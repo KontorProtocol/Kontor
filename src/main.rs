@@ -1,5 +1,11 @@
 use anyhow::Result;
-use kontor::{logging, stopper};
+use kontor::{
+    bitcoin_client,
+    config::Config,
+    logging,
+    retry::{new_backoff_limited, retry},
+    stopper,
+};
 use tokio::{select, task};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -8,19 +14,34 @@ use tracing::info;
 async fn main() -> Result<()> {
     logging::setup();
     info!("Hello, World!");
+    let client = bitcoin_client::Client::new_from_config(Config::load()?)?;
     let cancel_token = CancellationToken::new();
-    let cancel_token_clone = cancel_token.clone();
+    let stopper_handle = stopper::run(cancel_token.clone());
+    let retry_handle = task::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            info!("Retry task started");
+            let result = retry(
+                || client.get_block_hash(900000),
+                "get block hash",
+                new_backoff_limited(),
+                cancel_token,
+            )
+            .await;
+            info!("{:?}", result);
+            info!("Retry task exited");
+        }
+    });
     let task_handle = task::spawn(async move {
         info!("Task started");
         select! {
-            _ = cancel_token_clone.cancelled() => {
+            _ = cancel_token.cancelled() => {
                 info!("Task cancelled");
             }
         }
         info!("Exiting task");
     });
-    let stopper_handle = stopper::run(cancel_token);
-    for handle in [task_handle, stopper_handle] {
+    for handle in [retry_handle, task_handle, stopper_handle] {
         handle.await?
     }
     info!("Goodbye.");
