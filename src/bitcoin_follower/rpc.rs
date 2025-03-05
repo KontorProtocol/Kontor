@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use bitcoin::Block;
+use bitcoin::{Block, BlockHash};
 use tokio::{
     select,
     sync::{
@@ -22,29 +22,38 @@ use crate::{
     retry::{new_backoff_unlimited, retry},
 };
 
+pub type TargetBlockHeight = u64;
+pub type BlockHeight = u64;
+
 #[derive(Debug)]
 pub struct Fetcher {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
+    tx: Sender<(TargetBlockHeight, BlockHeight, BlockHash, Block)>,
 }
 
 impl Fetcher {
-    pub fn new(bitcoin: bitcoin_client::Client) -> Self {
+    pub fn new(
+        bitcoin: bitcoin_client::Client,
+        tx: Sender<(TargetBlockHeight, BlockHeight, BlockHash, Block)>,
+    ) -> Self {
         Self {
             handle: None,
             cancel_token: CancellationToken::new(),
             bitcoin,
+            tx,
         }
     }
 
-    pub async fn start(&mut self, start_height: u64, tx: Sender<Block>) {
+    pub fn start(&mut self, start_height: u64) {
         self.handle = Some(tokio::spawn({
             let bitcoin = self.bitcoin.clone();
             let cancel_token = self.cancel_token.clone();
             let (tx_1, mut rx_1) = mpsc::channel(10);
             let (tx_2, mut rx_2) = mpsc::channel(10);
             let (tx_3, mut rx_3) = mpsc::channel(10);
+            let tx = self.tx.clone();
             async move {
                 let producer = tokio::spawn({
                     let cancel_token = cancel_token.clone();
@@ -81,7 +90,7 @@ impl Fetcher {
                                 continue;
                             }
 
-                            if tx_1.send(height).await.is_err() {
+                            if tx_1.send((target_height, height)).await.is_err() {
                                 info!("Producer send channel closed, exiting");
                                 break;
                             }
@@ -92,6 +101,7 @@ impl Fetcher {
                         info!("Producer exiting");
                     }
                 });
+
                 let fetcher = tokio::spawn({
                     let cancel_token = cancel_token.clone();
                     let bitcoin = bitcoin.clone();
@@ -105,7 +115,7 @@ impl Fetcher {
                                 }
                                 option_height = rx_1.recv() => {
                                     match option_height {
-                                        Some(height) => {
+                                        Some((target_height, height)) => {
                                             let bitcoin = bitcoin.clone();
                                             let cancel_token = cancel_token.clone();
                                             let tx = tx_2.clone();
@@ -127,7 +137,7 @@ impl Fetcher {
                                                             cancel_token.clone(),
                                                         )
                                                         .await {
-                                                            let _ = tx.send(block).await;
+                                                            let _ = tx.send((target_height, height, block)).await;
                                                         }
                                                     }
 
@@ -147,6 +157,7 @@ impl Fetcher {
                         info!("Fetcher exited");
                     }
                 });
+
                 let processor = tokio::spawn({
                     let cancel_token = cancel_token.clone();
                     async move {
@@ -159,15 +170,16 @@ impl Fetcher {
                                 }
                                 option_block = rx_2.recv() => {
                                     match option_block {
-                                        Some(block) => {
+                                        Some((target_height, height, block)) => {
                                             let tx = tx_3.clone();
                                             let permit = semaphore.clone().acquire_owned().await.unwrap();
                                             tokio::spawn(
                                                 async move {
                                                     let _permit = permit;
                                                     let _ = tx.send((
-                                                        block.bip34_block_height()
-                                                            .expect("Unexpectged error when computing block height"),
+                                                        target_height,
+                                                        height,
+                                                        block.block_hash(),
                                                         block)
                                                     ).await;
                                                 }
@@ -185,6 +197,7 @@ impl Fetcher {
                         info!("Processor exited");
                     }
                 });
+
                 let orderer = tokio::spawn({
                     let cancel_token = cancel_token.clone();
                     async move {
@@ -192,6 +205,7 @@ impl Fetcher {
                         let mut next_index = start_height;
                         let mut pending_blocks = HashMap::new();
                         loop {
+                            let mut target_height = 0;
                             select! {
                                 _ = cancel_token.cancelled() => {
                                     info!("Orderer cancelled");
@@ -199,14 +213,17 @@ impl Fetcher {
                                 }
                                 option_pair = rx_3.recv() => {
                                     match option_pair {
-                                        Some((height, data)) => {
+                                        Some((new_target_height, height, block_hash, data)) => {
+                                            if new_target_height > target_height {
+                                                target_height = new_target_height;
+                                            }
                                             heap.push(Reverse(height));
-                                            pending_blocks.insert(height, data);
+                                            pending_blocks.insert(height, (block_hash, data));
                                             while let Some(&Reverse(maybe_next_index)) = heap.peek() {
                                                 if maybe_next_index == next_index {
                                                     heap.pop();
-                                                    if let Some(data) = pending_blocks.remove(&next_index) {
-                                                        let _ = tx.send(data).await;
+                                                    if let Some((block_hash, data)) = pending_blocks.remove(&next_index) {
+                                                        let _ = tx.send((target_height, next_index, block_hash, data)).await;
                                                         next_index += 1;
                                                     }
                                                 } else {
