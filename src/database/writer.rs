@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use libsql::Connection;
 
-use super::{connection::new_connection, types::Block};
+use super::{connection::new_connection, types::BlockRow};
 
 #[derive(Clone)]
 pub struct Writer {
@@ -16,7 +16,7 @@ impl Writer {
         Ok(Self { conn })
     }
 
-    pub async fn insert_block(&self, block: Block) -> Result<()> {
+    pub async fn insert_block(&self, block: BlockRow) -> Result<()> {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO blocks (height, hash) VALUES (?, ?)",

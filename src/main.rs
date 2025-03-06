@@ -5,7 +5,8 @@ use kontor::{
     bitcoin_client,
     bitcoin_follower::{self, event::Event},
     config::Config,
-    database, logging, stopper,
+    database::{self, types::BlockRow},
+    logging, stopper,
 };
 use tokio::{select, sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
                 reader,
                 bitcoin.clone(),
                 HashSet::new(),
+                |t| t,
                 tx,
             )
             .await
@@ -55,8 +57,8 @@ async fn main() -> Result<()> {
                             Some(event) => {
                                 match event {
                                     Event::Block(block) => {
-                                        let height = block.bip34_block_height().unwrap();
-                                        let hash = block.block_hash();
+                                        let height = block.height;
+                                        let hash = block.hash;
                                         if let Some(last_height) = option_last_height {
                                             if height != last_height + 1 {
                                                 error!("Order exception");
@@ -65,7 +67,7 @@ async fn main() -> Result<()> {
                                         }
                                         option_last_height = Some(height);
                                         writer.insert_block(
-                                            database::types::Block {
+                                            BlockRow {
                                                 height,
                                                 hash,
                                             }

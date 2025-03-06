@@ -2,7 +2,7 @@ use anyhow::Result;
 use kontor::{
     bitcoin_client::Client,
     config::Config,
-    database::{reader::Reader, types::Block, writer::Writer},
+    database::{reader::Reader, types::BlockRow, writer::Writer},
 };
 
 #[tokio::test]
@@ -12,7 +12,7 @@ async fn test_database() -> Result<()> {
     let client = Client::new_from_config(Config::load()?)?;
     let height = 800000;
     let hash = client.get_block_hash(height).await?;
-    let block = Block { height, hash };
+    let block = BlockRow { height, hash };
 
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test_db.db");

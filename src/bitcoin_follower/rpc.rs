@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use bitcoin::{Block, BlockHash};
+use bitcoin::Transaction;
 use tokio::{
     select,
     sync::{
@@ -19,6 +19,7 @@ use tracing::{error, info};
 
 use crate::{
     bitcoin_client,
+    block::{Block, Tx},
     retry::{new_backoff_unlimited, retry},
 };
 
@@ -26,22 +27,25 @@ pub type TargetBlockHeight = u64;
 pub type BlockHeight = u64;
 
 #[derive(Debug)]
-pub struct Fetcher {
+pub struct Fetcher<T: Tx> {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
-    tx: Sender<(TargetBlockHeight, BlockHeight, BlockHash, Block)>,
+    f: fn(Transaction) -> T,
+    tx: Sender<(TargetBlockHeight, Block<T>)>,
 }
 
-impl Fetcher {
+impl<T: Tx + 'static> Fetcher<T> {
     pub fn new(
         bitcoin: bitcoin_client::Client,
-        tx: Sender<(TargetBlockHeight, BlockHeight, BlockHash, Block)>,
+        f: fn(Transaction) -> T,
+        tx: Sender<(TargetBlockHeight, Block<T>)>,
     ) -> Self {
         Self {
             handle: None,
             cancel_token: CancellationToken::new(),
             bitcoin,
+            f,
             tx,
         }
     }
@@ -54,6 +58,7 @@ impl Fetcher {
             let (tx_1, mut rx_1) = mpsc::channel(10);
             let (tx_2, mut rx_2) = mpsc::channel(10);
             let (tx_3, mut rx_3) = mpsc::channel(10);
+            let f = self.f;
             let tx = self.tx.clone();
             async move {
                 let producer = tokio::spawn({
@@ -179,9 +184,12 @@ impl Fetcher {
                                                     let _permit = permit;
                                                     let _ = tx.send((
                                                         target_height,
-                                                        height,
-                                                        block.block_hash(),
-                                                        block)
+                                                        Block {
+                                                            height,
+                                                            hash: block.block_hash(),
+                                                            prev_hash: block.header.prev_blockhash,
+                                                            transactions: block.txdata.into_iter().map(f).collect(),
+                                                        })
                                                     ).await;
                                                 }
                                             );
@@ -214,17 +222,17 @@ impl Fetcher {
                                 }
                                 option_pair = rx_3.recv() => {
                                     match option_pair {
-                                        Some((new_target_height, height, block_hash, data)) => {
+                                        Some((new_target_height, block)) => {
                                             if new_target_height > target_height {
                                                 target_height = new_target_height;
                                             }
-                                            heap.push(Reverse(height));
-                                            pending_blocks.insert(height, (block_hash, data));
+                                            heap.push(Reverse(block.height));
+                                            pending_blocks.insert(block.height, block);
                                             while let Some(&Reverse(maybe_next_index)) = heap.peek() {
                                                 if maybe_next_index == next_index {
                                                     heap.pop();
-                                                    if let Some((block_hash, data)) = pending_blocks.remove(&next_index) {
-                                                        let _ = tx.send((target_height, next_index, block_hash, data)).await;
+                                                    if let Some(block) = pending_blocks.remove(&next_index) {
+                                                        let _ = tx.send((target_height, block)).await;
                                                         next_index += 1;
                                                     }
                                                 } else {

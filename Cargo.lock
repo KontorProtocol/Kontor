@@ -1300,6 +1300,7 @@ dependencies = [
  "bitcoin",
  "deadpool",
  "libsql",
+ "rayon",
  "reqwest",
  "scopeguard",
  "serde",

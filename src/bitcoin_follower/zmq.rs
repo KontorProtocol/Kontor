@@ -15,6 +15,7 @@ use zmq::Socket;
 use crate::{
     bitcoin_client,
     bitcoin_follower::message::SEQUENCE,
+    block::{Block, Tx},
     config::Config,
     retry::{new_backoff_limited, new_backoff_unlimited, retry},
 };
@@ -100,11 +101,12 @@ fn run_socket(
     })
 }
 
-pub async fn run(
+pub async fn run<T: Tx + 'static>(
     config: Config,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
-    tx: UnboundedSender<ZmqEvent>,
+    f: fn(Transaction) -> T,
+    tx: UnboundedSender<ZmqEvent<T>>,
 ) -> Result<JoinHandle<Result<()>>> {
     let (socket_tx, mut socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
@@ -154,7 +156,9 @@ pub async fn run(
         .await?;
         txs.extend(results.into_iter().filter_map(Result::ok));
     }
-    let _ = tx.send(ZmqEvent::MempoolTransactions(txs));
+    let _ = tx.send(ZmqEvent::MempoolTransactions(
+        txs.into_iter().map(f).collect(),
+    ));
 
     Ok(task::spawn(async move {
         defer! {
@@ -221,7 +225,12 @@ pub async fn run(
                                     )
                                     .await
                                     .context("Failed to get block handling BlockConnected sequence message")?;
-                                    ZmqEvent::BlockConnected(block)
+                                    ZmqEvent::BlockConnected(Block {
+                                        height: block.bip34_block_height().unwrap(),
+                                        hash: block.block_hash(),
+                                        prev_hash: block.header.prev_blockhash,
+                                        transactions: block.txdata.into_iter().map(f).collect(),
+                                    })
                                 }
                                 _ => ZmqEvent::SequenceMessage(sequence_message),
                             };
