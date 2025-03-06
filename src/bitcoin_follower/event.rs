@@ -1,18 +1,18 @@
 use std::fmt;
 
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
 
 use crate::block::{Block, Tx};
-
-use super::message::SequenceMessage;
 
 #[derive(Debug)]
 pub enum ZmqEvent<T: Tx> {
     Connected,
     Disconnected(anyhow::Error),
-    SequenceMessage(SequenceMessage),
     MempoolTransactions(Vec<T>),
+    MempoolTransactionAdded(T),
+    MempoolTransactionRemoved(Txid),
     BlockConnected(Block<T>),
+    BlockDisconnected(BlockHash),
 }
 
 impl<T: Tx> fmt::Display for ZmqEvent<T> {
@@ -20,14 +20,20 @@ impl<T: Tx> fmt::Display for ZmqEvent<T> {
         match self {
             ZmqEvent::Connected => write!(f, "ZMQ connected"),
             ZmqEvent::Disconnected(e) => write!(f, "ZMQ disconnected with error: {}", e),
-            ZmqEvent::SequenceMessage(sequence_message) => {
-                write!(f, "ZMQ sequence message: {:?}", sequence_message)
-            }
             ZmqEvent::MempoolTransactions(txs) => {
                 write!(f, "ZMQ mempool transactions: {}", txs.len())
             }
+            ZmqEvent::MempoolTransactionAdded(tx) => {
+                write!(f, "ZMQ mempool transaction added: {}", tx.txid())
+            }
+            ZmqEvent::MempoolTransactionRemoved(txid) => {
+                write!(f, "ZMQ mempool transaction removed: {}", txid)
+            }
             ZmqEvent::BlockConnected(block) => {
                 write!(f, "ZMQ block connected: {}", block.hash)
+            }
+            ZmqEvent::BlockDisconnected(block_hash) => {
+                write!(f, "ZMQ block disconnected: {}", block_hash)
             }
         }
     }

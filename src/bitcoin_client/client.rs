@@ -1,5 +1,6 @@
 use base64::prelude::*;
 use bitcoin::{Block, BlockHash, Transaction, Txid, consensus::encode};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use reqwest::{Client as HttpClient, ClientBuilder, header::HeaderMap};
 use serde::Deserialize;
 use serde_json::Value;
@@ -172,13 +173,8 @@ impl Client {
             .collect();
         let results: Vec<Result<String, Error>> = self.batch_call(calls).await?;
         Ok(results
-            .into_iter()
-            .map(|result| {
-                result.and_then(|hex| {
-                    let tx: Transaction = encode::deserialize_hex(&hex)?;
-                    Ok(tx)
-                })
-            })
+            .into_par_iter()
+            .map(|result| result.and_then(|hex| Ok(encode::deserialize_hex::<Transaction>(&hex)?)))
             .collect())
     }
 }

@@ -16,14 +16,11 @@ use tracing::{error, info, warn};
 
 use crate::{
     bitcoin_client,
-    bitcoin_follower::{
-        message::SequenceMessage,
-        rpc::{self, BlockHeight, TargetBlockHeight},
-    },
+    bitcoin_follower::rpc::{self, BlockHeight, TargetBlockHeight},
     block::{Block, Tx},
     config::Config,
     database,
-    retry::{new_backoff_limited, new_backoff_unlimited, retry},
+    retry::{new_backoff_unlimited, retry},
 };
 
 use super::{
@@ -205,37 +202,19 @@ pub async fn run<T: Tx + 'static>(
                     *mempool_cache = new_mempool_cache;
                     vec![Event::MempoolUpdates { added, removed }]
                 }
-                ZmqEvent::SequenceMessage(SequenceMessage::TransactionAdded { txid, .. }) => {
+                ZmqEvent::MempoolTransactionAdded(t) => {
+                    let txid = t.txid();
                     if let Entry::Vacant(_) = mempool_cache.entry(txid) {
-                        match retry(
-                            || bitcoin.get_raw_transaction(&txid),
-                            "get raw transaction",
-                            new_backoff_limited(),
-                            cancel_token.clone(),
-                        )
-                        .await
-                        {
-                            Ok(transaction) => {
-                                let t = f(transaction);
-                                mempool_cache.insert(txid, t.clone());
-                                vec![Event::MempoolUpdates {
-                                    added: vec![t],
-                                    removed: vec![],
-                                }]
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Skipping adding mempool transaction due to get error: {}",
-                                    e
-                                );
-                                vec![]
-                            }
-                        }
+                        mempool_cache.insert(txid, t.clone());
+                        vec![Event::MempoolUpdates {
+                            added: vec![t],
+                            removed: vec![],
+                        }]
                     } else {
                         vec![]
                     }
                 }
-                ZmqEvent::SequenceMessage(SequenceMessage::TransactionRemoved { txid, .. }) => {
+                ZmqEvent::MempoolTransactionRemoved(txid) => {
                     if mempool_cache.remove(&txid).is_some() {
                         vec![Event::MempoolUpdates {
                             added: vec![],
@@ -245,7 +224,7 @@ pub async fn run<T: Tx + 'static>(
                         vec![]
                     }
                 }
-                ZmqEvent::SequenceMessage(SequenceMessage::BlockDisconnected(block_hash)) => {
+                ZmqEvent::BlockDisconnected(block_hash) => {
                     let block_row = retry(
                         async || match reader.get_block_with_hash(&block_hash).await {
                             Ok(Some(row)) => Ok(row),
@@ -283,7 +262,6 @@ pub async fn run<T: Tx + 'static>(
                     *latest_block = Some((block.height, block.hash));
                     handle_block(mempool_cache, block)
                 }
-                _ => vec![],
             };
 
             match mode {
@@ -303,7 +281,7 @@ pub async fn run<T: Tx + 'static>(
                                       rpc_latest_block: &mut Option<(u64, BlockHash)>,
                                       (target_height, block): (u64, Block<T>)|
                -> Vec<Event<T>> {
-            if in_reorg_window(target_height, block.height, 10) {
+            if in_reorg_window(target_height, block.height, 20) {
                 info!("In reorg window: {} {}", target_height, block.height);
                 let mut prev_block_hash = block.prev_hash;
                 let mut subtrahend = 1;
