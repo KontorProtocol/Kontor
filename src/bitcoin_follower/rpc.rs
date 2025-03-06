@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use bitcoin::Transaction;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
     sync::{
@@ -188,7 +189,7 @@ impl<T: Tx + 'static> Fetcher<T> {
                                                             height,
                                                             hash: block.block_hash(),
                                                             prev_hash: block.header.prev_blockhash,
-                                                            transactions: block.txdata.into_iter().map(f).collect(),
+                                                            transactions: block.txdata.into_par_iter().map(f).collect(),
                                                         })
                                                     ).await;
                                                 }

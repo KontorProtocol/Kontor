@@ -2,6 +2,7 @@ use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 use bitcoin::Transaction;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use scopeguard::defer;
 use tokio::{
     select,
@@ -157,7 +158,7 @@ pub async fn run<T: Tx + 'static>(
         txs.extend(results.into_iter().filter_map(Result::ok));
     }
     let _ = tx.send(ZmqEvent::MempoolTransactions(
-        txs.into_iter().map(f).collect(),
+        txs.into_par_iter().map(f).collect(),
     ));
 
     Ok(task::spawn(async move {
@@ -229,7 +230,7 @@ pub async fn run<T: Tx + 'static>(
                                         height: block.bip34_block_height().unwrap(),
                                         hash: block.block_hash(),
                                         prev_hash: block.header.prev_blockhash,
-                                        transactions: block.txdata.into_iter().map(f).collect(),
+                                        transactions: block.txdata.into_par_iter().map(f).collect(),
                                     })
                                 }
                                 _ => ZmqEvent::SequenceMessage(sequence_message),
