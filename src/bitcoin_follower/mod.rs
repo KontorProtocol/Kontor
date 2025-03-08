@@ -3,7 +3,7 @@ use events::Event;
 use indexmap::IndexSet;
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{error, info};
 
 use crate::{bitcoin_client, block::Tx, config::Config, database::Reader};
 
@@ -35,6 +35,6 @@ pub async fn run<T: Tx + 'static>(
         if handle.await.is_err() {
             error!("Panicked on join");
         }
-        warn!("Exited");
+        info!("Exited");
     })
 }

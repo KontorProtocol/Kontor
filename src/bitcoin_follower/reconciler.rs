@@ -281,38 +281,46 @@ pub async fn run<T: Tx + 'static>(
                     }
                 }
                 ZmqEvent::BlockDisconnected(block_hash) => {
-                    let block_row = retry(
-                        async || match reader.get_block_with_hash(&block_hash).await {
-                            Ok(Some(row)) => Ok(row),
-                            Ok(None) => Err(anyhow!("Block with hash not found: {}", &block_hash)),
-                            Err(e) => Err(e),
-                        },
-                        "get block with hash",
-                        new_backoff_unlimited(),
-                        cancel_token.clone(),
-                    )
-                    .await
-                    .expect("Disconnect block should eventually exist in database");
+                    if let Mode::Zmq = mode {
+                        let block_row = retry(
+                            async || match reader.get_block_with_hash(&block_hash).await {
+                                Ok(Some(row)) => Ok(row),
+                                Ok(None) => {
+                                    Err(anyhow!("Block with hash not found: {}", &block_hash))
+                                }
+                                Err(e) => Err(e),
+                            },
+                            "get block with hash",
+                            new_backoff_unlimited(),
+                            cancel_token.clone(),
+                        )
+                        .await
+                        .expect("Disconnect block should eventually exist in database");
 
-                    let prev_block_row = retry(
-                        async || match reader.get_block_at_height(block_row.height - 1).await {
-                            Ok(Some(row)) => Ok(row),
-                            Ok(None) => Err(anyhow!(
-                                "Block at height not found: {}",
-                                block_row.height - 1
-                            )),
-                            Err(e) => Err(e),
-                        },
-                        "get block at height",
-                        new_backoff_unlimited(),
-                        cancel_token.clone(),
-                    )
-                    .await
-                    .expect("Block at height below disconnected block should exist in database");
+                        let prev_block_row = retry(
+                            async || match reader.get_block_at_height(block_row.height - 1).await {
+                                Ok(Some(row)) => Ok(row),
+                                Ok(None) => Err(anyhow!(
+                                    "Block at height not found: {}",
+                                    block_row.height - 1
+                                )),
+                                Err(e) => Err(e),
+                            },
+                            "get block at height",
+                            new_backoff_unlimited(),
+                            cancel_token.clone(),
+                        )
+                        .await
+                        .expect(
+                            "Block at height below disconnected block should exist in database",
+                        );
 
-                    *latest_block = Some((prev_block_row.height, prev_block_row.hash));
-
-                    vec![Event::Rollback(prev_block_row.height)]
+                        *latest_block = Some((prev_block_row.height, prev_block_row.hash));
+                        vec![Event::Rollback(prev_block_row.height)]
+                    } else {
+                        *latest_block = None;
+                        vec![]
+                    }
                 }
                 ZmqEvent::BlockConnected(block) => {
                     *latest_block = Some((block.height, block.hash));
@@ -398,7 +406,7 @@ pub async fn run<T: Tx + 'static>(
         let mut rpc_latest_block = None;
         let mut zmq_connected = false;
         let mut mode = Mode::Rpc;
-        loop {
+        'outer: loop {
             select! {
                 option_zmq_event = zmq_rx.recv() => {
                     match option_zmq_event {
@@ -417,7 +425,7 @@ pub async fn run<T: Tx + 'static>(
                             ).await {
                                 if tx.send(event).await.is_err() {
                                     info!("Send channel closed, exiting");
-                                    break;
+                                    break 'outer;
                                 }
                             }
                         },
@@ -445,7 +453,7 @@ pub async fn run<T: Tx + 'static>(
                             ).await {
                                 if tx.send(event).await.is_err() {
                                     info!("Send channel closed, exiting");
-                                    break;
+                                    break 'outer;
                                 }
                             }
                         },
@@ -463,13 +471,15 @@ pub async fn run<T: Tx + 'static>(
         }
 
         runner_cancel_token.cancel();
+        rpc_rx.close();
+        while rpc_rx.recv().await.is_some() {}
         match runner_handle.await {
             Err(_) => error!("ZMQ runner panicked on join"),
             Ok(Err(e)) => error!("ZMQ runner failed to start with error: {}", e),
             Ok(Ok(_)) => (),
         }
         if (fetcher.stop().await).is_err() {
-            error!("RPC fetcher panicked on join");
+            error!("Panicked on join");
         }
 
         info!("Exited");

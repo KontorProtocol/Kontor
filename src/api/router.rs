@@ -1,6 +1,7 @@
 use axum::Router;
 use tokio_util::sync::CancellationToken;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 use crate::{config::Config, database};
 
@@ -19,6 +20,10 @@ pub fn new(state: State) -> Router {
                 .route("/", axum::routing::get(|| async { "Hello, world!" }))
                 .route("/health", axum::routing::get(|| async { "OK" })),
         )
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(state)
 }

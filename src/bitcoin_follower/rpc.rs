@@ -52,7 +52,7 @@ impl<T: Tx + 'static> Fetcher<T> {
     }
 
     pub fn start(&mut self, start_height: u64) {
-        info!("RPC fetcher starting at height: {}", start_height);
+        info!("Starting at height: {}", start_height);
         self.handle = Some(tokio::spawn({
             let bitcoin = self.bitcoin.clone();
             let cancel_token = self.cancel_token.clone();
@@ -147,8 +147,6 @@ impl<T: Tx + 'static> Fetcher<T> {
                                                             let _ = tx.send((target_height, height, block)).await;
                                                         }
                                                     }
-
-                                                    info!("Fetcher worker cancelled");
                                                 }
                                             );
                                         },
@@ -161,6 +159,8 @@ impl<T: Tx + 'static> Fetcher<T> {
                             }
                         }
 
+                        rx_1.close();
+                        while rx_1.recv().await.is_some() {}
                         info!("Fetcher exited");
                     }
                 });
@@ -204,6 +204,8 @@ impl<T: Tx + 'static> Fetcher<T> {
                             }
                         }
 
+                        rx_2.close();
+                        while rx_2.recv().await.is_some() {}
                         info!("Processor exited");
                     }
                 });
@@ -233,7 +235,10 @@ impl<T: Tx + 'static> Fetcher<T> {
                                                 if maybe_next_index == next_index {
                                                     heap.pop();
                                                     if let Some(block) = pending_blocks.remove(&next_index) {
-                                                        let _ = tx.send((target_height, block)).await;
+                                                        if tx.send((target_height, block)).await.is_err() {
+                                                            info!("Orderer send channel closed, exiting");
+                                                            break;
+                                                        };
                                                         next_index += 1;
                                                     }
                                                 } else {
@@ -248,11 +253,14 @@ impl<T: Tx + 'static> Fetcher<T> {
                                     }
                                 }
                             }
-
-                            info!("Orderer exited");
                         }
+
+                        rx_3.close();
+                        while rx_3.recv().await.is_some() {}
+                        info!("Orderer exited");
                     }
                 });
+
                 for handle in [producer, fetcher, processor, orderer] {
                     if let Err(e) = handle.await {
                         error!("Fetcher sub task panicked on join: {}", e);
@@ -263,12 +271,12 @@ impl<T: Tx + 'static> Fetcher<T> {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
-        info!("RPC fetcher stopping");
         if let Some(handle) = self.handle.take() {
+            info!("Exiting");
             self.cancel_token.cancel();
             handle.await?;
         }
-        info!("RPC fetcher stopped");
+        info!("Exited");
         Ok(())
     }
 }

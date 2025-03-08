@@ -140,29 +140,6 @@ pub async fn run<T: Tx + 'static>(
         .context("Could not connect to ZMQ address")?;
     let socket_handle = run_socket(socket, socket_cancel_token.clone(), socket_tx.clone());
 
-    info!("Getting mempool transactions...");
-    let mempool_txids = retry(
-        || bitcoin.get_raw_mempool(),
-        "get raw mempool",
-        new_backoff_unlimited(),
-        cancel_token.clone(),
-    )
-    .await?;
-    let mut txs: Vec<Transaction> = vec![];
-    for txids in mempool_txids.chunks(100) {
-        let results = retry(
-            || bitcoin.get_raw_transactions(txids),
-            "get raw transactions",
-            new_backoff_limited(),
-            cancel_token.clone(),
-        )
-        .await?;
-        txs.extend(results.into_iter().filter_map(Result::ok));
-    }
-    let _ = tx.send(ZmqEvent::MempoolTransactions(
-        txs.into_par_iter().map(f).collect(),
-    ));
-
     Ok(task::spawn(async move {
         defer! {
             socket_cancel_token.cancel();
@@ -192,8 +169,50 @@ pub async fn run<T: Tx + 'static>(
                             }
                             if let MonitorMessage::HandshakeSucceeded = event {
                                 if tx.send(ZmqEvent::Connected).is_err() {
-                                    info!("Send channel is closed, exiting")
+                                    info!("Send channel is closed, exiting");
+                                    return Ok(())
                                 }
+
+                                tokio::spawn({
+                                    let bitcoin = bitcoin.clone();
+                                    let tx = tx.clone();
+                                    let cancel_token = cancel_token.clone();
+                                    async move {
+                                        let mempool_txids = retry(
+                                            || bitcoin.get_raw_mempool(),
+                                            "get raw mempool",
+                                            new_backoff_unlimited(),
+                                            cancel_token.clone(),
+                                        )
+                                        .await
+                                        .expect("Unexpected error getting raw mempool");
+                                        info!("Getting mempool transactions: {}", mempool_txids.len());
+                                        let mut txs: Vec<Transaction> = vec![];
+                                        for txids in mempool_txids.chunks(100) {
+                                            if cancel_token.is_cancelled() {
+                                                break;
+                                            }
+
+                                            let results = retry(
+                                                || bitcoin.get_raw_transactions(txids),
+                                                "get raw transactions",
+                                                new_backoff_unlimited(),
+                                                cancel_token.clone(),
+                                            )
+                                            .await
+                                            .expect("Unexpected error getting raw mempool transactions");
+                                            txs.extend(results.into_iter().filter_map(Result::ok));
+                                            info!(
+                                                "Got mempool transaction: {}/{}",
+                                                txs.len(),
+                                                mempool_txids.len()
+                                            );
+                                        }
+                                        let _ = tx.send(ZmqEvent::MempoolTransactions(
+                                            txs.into_par_iter().map(f).collect(),
+                                        ));
+                                    }
+                                });
                             }
                         },
                         Some(Err(e)) => {
@@ -265,7 +284,8 @@ pub async fn run<T: Tx + 'static>(
                             }
                             {
                                 if tx.send(event).is_err() {
-                                    info!("Send channel is closed, exiting")
+                                    info!("Send channel is closed, exiting");
+                                    return Ok(())
                                 }
                             }
                         },
