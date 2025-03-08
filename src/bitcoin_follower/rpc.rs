@@ -2,6 +2,7 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -14,6 +15,7 @@ use tokio::{
         mpsc::{self, Sender},
     },
     task::JoinHandle,
+    time::sleep,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -72,6 +74,10 @@ impl<T: Tx + 'static> Fetcher<T> {
                             }
 
                             if target_height == height {
+                                if target_height != start_height {
+                                    sleep(Duration::from_secs(10)).await;
+                                }
+
                                 match retry(
                                     || bitcoin.get_blockchain_info(),
                                     "get blockchain info",
