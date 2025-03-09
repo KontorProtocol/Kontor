@@ -66,18 +66,14 @@ impl<T: Tx + 'static> Fetcher<T> {
                     let bitcoin = bitcoin.clone();
                     async move {
                         let mut height = start_height;
-                        let mut target_height = height;
+                        let mut target_height = height - 1;
                         loop {
                             if cancel_token.is_cancelled() {
                                 info!("Producer cancelled");
                                 break;
                             }
 
-                            if target_height == height {
-                                if target_height != start_height {
-                                    sleep(Duration::from_secs(10)).await;
-                                }
-
+                            if target_height < height {
                                 match retry(
                                     || bitcoin.get_blockchain_info(),
                                     "get blockchain info",
@@ -96,7 +92,10 @@ impl<T: Tx + 'static> Fetcher<T> {
                                         );
                                     }
                                 }
+                            }
 
+                            if target_height < height {
+                                sleep(Duration::from_secs(10)).await;
                                 continue;
                             }
 
