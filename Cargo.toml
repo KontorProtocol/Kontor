@@ -35,5 +35,11 @@ rustls = { version = "0.23", features = [
   "ring",
   "tls12",
 ], default-features = false }
-tower-http = { version = "0.6", features = ["request-id", "trace"] }
-tower = { version = "0.5", features = [] }
+tower-http = { version = "0.6", features = [
+  "request-id",
+  "trace",
+  "timeout",
+  "catch-panic",
+  "cors",
+] }
+tower = "0.5"

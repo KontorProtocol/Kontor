@@ -187,11 +187,10 @@ pub async fn run<T: Tx + 'static>(
     cancel_token: CancellationToken,
     reader: database::Reader,
     bitcoin: bitcoin_client::Client,
-    start_height: u64,
     mut initial_mempool_txids: IndexSet<Txid>,
     f: fn(Transaction) -> T,
     tx: Sender<Event<T>>,
-) -> JoinHandle<()> {
+) -> Result<JoinHandle<()>> {
     let (zmq_tx, mut zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<T>>();
     let (rpc_tx, mut rpc_rx) = mpsc::channel(10);
     let runner_cancel_token = CancellationToken::new();
@@ -211,7 +210,14 @@ pub async fn run<T: Tx + 'static>(
 
     let mut fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
 
-    tokio::spawn(async move {
+    let start_height = reader
+        .get_block_latest()
+        .await?
+        .map(|block_row| block_row.height)
+        .unwrap_or(config.starting_block_height - 1)
+        + 1;
+
+    Ok(tokio::spawn(async move {
         let handle_zmq_event = async |reader: &database::Reader,
                                       initial_mempool_txids: &mut IndexSet<Txid>,
                                       mode: &mut Mode,
@@ -479,5 +485,5 @@ pub async fn run<T: Tx + 'static>(
         }
 
         info!("Exited");
-    })
+    }))
 }

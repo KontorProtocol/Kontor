@@ -1,13 +1,17 @@
 use std::time::Duration;
 
 use axum::{
-    Router,
+    Json, Router,
     http::{HeaderName, Request, Response},
+    response::IntoResponse,
     routing::get,
 };
 use tower::ServiceBuilder;
 use tower_http::{
+    catch_panic::CatchPanicLayer,
+    cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
+    timeout::TimeoutLayer,
     trace::{MakeSpan, OnFailure, OnResponse, TraceLayer},
 };
 use tracing::{Level, Span, error, field, info, span};
@@ -15,6 +19,7 @@ use tracing::{Level, Span, error, field, info, span};
 use super::{
     context::Context,
     handlers::{get_block, get_block_latest},
+    response::ErrorResponse,
 };
 
 #[derive(Clone)]
@@ -33,7 +38,7 @@ impl<B> MakeSpan<B> for CustomMakeSpan {
             method = %req.method(),
             path = %req.uri().path(),
             version = ?req.version(),
-            error = field::Empty
+            error = field::Empty,
         )
     }
 }
@@ -54,6 +59,22 @@ impl<B> OnResponse<B> for CustomOnResponse {
 struct NoOpOnFailure;
 impl<B> OnFailure<B> for NoOpOnFailure {
     fn on_failure(&mut self, _res: B, _latency: Duration, _span: &Span) {}
+}
+
+fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> axum::response::Response {
+    let message = panic
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("Unknown panic occurred")
+        .to_string();
+
+    let error_response = Json(ErrorResponse { error: message });
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        error_response,
+    )
+        .into_response()
 }
 
 pub fn new(context: Context) -> Router {
@@ -78,7 +99,10 @@ pub fn new(context: Context) -> Router {
                         .on_response(CustomOnResponse)
                         .on_failure(NoOpOnFailure),
                 )
-                .layer(PropagateRequestIdLayer::new(x_request_id)),
+                .layer(PropagateRequestIdLayer::new(x_request_id))
+                .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any))
+                .layer(CatchPanicLayer::custom(handle_panic))
+                .layer(TimeoutLayer::new(Duration::from_secs(30))),
         )
         .with_state(context)
 }
