@@ -1,5 +1,3 @@
-use std::fmt;
-
 use bitcoin::{BlockHash, Txid};
 
 use crate::block::{Block, Tx};
@@ -15,52 +13,10 @@ pub enum ZmqEvent<T: Tx> {
     BlockDisconnected(BlockHash),
 }
 
-impl<T: Tx> fmt::Display for ZmqEvent<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ZmqEvent::Connected => write!(f, "ZMQ connected"),
-            ZmqEvent::Disconnected(e) => write!(f, "ZMQ disconnected with error: {}", e),
-            ZmqEvent::MempoolTransactions(txs) => {
-                write!(f, "ZMQ mempool transactions: {}", txs.len())
-            }
-            ZmqEvent::MempoolTransactionAdded(tx) => {
-                write!(f, "ZMQ mempool transaction added: {}", tx.txid())
-            }
-            ZmqEvent::MempoolTransactionRemoved(txid) => {
-                write!(f, "ZMQ mempool transaction removed: {}", txid)
-            }
-            ZmqEvent::BlockConnected(block) => {
-                write!(f, "ZMQ block connected: {}", block.hash)
-            }
-            ZmqEvent::BlockDisconnected(block_hash) => {
-                write!(f, "ZMQ block disconnected: {}", block_hash)
-            }
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Event<T: Tx> {
-    MempoolUpdates { removed: Vec<Txid>, added: Vec<T> },
+    MempoolUpdate { removed: Vec<Txid>, added: Vec<T> },
+    MempoolSet(Vec<T>),
     Block(Block<T>),
     Rollback(u64),
-}
-
-impl<T: Tx> fmt::Display for Event<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Event::MempoolUpdates { removed, added } => write!(
-                f,
-                "Mempool updates: removed {} added {}",
-                removed.len(),
-                added.len(),
-            ),
-            Event::Rollback(block_hash) => {
-                write!(f, "Rollback: {}", block_hash)
-            }
-            Event::Block(block) => {
-                write!(f, "Block: {}", block.hash)
-            }
-        }
-    }
 }

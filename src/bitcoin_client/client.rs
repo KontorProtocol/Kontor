@@ -22,21 +22,20 @@ const JSONRPC: &str = "2.0";
 
 impl Client {
     pub fn new(url: String, user: String, password: String) -> Result<Self, Error> {
-        let mut builder = ClientBuilder::new();
+        let client = ClientBuilder::new()
+            .default_headers({
+                let mut headers = HeaderMap::new();
+                let auth_str = BASE64_STANDARD.encode(format!("{}:{}", user, password));
+                headers.insert(
+                    "Authorization",
+                    format!("Basic {}", auth_str).parse().unwrap(),
+                );
+                headers.insert("Content-Type", "application/json".parse().unwrap());
+                headers.insert("Accept", "application/json".parse().unwrap());
+                headers
+            })
+            .build()?;
 
-        builder = builder.default_headers({
-            let mut headers = HeaderMap::new();
-            let auth_str = BASE64_STANDARD.encode(format!("{}:{}", user, password));
-            headers.insert(
-                "Authorization",
-                format!("Basic {}", auth_str).parse().unwrap(),
-            );
-            headers.insert("Content-Type", "application/json".parse().unwrap());
-            headers.insert("Accept", "application/json".parse().unwrap());
-            headers
-        });
-
-        let client = builder.build()?;
         Ok(Client { client, url })
     }
 

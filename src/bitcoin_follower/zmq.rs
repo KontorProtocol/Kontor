@@ -1,6 +1,7 @@
 use std::thread;
 
 use anyhow::{Context, Result, anyhow};
+use backon::Retryable;
 use bitcoin::Transaction;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use scopeguard::defer;
@@ -18,7 +19,7 @@ use crate::{
     bitcoin_follower::messages::SEQUENCE,
     block::{Block, Tx},
     config::Config,
-    retry::{new_backoff_limited, new_backoff_unlimited, retry},
+    retry::{new_backoff_limited, notify, retry},
 };
 
 use super::{
@@ -168,51 +169,43 @@ pub async fn run<T: Tx + 'static>(
                                 return Err(anyhow!("Received failure event from monitor socket: {:?}", event));
                             }
                             if let MonitorMessage::HandshakeSucceeded = event {
+                                let mempool_txids = retry(
+                                    || bitcoin.get_raw_mempool(),
+                                    "get raw mempool",
+                                    new_backoff_limited(),
+                                    cancel_token.clone(),
+                                )
+                                .await?;
+                                info!("Getting mempool transactions: {}", mempool_txids.len());
+                                let mut txs: Vec<Transaction> = vec![];
+                                for txids in mempool_txids.chunks(100) {
+                                    if cancel_token.is_cancelled() {
+                                        break;
+                                    }
+
+                                    let results = retry(
+                                        || bitcoin.get_raw_transactions(txids),
+                                        "get raw transactions",
+                                        new_backoff_limited(),
+                                        cancel_token.clone(),
+                                    )
+                                    .await?;
+                                    txs.extend(results.into_iter().filter_map(Result::ok));
+                                    info!(
+                                        "Got mempool transaction: {}/{}",
+                                        txs.len(),
+                                        mempool_txids.len()
+                                    );
+                                }
+
+                                let _ = tx.send(ZmqEvent::MempoolTransactions(
+                                    txs.into_par_iter().map(f).collect(),
+                                ));
+
                                 if tx.send(ZmqEvent::Connected).is_err() {
                                     info!("Send channel is closed, exiting");
                                     return Ok(())
                                 }
-
-                                tokio::spawn({
-                                    let bitcoin = bitcoin.clone();
-                                    let tx = tx.clone();
-                                    let cancel_token = cancel_token.clone();
-                                    async move {
-                                        let mempool_txids = retry(
-                                            || bitcoin.get_raw_mempool(),
-                                            "get raw mempool",
-                                            new_backoff_unlimited(),
-                                            cancel_token.clone(),
-                                        )
-                                        .await
-                                        .expect("Unexpected error getting raw mempool");
-                                        info!("Getting mempool transactions: {}", mempool_txids.len());
-                                        let mut txs: Vec<Transaction> = vec![];
-                                        for txids in mempool_txids.chunks(100) {
-                                            if cancel_token.is_cancelled() {
-                                                break;
-                                            }
-
-                                            let results = retry(
-                                                || bitcoin.get_raw_transactions(txids),
-                                                "get raw transactions",
-                                                new_backoff_unlimited(),
-                                                cancel_token.clone(),
-                                            )
-                                            .await
-                                            .expect("Unexpected error getting raw mempool transactions");
-                                            txs.extend(results.into_iter().filter_map(Result::ok));
-                                            info!(
-                                                "Got mempool transaction: {}/{}",
-                                                txs.len(),
-                                                mempool_txids.len()
-                                            );
-                                        }
-                                        let _ = tx.send(ZmqEvent::MempoolTransactions(
-                                            txs.into_par_iter().map(f).collect(),
-                                        ));
-                                    }
-                                });
                             }
                         },
                         Some(Err(e)) => {
@@ -254,13 +247,14 @@ pub async fn run<T: Tx + 'static>(
                                     }))
                                 },
                                 SequenceMessage::TransactionAdded{txid, ..} => {
-                                    match retry(
-                                        || bitcoin.get_raw_transaction(&txid),
-                                        "get raw transaction",
-                                        new_backoff_limited(),
-                                        cancel_token.clone(),
-                                    )
-                                    .await
+                                    let cancel_token = cancel_token.clone();
+                                    match (|| bitcoin.get_raw_transaction(&txid))
+                                        .retry(new_backoff_limited())
+                                        .notify(notify("get raw transaction"))
+                                        .when(move |e| {
+                                            !e.to_string().contains("No such mempool or blockchain transaction") && !cancel_token.is_cancelled()
+                                        })
+                                        .await
                                     {
                                         Ok(transaction) => {
                                             let t = f(transaction);

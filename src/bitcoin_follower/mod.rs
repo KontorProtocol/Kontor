@@ -1,7 +1,6 @@
 use anyhow::Result;
 use bitcoin::Transaction;
 use events::Event;
-use indexmap::IndexSet;
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -22,16 +21,7 @@ pub async fn run<T: Tx + 'static>(
     f: fn(Transaction) -> T,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
-    let handle = reconciler::run(
-        config,
-        cancel_token.clone(),
-        reader,
-        bitcoin,
-        IndexSet::new(),
-        f,
-        tx,
-    )
-    .await?;
+    let handle = reconciler::run(config, cancel_token.clone(), reader, bitcoin, f, tx).await?;
     Ok(tokio::spawn(async move {
         if handle.await.is_err() {
             error!("Panicked on join");

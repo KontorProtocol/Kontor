@@ -50,6 +50,10 @@ impl<T: Tx + 'static> Fetcher<T> {
         }
     }
 
+    pub fn running(&self) -> bool {
+        self.handle.is_some()
+    }
+
     pub fn start(&mut self, start_height: u64) {
         info!("Starting at height: {}", start_height);
         self.handle = Some(tokio::spawn({
@@ -95,7 +99,11 @@ impl<T: Tx + 'static> Fetcher<T> {
                             }
 
                             if target_height < height {
-                                sleep(Duration::from_secs(10)).await;
+                                select! {
+                                    _ = sleep(Duration::from_secs(10)) => {}
+                                    _ = cancel_token.cancelled() => {}
+                                }
+
                                 continue;
                             }
 
