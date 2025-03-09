@@ -17,7 +17,7 @@ async fn test_database() -> Result<()> {
     let block_at_height = reader.get_block_at_height(height).await?.unwrap();
     assert_eq!(block_at_height.height, height);
     assert_eq!(block_at_height.hash, hash);
-    let last_block = reader.get_last_block().await?.unwrap();
+    let last_block = reader.get_block_latest().await?.unwrap();
     assert_eq!(last_block.height, height);
     assert_eq!(last_block.hash, hash);
 

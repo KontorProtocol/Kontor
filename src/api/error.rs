@@ -1,6 +1,6 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use thiserror::Error as ThisError;
-use tracing::error;
+use tracing::{Span, error};
 
 use super::response::ErrorResponse;
 
@@ -40,6 +40,7 @@ impl IntoResponse for Error {
         } else {
             (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string())
         };
+        Span::current().record("error", message.clone());
         let error_response = Json(ErrorResponse { error: message });
         (status, error_response).into_response()
     }

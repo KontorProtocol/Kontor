@@ -28,7 +28,7 @@ impl Reader {
             .context("Failed to get connection for database reader pool")
     }
 
-    pub async fn get_last_block(&self) -> Result<Option<BlockRow>> {
+    pub async fn get_block_latest(&self) -> Result<Option<BlockRow>> {
         let conn = self.get_connection().await?;
         let mut rows = conn
             .query(

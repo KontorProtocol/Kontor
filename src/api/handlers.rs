@@ -17,3 +17,10 @@ pub async fn get_block(
         None => Err(HttpError::NotFound(format!("block at height: {}", height)).into()),
     }
 }
+
+pub async fn get_block_latest(State(context): State<Context>) -> Result<Response<BlockRow>, Error> {
+    match context.reader.get_block_latest().await? {
+        Some(block_row) => Ok(block_row.into()),
+        None => Err(HttpError::NotFound("No blocks written".to_owned()).into()),
+    }
+}
