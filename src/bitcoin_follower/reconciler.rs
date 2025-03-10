@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use bitcoin::{BlockHash, Transaction, Txid};
+use bitcoin::{Transaction, Txid};
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use tokio::{
     select,
-    sync::mpsc::{self, Receiver, Sender, UnboundedSender},
+    sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
     time::sleep,
 };
@@ -25,6 +25,34 @@ use super::{
     events::{Event, ZmqEvent},
     zmq,
 };
+
+#[derive(Clone, PartialEq)]
+enum Mode {
+    Zmq,
+    Rpc,
+}
+
+struct State<T: Tx> {
+    cancel_token: CancellationToken,
+    mempool_cache: IndexMap<Txid, T>,
+    zmq_latest_block_height: Option<u64>,
+    rpc_latest_block_height: u64,
+    zmq_connected: bool,
+    mode: Mode,
+}
+
+impl<T: Tx> State<T> {
+    pub fn new(cancel_token: CancellationToken, start_height: u64) -> Self {
+        Self {
+            cancel_token,
+            mempool_cache: IndexMap::new(),
+            zmq_latest_block_height: None,
+            rpc_latest_block_height: start_height - 1,
+            zmq_connected: false,
+            mode: Mode::Rpc,
+        }
+    }
+}
 
 async fn zmq_runner<T: Tx + 'static>(
     config: Config,
@@ -91,12 +119,6 @@ fn handle_block<T: Tx>(mempool_cache: &mut IndexMap<Txid, T>, block: Block<T>) -
         },
         Event::Block(block),
     ]
-}
-
-#[derive(Clone, PartialEq)]
-enum Mode {
-    Zmq,
-    Rpc,
 }
 
 pub fn handle_new_mempool_transactions<T: Tx>(
@@ -168,6 +190,192 @@ pub async fn get_last_matching_block_height<T: Tx>(
     block.height - subtrahend
 }
 
+async fn handle_zmq_event<T: Tx + 'static>(
+    config: &Config,
+    reader: &database::Reader,
+    fetcher: &mut rpc::Fetcher<T>,
+    rx: &mut UnboundedReceiver<ZmqEvent<T>>,
+    state: &mut State<T>,
+    zmq_event: ZmqEvent<T>,
+) -> Vec<Event<T>> {
+    let events = match zmq_event {
+        ZmqEvent::Connected => {
+            info!("ZMQ connected: {}", config.zmq_pub_sequence_address);
+            state.zmq_connected = true;
+            // At program start, only run the fetcher after zmq is connected
+            if state.mode == Mode::Rpc && !fetcher.running() {
+                fetcher.start(state.rpc_latest_block_height + 1);
+            }
+            vec![]
+        }
+        ZmqEvent::Disconnected(e) => {
+            error!("ZMQ disconnected: {}", e);
+            state.zmq_connected = false;
+            if state.mode == Mode::Zmq {
+                state.mode = Mode::Rpc;
+                let height = if let Some(height) = state.zmq_latest_block_height {
+                    height + 1
+                } else {
+                    state.rpc_latest_block_height + 1
+                };
+                fetcher.start(height);
+            }
+            state.zmq_latest_block_height = None;
+            // Drain zmq event receiver
+            while !rx.is_empty() {
+                rx.recv().await;
+            }
+            vec![]
+        }
+        ZmqEvent::MempoolTransactions(txs) => {
+            vec![handle_new_mempool_transactions(
+                &mut state.mempool_cache,
+                txs,
+            )]
+        }
+        ZmqEvent::MempoolTransactionAdded(t) => {
+            let txid = t.txid();
+            if let Entry::Vacant(_) = state.mempool_cache.entry(txid) {
+                state.mempool_cache.insert(txid, t.clone());
+                vec![Event::MempoolUpdate {
+                    removed: vec![],
+                    added: vec![t],
+                }]
+            } else {
+                vec![]
+            }
+        }
+        ZmqEvent::MempoolTransactionRemoved(txid) => {
+            if state.mempool_cache.shift_remove(&txid).is_some() {
+                vec![Event::MempoolUpdate {
+                    removed: vec![txid],
+                    added: vec![],
+                }]
+            } else {
+                vec![]
+            }
+        }
+        ZmqEvent::BlockDisconnected(block_hash) => {
+            if state.mode == Mode::Zmq {
+                let block_row = retry(
+                    async || match reader.get_block_with_hash(&block_hash).await {
+                        Ok(Some(row)) => Ok(row),
+                        Ok(None) => Err(anyhow!("Block with hash not found: {}", &block_hash)),
+                        Err(e) => Err(e),
+                    },
+                    "get block with hash",
+                    new_backoff_unlimited(),
+                    state.cancel_token.clone(),
+                )
+                .await
+                .expect("Disconnect block should eventually exist in database");
+
+                let prev_block_row = retry(
+                    async || match reader.get_block_at_height(block_row.height - 1).await {
+                        Ok(Some(row)) => Ok(row),
+                        Ok(None) => Err(anyhow!(
+                            "Block at height not found: {}",
+                            block_row.height - 1
+                        )),
+                        Err(e) => Err(e),
+                    },
+                    "get block at height",
+                    new_backoff_unlimited(),
+                    state.cancel_token.clone(),
+                )
+                .await
+                .expect("Block at height below disconnected block should exist in database");
+
+                state.zmq_latest_block_height = Some(prev_block_row.height);
+                vec![Event::Rollback(prev_block_row.height)]
+            } else {
+                state.zmq_latest_block_height = None;
+                vec![]
+            }
+        }
+        ZmqEvent::BlockConnected(block) => {
+            if block.height > state.rpc_latest_block_height {
+                state.zmq_latest_block_height = Some(block.height);
+                handle_block(&mut state.mempool_cache, block)
+            } else {
+                vec![]
+            }
+        }
+    };
+
+    match state.mode {
+        Mode::Zmq => events,
+        Mode::Rpc => vec![],
+    }
+}
+
+async fn handle_rpc_event<T: Tx + 'static>(
+    reader: &database::Reader,
+    bitcoin: &bitcoin_client::Client,
+    fetcher: &mut rpc::Fetcher<T>,
+    rx: &mut Receiver<(u64, Block<T>)>,
+    state: &mut State<T>,
+    (target_height, block): (u64, Block<T>),
+) -> Vec<Event<T>> {
+    if in_reorg_window(target_height, block.height, 20) {
+        info!("In reorg window: {} {}", target_height, block.height);
+        let last_matching_block_height =
+            get_last_matching_block_height(state.cancel_token.clone(), reader, bitcoin, &block)
+                .await;
+        if last_matching_block_height != block.height - 1 {
+            warn!(
+                "Reorganization occured while RPC fetching: {}, {}",
+                block.height, last_matching_block_height
+            );
+            if let Err(e) = fetcher.stop().await {
+                error!("Fetcher panicked on join: {}", e);
+            }
+            // drain receive channel
+            while !rx.is_empty() {
+                let _ = rx.recv().await;
+            }
+            fetcher.start(last_matching_block_height + 1);
+            return vec![Event::Rollback(last_matching_block_height)];
+        }
+    }
+
+    state.rpc_latest_block_height = block.height;
+
+    let mut events = handle_block(&mut state.mempool_cache, block);
+    events[0] = Event::MempoolSet(vec![]);
+
+    if state.zmq_connected && target_height == state.rpc_latest_block_height {
+        let info = retry(
+            || bitcoin.get_blockchain_info(),
+            "get blockchain info",
+            new_backoff_unlimited(),
+            state.cancel_token.clone(),
+        )
+        .await
+        .expect("Unexpected");
+        if target_height == info.blocks {
+            info!("RPC caught up to ZMQ: {}", target_height);
+
+            state.mode = Mode::Zmq;
+
+            if let Err(e) = fetcher.stop().await {
+                error!("Fetcher panicked on join: {}", e);
+            }
+
+            // drain receive channel
+            while !rx.is_empty() {
+                let _ = rx.recv().await;
+            }
+
+            events.push(Event::MempoolSet(
+                state.mempool_cache.values().cloned().collect(),
+            ));
+        }
+    }
+
+    events
+}
+
 pub async fn run<T: Tx + 'static>(
     config: Config,
     cancel_token: CancellationToken,
@@ -177,7 +385,6 @@ pub async fn run<T: Tx + 'static>(
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let (zmq_tx, mut zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<T>>();
-    let (rpc_tx, mut rpc_rx) = mpsc::channel(10);
     let runner_cancel_token = CancellationToken::new();
     let runner_handle = zmq_runner(
         config.clone(),
@@ -188,6 +395,7 @@ pub async fn run<T: Tx + 'static>(
     )
     .await;
 
+    let (rpc_tx, mut rpc_rx) = mpsc::channel(10);
     let mut fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
 
     let start_height = reader
@@ -198,210 +406,18 @@ pub async fn run<T: Tx + 'static>(
         + 1;
 
     Ok(tokio::spawn(async move {
-        let handle_zmq_event = async |reader: &database::Reader,
-                                      mode: &mut Mode,
-                                      connected: &mut bool,
-                                      fetcher: &mut rpc::Fetcher<T>,
-                                      mempool_cache: &mut IndexMap<Txid, T>,
-                                      rpc_latest_block_height: &u64,
-                                      latest_block: &mut Option<(u64, BlockHash)>,
-                                      zmq_event: ZmqEvent<T>|
-               -> Vec<Event<T>> {
-            let events = match zmq_event {
-                ZmqEvent::Connected => {
-                    info!(
-                        "Connected to Bitcoin ZMQ @ {}",
-                        config.zmq_pub_sequence_address
-                    );
-                    *connected = true;
-                    if *mode == Mode::Rpc && !fetcher.running() {
-                        fetcher.start(start_height);
-                    }
-                    vec![]
-                }
-                ZmqEvent::Disconnected(e) => {
-                    error!("ZMQ disconnected: {}", e);
-                    *connected = false;
-                    if *mode == Mode::Zmq {
-                        *mode = Mode::Rpc;
-                        let height = if let Some((height, _)) = latest_block {
-                            *height + 1
-                        } else {
-                            rpc_latest_block_height + 1
-                        };
-                        fetcher.start(height);
-                    }
-                    *latest_block = None;
-                    vec![]
-                }
-                ZmqEvent::MempoolTransactions(txs) => {
-                    vec![handle_new_mempool_transactions(mempool_cache, txs)]
-                }
-                ZmqEvent::MempoolTransactionAdded(t) => {
-                    let txid = t.txid();
-                    if let Entry::Vacant(_) = mempool_cache.entry(txid) {
-                        mempool_cache.insert(txid, t.clone());
-                        vec![Event::MempoolUpdate {
-                            removed: vec![],
-                            added: vec![t],
-                        }]
-                    } else {
-                        vec![]
-                    }
-                }
-                ZmqEvent::MempoolTransactionRemoved(txid) => {
-                    if mempool_cache.shift_remove(&txid).is_some() {
-                        vec![Event::MempoolUpdate {
-                            removed: vec![txid],
-                            added: vec![],
-                        }]
-                    } else {
-                        vec![]
-                    }
-                }
-                ZmqEvent::BlockDisconnected(block_hash) => {
-                    if *mode == Mode::Zmq {
-                        let block_row = retry(
-                            async || match reader.get_block_with_hash(&block_hash).await {
-                                Ok(Some(row)) => Ok(row),
-                                Ok(None) => {
-                                    Err(anyhow!("Block with hash not found: {}", &block_hash))
-                                }
-                                Err(e) => Err(e),
-                            },
-                            "get block with hash",
-                            new_backoff_unlimited(),
-                            cancel_token.clone(),
-                        )
-                        .await
-                        .expect("Disconnect block should eventually exist in database");
-
-                        let prev_block_row = retry(
-                            async || match reader.get_block_at_height(block_row.height - 1).await {
-                                Ok(Some(row)) => Ok(row),
-                                Ok(None) => Err(anyhow!(
-                                    "Block at height not found: {}",
-                                    block_row.height - 1
-                                )),
-                                Err(e) => Err(e),
-                            },
-                            "get block at height",
-                            new_backoff_unlimited(),
-                            cancel_token.clone(),
-                        )
-                        .await
-                        .expect(
-                            "Block at height below disconnected block should exist in database",
-                        );
-
-                        *latest_block = Some((prev_block_row.height, prev_block_row.hash));
-                        vec![Event::Rollback(prev_block_row.height)]
-                    } else {
-                        *latest_block = None;
-                        vec![]
-                    }
-                }
-                ZmqEvent::BlockConnected(block) => {
-                    if block.height > *rpc_latest_block_height {
-                        *latest_block = Some((block.height, block.hash));
-                        handle_block(mempool_cache, block)
-                    } else {
-                        vec![]
-                    }
-                }
-            };
-
-            match mode {
-                Mode::Zmq => events,
-                Mode::Rpc => vec![],
-            }
-        };
-
-        let handle_rpc_event = async |reader: &database::Reader,
-                                      bitcoin: &bitcoin_client::Client,
-                                      mode: &mut Mode,
-                                      zmq_connected: &bool,
-                                      fetcher: &mut rpc::Fetcher<T>,
-                                      rpc_rx: &mut Receiver<(u64, Block<T>)>,
-                                      mempool_cache: &mut IndexMap<Txid, T>,
-                                      rpc_latest_block_height: &mut u64,
-                                      (target_height, block): (u64, Block<T>)|
-               -> Vec<Event<T>> {
-            if in_reorg_window(target_height, block.height, 20) {
-                info!("In reorg window: {} {}", target_height, block.height);
-                let last_matching_block_height =
-                    get_last_matching_block_height(cancel_token.clone(), reader, bitcoin, &block)
-                        .await;
-                if last_matching_block_height != block.height - 1 {
-                    warn!(
-                        "Reorganization occured while RPC fetching: {}, {}",
-                        block.height, last_matching_block_height
-                    );
-                    if let Err(e) = fetcher.stop().await {
-                        error!("Fetcher panicked on join: {}", e);
-                    }
-                    // drain receive channel
-                    while !rpc_rx.is_empty() {
-                        let _ = rpc_rx.recv().await;
-                    }
-                    fetcher.start(last_matching_block_height + 1);
-                    return vec![Event::Rollback(last_matching_block_height)];
-                }
-            }
-
-            *rpc_latest_block_height = block.height;
-
-            let mut events = handle_block(mempool_cache, block);
-            events[0] = Event::MempoolSet(vec![]);
-
-            if *zmq_connected && target_height == *rpc_latest_block_height {
-                let info = retry(
-                    || bitcoin.get_blockchain_info(),
-                    "get blockchain info",
-                    new_backoff_unlimited(),
-                    cancel_token.clone(),
-                )
-                .await
-                .expect("Unexpected");
-                if target_height == info.blocks {
-                    info!("RPC caught up to ZMQ: {}", target_height);
-
-                    *mode = Mode::Zmq;
-
-                    if let Err(e) = fetcher.stop().await {
-                        error!("Fetcher panicked on join: {}", e);
-                    }
-
-                    // drain receive channel
-                    while !rpc_rx.is_empty() {
-                        let _ = rpc_rx.recv().await;
-                    }
-
-                    events.push(Event::MempoolSet(mempool_cache.values().cloned().collect()));
-                }
-            }
-
-            events
-        };
-
-        let mut mempool_cache = IndexMap::new();
-        let mut zmq_latest_block = None;
-        let mut rpc_latest_block_height = start_height - 1;
-        let mut zmq_connected = false;
-        let mut mode = Mode::Rpc;
+        let mut state = State::new(cancel_token.clone(), start_height);
         'outer: loop {
             select! {
                 option_zmq_event = zmq_rx.recv() => {
                     match option_zmq_event {
                         Some(zmq_event) => {
                             for event in handle_zmq_event(
+                                &config,
                                 &reader,
-                                &mut mode,
-                                &mut zmq_connected,
                                 &mut fetcher,
-                                &mut mempool_cache,
-                                &rpc_latest_block_height,
-                                &mut zmq_latest_block,
+                                &mut zmq_rx,
+                                &mut state,
                                 zmq_event
                             ).await {
                                 if tx.send(event).await.is_err() {
@@ -423,12 +439,9 @@ pub async fn run<T: Tx + 'static>(
                             for event in handle_rpc_event(
                                 &reader,
                                 &bitcoin,
-                                &mut mode,
-                                &zmq_connected,
                                 &mut fetcher,
                                 &mut rpc_rx,
-                                &mut mempool_cache,
-                                &mut rpc_latest_block_height,
+                                &mut state,
                                 rpc_event
                             ).await {
                                 if tx.send(event).await.is_err() {
