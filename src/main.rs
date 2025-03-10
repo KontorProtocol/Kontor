@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     let bitcoin = bitcoin_client::Client::new_from_config(config.clone())?;
     let cancel_token = CancellationToken::new();
     let mut handles = vec![];
-    handles.push(stopper::run(cancel_token.clone()));
+    handles.push(stopper::run(cancel_token.clone())?);
     let db_path = config.database_dir.join("state.db");
     let reader = database::Reader::new(&db_path).await?;
     let writer = database::Writer::new(&db_path).await?;

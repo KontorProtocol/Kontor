@@ -91,7 +91,7 @@ impl MonitorMessage {
         if multipart.is_empty() || multipart[0].len() < 2 {
             return Err(anyhow!("Received invalid multipart message"));
         }
-        let event_type = u16::from_le_bytes(multipart[0][0..2].try_into().unwrap());
+        let event_type = u16::from_le_bytes(multipart[0][0..2].try_into()?);
         Ok(MonitorMessage::from_raw(event_type))
     }
 }

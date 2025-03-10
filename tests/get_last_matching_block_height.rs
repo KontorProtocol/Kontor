@@ -39,7 +39,7 @@ async fn test_no_reorg() -> Result<()> {
         })
         .await?;
 
-    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await;
+    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await?;
     assert_eq!(
         result, prev_height,
         "Should return height-1 when prev_hash matches DB at height-1"
@@ -74,7 +74,7 @@ async fn test_single_block_reorg() -> Result<()> {
         })
         .await?;
 
-    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await;
+    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await?;
     assert_eq!(
         result, prev_prev_height,
         "Should return height-2 when prev_hash matches height-2"
@@ -117,7 +117,7 @@ async fn test_multi_block_reorg() -> Result<()> {
         })
         .await?;
 
-    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await;
+    let result = get_last_matching_block_height(cancel_token, &reader, &bitcoin, &block).await?;
     assert_eq!(
         result, prev_prev_prev_height,
         "Should return height-3 when prev_hash matches height-3"

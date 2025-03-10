@@ -240,7 +240,7 @@ pub async fn run<T: Tx + 'static>(
                                     .await
                                     .context("Failed to get block handling BlockConnected sequence message")?;
                                     Some(ZmqEvent::BlockConnected(Block {
-                                        height: block.bip34_block_height().unwrap(),
+                                        height: block.bip34_block_height()?,
                                         hash: block.block_hash(),
                                         prev_hash: block.header.prev_blockhash,
                                         transactions: block.txdata.into_par_iter().map(f).collect(),

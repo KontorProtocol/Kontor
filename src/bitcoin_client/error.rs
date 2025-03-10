@@ -21,4 +21,6 @@ pub enum Error {
     BitcoinRpc { code: i32, message: String },
     #[error("Deserialize hex error: {0}")]
     DeserializeHex(#[from] bitcoin::consensus::encode::FromHexError),
+    #[error("Invalid header value error: {0}")]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
 }

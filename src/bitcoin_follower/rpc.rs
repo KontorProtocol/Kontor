@@ -136,7 +136,11 @@ impl<T: Tx + 'static> Fetcher<T> {
                                             let bitcoin = bitcoin.clone();
                                             let cancel_token = cancel_token.clone();
                                             let tx = tx_2.clone();
-                                            let permit = semaphore.clone().acquire_owned().await.unwrap();
+                                            let permit = semaphore
+                                                .clone()
+                                                .acquire_owned()
+                                                .await
+                                                .expect("semaphore.acquired_owned failed despite never being closed");
                                             tokio::spawn(
                                                 async move {
                                                     let _permit = permit;
@@ -189,7 +193,11 @@ impl<T: Tx + 'static> Fetcher<T> {
                                     match option_block {
                                         Some((target_height, height, block)) => {
                                             let tx = tx_3.clone();
-                                            let permit = semaphore.clone().acquire_owned().await.unwrap();
+                                            let permit = semaphore
+                                                .clone()
+                                                .acquire_owned()
+                                                .await
+                                                .expect("semaphore.acquired_owned failed despite never being closed");
                                             tokio::spawn(
                                                 async move {
                                                     let _permit = permit;

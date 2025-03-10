@@ -35,7 +35,10 @@ where
 impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = if self.0.is::<HttpError>() {
-            let http_error = self.0.downcast_ref::<HttpError>().unwrap();
+            let http_error = self
+                .0
+                .downcast_ref::<HttpError>()
+                .expect("downcast_ref failed despite is::<HttpError>() being true");
             (http_error.status_code(), http_error.to_string())
         } else {
             (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string())

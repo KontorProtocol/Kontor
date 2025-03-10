@@ -1,3 +1,4 @@
+use anyhow::Result;
 use tokio::{
     select,
     signal::{
@@ -9,9 +10,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-pub fn run(cancel_token: CancellationToken) -> JoinHandle<()> {
-    task::spawn(async move {
-        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to listen for SIGTERM");
+pub fn run(cancel_token: CancellationToken) -> Result<JoinHandle<()>> {
+    let mut sigterm = signal(SignalKind::terminate())?;
+    Ok(task::spawn(async move {
         select! {
             _ = cancel_token.cancelled() => warn!("Cancelled"),
             _ = ctrl_c() => warn!("Ctrl+C received"),
@@ -20,5 +21,5 @@ pub fn run(cancel_token: CancellationToken) -> JoinHandle<()> {
         info!("Initiating shutdown");
         cancel_token.cancel();
         info!("Exited");
-    })
+    }))
 }

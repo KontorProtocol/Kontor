@@ -26,12 +26,9 @@ impl Client {
             .default_headers({
                 let mut headers = HeaderMap::new();
                 let auth_str = BASE64_STANDARD.encode(format!("{}:{}", user, password));
-                headers.insert(
-                    "Authorization",
-                    format!("Basic {}", auth_str).parse().unwrap(),
-                );
-                headers.insert("Content-Type", "application/json".parse().unwrap());
-                headers.insert("Accept", "application/json".parse().unwrap());
+                headers.insert("Authorization", format!("Basic {}", auth_str).parse()?);
+                headers.insert("Content-Type", "application/json".parse()?);
+                headers.insert("Accept", "application/json".parse()?);
                 headers
             })
             .build()?;
@@ -145,10 +142,7 @@ impl Client {
         let hex: String = self
             .call(
                 "getrawtransaction",
-                vec![
-                    serde_json::to_value(txid).unwrap(),
-                    serde_json::to_value(false).unwrap(),
-                ],
+                vec![serde_json::to_value(txid)?, serde_json::to_value(false)?],
             )
             .await?;
         Ok(encode::deserialize_hex(&hex)?)
@@ -158,18 +152,13 @@ impl Client {
         &self,
         txids: &[Txid],
     ) -> Result<Vec<Result<Transaction, Error>>, Error> {
-        let calls = txids
-            .iter()
-            .map(|txid| {
-                (
-                    "getrawtransaction".to_owned(),
-                    vec![
-                        serde_json::to_value(txid).unwrap(),
-                        serde_json::to_value(false).unwrap(),
-                    ],
-                )
-            })
-            .collect();
+        let mut calls = vec![];
+        for txid in txids {
+            calls.push((
+                "getrawtransaction".to_owned(),
+                vec![serde_json::to_value(txid)?, serde_json::to_value(false)?],
+            ))
+        }
         let results: Vec<Result<String, Error>> = self.batch_call(calls).await?;
         Ok(results
             .into_par_iter()

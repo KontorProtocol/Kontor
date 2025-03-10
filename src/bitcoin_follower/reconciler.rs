@@ -151,7 +151,7 @@ pub async fn get_last_matching_block_height<T: Tx>(
     reader: &database::Reader,
     bitcoin: &bitcoin_client::Client,
     block: &Block<T>,
-) -> u64 {
+) -> Result<u64> {
     let mut prev_block_hash = block.prev_hash;
     let mut subtrahend = 1;
     loop {
@@ -168,8 +168,7 @@ pub async fn get_last_matching_block_height<T: Tx>(
             new_backoff_unlimited(),
             cancel_token.clone(),
         )
-        .await
-        .expect("Block at height below new block should exist in database");
+        .await?;
 
         if prev_block_row.hash == prev_block_hash {
             break;
@@ -183,11 +182,10 @@ pub async fn get_last_matching_block_height<T: Tx>(
             new_backoff_unlimited(),
             cancel_token.clone(),
         )
-        .await
-        .expect("Block hash should be returned by bitcoin");
+        .await?;
     }
 
-    block.height - subtrahend
+    Ok(block.height - subtrahend)
 }
 
 async fn handle_zmq_event<T: Tx + 'static>(
@@ -197,7 +195,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
     rx: &mut UnboundedReceiver<ZmqEvent<T>>,
     state: &mut State<T>,
     zmq_event: ZmqEvent<T>,
-) -> Vec<Event<T>> {
+) -> Result<Vec<Event<T>>> {
     let events = match zmq_event {
         ZmqEvent::Connected => {
             info!("ZMQ connected: {}", config.zmq_pub_sequence_address);
@@ -267,8 +265,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
                     new_backoff_unlimited(),
                     state.cancel_token.clone(),
                 )
-                .await
-                .expect("Disconnect block should eventually exist in database");
+                .await?;
 
                 let prev_block_row = retry(
                     async || match reader.get_block_at_height(block_row.height - 1).await {
@@ -283,8 +280,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
                     new_backoff_unlimited(),
                     state.cancel_token.clone(),
                 )
-                .await
-                .expect("Block at height below disconnected block should exist in database");
+                .await?;
 
                 state.zmq_latest_block_height = Some(prev_block_row.height);
                 vec![Event::Rollback(prev_block_row.height)]
@@ -303,10 +299,10 @@ async fn handle_zmq_event<T: Tx + 'static>(
         }
     };
 
-    match state.mode {
+    Ok(match state.mode {
         Mode::Zmq => events,
         Mode::Rpc => vec![],
-    }
+    })
 }
 
 async fn handle_rpc_event<T: Tx + 'static>(
@@ -316,12 +312,12 @@ async fn handle_rpc_event<T: Tx + 'static>(
     rx: &mut Receiver<(u64, Block<T>)>,
     state: &mut State<T>,
     (target_height, block): (u64, Block<T>),
-) -> Vec<Event<T>> {
+) -> Result<Vec<Event<T>>> {
     if in_reorg_window(target_height, block.height, 20) {
         info!("In reorg window: {} {}", target_height, block.height);
         let last_matching_block_height =
             get_last_matching_block_height(state.cancel_token.clone(), reader, bitcoin, &block)
-                .await;
+                .await?;
         if last_matching_block_height != block.height - 1 {
             warn!(
                 "Reorganization occured while RPC fetching: {}, {}",
@@ -335,7 +331,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
                 let _ = rx.recv().await;
             }
             fetcher.start(last_matching_block_height + 1);
-            return vec![Event::Rollback(last_matching_block_height)];
+            return Ok(vec![Event::Rollback(last_matching_block_height)]);
         }
     }
 
@@ -351,8 +347,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
             new_backoff_unlimited(),
             state.cancel_token.clone(),
         )
-        .await
-        .expect("Unexpected");
+        .await?;
         if target_height == info.blocks {
             info!("RPC caught up to ZMQ: {}", target_height);
 
@@ -373,7 +368,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
         }
     }
 
-    events
+    Ok(events)
 }
 
 pub async fn run<T: Tx + 'static>(
@@ -412,17 +407,26 @@ pub async fn run<T: Tx + 'static>(
                 option_zmq_event = zmq_rx.recv() => {
                     match option_zmq_event {
                         Some(zmq_event) => {
-                            for event in handle_zmq_event(
+                            match handle_zmq_event(
                                 &config,
                                 &reader,
                                 &mut fetcher,
                                 &mut zmq_rx,
                                 &mut state,
                                 zmq_event
-                            ).await {
-                                if tx.send(event).await.is_err() {
-                                    info!("Send channel closed, exiting");
-                                    break 'outer;
+                            )
+                            .await {
+                                Ok(events) => {
+                                    for event in events {
+                                        if tx.send(event).await.is_err() {
+                                            info!("Send channel closed, exiting");
+                                            break 'outer;
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Handling zmq event resulted in error implying cancellation, exiting: {}", e);
+                                    break;
                                 }
                             }
                         },
@@ -436,17 +440,26 @@ pub async fn run<T: Tx + 'static>(
                 option_rpc_event = rpc_rx.recv() => {
                     match option_rpc_event {
                         Some(rpc_event) => {
-                            for event in handle_rpc_event(
+                            match handle_rpc_event(
                                 &reader,
                                 &bitcoin,
                                 &mut fetcher,
                                 &mut rpc_rx,
                                 &mut state,
                                 rpc_event
-                            ).await {
-                                if tx.send(event).await.is_err() {
-                                    info!("Send channel closed, exiting");
-                                    break 'outer;
+                            )
+                            .await {
+                                Ok(events) => {
+                                    for event in events {
+                                        if tx.send(event).await.is_err() {
+                                            info!("Send channel closed, exiting");
+                                            break 'outer;
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Handling rpc event resulted in error implying cancellation, exiting: {}", e);
+                                    break;
                                 }
                             }
                         },
