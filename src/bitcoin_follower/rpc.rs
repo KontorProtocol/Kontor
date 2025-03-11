@@ -293,6 +293,7 @@ impl<T: Tx + 'static> Fetcher<T> {
             info!("Exiting");
             self.cancel_token.cancel();
             handle.await?;
+            self.cancel_token = CancellationToken::new();
         }
         info!("Exited");
         Ok(())
