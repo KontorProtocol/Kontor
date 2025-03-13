@@ -27,7 +27,7 @@ pub fn run<T: Tx + 'static>(
                         match option_event {
                             Some(event) => {
                                 match event {
-                                    Event::Block(block) => {
+                                    Event::Block((target_height, block)) => {
                                         let height = block.height;
                                         let hash = block.hash;
                                         if let Some(last_height) = option_last_height {
@@ -43,7 +43,7 @@ pub fn run<T: Tx + 'static>(
                                                 hash,
                                             }
                                         ).await.unwrap();
-                                        info!("Block {} {}", height, hash);
+                                        info!("Block {}/{} {}", height, target_height, hash);
                                     },
                                     Event::Rollback(height) => {
                                         writer.rollback_to_height(height).await.unwrap();

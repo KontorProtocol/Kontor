@@ -17,6 +17,6 @@ pub enum ZmqEvent<T: Tx> {
 pub enum Event<T: Tx> {
     MempoolUpdate { removed: Vec<Txid>, added: Vec<T> },
     MempoolSet(Vec<T>),
-    Block(Block<T>),
+    Block((u64, Block<T>)),
     Rollback(u64),
 }

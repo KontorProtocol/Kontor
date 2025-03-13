@@ -137,7 +137,11 @@ fn in_reorg_window(target_height: u64, height: u64, reorg_window: u64) -> bool {
     height >= target_height - reorg_window
 }
 
-fn handle_block<T: Tx>(mempool_cache: &mut IndexMap<Txid, T>, block: Block<T>) -> Vec<Event<T>> {
+fn handle_block<T: Tx>(
+    mempool_cache: &mut IndexMap<Txid, T>,
+    target_height: u64,
+    block: Block<T>,
+) -> Vec<Event<T>> {
     let mut removed = vec![];
     for t in block.transactions.iter() {
         let txid = t.txid();
@@ -150,7 +154,7 @@ fn handle_block<T: Tx>(mempool_cache: &mut IndexMap<Txid, T>, block: Block<T>) -
             removed,
             added: vec![],
         },
-        Event::Block(block),
+        Event::Block((target_height, block)),
     ]
 }
 
@@ -397,7 +401,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
         ZmqEvent::BlockConnected(block) => {
             if block.height > state.rpc_latest_block_height {
                 state.zmq_latest_block_height = Some(block.height);
-                handle_block(&mut state.mempool_cache, block)
+                handle_block(&mut state.mempool_cache, block.height, block)
             } else {
                 vec![]
             }
@@ -443,7 +447,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
 
     state.rpc_latest_block_height = block.height;
 
-    let mut events = handle_block(&mut state.mempool_cache, block);
+    let mut events = handle_block(&mut state.mempool_cache, target_height, block);
     events[0] = Event::MempoolSet(vec![]);
 
     if state.zmq_connected && target_height == state.rpc_latest_block_height {
