@@ -17,7 +17,7 @@ use tower_http::{
 use tracing::{Level, Span, error, field, info, span};
 
 use super::{
-    context::Context,
+    Env,
     handlers::{get_block, get_block_latest},
     response::ErrorResponse,
 };
@@ -77,7 +77,7 @@ fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> axum::response::Respons
         .into_response()
 }
 
-pub fn new(context: Context) -> Router {
+pub fn new(context: Env) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
     Router::new()

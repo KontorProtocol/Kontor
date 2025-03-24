@@ -1,5 +1,6 @@
-mod connection;
+pub mod connection;
 mod pool;
+pub mod queries;
 pub mod reader;
 mod tables;
 pub mod types;

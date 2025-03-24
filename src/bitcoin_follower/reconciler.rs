@@ -17,7 +17,10 @@ use crate::{
     bitcoin_follower::rpc,
     block::{Block, Tx},
     config::Config,
-    database,
+    database::{
+        self,
+        queries::{select_block_at_height, select_block_latest, select_block_with_hash},
+    },
     retry::{new_backoff_unlimited, retry},
 };
 
@@ -194,7 +197,12 @@ pub async fn get_last_matching_block_height(
     let mut subtrahend = 1;
     loop {
         let prev_block_row = retry(
-            async || match reader.get_block_at_height(block_height - subtrahend).await {
+            async || match select_block_at_height(
+                &*reader.connection().await?,
+                block_height - subtrahend,
+            )
+            .await
+            {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(anyhow!(
                     "Block at height not found: {}",
@@ -245,14 +253,8 @@ async fn handle_zmq_event<T: Tx + 'static>(
                 )
                 .await?;
 
-                let option_block_row = retry(
-                    || env.reader.get_block_latest(),
-                    "get block latest",
-                    new_backoff_unlimited(),
-                    env.cancel_token.clone(),
-                )
-                .await?;
-
+                let option_block_row =
+                    select_block_latest(&*env.reader.connection().await?).await?;
                 let caught_up = option_block_row
                     .as_ref()
                     .is_some_and(|b| b.height == info.blocks);
@@ -365,7 +367,12 @@ async fn handle_zmq_event<T: Tx + 'static>(
         ZmqEvent::BlockDisconnected(block_hash) => {
             if state.mode == Mode::Zmq {
                 let block_row = retry(
-                    async || match env.reader.get_block_with_hash(&block_hash).await {
+                    async || match select_block_with_hash(
+                        &*env.reader.connection().await?,
+                        &block_hash,
+                    )
+                    .await
+                    {
                         Ok(Some(row)) => Ok(row),
                         Ok(None) => Err(anyhow!("Block with hash not found: {}", &block_hash)),
                         Err(e) => Err(e),
@@ -377,7 +384,12 @@ async fn handle_zmq_event<T: Tx + 'static>(
                 .await?;
 
                 let prev_block_row = retry(
-                    async || match env.reader.get_block_at_height(block_row.height - 1).await {
+                    async || match select_block_at_height(
+                        &*env.reader.connection().await?,
+                        block_row.height - 1,
+                    )
+                    .await
+                    {
                         Ok(Some(row)) => Ok(row),
                         Ok(None) => Err(anyhow!(
                             "Block at height not found: {}",
@@ -495,8 +507,7 @@ pub async fn run<T: Tx + 'static>(
         f,
     );
 
-    let start_height = reader
-        .get_block_latest()
+    let start_height = select_block_latest(&*env.reader.connection().await?)
         .await?
         .map(|block_row| block_row.height)
         .unwrap_or(config.starting_block_height - 1)

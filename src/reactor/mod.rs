@@ -5,7 +5,11 @@ use tracing::{error, info};
 use crate::{
     bitcoin_follower::events::Event,
     block::Tx,
-    database::{self, types::BlockRow},
+    database::{
+        self,
+        queries::{insert_block, rollback_to_height},
+        types::BlockRow,
+    },
 };
 
 pub fn run<T: Tx + 'static>(
@@ -37,7 +41,8 @@ pub fn run<T: Tx + 'static>(
                                             }
                                         }
                                         option_last_height = Some(height);
-                                        writer.insert_block(
+                                        insert_block(
+                                            &writer.connection(),
                                             BlockRow {
                                                 height,
                                                 hash,
@@ -46,7 +51,7 @@ pub fn run<T: Tx + 'static>(
                                         info!("Block {}/{} {}", height, target_height, hash);
                                     },
                                     Event::Rollback(height) => {
-                                        writer.rollback_to_height(height).await.unwrap();
+                                        rollback_to_height(&writer.connection(), height).await.unwrap();
                                         option_last_height = Some(height);
                                         info!("Rollback {}" ,height);
                                     },

@@ -6,7 +6,7 @@ use kontor::{
     bitcoin_follower::reconciler::get_last_matching_block_height,
     block::Block,
     config::Config,
-    database::types::BlockRow,
+    database::{queries::insert_block, types::BlockRow},
     utils::{MockTransaction, new_mock_block_hash, new_test_db},
 };
 use tokio_util::sync::CancellationToken;
@@ -32,12 +32,14 @@ async fn test_no_reorg() -> Result<()> {
     let prev_hash = bitcoin.get_block_hash(prev_height).await?; // Real, must match DB
     let block = new_minimal_block(height, hash, prev_hash);
 
-    writer
-        .insert_block(BlockRow {
+    insert_block(
+        &writer.connection(),
+        BlockRow {
             height: prev_height,
             hash: prev_hash,
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let result = get_last_matching_block_height(
         cancel_token,
@@ -68,18 +70,23 @@ async fn test_single_block_reorg() -> Result<()> {
     let db_prev_hash = new_mock_block_hash(1000); // Fake, non-matching
     let block = new_minimal_block(height, hash, prev_hash);
 
-    writer
-        .insert_block(BlockRow {
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow {
             height: prev_height,
             hash: db_prev_hash,
-        })
-        .await?;
-    writer
-        .insert_block(BlockRow {
+        },
+    )
+    .await?;
+    insert_block(
+        &conn,
+        BlockRow {
             height: prev_prev_height,
             hash: prev_hash,
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let result = get_last_matching_block_height(
         cancel_token,
@@ -112,24 +119,31 @@ async fn test_multi_block_reorg() -> Result<()> {
     let db_prev_prev_hash = new_mock_block_hash(1001); // Fake, non-matching
     let block = new_minimal_block(height, hash, prev_hash);
 
-    writer
-        .insert_block(BlockRow {
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow {
             height: prev_height,
             hash: db_prev_hash,
-        })
-        .await?;
-    writer
-        .insert_block(BlockRow {
+        },
+    )
+    .await?;
+    insert_block(
+        &conn,
+        BlockRow {
             height: prev_prev_height,
             hash: db_prev_prev_hash,
-        })
-        .await?;
-    writer
-        .insert_block(BlockRow {
+        },
+    )
+    .await?;
+    insert_block(
+        &conn,
+        BlockRow {
             height: prev_prev_prev_height,
             hash: prev_hash,
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let result = get_last_matching_block_height(
         cancel_token,
