@@ -3,6 +3,7 @@ pub mod error;
 pub mod handlers;
 pub mod response;
 pub mod router;
+pub mod ws;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -32,7 +33,7 @@ pub async fn run(env: Env) -> Result<JoinHandle<()>> {
     Ok(tokio::spawn(async move {
         if axum_server::bind_rustls(addr, config)
             .handle(handle)
-            .serve(router::new(env).into_make_service())
+            .serve(router::new(env).into_make_service_with_connect_info::<SocketAddr>())
             .await
             .is_err()
         {

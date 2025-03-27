@@ -9,6 +9,11 @@ use crate::{
     database::{Reader, Writer},
 };
 
+pub enum ControlFlow {
+    Continue,
+    Break,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MockTransaction {
     txid: Txid,

@@ -4,8 +4,9 @@ use axum::{
     Json, Router,
     http::{HeaderName, Request, Response},
     response::IntoResponse,
-    routing::get,
+    routing::{any, get},
 };
+use reqwest::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -20,6 +21,7 @@ use super::{
     Env,
     handlers::{get_block, get_block_latest},
     response::ErrorResponse,
+    ws,
 };
 
 #[derive(Clone)]
@@ -47,7 +49,7 @@ impl<B> MakeSpan<B> for CustomMakeSpan {
 struct CustomOnResponse;
 impl<B> OnResponse<B> for CustomOnResponse {
     fn on_response(self, res: &Response<B>, latency: Duration, _: &Span) {
-        if res.status().is_success() {
+        if res.status().is_success() || res.status() == StatusCode::SWITCHING_PROTOCOLS {
             info!("{} {}ms", res.status(), latency.as_millis());
         } else {
             error!("{} {}ms", res.status(), latency.as_millis());
@@ -87,6 +89,7 @@ pub fn new(context: Env) -> Router {
                 .route("/block/{height}", get(get_block))
                 .route("/block/latest", get(get_block_latest)),
         )
+        .route("/ws", any(ws::handler))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(

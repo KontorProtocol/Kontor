@@ -24,7 +24,7 @@ scopeguard = "1.2.0"
 rayon = "1.10.0"
 indexmap = "2.7.1"
 clap = { version = "4.5", features = ["derive", "env"] }
-axum = { version = "0.8", features = ["http2"] }
+axum = { version = "0.8", features = ["http2", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", features = [
   "logging",
@@ -40,3 +40,8 @@ tower-http = { version = "0.6", features = [
   "cors",
 ] }
 tower = "0.5"
+rustls-native-certs = "0.8.1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
