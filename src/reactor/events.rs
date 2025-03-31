@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_CAPACITY: usize = 100;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Event {
     pub contract_address: String,
     pub event_signature: String,
@@ -18,7 +18,7 @@ pub struct Event {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum EventFilter {
     All,
@@ -28,7 +28,7 @@ pub enum EventFilter {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventSignatureFilter {
     pub signature: String,
     pub topic_values: Option<Vec<Value>>,

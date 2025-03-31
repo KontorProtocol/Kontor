@@ -23,16 +23,18 @@ use super::Env;
 
 const MAX_SEND_MILLIS: u64 = 1000;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Request {
     Subscribe { filter: EventFilter },
+    Unsubscribe { id: usize },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Response {
     SubscribeResponse { id: usize },
+    UnsubscribeResponse { id: usize },
     Event { id: usize, event: Event },
     Error { error: String },
 }
@@ -73,6 +75,19 @@ pub async fn handle_message(
             state.subscription_ids.insert(id);
             info!("Subscribed with ID: {}", id);
             Some(Response::SubscribeResponse { id })
+        }
+        Request::Unsubscribe { id } => {
+            info!("Received unsubscribe request for ID: {}", id);
+            if state.subscription_ids.remove(&id) {
+                let _ = env.event_subscriber.unsubscribe(id).await;
+                info!("Unsubscribed ID: {}", id);
+                Some(Response::UnsubscribeResponse { id })
+            } else {
+                warn!("Unsubscribe failed: ID {} not found", id);
+                Some(Response::Error {
+                    error: format!("Subscription ID {} not found", id),
+                })
+            }
         }
     }
 }
