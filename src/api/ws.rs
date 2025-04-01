@@ -10,6 +10,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::{select, sync::broadcast, time::timeout};
 use tower_http::request_id::RequestId;
 use tracing::{Instrument, info, info_span, warn};
@@ -35,7 +36,7 @@ pub enum Request {
 pub enum Response {
     SubscribeResponse { id: usize },
     UnsubscribeResponse { id: usize },
-    Event { id: usize, event: Event },
+    Event { id: usize, event: Value },
     Error { error: String },
 }
 
@@ -200,7 +201,7 @@ pub async fn handle_socket(
                                 }));
                             }
 
-                            let msg = Response::Event { id, event };
+                            let msg = Response::Event { id, event: event.data };
                             let json = serde_json::to_string(&msg).expect("Failed to serialize event");
                             if timeout(
                                 Duration::from_millis(MAX_SEND_MILLIS),

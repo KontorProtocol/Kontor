@@ -125,7 +125,7 @@ async fn test_websocket_server() -> Result<()> {
         event_response,
         Response::Event {
             id: id_all,
-            event: event1.clone()
+            event: event1.data.clone()
         }
     );
 
@@ -136,7 +136,7 @@ async fn test_websocket_server() -> Result<()> {
         event_response,
         Response::Event {
             id: id_specific,
-            event: event1.clone()
+            event: event1.data
         }
     );
 
@@ -147,7 +147,7 @@ async fn test_websocket_server() -> Result<()> {
         event_response,
         Response::Event {
             id: id_all,
-            event: event2.clone()
+            event: event2.data
         }
     );
 
