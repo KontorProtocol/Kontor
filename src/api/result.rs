@@ -1,10 +1,7 @@
 use axum::{Json, response::IntoResponse};
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
+use super::error::Error;
 
 #[derive(Debug, Serialize)]
 pub struct ResultResponse<T: Serialize> {
@@ -25,3 +22,5 @@ impl<T: Serialize> From<T> for Response<T> {
         Response(Json(ResultResponse { result: value }))
     }
 }
+
+pub type Result<T> = std::result::Result<Response<T>, Error>;

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{select, sync::broadcast, time::timeout};
 use tower_http::request_id::RequestId;
-use tracing::{Instrument, info, info_span, warn};
+use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     reactor::events::{Event, EventFilter},
@@ -218,7 +218,7 @@ pub async fn handle_socket(
                             state.subscription_ids.remove(&id);
                             warn!("Subscription channel {} closed", id);
                         }
-                        Err(e) => warn!("Error receiving event: {}", e),
+                        Err(e) => error!("Error receiving event: {}", e),
                     }
                 }
                 option_result_message = socket.recv() => match option_result_message {

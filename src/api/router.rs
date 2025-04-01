@@ -19,8 +19,8 @@ use tracing::{Level, Span, error, field, info, span};
 
 use super::{
     Env,
+    error::ErrorResponse,
     handlers::{get_block, get_block_latest},
-    response::ErrorResponse,
     ws,
 };
 

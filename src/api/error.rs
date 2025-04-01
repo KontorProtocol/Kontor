@@ -1,8 +1,7 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
+use serde::Serialize;
 use thiserror::Error as ThisError;
 use tracing::{Span, error};
-
-use super::response::ErrorResponse;
 
 #[derive(ThisError, Debug)]
 pub enum HttpError {
@@ -30,6 +29,11 @@ where
     fn from(err: E) -> Self {
         Self(err.into())
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
 }
 
 impl IntoResponse for Error {

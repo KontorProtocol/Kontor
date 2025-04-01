@@ -1,7 +1,7 @@
 pub mod env;
 pub mod error;
 pub mod handlers;
-pub mod response;
+pub mod result;
 pub mod router;
 pub mod ws;
 
