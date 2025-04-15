@@ -5,6 +5,7 @@ use reqwest::{Client as HttpClient, ClientBuilder, header::HeaderMap};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::bitcoin_client::types::TestMempoolAcceptResult;
 use crate::config::Config;
 
 use super::{
@@ -164,5 +165,12 @@ impl Client {
             .into_par_iter()
             .map(|result| result.and_then(|hex| Ok(encode::deserialize_hex::<Transaction>(&hex)?)))
             .collect())
+    }
+
+    pub async fn test_mempool_accept(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<Vec<TestMempoolAcceptResult>, Error> {
+        self.call("testmempoolaccept", vec![raw_txs.into()]).await
     }
 }

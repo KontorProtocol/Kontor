@@ -7,7 +7,7 @@ use tracing::{Span, error};
 pub enum HttpError {
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Not found: {0}")]
+    #[error("Bad request: {0}")]
     BadRequest(String),
 }
 
