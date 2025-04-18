@@ -5,6 +5,7 @@ use bitcoin::PrivateKey;
 use bitcoin::Psbt;
 use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
+use bitcoin::XOnlyPublicKey;
 use bitcoin::bip32::{DerivationPath, Xpriv};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak, TweakedKeypair};
@@ -16,8 +17,11 @@ use bitcoin::secp256k1::Keypair;
 use bitcoin::secp256k1::Message;
 use bitcoin::sighash::Prevouts;
 use bitcoin::sighash::SighashCache;
+use bitcoin::taproot::ControlBlock;
 use bitcoin::taproot::LeafVersion;
+use bitcoin::taproot::Signature;
 use bitcoin::taproot::TaprootBuilder;
+use bitcoin::taproot::TaprootSpendInfo;
 use bitcoin::{
     Amount, OutPoint, ScriptBuf, Sequence, Txid, Witness,
     absolute::LockTime,
@@ -46,7 +50,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let (seller_address, seller_child_key) =
         generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
-    let (buyer_address, _buyer_child_key) =
+    let (buyer_address, buyer_child_key) =
         generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
@@ -59,7 +63,8 @@ async fn test_taproot_transaction() -> Result<()> {
         name: "token_name".to_string(),
     };
 
-    let serialized_token_balance = rmp_serde::to_vec(&token_balance).unwrap();
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
     let tap_script = Builder::new()
@@ -69,7 +74,6 @@ async fn test_taproot_transaction() -> Result<()> {
         .push_slice(sha256::Hash::hash(&serialized_token_balance).as_byte_array())
         .push_opcode(OP_EQUALVERIFY)
         .push_x_only_key(&internal_key)
-        // .push_slice(internal_key.serialize()) // Use x-only public key  //.push_x_only_public_key(entire keypair!!!!) look at implementation
         .push_opcode(OP_CHECKSIG)
         .into_script();
 
@@ -79,19 +83,115 @@ async fn test_taproot_transaction() -> Result<()> {
         .expect("Failed to add leaf")
         .finalize(&secp, internal_key) // does this need to be the whole keypair then?
         .expect("Failed to finalize Taproot tree");
-
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
 
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
+    let attach_tx =
+        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+
+    let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
+        &secp,
+        &keypair,
+        &seller_address,
+        &attach_tx,
+        &internal_key,
+        &taproot_spend_info,
+        &tap_script,
+    )?;
+
+    // Build the witness stack for script path spending
+    let mut witness = Witness::new();
+    witness.push(signature.to_vec());
+    witness.push(&serialized_token_balance);
+    witness.push(b"KNTR");
+    witness.push(tap_script.as_bytes());
+    witness.push(control_block.serialize());
+    seller_psbt.inputs[0].final_script_witness = Some(witness);
+
+    let buyer_psbt = build_signed_buyer_psbt(
+        &secp,
+        &buyer_child_key,
+        &buyer_address,
+        &seller_address,
+        &attach_tx,
+        &script_spendable_address,
+        &seller_psbt,
+    )?;
+
+    // Extract the transaction (no finalize needed since we set all witnesses manually)
+    let final_tx = buyer_psbt.extract_tx()?;
+
+    let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
+    let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
+
+    let result = client
+        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+        .await?;
+
+    // Assert both transactions are allowed
+    assert_eq!(result.len(), 2, "Expected exactly two transaction results");
+    assert!(result[0].allowed, "Attach transaction was rejected");
+    assert!(result[1].allowed, "Swap transaction was rejected");
+
+    Ok(())
+}
+
+fn generate_address_from_mnemonic(
+    secp: &Secp256k1<secp256k1::All>,
+    path: &Path,
+    index: u32,
+) -> Result<(Address, Xpriv), anyhow::Error> {
+    let mnemonic = fs::read_to_string(path)
+        .expect("Failed to read mnemonic file")
+        .trim()
+        .to_string();
+
+    // Parse the mnemonic
+    let mnemonic = Mnemonic::from_str(&mnemonic).expect("Invalid mnemonic phrase");
+
+    // Generate seed from mnemonic
+    let seed = mnemonic.to_seed("");
+
+    // Create master key
+    let master_key =
+        Xpriv::new_master(Network::Bitcoin, &seed).expect("Failed to create master key");
+
+    // Derive first child key using a proper derivation path
+    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
+        .expect("Invalid derivation path");
+    let child_key = master_key
+        .derive_priv(secp, &path)
+        .expect("Failed to derive child key");
+
+    // Get the private key
+    let private_key = PrivateKey::new(child_key.private_key, Network::Bitcoin);
+
+    // Get the public key
+    let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
+
+    // Create a Taproot address
+    let x_only_pubkey = public_key.inner.x_only_public_key().0;
+    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
+
+    Ok((address, child_key))
+}
+
+fn build_signed_attach_tx(
+    secp: &Secp256k1<secp256k1::All>,
+    keypair: &Keypair,
+    seller_address: &Address,
+    script_spendable_address: &Address,
+) -> Result<Transaction> {
     let mut op_return_script = ScriptBuf::new();
     op_return_script.push_opcode(OP_RETURN);
     op_return_script.push_slice(b"KNTR");
 
-    let op_return_data = OpReturnData::Attach { output_index: 0 };
-    let s = rmp_serde::to_vec(&op_return_data).unwrap();
+    let op_return_data = OpReturnData::A { o: 0 };
+    let mut s = Vec::new();
+    ciborium::into_writer(&op_return_data, &mut s).unwrap();
     op_return_script.push_slice(PushBytesBuf::try_from(s)?);
 
     // Create the transaction
@@ -140,7 +240,7 @@ async fn test_taproot_transaction() -> Result<()> {
         .expect("failed to construct sighash");
 
     // Sign the sighash
-    let tweaked: TweakedKeypair = keypair.tap_tweak(&secp, None);
+    let tweaked: TweakedKeypair = keypair.tap_tweak(secp, None);
     let msg = Message::from_digest(sighash.to_byte_array());
     let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
 
@@ -153,6 +253,19 @@ async fn test_taproot_transaction() -> Result<()> {
         .witness
         .push(signature.to_vec());
 
+    Ok(attach_tx)
+}
+
+fn build_seller_psbt_and_sig(
+    secp: &Secp256k1<secp256k1::All>,
+    keypair: &Keypair,
+    seller_address: &Address,
+    attach_tx: &Transaction,
+    seller_internal_key: &XOnlyPublicKey,
+    taproot_spend_info: &TaprootSpendInfo,
+    tap_script: &ScriptBuf,
+) -> Result<(Psbt, Signature, ControlBlock)> {
+    let seller_internal_key = *seller_internal_key;
     // Create the control block for the script
     let control_block = taproot_spend_info
         .control_block(&(tap_script.clone(), LeafVersion::TapScript))
@@ -179,7 +292,7 @@ async fn test_taproot_transaction() -> Result<()> {
         },
         inputs: vec![Input {
             witness_utxo: Some(attach_tx.output[0].clone()),
-            tap_internal_key: Some(internal_key),
+            tap_internal_key: Some(seller_internal_key),
             tap_merkle_root: Some(taproot_spend_info.merkle_root().unwrap()),
             tap_scripts: {
                 let mut scripts = std::collections::BTreeMap::new();
@@ -203,13 +316,13 @@ async fn test_taproot_transaction() -> Result<()> {
         .taproot_script_spend_signature_hash(
             0,
             &Prevouts::All(&[attach_tx.output[0].clone()]),
-            TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
+            TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
             TapSighashType::SinglePlusAnyoneCanPay,
         )
         .expect("Failed to create sighash");
 
     let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &keypair);
+    let signature = secp.sign_schnorr(&msg, keypair);
     let signature = bitcoin::taproot::Signature {
         signature,
         sighash_type: TapSighashType::SinglePlusAnyoneCanPay,
@@ -218,28 +331,28 @@ async fn test_taproot_transaction() -> Result<()> {
     // Add the signature to the PSBT
     seller_psbt.inputs[0].tap_script_sigs.insert(
         (
-            internal_key,
-            TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
+            seller_internal_key,
+            TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
         ),
         signature,
     );
-    // Add the witness script to the PSBT from taproot transaction
-    // Build the witness stack for script path spending
-    let mut witness = Witness::new();
-    witness.push(signature.to_vec());
-    witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
-    witness.push(tap_script.as_bytes());
-    witness.push(control_block.serialize());
-    seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    // After creating the seller's PSBT, build the buyer side
+    Ok((seller_psbt, signature, control_block))
+}
 
+fn build_signed_buyer_psbt(
+    secp: &Secp256k1<secp256k1::All>,
+    buyer_child_key: &Xpriv,
+    buyer_address: &Address,
+    seller_address: &Address,
+    attach_tx: &Transaction,
+    script_spendable_address: &Address,
+    seller_psbt: &Psbt,
+) -> Result<Psbt> {
     // Create buyer's keypair
-    let buyer_keypair = Keypair::from_secret_key(&secp, &_buyer_child_key.private_key);
+    let buyer_keypair = Keypair::from_secret_key(secp, &buyer_child_key.private_key);
     let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
-    println!("[DEBUG] Buyer's internal key: {:?}", hex::encode(buyer_internal_key.serialize()));
-    
+
     // Create buyer's PSBT that combines with seller's PSBT
     let mut buyer_psbt = Psbt {
         unsigned_tx: Transaction {
@@ -284,11 +397,13 @@ async fn test_taproot_transaction() -> Result<()> {
                         op_return_script.push_slice(b"KNTR");
 
                         // Create transfer data pointing to output 2 (buyer's address)
-                        let transfer_data = OpReturnData::Swap {
-                            destination: buyer_address.script_pubkey().as_bytes().to_vec(),
+                        let transfer_data = OpReturnData::S {
+                            d: buyer_address.script_pubkey().as_bytes().to_vec(),
                         };
-                        let transfer_bytes = rmp_serde::to_vec(&transfer_data).unwrap();
+                        let mut transfer_bytes = Vec::new();
+                        ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
                         op_return_script.push_slice(PushBytesBuf::try_from(transfer_bytes)?);
+
                         op_return_script
                     },
                 },
@@ -346,43 +461,26 @@ async fn test_taproot_transaction() -> Result<()> {
             },
         ];
 
-        println!("[DEBUG] Prevouts for sighash:");
-        for (i, prevout) in prevouts.iter().enumerate() {
-            println!("[DEBUG] Input {}: value={}, script_pubkey={}", 
-                i, 
-                prevout.value.to_sat(), 
-                hex::encode(prevout.script_pubkey.as_bytes()));
-        }
-
         // Calculate the sighash for key path spending
-        let sighash = sighasher.taproot_key_spend_signature_hash(
-            1, // Buyer's input index (back to 1)
-            &Prevouts::All(&prevouts),
-            TapSighashType::Default,
-        )
-        .expect("Failed to create sighash");
-        
-        println!("[DEBUG] Calculated sighash: {:?}", hex::encode(sighash.to_byte_array()));
+        let sighash = sighasher
+            .taproot_key_spend_signature_hash(
+                1, // Buyer's input index (back to 1)
+                &Prevouts::All(&prevouts),
+                TapSighashType::Default,
+            )
+            .expect("Failed to create sighash");
+
         sighash
     };
 
     // Sign with the buyer's tweaked key
     let msg = Message::from_digest(sighash.to_byte_array());
-    println!("[DEBUG] Message to sign: {:?}", hex::encode(msg.as_ref()));
-    
-    // Get the tweaked key for signing using the merkle root from seller's PSBT
-    let merkle_root = seller_psbt.inputs[0].tap_merkle_root.unwrap();
-    println!("[DEBUG] Merkle root from seller's PSBT: {:?}", hex::encode(merkle_root.as_byte_array()));
-    
+
     // Create the tweaked keypair
-    let buyer_tweaked = buyer_keypair.tap_tweak(&secp, Some(merkle_root));
-    let (tweaked_x_only, _) = buyer_tweaked.to_inner().x_only_public_key();
-    println!("[DEBUG] Buyer's tweaked x-only key: {:?}", hex::encode(tweaked_x_only.serialize()));
-    
+    let buyer_tweaked = buyer_keypair.tap_tweak(secp, None);
     // Sign with the tweaked keypair since we're doing key path spending
     let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
-    println!("[DEBUG] Generated signature: {:?}", hex::encode(buyer_signature.serialize()));
-    
+
     let buyer_signature = bitcoin::taproot::Signature {
         signature: buyer_signature,
         sighash_type: TapSighashType::Default,
@@ -394,66 +492,7 @@ async fn test_taproot_transaction() -> Result<()> {
     // Construct the witness stack for key path spending
     let mut buyer_witness = Witness::new();
     buyer_witness.push(buyer_signature.to_vec());
-    println!("[DEBUG] Final witness stack length: {}", buyer_witness.len());
     buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
 
-    // Extract the transaction (no finalize needed since we set all witnesses manually)
-    let final_tx = buyer_psbt.extract_tx()?;
-
-    let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
-    let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
-    println!("raw_attach_tx_hex: {}", raw_attach_tx_hex);
-    println!("raw_swap_tx_hex: {}", raw_swap_tx_hex);
-
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
-        .await?;
-    println!("result: {:#?}", result);
-
-    // Assert both transactions are allowed
-    assert_eq!(result.len(), 2, "Expected exactly two transaction results");
-    assert!(result[0].allowed, "Attach transaction was rejected");
-    assert!(result[1].allowed, "Swap transaction was rejected");
-
-    Ok(())
-}
-
-fn generate_address_from_mnemonic(
-    secp: &Secp256k1<secp256k1::All>,
-    path: &Path,
-    index: u32,
-) -> Result<(Address, Xpriv), anyhow::Error> {
-    let mnemonic = fs::read_to_string(path)
-        .expect("Failed to read mnemonic file")
-        .trim()
-        .to_string();
-
-    // Parse the mnemonic
-    let mnemonic = Mnemonic::from_str(&mnemonic).expect("Invalid mnemonic phrase");
-
-    // Generate seed from mnemonic
-    let seed = mnemonic.to_seed("");
-
-    // Create master key
-    let master_key =
-        Xpriv::new_master(Network::Bitcoin, &seed).expect("Failed to create master key");
-
-    // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
-        .expect("Invalid derivation path");
-    let child_key = master_key
-        .derive_priv(secp, &path)
-        .expect("Failed to derive child key");
-
-    // Get the private key
-    let private_key = PrivateKey::new(child_key.private_key, Network::Bitcoin);
-
-    // Get the public key
-    let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
-
-    // Create a Taproot address
-    let x_only_pubkey = public_key.inner.x_only_public_key().0;
-    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
-
-    Ok((address, child_key))
+    Ok(buyer_psbt)
 }

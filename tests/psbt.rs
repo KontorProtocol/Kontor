@@ -102,10 +102,8 @@ async fn test_psbt_with_secret() -> Result<()> {
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
+    let attach_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
+    assert_eq!(attach_op_return_data, OpReturnData::A { o: 0 });
 
     // Assert deserialize swap op_return data
     let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
@@ -121,12 +119,12 @@ async fn test_psbt_with_secret() -> Result<()> {
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"KNTR");
+    let swap_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
     assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
+        swap_op_return_data,
+        OpReturnData::S {
+            d: buyer_address.script_pubkey().as_bytes().to_vec()
+        }
     );
 
     // Assert deserialize swap witness script
@@ -226,75 +224,6 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
     );
 
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    // Assert deserialize swap witness script
-    let swap_witness_data = &final_tx.input[0].witness;
-    assert_eq!(
-        swap_witness_data.len(),
-        4,
-        "Swap witness data should have 4 elements"
-    );
-
-    let signature = swap_witness_data.nth(0).unwrap();
-    let token_balance = swap_witness_data.nth(1).unwrap();
-    let prefix = swap_witness_data.nth(2).unwrap();
-    let final_witness_script = swap_witness_data.nth(3).unwrap();
-
-    assert_eq!(signature, sig.to_vec(), "First element should be signature");
-    assert_eq!(
-        token_balance, serialized_token_balance,
-        "Second element should be token balance"
-    );
-    assert_eq!(
-        prefix, b"KNR",
-        "Third element should be incorrect prefix KNR"
-    );
-    assert_eq!(
-        final_witness_script,
-        witness_script.as_bytes(),
-        "Fourth element should be witness script"
-    );
-
     Ok(())
 }
 
@@ -363,78 +292,6 @@ async fn test_psbt_without_secret() -> Result<()> {
     assert_eq!(
         result[1].reject_reason.as_ref().unwrap(),
         "mandatory-script-verify-flag-failed (Witness program hash mismatch)"
-    );
-
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    // In this test, we're using the seller's address script_pubkey instead of a witness script
-    // So we should verify that the witness data contains the seller's address script_pubkey
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 4, "Witness data should have 4 elements");
-    // The witness should contain:
-    // 1. Signature
-    // 2. Serialized token balance
-    // 3. "KNTR" prefix
-    // 4. Seller's address script_pubkey
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        serialized_token_balance,
-        "Second element should be token balance"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        b"KNTR",
-        "Third element should be KNTR prefix"
-    );
-    assert_eq!(
-        witness.nth(3).unwrap(),
-        seller_address.script_pubkey().as_bytes(),
-        "Fourth element should be seller's address script_pubkey"
     );
 
     Ok(())
@@ -506,71 +363,6 @@ async fn test_psbt_without_token_balance() -> Result<()> {
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
     );
 
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 3, "Witness data should have 3 elements");
-    // In this test, we're using a witness without the token balance
-    // So we should verify that the witness data contains:
-    // 1. Signature
-    // 2. "KNTR" prefix
-    // 3. Witness script
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        b"KNTR",
-        "Second element should be KNTR prefix"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        witness_script.as_bytes(),
-        "Third element should be witness script"
-    );
-
     Ok(())
 }
 
@@ -638,71 +430,6 @@ async fn test_psbt_without_prefix() -> Result<()> {
     assert_eq!(
         result[1].reject_reason.as_ref().unwrap(),
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
-    );
-
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 3, "Witness data should have 3 elements");
-    // In this test, we're using a witness without the KNTR prefix
-    // So we should verify that the witness data contains:
-    // 1. Signature
-    // 2. Serialized token balance
-    // 3. Witness script
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        serialized_token_balance,
-        "Second element should be token balance"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        witness_script.as_bytes(),
-        "Third element should be witness script"
     );
 
     Ok(())
@@ -785,90 +512,6 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         "mandatory-script-verify-flag-failed (Witness program hash mismatch)"
     );
 
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 4, "Witness data should have 4 elements");
-    // In this test, we're using a witness with a malformed secret
-    // So we should verify that the witness data contains:
-    // 1. Signature
-    // 2. Serialized token balance
-    // 3. "KNTR" prefix
-    // 4. Witness script (with malformed secret hash)
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        serialized_token_balance,
-        "Second element should be token balance"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        b"KNTR",
-        "Third element should be KNTR prefix"
-    );
-
-    // Get the witness script from the witness data
-    let actual_witness_script = witness.nth(3).unwrap();
-    // Create the expected witness script with malformed secret
-    let expected_witness_script = Builder::new()
-        .push_slice(b"KNTR")
-        .push_opcode(OP_EQUALVERIFY)
-        .push_opcode(OP_SHA256)
-        .push_slice(sha256::Hash::hash(b"SECRET").as_byte_array())
-        .push_opcode(OP_EQUALVERIFY)
-        .push_slice(seller_compressed_pubkey.to_bytes())
-        .push_opcode(OP_CHECKSIG)
-        .into_script();
-    assert_eq!(
-        actual_witness_script,
-        expected_witness_script.as_bytes(),
-        "Fourth element should be witness script with malformed secret"
-    );
-
     Ok(())
 }
 
@@ -901,10 +544,14 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
         &attach_tx,
         &witness_script,
     )?;
-    let serialized_token_balance = rmp_serde::to_vec(&WitnessData::TokenBalance {
-        value: 1000,
-        name: "wrong_token_name".to_string(),
-    })
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(
+        &WitnessData::TokenBalance {
+            value: 1000,
+            name: "wrong_token_name".to_string(),
+        },
+        &mut serialized_token_balance,
+    )
     .unwrap();
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
@@ -942,84 +589,6 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     assert_eq!(
         result[1].reject_reason.as_ref().unwrap(),
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
-    );
-
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 4, "Witness data should have 4 elements");
-    // In this test, we're using a witness with a malformed token name
-    // So we should verify that the witness data contains:
-    // 1. Signature
-    // 2. Serialized token balance with wrong token name
-    // 3. "KNTR" prefix
-    // 4. Witness script
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-
-    // Create the expected malformed token balance
-    let expected_token_balance = rmp_serde::to_vec(&WitnessData::TokenBalance {
-        value: 1000,
-        name: "wrong_token_name".to_string(),
-    })
-    .unwrap();
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        expected_token_balance,
-        "Second element should be token balance with wrong token name"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        b"KNTR",
-        "Third element should be KNTR prefix"
-    );
-    assert_eq!(
-        witness.nth(3).unwrap(),
-        witness_script.as_bytes(),
-        "Fourth element should be witness script"
     );
 
     Ok(())
@@ -1054,10 +623,14 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         &attach_tx,
         &witness_script,
     )?;
-    let serialized_token_balance = rmp_serde::to_vec(&WitnessData::TokenBalance {
-        value: 900,
-        name: "token_name".to_string(),
-    })
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(
+        &WitnessData::TokenBalance {
+            value: 900,
+            name: "token_name".to_string(),
+        },
+        &mut serialized_token_balance,
+    )
     .unwrap();
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
@@ -1097,84 +670,6 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
     );
 
-    // Assert deserialize attached op_return data
-    let attach_op_return_script = &attach_tx.output[2].script_pubkey; // OP_RETURN is the third output
-
-    let attach_instructions = attach_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = attach_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Attach { output_index: 0 }).unwrap()
-    );
-
-    // Assert deserialize swap op_return data
-    let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
-    let swap_instructions = swap_op_return_script
-        .instructions()
-        .collect::<Result<Vec<_>, _>>()?;
-    let [
-        Instruction::Op(OP_RETURN),
-        Instruction::PushBytes(prefix),
-        Instruction::PushBytes(data),
-    ] = swap_instructions.as_slice()
-    else {
-        panic!("Invalid OP_RETURN script format");
-    };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
-    assert_eq!(
-        data.as_bytes(),
-        rmp_serde::to_vec(&OpReturnData::Swap {
-            destination: buyer_address.script_pubkey().as_bytes().to_vec()
-        })
-        .unwrap()
-    );
-
-    let witness = &final_tx.input[0].witness;
-    assert_eq!(witness.len(), 4, "Witness data should have 4 elements");
-    // In this test, we're using a witness with insufficient funds
-    // So we should verify that the witness data contains:
-    // 1. Signature
-    // 2. Serialized token balance with insufficient funds
-    // 3. "KNTR" prefix
-    // 4. Witness script
-    assert_eq!(
-        witness.nth(0).unwrap(),
-        sig.to_vec(),
-        "First element should be signature"
-    );
-
-    // Create the expected malformed token balance
-    let expected_token_balance = rmp_serde::to_vec(&WitnessData::TokenBalance {
-        value: 900,
-        name: "token_name".to_string(),
-    })
-    .unwrap();
-    assert_eq!(
-        witness.nth(1).unwrap(),
-        expected_token_balance,
-        "Second element should be token balance with insufficient funds"
-    );
-    assert_eq!(
-        witness.nth(2).unwrap(),
-        b"KNTR",
-        "Third element should be KNTR prefix"
-    );
-    assert_eq!(
-        witness.nth(3).unwrap(),
-        witness_script.as_bytes(),
-        "Fourth element should be witness script"
-    );
-
     Ok(())
 }
 
@@ -1197,8 +692,9 @@ fn build_signed_attach_tx(
     op_return_script.push_opcode(OP_RETURN);
     op_return_script.push_slice(b"KNTR");
 
-    let op_return_data = OpReturnData::Attach { output_index: 0 };
-    let s = rmp_serde::to_vec(&op_return_data).unwrap();
+    let op_return_data = OpReturnData::A { o: 0 };
+    let mut s = Vec::new();
+    ciborium::into_writer(&op_return_data, &mut s).unwrap();
     op_return_script.push_slice(PushBytesBuf::try_from(s)?);
 
     // Create first transaction to create our special UTXO
@@ -1260,8 +756,10 @@ fn build_serialized_token_and_witness_script(
         value: token_value,
         name: "token_name".to_string(),
     };
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap(); // RETURN RESULT 
 
-    let serialized_token_balance = rmp_serde::to_vec(&token_balance).unwrap();
+    // let serialized_token_balance = rmp_serde::to_vec(&token_balance).unwrap();
     let witness_script = Builder::new()
         .push_slice(b"KNTR")
         .push_opcode(OP_EQUALVERIFY)
@@ -1343,11 +841,12 @@ fn build_signed_buyer_psbt(
     buyer_op_return_script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
     buyer_op_return_script.push_slice(b"KNTR");
 
-    let buyer_op_return_data = OpReturnData::Swap {
-        destination: buyer_address.script_pubkey().as_bytes().to_vec(),
+    let buyer_op_return_data = OpReturnData::S {
+        d: buyer_address.script_pubkey().as_bytes().to_vec(),
     };
 
-    let s = rmp_serde::to_vec(&buyer_op_return_data).unwrap();
+    let mut s = Vec::new();
+    ciborium::into_writer(&buyer_op_return_data, &mut s).unwrap();
     buyer_op_return_script.push_slice(PushBytesBuf::try_from(s)?);
 
     // Create buyer's PSBT

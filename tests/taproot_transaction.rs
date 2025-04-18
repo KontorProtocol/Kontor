@@ -75,7 +75,8 @@ async fn test_taproot_transaction() -> Result<()> {
         name: "token_name".to_string(),
     };
 
-    let serialized_token_balance = rmp_serde::to_vec(&token_balance).unwrap();
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
     let tap_script = Builder::new()
@@ -111,8 +112,9 @@ async fn test_taproot_transaction() -> Result<()> {
     op_return_script.push_opcode(OP_RETURN);
     op_return_script.push_slice(b"KNTR");
 
-    let op_return_data = OpReturnData::Attach { output_index: 0 };
-    let s = rmp_serde::to_vec(&op_return_data).unwrap();
+    let op_return_data = OpReturnData::A { o: 0 };
+    let mut s = Vec::new();
+    ciborium::into_writer(&op_return_data, &mut s).unwrap();
     op_return_script.push_slice(PushBytesBuf::try_from(s)?);
 
     let op_return_out = TxOut {
@@ -220,7 +222,6 @@ async fn test_taproot_transaction() -> Result<()> {
     let result = client
         .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
         .await?;
-    println!("Result: {:#?}", result);
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Attach transaction was rejected");
     assert!(result[1].allowed, "Spend transaction was rejected");
