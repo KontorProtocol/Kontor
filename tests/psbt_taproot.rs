@@ -204,7 +204,7 @@ async fn test_taproot_transaction() -> Result<()> {
             0,
             &Prevouts::All(&[attach_tx.output[0].clone()]),
             TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
-            TapSighashType::Default,
+            TapSighashType::SinglePlusAnyoneCanPay,
         )
         .expect("Failed to create sighash");
 
@@ -212,7 +212,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let signature = secp.sign_schnorr(&msg, &keypair);
     let signature = bitcoin::taproot::Signature {
         signature,
-        sighash_type: TapSighashType::Default,
+        sighash_type: TapSighashType::SinglePlusAnyoneCanPay,
     };
 
     // Add the signature to the PSBT
@@ -233,7 +233,187 @@ async fn test_taproot_transaction() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    // buyer side key spend
+    // After creating the seller's PSBT, build the buyer side
+
+    // Create buyer's keypair
+    let buyer_keypair = Keypair::from_secret_key(&secp, &_buyer_child_key.private_key);
+    let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
+    println!("[DEBUG] Buyer's internal key: {:?}", hex::encode(buyer_internal_key.serialize()));
+    
+    // Create buyer's PSBT that combines with seller's PSBT
+    let mut buyer_psbt = Psbt {
+        unsigned_tx: Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![
+                // Seller's signed input (from the unspendable output)
+                TxIn {
+                    previous_output: OutPoint {
+                        txid: attach_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    script_sig: ScriptBuf::default(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                },
+                // Buyer's UTXO input
+                TxIn {
+                    previous_output: OutPoint {
+                        txid: Txid::from_str(
+                            "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
+                        )?,
+                        vout: 0,
+                    },
+                    script_sig: ScriptBuf::default(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                },
+            ],
+            output: vec![
+                // Seller receives payment
+                TxOut {
+                    value: Amount::from_sat(600),
+                    script_pubkey: seller_address.script_pubkey(),
+                },
+                // Buyer receives the token (create a new OP_RETURN with transfer data)
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: {
+                        let mut op_return_script = ScriptBuf::new();
+                        op_return_script.push_opcode(OP_RETURN);
+                        op_return_script.push_slice(b"KNTR");
+
+                        // Create transfer data pointing to output 2 (buyer's address)
+                        let transfer_data = OpReturnData::Swap {
+                            destination: buyer_address.script_pubkey().as_bytes().to_vec(),
+                        };
+                        let transfer_bytes = rmp_serde::to_vec(&transfer_data).unwrap();
+                        op_return_script.push_slice(PushBytesBuf::try_from(transfer_bytes)?);
+                        op_return_script
+                    },
+                },
+                // Buyer's address to receive the token
+                TxOut {
+                    value: Amount::from_sat(546), // Minimum dust limit for the token
+                    script_pubkey: buyer_address.script_pubkey(),
+                },
+                // Buyer's change
+                TxOut {
+                    value: Amount::from_sat(8854), // 10000 - 600 - 546
+                    script_pubkey: buyer_address.script_pubkey(),
+                },
+            ],
+        },
+        inputs: vec![
+            // Seller's input (copy from seller's PSBT)
+            seller_psbt.inputs[0].clone(),
+            // Buyer's input
+            Input {
+                witness_utxo: Some(TxOut {
+                    script_pubkey: buyer_address.script_pubkey(),
+                    value: Amount::from_sat(10000),
+                }),
+                tap_internal_key: Some(buyer_internal_key),
+                ..Default::default()
+            },
+        ],
+        outputs: vec![
+            Output::default(),
+            Output::default(),
+            Output::default(),
+            Output::default(),
+        ],
+        version: 0,
+        xpub: Default::default(),
+        proprietary: Default::default(),
+        unknown: Default::default(),
+    };
+
+    // Sign the buyer's input (key path spending)
+    let sighash = {
+        // Create a new SighashCache for the transaction
+        let mut sighasher = SighashCache::new(&buyer_psbt.unsigned_tx);
+
+        // Define the prevouts explicitly in the same order as inputs
+        let prevouts = [
+            TxOut {
+                value: Amount::from_sat(1000), // The value of the first input (unspendable output)
+                script_pubkey: script_spendable_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
+                script_pubkey: buyer_address.script_pubkey(),
+            },
+        ];
+
+        println!("[DEBUG] Prevouts for sighash:");
+        for (i, prevout) in prevouts.iter().enumerate() {
+            println!("[DEBUG] Input {}: value={}, script_pubkey={}", 
+                i, 
+                prevout.value.to_sat(), 
+                hex::encode(prevout.script_pubkey.as_bytes()));
+        }
+
+        // Calculate the sighash for key path spending
+        let sighash = sighasher.taproot_key_spend_signature_hash(
+            1, // Buyer's input index (back to 1)
+            &Prevouts::All(&prevouts),
+            TapSighashType::Default,
+        )
+        .expect("Failed to create sighash");
+        
+        println!("[DEBUG] Calculated sighash: {:?}", hex::encode(sighash.to_byte_array()));
+        sighash
+    };
+
+    // Sign with the buyer's tweaked key
+    let msg = Message::from_digest(sighash.to_byte_array());
+    println!("[DEBUG] Message to sign: {:?}", hex::encode(msg.as_ref()));
+    
+    // Get the tweaked key for signing using the merkle root from seller's PSBT
+    let merkle_root = seller_psbt.inputs[0].tap_merkle_root.unwrap();
+    println!("[DEBUG] Merkle root from seller's PSBT: {:?}", hex::encode(merkle_root.as_byte_array()));
+    
+    // Create the tweaked keypair
+    let buyer_tweaked = buyer_keypair.tap_tweak(&secp, Some(merkle_root));
+    let (tweaked_x_only, _) = buyer_tweaked.to_inner().x_only_public_key();
+    println!("[DEBUG] Buyer's tweaked x-only key: {:?}", hex::encode(tweaked_x_only.serialize()));
+    
+    // Sign with the tweaked keypair since we're doing key path spending
+    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
+    println!("[DEBUG] Generated signature: {:?}", hex::encode(buyer_signature.serialize()));
+    
+    let buyer_signature = bitcoin::taproot::Signature {
+        signature: buyer_signature,
+        sighash_type: TapSighashType::Default,
+    };
+
+    // Add the signature to the PSBT
+    buyer_psbt.inputs[1].tap_key_sig = Some(buyer_signature);
+
+    // Construct the witness stack for key path spending
+    let mut buyer_witness = Witness::new();
+    buyer_witness.push(buyer_signature.to_vec());
+    println!("[DEBUG] Final witness stack length: {}", buyer_witness.len());
+    buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
+
+    // Extract the transaction (no finalize needed since we set all witnesses manually)
+    let final_tx = buyer_psbt.extract_tx()?;
+
+    let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
+    let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
+    println!("raw_attach_tx_hex: {}", raw_attach_tx_hex);
+    println!("raw_swap_tx_hex: {}", raw_swap_tx_hex);
+
+    let result = client
+        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+        .await?;
+    println!("result: {:#?}", result);
+
+    // Assert both transactions are allowed
+    assert_eq!(result.len(), 2, "Expected exactly two transaction results");
+    assert!(result[0].allowed, "Attach transaction was rejected");
+    assert!(result[1].allowed, "Swap transaction was rejected");
 
     Ok(())
 }
