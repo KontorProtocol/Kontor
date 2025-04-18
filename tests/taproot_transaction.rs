@@ -25,6 +25,7 @@ use bitcoin::{
     transaction::{Transaction, TxIn, TxOut, Version},
 };
 use clap::Parser;
+use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::witness_data::WitnessData;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
@@ -34,8 +35,8 @@ use std::str::FromStr;
 
 #[tokio::test]
 async fn test_taproot_transaction() -> Result<()> {
-    let config = Config::try_parse()?;
-    let client = Client::new_from_config(config.clone())?;
+    let client = Client::new_from_config(Config::try_parse()?)?;
+    let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
 

@@ -21,6 +21,7 @@ use bitcoin::{
     transaction::{Transaction, TxIn, TxOut, Version},
 };
 use clap::Parser;
+use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::{
     bitcoin_client::Client, config::Config, op_return::OpReturnData, witness_data::WitnessData,
@@ -30,7 +31,7 @@ use std::str::FromStr;
 #[tokio::test]
 async fn test_psbt_with_secret() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -159,7 +160,7 @@ async fn test_psbt_with_secret() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -231,7 +232,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_without_secret() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -301,7 +302,7 @@ async fn test_psbt_without_secret() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_without_token_balance() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -370,7 +371,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_without_prefix() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -439,7 +440,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -519,7 +520,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
@@ -598,7 +599,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
 #[tokio::test]
 async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
-    let config = Config::try_parse()?;
+    let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =

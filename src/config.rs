@@ -67,19 +67,24 @@ pub struct Config {
         default_value = "887000"
     )]
     pub starting_block_height: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
+pub struct TestConfig {
     #[clap(
         long,
-        env = "SELLER_KEY_PATH",
+        env = "SEGWIT_SELLER_KEY_PATH",
         help = "Full path to the seller's key file"
     )]
     pub seller_key_path: PathBuf,
 
     #[clap(
         long,
-        env = "BUYER_KEY_PATH",
+        env = "SEGWIT_BUYER_KEY_PATH",
         help = "Full path to the buyer's key file"
     )]
     pub buyer_key_path: PathBuf,
+
     #[clap(
         long,
         env = "TAPROOT_KEY_PATH",
