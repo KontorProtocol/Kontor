@@ -1,12 +1,8 @@
 use anyhow::Result;
-use bip39::Mnemonic;
-use bitcoin::Network;
-use bitcoin::PrivateKey;
 use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
-use bitcoin::bip32::{DerivationPath, Xpriv};
 use bitcoin::hashes::Hash;
-use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak, TweakedKeypair};
+use bitcoin::key::{TapTweak, TweakedKeypair};
 use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Keypair;
@@ -21,7 +17,6 @@ use bitcoin::{
     address::{Address, KnownHrp},
     consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
-    secp256k1::{self},
     transaction::{Transaction, TxIn, TxOut, Version},
 };
 use clap::Parser;
@@ -29,8 +24,6 @@ use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::witness_data::WitnessData;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
-use std::fs;
-use std::path::Path;
 use std::str::FromStr;
 
 #[tokio::test]
@@ -41,10 +34,10 @@ async fn test_taproot_transaction() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (recipient_address, _recipient_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -255,44 +248,4 @@ async fn test_taproot_transaction() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn generate_address_from_mnemonic(
-    secp: &Secp256k1<secp256k1::All>,
-    path: &Path,
-    index: u32,
-) -> Result<(Address, Xpriv), anyhow::Error> {
-    let mnemonic = fs::read_to_string(path)
-        .expect("Failed to read mnemonic file")
-        .trim()
-        .to_string();
-
-    // Parse the mnemonic
-    let mnemonic = Mnemonic::from_str(&mnemonic).expect("Invalid mnemonic phrase");
-
-    // Generate seed from mnemonic
-    let seed = mnemonic.to_seed("");
-
-    // Create master key
-    let master_key =
-        Xpriv::new_master(Network::Bitcoin, &seed).expect("Failed to create master key");
-
-    // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
-        .expect("Invalid derivation path");
-    let child_key = master_key
-        .derive_priv(secp, &path)
-        .expect("Failed to derive child key");
-
-    // Get the private key
-    let private_key = PrivateKey::new(child_key.private_key, Network::Bitcoin);
-
-    // Get the public key
-    let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
-
-    // Create a Taproot address
-    let x_only_pubkey = public_key.inner.x_only_public_key().0;
-    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
-
-    Ok((address, child_key))
 }

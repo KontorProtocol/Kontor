@@ -40,8 +40,18 @@ async fn test_psbt_with_secret() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
 
     let attach_tx = build_signed_attach_tx(
         &secp,
@@ -169,8 +179,18 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
 
     let attach_tx = build_signed_attach_tx(
         &secp,
@@ -241,8 +261,19 @@ async fn test_psbt_without_secret() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -311,8 +342,18 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (_serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -380,8 +421,19 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -449,8 +501,19 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -529,8 +592,19 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (_serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -608,8 +682,19 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let (_serialized_token_balance, witness_script) =
-        build_serialized_token_and_witness_script(&seller_compressed_pubkey, 1000);
+    let token_balance = WitnessData::TokenBalance {
+        value: 1000,
+        name: "token_name".to_string(),
+    };
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
     let attach_tx = build_signed_attach_tx(
         &secp,
         &seller_address,
@@ -748,25 +833,6 @@ fn build_signed_attach_tx(
     create_tx.input[0].witness = witness;
 
     Ok(create_tx)
-}
-
-fn build_serialized_token_and_witness_script(
-    seller_compressed_pubkey: &CompressedPublicKey,
-    token_value: u64,
-) -> (Vec<u8>, ScriptBuf) {
-    let token_balance = WitnessData::TokenBalance {
-        value: token_value,
-        name: "token_name".to_string(),
-    };
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
-
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(seller_compressed_pubkey),
-        &serialized_token_balance,
-    );
-
-    (serialized_token_balance, witness_script)
 }
 
 fn build_seller_psbt_and_sig(

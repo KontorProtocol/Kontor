@@ -1,14 +1,11 @@
 use anyhow::Result;
-use bip39::Mnemonic;
-use bitcoin::Network;
-use bitcoin::PrivateKey;
 use bitcoin::Psbt;
 use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
 use bitcoin::XOnlyPublicKey;
-use bitcoin::bip32::{DerivationPath, Xpriv};
+use bitcoin::bip32::Xpriv;
 use bitcoin::hashes::Hash;
-use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak, TweakedKeypair};
+use bitcoin::key::TapTweak;
 use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::psbt::Input;
 use bitcoin::psbt::Output;
@@ -37,8 +34,6 @@ use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::witness_data::WitnessData;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
-use std::fs;
-use std::path::Path;
 use std::str::FromStr;
 
 #[tokio::test]
@@ -49,10 +44,10 @@ async fn test_taproot_transaction() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -85,8 +80,12 @@ async fn test_taproot_transaction() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -220,10 +219,10 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -256,8 +255,12 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -322,10 +325,10 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -358,8 +361,12 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -423,10 +430,10 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -459,8 +466,12 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -532,10 +543,10 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -567,8 +578,12 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -640,10 +655,10 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -676,8 +691,12 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -740,10 +759,10 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let (buyer_address, buyer_child_key) =
-        generate_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -776,8 +795,12 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx =
-        build_signed_attach_tx(&secp, &keypair, &seller_address, &script_spendable_address)?;
+    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+        &secp,
+        &keypair,
+        &seller_address,
+        &script_spendable_address,
+    )?;
 
     let (mut seller_psbt, signature, _control_block) = build_seller_psbt_and_sig(
         &secp,
@@ -831,123 +854,6 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn generate_address_from_mnemonic(
-    secp: &Secp256k1<secp256k1::All>,
-    path: &Path,
-    index: u32,
-) -> Result<(Address, Xpriv), anyhow::Error> {
-    let mnemonic = fs::read_to_string(path)
-        .expect("Failed to read mnemonic file")
-        .trim()
-        .to_string();
-
-    // Parse the mnemonic
-    let mnemonic = Mnemonic::from_str(&mnemonic).expect("Invalid mnemonic phrase");
-
-    // Generate seed from mnemonic
-    let seed = mnemonic.to_seed("");
-
-    // Create master key
-    let master_key =
-        Xpriv::new_master(Network::Bitcoin, &seed).expect("Failed to create master key");
-
-    // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
-        .expect("Invalid derivation path");
-    let child_key = master_key
-        .derive_priv(secp, &path)
-        .expect("Failed to derive child key");
-
-    // Get the private key
-    let private_key = PrivateKey::new(child_key.private_key, Network::Bitcoin);
-
-    // Get the public key
-    let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
-
-    // Create a Taproot address
-    let x_only_pubkey = public_key.inner.x_only_public_key().0;
-    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
-
-    Ok((address, child_key))
-}
-
-fn build_signed_attach_tx(
-    secp: &Secp256k1<secp256k1::All>,
-    keypair: &Keypair,
-    seller_address: &Address,
-    script_spendable_address: &Address,
-) -> Result<Transaction> {
-    let mut op_return_script = ScriptBuf::new();
-    op_return_script.push_opcode(OP_RETURN);
-    op_return_script.push_slice(b"KNTR");
-
-    let op_return_data = OpReturnData::A { output_index: 0 };
-    let mut s = Vec::new();
-    ciborium::into_writer(&op_return_data, &mut s).unwrap();
-    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
-
-    // Create the transaction
-    let mut attach_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_str(
-                    "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8",
-                )?,
-                vout: 0,
-            }, // The output we are spending
-            script_sig: ScriptBuf::default(), // For a p2tr script_sig is empty
-            sequence: Sequence::MAX,
-            witness: Witness::default(), // Filled in after signing
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(1000),
-                script_pubkey: script_spendable_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: op_return_script,
-            },
-            TxOut {
-                value: Amount::from_sat(7700), // 9000 - 1000 - 300 fee
-                script_pubkey: seller_address.script_pubkey(),
-            },
-        ],
-    };
-    let input_index = 0;
-
-    // Sign the transaction
-    let sighash_type = TapSighashType::Default;
-    let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000), // existing utxo with 9000 sats
-        script_pubkey: seller_address.script_pubkey(),
-    }];
-    let prevouts = Prevouts::All(&prevouts);
-
-    let mut sighasher = SighashCache::new(&attach_tx);
-    let sighash = sighasher
-        .taproot_key_spend_signature_hash(input_index, &prevouts, sighash_type)
-        .expect("failed to construct sighash");
-
-    // Sign the sighash
-    let tweaked: TweakedKeypair = keypair.tap_tweak(secp, None);
-    let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
-
-    // Update the witness stack
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    attach_tx.input[input_index]
-        .witness
-        .push(signature.to_vec());
-
-    Ok(attach_tx)
 }
 
 fn build_seller_psbt_and_sig(
@@ -1022,7 +928,7 @@ fn build_seller_psbt_and_sig(
         sighash_type: TapSighashType::SinglePlusAnyoneCanPay,
     };
 
-    // Add the signature to the PSBT
+    // Not necessary for test, but this is where the signature would be stored in the marketplace until it was ready to be spent
     seller_psbt.inputs[0].tap_script_sigs.insert(
         (
             seller_internal_key,
