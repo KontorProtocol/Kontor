@@ -1,24 +1,14 @@
 use anyhow::Result;
-use bitcoin::Network;
-use bitcoin::bip32::Xpriv;
-use bitcoin::ecdsa::Signature;
+
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::opcodes::all::OP_RETURN;
-use bitcoin::script::{Instruction, PushBytesBuf};
-use bitcoin::secp256k1::All;
-use bitcoin::sighash::SighashCache;
+use bitcoin::script::Instruction;
 use bitcoin::{
-    Amount, OutPoint, ScriptBuf, Txid, Witness,
-    absolute::LockTime,
-    address::Address,
+    Witness,
     consensus::encode::serialize as serialize_tx,
-    key::{CompressedPublicKey, Secp256k1},
+    key::Secp256k1,
     opcodes::all::{OP_CHECKSIG, OP_EQUALVERIFY, OP_SHA256},
-    psbt::{Input, Output, Psbt, PsbtSighashType},
     script::Builder,
-    secp256k1::{self},
-    sighash::EcdsaSighashType,
-    transaction::{Transaction, TxIn, TxOut, Version},
 };
 use clap::Parser;
 use kontor::config::TestConfig;
@@ -27,7 +17,6 @@ use kontor::{
     bitcoin_client::Client, config::Config, op_return::OpReturnData, witness_data::WitnessData,
 };
 use std::collections::HashMap;
-use std::str::FromStr;
 
 #[tokio::test]
 async fn test_psbt_with_secret() -> Result<()> {
@@ -54,7 +43,7 @@ async fn test_psbt_with_secret() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -62,7 +51,7 @@ async fn test_psbt_with_secret() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -76,7 +65,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -193,7 +182,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -201,7 +190,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -216,7 +205,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -275,7 +264,7 @@ async fn test_psbt_without_secret() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -283,7 +272,7 @@ async fn test_psbt_without_secret() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -297,7 +286,7 @@ async fn test_psbt_without_secret() -> Result<()> {
     witness.push(seller_address.script_pubkey().as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -355,7 +344,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
         test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -363,7 +352,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -376,7 +365,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -435,7 +424,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -443,7 +432,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -456,7 +445,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -515,7 +504,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -523,7 +512,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -547,7 +536,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     witness.push(malformedwitness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -606,7 +595,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -614,7 +603,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -637,7 +626,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -696,7 +685,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -704,7 +693,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -727,7 +716,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -783,7 +772,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
         &serialized_token_balance,
     );
 
-    let attach_tx = build_signed_attach_tx(
+    let attach_tx = test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -791,7 +780,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -805,7 +794,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = build_signed_buyer_psbt(
+    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -870,237 +859,4 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn build_signed_attach_tx(
-    secp: &Secp256k1<All>,
-    seller_address: &Address,
-    seller_compressed_pubkey: &CompressedPublicKey,
-    seller_child_key: &Xpriv,
-    witness_script: &ScriptBuf,
-) -> Result<Transaction> {
-    // Use a known UTXO as input for create_tx
-    let input_txid =
-        Txid::from_str("ce18ea0cdbd14cb35eccdd0a1d551509d83516c7b3534c83b2a0adb552809caf")?;
-    let input_vout = 0;
-    let input_amount = Amount::from_sat(10000);
-
-    let script_address: Address = Address::p2wsh(witness_script, Network::Bitcoin);
-
-    let mut op_return_script = ScriptBuf::new();
-    op_return_script.push_opcode(OP_RETURN);
-    op_return_script.push_slice(b"KNTR");
-
-    let op_return_data = OpReturnData::A { output_index: 0 };
-    let mut s = Vec::new();
-    ciborium::into_writer(&op_return_data, &mut s).unwrap();
-    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
-
-    // Create first transaction to create our special UTXO
-    let mut create_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: input_txid,
-                vout: input_vout,
-            },
-            ..Default::default()
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(1000),
-                script_pubkey: script_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(8700),
-                script_pubkey: seller_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: op_return_script,
-            },
-        ],
-    };
-
-    // Sign the input as normal P2WPKH
-    let mut sighash_cache = SighashCache::new(&create_tx);
-    let sighash = sighash_cache
-        .p2wpkh_signature_hash(
-            0,
-            &seller_address.script_pubkey(),
-            input_amount,
-            EcdsaSighashType::All,
-        )
-        .expect("Failed to compute sighash");
-
-    let msg = secp256k1::Message::from(sighash);
-    let sig = secp.sign_ecdsa(&msg, &seller_child_key.private_key);
-    let sig = Signature::sighash_all(sig);
-
-    // Create witness data for P2WPKH
-    let mut witness = Witness::new();
-    witness.push(sig.to_vec());
-    witness.push(seller_compressed_pubkey.to_bytes());
-    create_tx.input[0].witness = witness;
-
-    Ok(create_tx)
-}
-
-fn build_seller_psbt_and_sig(
-    secp: &Secp256k1<All>,
-    seller_address: &Address,
-    seller_child_key: &Xpriv,
-    attach_tx: &Transaction,
-    witness_script: &ScriptBuf,
-) -> Result<(Psbt, Signature)> {
-    // Create seller's PSBT
-    let seller_psbt = Psbt {
-        unsigned_tx: Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: attach_tx.compute_txid(),
-                    vout: 0,
-                },
-                ..Default::default()
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(600),
-                script_pubkey: seller_address.script_pubkey(),
-            }],
-        },
-        inputs: vec![Input {
-            witness_script: Some(witness_script.clone()),
-            witness_utxo: Some(TxOut {
-                script_pubkey: attach_tx.output[0].script_pubkey.clone(),
-                value: Amount::from_sat(1000), // Use the actual output amount from create_tx
-            }),
-            sighash_type: Some(PsbtSighashType::from(
-                EcdsaSighashType::SinglePlusAnyoneCanPay,
-            )),
-            ..Default::default()
-        }],
-        outputs: vec![Output::default()],
-        version: 0,
-        xpub: Default::default(),
-        proprietary: Default::default(),
-        unknown: Default::default(),
-    };
-
-    // Sign seller's PSBT with the witness script and secret data
-    let mut sighash_cache = SighashCache::new(&seller_psbt.unsigned_tx);
-    let (msg, sighash_type) = seller_psbt.sighash_ecdsa(0, &mut sighash_cache)?;
-
-    let sig = secp.sign_ecdsa(&msg, &seller_child_key.private_key);
-    let sig = Signature {
-        signature: sig,
-        sighash_type,
-    };
-
-    Ok((seller_psbt, sig))
-}
-
-fn build_signed_buyer_psbt(
-    secp: &Secp256k1<All>,
-    buyer_address: &Address,
-    buyer_child_key: &Xpriv,
-    attach_tx: &Transaction,
-    buyer_compressed_pubkey: &CompressedPublicKey,
-    seller_address: &Address,
-    seller_psbt: &Psbt,
-) -> Result<Psbt> {
-    let mut buyer_op_return_script = ScriptBuf::new();
-    buyer_op_return_script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
-    buyer_op_return_script.push_slice(b"KNTR");
-
-    let buyer_op_return_data = OpReturnData::S {
-        destination: buyer_address.script_pubkey().as_bytes().to_vec(),
-    };
-
-    let mut s = Vec::new();
-    ciborium::into_writer(&buyer_op_return_data, &mut s).unwrap();
-    buyer_op_return_script.push_slice(PushBytesBuf::try_from(s)?);
-
-    // Create buyer's PSBT
-    let mut buyer_psbt = Psbt {
-        unsigned_tx: Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![
-                // Seller's signed input
-                TxIn {
-                    previous_output: OutPoint {
-                        txid: attach_tx.compute_txid(),
-                        vout: 0,
-                    },
-                    ..Default::default()
-                },
-                // Buyer's UTXO input
-                TxIn {
-                    previous_output: OutPoint {
-                        txid: Txid::from_str(
-                            "ca346e6fd745c138eee30f1dbe93ab269231cfb46e5ac945d028cbcc9dd2dea2",
-                        )?,
-                        vout: 0,
-                    },
-                    ..Default::default()
-                },
-            ],
-            output: vec![
-                // Seller receives payment
-                TxOut {
-                    value: Amount::from_sat(600),
-                    script_pubkey: seller_address.script_pubkey(),
-                },
-                // Buyer receives the asset
-                TxOut {
-                    value: Amount::from_sat(0),
-                    script_pubkey: buyer_op_return_script, // OP_RETURN with data pointing to the attached UTXO
-                },
-                // Buyer's change
-                TxOut {
-                    value: Amount::from_sat(9100), // 10000 - 600 - 300 fee
-                    script_pubkey: buyer_address.script_pubkey(),
-                },
-            ],
-        },
-        inputs: vec![
-            // Seller's signed input
-            seller_psbt.inputs[0].clone(),
-            // Buyer's UTXO input
-            Input {
-                witness_utxo: Some(TxOut {
-                    script_pubkey: buyer_address.script_pubkey(),
-                    value: Amount::from_sat(10000),
-                }),
-                sighash_type: Some(PsbtSighashType::from(EcdsaSighashType::All)),
-                ..Default::default()
-            },
-        ],
-        outputs: vec![Output::default(), Output::default(), Output::default()],
-        version: 0,
-        xpub: Default::default(),
-        proprietary: Default::default(),
-        unknown: Default::default(),
-    };
-
-    // Sign buyer's input
-    let mut sighash_cache = SighashCache::new(&buyer_psbt.unsigned_tx);
-    let (msg, sighash_type) = buyer_psbt.sighash_ecdsa(1, &mut sighash_cache)?;
-
-    let sig = secp.sign_ecdsa(&msg, &buyer_child_key.private_key);
-    let sig = Signature {
-        signature: sig,
-        sighash_type,
-    };
-
-    // Create witness data for buyer's input
-    let mut witness = Witness::new();
-    witness.push(sig.to_vec());
-    witness.push(buyer_compressed_pubkey.to_bytes());
-    buyer_psbt.inputs[1].final_script_witness = Some(witness);
-
-    Ok(buyer_psbt)
 }

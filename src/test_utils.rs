@@ -4,17 +4,20 @@ use bitcoin::absolute::LockTime;
 use bitcoin::address::Address;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak, TweakedKeypair};
-use bitcoin::opcodes::all::{OP_CHECKSIG, OP_EQUALVERIFY, OP_RETURN, OP_SHA256};
-use bitcoin::psbt::{Input, Output};
+use bitcoin::opcodes::OP_FALSE;
+use bitcoin::opcodes::all::{
+    OP_CHECKSIG, OP_ENDIF, OP_EQUALVERIFY, OP_IF, OP_PUSHNUM_1, OP_RETURN, OP_SHA256,
+};
+use bitcoin::psbt::{Input, Output, PsbtSighashType};
 use bitcoin::script::{Builder, PushBytesBuf};
-use bitcoin::secp256k1::Keypair;
 use bitcoin::secp256k1::Message;
+use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Amount, KnownHrp, OutPoint, Psbt, ScriptBuf, Sequence, TapLeafHash, TapSighashType,
-    Transaction, TxIn, TxOut, Txid, Witness, XOnlyPublicKey, secp256k1,
+    Amount, EcdsaSighashType, KnownHrp, OutPoint, Psbt, ScriptBuf, Sequence, TapLeafHash,
+    TapSighashType, Transaction, TxIn, TxOut, Txid, Witness, XOnlyPublicKey, secp256k1,
 };
 use bitcoin::{
     Network, PrivateKey,
@@ -87,6 +90,33 @@ pub fn build_witness_script(key: PublicKey, serialized_token_balance: &[u8]) -> 
     };
 
     witness_script.push_opcode(OP_CHECKSIG).into_script()
+}
+
+pub fn build_inscription_without_checksig(
+    serialized_token_balance: Vec<u8>,
+    key: PublicKey,
+) -> Result<Builder> {
+    let base_witness_script = Builder::new()
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(b"KNTR")
+        .push_opcode(OP_PUSHNUM_1)
+        .push_slice(PushBytesBuf::try_from(serialized_token_balance)?)
+        .push_opcode(OP_ENDIF);
+
+    let witness_script = match key {
+        PublicKey::Segwit(compressed) => base_witness_script.push_slice(compressed.to_bytes()),
+        PublicKey::Taproot(x_only) => base_witness_script.push_slice(x_only.serialize()),
+    };
+
+    Ok(witness_script)
+}
+
+pub fn build_inscription(serialized_token_balance: Vec<u8>, key: PublicKey) -> Result<ScriptBuf> {
+    let tap_script =
+        build_inscription_without_checksig(serialized_token_balance, key)?.push_opcode(OP_CHECKSIG);
+
+    Ok(tap_script.into_script())
 }
 
 pub fn generate_taproot_address_from_mnemonic(
@@ -460,6 +490,239 @@ pub fn build_signed_buyer_psbt_taproot(
     let mut buyer_witness = Witness::new();
     buyer_witness.push(buyer_signature.to_vec());
     buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
+
+    Ok(buyer_psbt)
+}
+
+pub fn build_signed_attach_tx_segwit(
+    secp: &Secp256k1<All>,
+    seller_address: &Address,
+    seller_compressed_pubkey: &CompressedPublicKey,
+    seller_child_key: &Xpriv,
+    witness_script: &ScriptBuf,
+) -> Result<Transaction> {
+    // Use a known UTXO as input for create_tx
+    let input_txid =
+        Txid::from_str("ce18ea0cdbd14cb35eccdd0a1d551509d83516c7b3534c83b2a0adb552809caf")?;
+    let input_vout = 0;
+    let input_amount = Amount::from_sat(10000);
+
+    let script_address: Address = Address::p2wsh(witness_script, Network::Bitcoin);
+
+    let mut op_return_script = ScriptBuf::new();
+    op_return_script.push_opcode(OP_RETURN);
+    op_return_script.push_slice(b"KNTR");
+
+    let op_return_data = OpReturnData::A { output_index: 0 };
+    let mut s = Vec::new();
+    ciborium::into_writer(&op_return_data, &mut s).unwrap();
+    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
+
+    // Create first transaction to create our special UTXO
+    let mut create_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: input_txid,
+                vout: input_vout,
+            },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: script_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(8700),
+                script_pubkey: seller_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: op_return_script,
+            },
+        ],
+    };
+
+    // Sign the input as normal P2WPKH
+    let mut sighash_cache = SighashCache::new(&create_tx);
+    let sighash = sighash_cache
+        .p2wpkh_signature_hash(
+            0,
+            &seller_address.script_pubkey(),
+            input_amount,
+            EcdsaSighashType::All,
+        )
+        .expect("Failed to compute sighash");
+
+    let msg = secp256k1::Message::from(sighash);
+    let sig = secp.sign_ecdsa(&msg, &seller_child_key.private_key);
+    let sig = bitcoin::ecdsa::Signature::sighash_all(sig);
+
+    // Create witness data for P2WPKH
+    let mut witness = Witness::new();
+    witness.push(sig.to_vec());
+    witness.push(seller_compressed_pubkey.to_bytes());
+    create_tx.input[0].witness = witness;
+
+    Ok(create_tx)
+}
+
+pub fn build_seller_psbt_and_sig_segwit(
+    secp: &Secp256k1<All>,
+    seller_address: &Address,
+    seller_child_key: &Xpriv,
+    attach_tx: &Transaction,
+    witness_script: &ScriptBuf,
+) -> Result<(Psbt, bitcoin::ecdsa::Signature)> {
+    // Create seller's PSBT
+    let seller_psbt = Psbt {
+        unsigned_tx: Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: attach_tx.compute_txid(),
+                    vout: 0,
+                },
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(600),
+                script_pubkey: seller_address.script_pubkey(),
+            }],
+        },
+        inputs: vec![Input {
+            witness_script: Some(witness_script.clone()),
+            witness_utxo: Some(TxOut {
+                script_pubkey: attach_tx.output[0].script_pubkey.clone(),
+                value: Amount::from_sat(1000), // Use the actual output amount from create_tx
+            }),
+            sighash_type: Some(PsbtSighashType::from(
+                EcdsaSighashType::SinglePlusAnyoneCanPay,
+            )),
+            ..Default::default()
+        }],
+        outputs: vec![Output::default()],
+        version: 0,
+        xpub: Default::default(),
+        proprietary: Default::default(),
+        unknown: Default::default(),
+    };
+
+    // Sign seller's PSBT with the witness script and secret data
+    let mut sighash_cache = SighashCache::new(&seller_psbt.unsigned_tx);
+    let (msg, sighash_type) = seller_psbt.sighash_ecdsa(0, &mut sighash_cache)?;
+
+    let sig = secp.sign_ecdsa(&msg, &seller_child_key.private_key);
+    let sig = bitcoin::ecdsa::Signature {
+        signature: sig,
+        sighash_type,
+    };
+
+    Ok((seller_psbt, sig))
+}
+
+pub fn build_signed_buyer_psbt_segwit(
+    secp: &Secp256k1<All>,
+    buyer_address: &Address,
+    buyer_child_key: &Xpriv,
+    attach_tx: &Transaction,
+    buyer_compressed_pubkey: &CompressedPublicKey,
+    seller_address: &Address,
+    seller_psbt: &Psbt,
+) -> Result<Psbt> {
+    let mut buyer_op_return_script = ScriptBuf::new();
+    buyer_op_return_script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
+    buyer_op_return_script.push_slice(b"KNTR");
+
+    let buyer_op_return_data = OpReturnData::S {
+        destination: buyer_address.script_pubkey().as_bytes().to_vec(),
+    };
+
+    let mut s = Vec::new();
+    ciborium::into_writer(&buyer_op_return_data, &mut s).unwrap();
+    buyer_op_return_script.push_slice(PushBytesBuf::try_from(s)?);
+
+    // Create buyer's PSBT
+    let mut buyer_psbt = Psbt {
+        unsigned_tx: Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![
+                // Seller's signed input
+                TxIn {
+                    previous_output: OutPoint {
+                        txid: attach_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    ..Default::default()
+                },
+                // Buyer's UTXO input
+                TxIn {
+                    previous_output: OutPoint {
+                        txid: Txid::from_str(
+                            "ca346e6fd745c138eee30f1dbe93ab269231cfb46e5ac945d028cbcc9dd2dea2",
+                        )?,
+                        vout: 0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            output: vec![
+                // Seller receives payment
+                TxOut {
+                    value: Amount::from_sat(600),
+                    script_pubkey: seller_address.script_pubkey(),
+                },
+                // Buyer receives the asset
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: buyer_op_return_script, // OP_RETURN with data pointing to the attached UTXO
+                },
+                // Buyer's change
+                TxOut {
+                    value: Amount::from_sat(9100), // 10000 - 600 - 300 fee
+                    script_pubkey: buyer_address.script_pubkey(),
+                },
+            ],
+        },
+        inputs: vec![
+            // Seller's signed input
+            seller_psbt.inputs[0].clone(),
+            // Buyer's UTXO input
+            Input {
+                witness_utxo: Some(TxOut {
+                    script_pubkey: buyer_address.script_pubkey(),
+                    value: Amount::from_sat(10000),
+                }),
+                sighash_type: Some(PsbtSighashType::from(EcdsaSighashType::All)),
+                ..Default::default()
+            },
+        ],
+        outputs: vec![Output::default(), Output::default(), Output::default()],
+        version: 0,
+        xpub: Default::default(),
+        proprietary: Default::default(),
+        unknown: Default::default(),
+    };
+
+    // Sign buyer's input
+    let mut sighash_cache = SighashCache::new(&buyer_psbt.unsigned_tx);
+    let (msg, sighash_type) = buyer_psbt.sighash_ecdsa(1, &mut sighash_cache)?;
+
+    let sig = secp.sign_ecdsa(&msg, &buyer_child_key.private_key);
+    let sig = bitcoin::ecdsa::Signature {
+        signature: sig,
+        sighash_type,
+    };
+
+    // Create witness data for buyer's input
+    let mut witness = Witness::new();
+    witness.push(sig.to_vec());
+    witness.push(buyer_compressed_pubkey.to_bytes());
+    buyer_psbt.inputs[1].final_script_witness = Some(witness);
 
     Ok(buyer_psbt)
 }
