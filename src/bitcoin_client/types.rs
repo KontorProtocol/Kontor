@@ -83,6 +83,7 @@ pub struct GetBlockchainInfoResult {
 pub struct TestMempoolAcceptResult {
     pub txid: Txid,
     pub wtxid: Txid,
+    #[serde(default)]
     pub allowed: bool,
     #[serde(rename = "reject-reason")]
     pub reject_reason: Option<String>,

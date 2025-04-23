@@ -26,6 +26,7 @@ use kontor::test_utils;
 use kontor::{
     bitcoin_client::Client, config::Config, op_return::OpReturnData, witness_data::WitnessData,
 };
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[tokio::test]
@@ -755,6 +756,117 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     assert_eq!(
         result[1].reject_reason.as_ref().unwrap(),
         "mandatory-script-verify-flag-failed (Script failed an OP_EQUALVERIFY operation)"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_psbt_with_long_witness_stack() -> Result<()> {
+    let client = Client::new_from_config(Config::try_parse()?)?;
+    let config = TestConfig::try_parse()?;
+    let secp = Secp256k1::new();
+
+    let (seller_address, seller_child_key, seller_compressed_pubkey) =
+        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+
+    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
+        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+
+    let token_balances = test_utils::build_long_token_balance();
+
+    let mut serialized_token_balance = Vec::new();
+    ciborium::into_writer(&token_balances, &mut serialized_token_balance).unwrap();
+
+    let witness_script = test_utils::build_witness_script(
+        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        &serialized_token_balance,
+    );
+
+    let attach_tx = build_signed_attach_tx(
+        &secp,
+        &seller_address,
+        &seller_compressed_pubkey,
+        &seller_child_key,
+        &witness_script,
+    )?;
+
+    let (mut seller_psbt, sig) = build_seller_psbt_and_sig(
+        &secp,
+        &seller_address,
+        &seller_child_key,
+        &attach_tx,
+        &witness_script,
+    )?;
+    let mut witness = Witness::new();
+    witness.push(sig.to_vec());
+    witness.push(&serialized_token_balance);
+    witness.push(b"KNTR");
+    witness.push(witness_script.as_bytes());
+    seller_psbt.inputs[0].final_script_witness = Some(witness);
+
+    let buyer_psbt = build_signed_buyer_psbt(
+        &secp,
+        &buyer_address,
+        &buyer_child_key,
+        &attach_tx,
+        &buyer_compressed_pubkey,
+        &seller_address,
+        &seller_psbt,
+    )?;
+
+    let final_tx = buyer_psbt.extract_tx()?;
+
+    let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
+    let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
+
+    let result = client
+        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+        .await?;
+
+    // Assert both transactions are allowed
+    assert_eq!(result.len(), 2, "Expected exactly two transaction results");
+    assert!(
+        !result[1].allowed,
+        "Swap transaction was unexpectedly accepted"
+    );
+    assert!(
+        result[1]
+            .reject_reason
+            .as_ref()
+            .unwrap()
+            .contains("bad-witness-nonstandard")
+    );
+
+    // Assert deserialize swap witness script
+    let swap_witness_data = &final_tx.input[0].witness;
+    assert_eq!(
+        swap_witness_data.len(),
+        4,
+        "Swap witness data should have 4 elements"
+    );
+
+    let signature = swap_witness_data.nth(0).unwrap();
+    let token_balance = swap_witness_data.nth(1).unwrap();
+    let prefix = swap_witness_data.nth(2).unwrap();
+    let final_witness_script = swap_witness_data.nth(3).unwrap();
+
+    assert_eq!(signature, sig.to_vec(), "First element should be signature");
+    assert_eq!(
+        token_balance, serialized_token_balance,
+        "Second element should be token balance"
+    );
+    assert_eq!(prefix, b"KNTR", "Third element should be prefix KNTR");
+    assert_eq!(
+        final_witness_script,
+        witness_script.as_bytes(),
+        "Fourth element should be witness script"
+    );
+
+    let token_balance_decoded: HashMap<String, i32> = ciborium::from_reader(token_balance).unwrap();
+    assert_eq!(
+        token_balance_decoded, token_balances,
+        "Token balance in witness doesn't match expected value"
     );
 
     Ok(())
