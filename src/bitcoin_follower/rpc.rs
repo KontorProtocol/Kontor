@@ -31,14 +31,14 @@ pub struct Fetcher<T: Tx> {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
-    f: fn(Transaction) -> T,
+    f: fn(Transaction) -> Option<T>,
     tx: Sender<(u64, Block<T>)>,
 }
 
 impl<T: Tx + 'static> Fetcher<T> {
     pub fn new(
         bitcoin: bitcoin_client::Client,
-        f: fn(Transaction) -> T,
+        f: fn(Transaction) -> Option<T>,
         tx: Sender<(u64, Block<T>)>,
     ) -> Self {
         Self {
@@ -206,7 +206,7 @@ impl<T: Tx + 'static> Fetcher<T> {
                                                             height,
                                                             hash: block.block_hash(),
                                                             prev_hash: block.header.prev_blockhash,
-                                                            transactions: block.txdata.into_par_iter().map(f).collect(),
+                                                            transactions: block.txdata.into_par_iter().filter_map(f).collect(),
                                                         })
                                                     ).await;
                                                     drop(permit);

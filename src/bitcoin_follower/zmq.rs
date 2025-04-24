@@ -107,7 +107,7 @@ pub async fn run<T: Tx + 'static>(
     config: Config,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
-    f: fn(Transaction) -> T,
+    f: fn(Transaction) -> Option<T>,
     tx: UnboundedSender<ZmqEvent<T>>,
 ) -> Result<JoinHandle<Result<()>>> {
     let (socket_tx, mut socket_rx) = mpsc::unbounded_channel();
@@ -199,7 +199,7 @@ pub async fn run<T: Tx + 'static>(
                                 }
 
                                 let _ = tx.send(ZmqEvent::MempoolTransactions(
-                                    txs.into_par_iter().map(f).collect(),
+                                    txs.into_par_iter().filter_map(f).collect(),
                                 ));
 
                                 if tx.send(ZmqEvent::Connected).is_err() {
@@ -243,7 +243,7 @@ pub async fn run<T: Tx + 'static>(
                                         height: block.bip34_block_height()?,
                                         hash: block.block_hash(),
                                         prev_hash: block.header.prev_blockhash,
-                                        transactions: block.txdata.into_par_iter().map(f).collect(),
+                                        transactions: block.txdata.into_par_iter().filter_map(f).collect(),
                                     }))
                                 },
                                 SequenceMessage::TransactionAdded{txid, ..} => {
@@ -257,8 +257,7 @@ pub async fn run<T: Tx + 'static>(
                                         .await
                                     {
                                         Ok(transaction) => {
-                                            let t = f(transaction);
-                                            Some(ZmqEvent::MempoolTransactionAdded(t))
+                                            f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t))
                                         }
                                         Err(e) => {
                                             warn!(

@@ -46,7 +46,7 @@ impl<T: Tx + 'static> Env<T> {
         config: Config,
         reader: database::Reader,
         bitcoin: bitcoin_client::Client,
-        f: fn(Transaction) -> T,
+        f: fn(Transaction) -> Option<T>,
     ) -> Self {
         let (zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<T>>();
         let (rpc_tx, rpc_rx) = mpsc::channel(10);
@@ -94,7 +94,7 @@ async fn zmq_runner<T: Tx + 'static>(
     config: Config,
     cancel_token: CancellationToken,
     bitcoin: bitcoin_client::Client,
-    f: fn(Transaction) -> T,
+    f: fn(Transaction) -> Option<T>,
     tx: UnboundedSender<ZmqEvent<T>>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
@@ -496,7 +496,7 @@ pub async fn run<T: Tx + 'static>(
     cancel_token: CancellationToken,
     reader: database::Reader,
     bitcoin: bitcoin_client::Client,
-    f: fn(Transaction) -> T,
+    f: fn(Transaction) -> Option<T>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let mut env = Env::new(

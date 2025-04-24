@@ -18,7 +18,7 @@ pub async fn run<T: Tx + 'static>(
     cancel_token: CancellationToken,
     reader: Reader,
     bitcoin: bitcoin_client::Client,
-    f: fn(Transaction) -> T,
+    f: fn(Transaction) -> Option<T>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let handle = reconciler::run(config, cancel_token.clone(), reader, bitcoin, f, tx).await?;

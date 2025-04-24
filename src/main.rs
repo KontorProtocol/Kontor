@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
             cancel_token.clone(),
             reader.clone(),
             bitcoin,
-            |t| t,
+            Some,
             reactor_tx,
         )
         .await?,
