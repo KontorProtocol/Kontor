@@ -123,7 +123,7 @@ pub fn generate_taproot_address_from_mnemonic(
     secp: &Secp256k1<secp256k1::All>,
     path: &Path,
     index: u32,
-) -> Result<(Address, Xpriv), anyhow::Error> {
+) -> Result<(Address, Xpriv, CompressedPublicKey), anyhow::Error> {
     let mnemonic = fs::read_to_string(path)
         .expect("Failed to read mnemonic file")
         .trim()
@@ -151,12 +151,14 @@ pub fn generate_taproot_address_from_mnemonic(
 
     // Get the public key
     let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
+    let compressed_pubkey = bitcoin::CompressedPublicKey(public_key.inner);
+
 
     // Create a Taproot address
     let x_only_pubkey = public_key.inner.x_only_public_key().0;
     let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
 
-    Ok((address, child_key))
+    Ok((address, child_key, compressed_pubkey))
 }
 
 pub fn build_signed_taproot_attach_tx(
