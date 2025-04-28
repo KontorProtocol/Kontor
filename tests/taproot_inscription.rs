@@ -3,7 +3,6 @@ use bitcoin::XOnlyPublicKey;
 use bitcoin::opcodes::all::OP_CHECKSIG;
 use bitcoin::opcodes::all::OP_ENDIF;
 use bitcoin::opcodes::all::OP_IF;
-use bitcoin::opcodes::all::OP_PUSHNUM_1;
 use bitcoin::script::Instruction;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
@@ -101,6 +100,8 @@ async fn test_psbt_inscription() -> Result<()> {
 
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
+    println!("{}", raw_attach_tx_hex);
+    println!("{}", raw_swap_tx_hex);
 
     let result = client
         .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
@@ -123,10 +124,10 @@ async fn test_psbt_inscription() -> Result<()> {
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
-        Instruction::PushBytes(empty),
+        Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
         Instruction::PushBytes(kntr),
-        Instruction::Op(op_pushnum_1),
+        Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
         Instruction::PushBytes(_key),
@@ -134,16 +135,12 @@ async fn test_psbt_inscription() -> Result<()> {
     ] = instructions.as_slice()
     {
         // Verify the opcodes
+        assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(*op_pushnum_1, OP_PUSHNUM_1, "Expected OP_PUSHNUM_1");
+        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
+        assert!(op_0.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
-
-        // Verify the KNTR identifier
-        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
-
-        // The first push is empty instead of OP_FALSE
-        assert!(empty.is_empty(), "Expected empty push bytes");
 
         // Deserialize the token data
         let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
@@ -157,7 +154,10 @@ async fn test_psbt_inscription() -> Result<()> {
         let key_from_bytes = XOnlyPublicKey::from_slice(_key.as_bytes())?;
         assert_eq!(key_from_bytes, internal_key);
     } else {
-        panic!("Script structure doesn't match expected pattern");
+        panic!(
+            "Script structure doesn't match expected pattern: {:#?}",
+            instructions
+        );
     }
 
     Ok(())
@@ -295,10 +295,10 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
-        Instruction::PushBytes(empty),
+        Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
         Instruction::PushBytes(kntr),
-        Instruction::Op(op_pushnum_1),
+        Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
         Instruction::PushBytes(_key),
@@ -306,16 +306,12 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
     ] = instructions.as_slice()
     {
         // Verify the opcodes
+        assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(*op_pushnum_1, OP_PUSHNUM_1, "Expected OP_PUSHNUM_1");
+        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
+        assert!(op_0.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
-
-        // Verify the KNTR identifier
-        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
-
-        // The first push is empty instead of OP_FALSE
-        assert!(empty.is_empty(), "Expected empty push bytes");
 
         // Deserialize the token data
         let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
@@ -458,10 +454,10 @@ async fn test_inscription_wrong_internal_key() -> Result<()> {
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
-        Instruction::PushBytes(empty),
+        Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
         Instruction::PushBytes(kntr),
-        Instruction::Op(op_pushnum_1),
+        Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
         Instruction::PushBytes(_key),
@@ -469,16 +465,12 @@ async fn test_inscription_wrong_internal_key() -> Result<()> {
     ] = instructions.as_slice()
     {
         // Verify the opcodes
+        assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(*op_pushnum_1, OP_PUSHNUM_1, "Expected OP_PUSHNUM_1");
+        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
+        assert!(op_0.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
-
-        // Verify the KNTR identifier
-        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
-
-        // The first push is empty instead of OP_FALSE
-        assert!(empty.is_empty(), "Expected empty push bytes");
 
         // Deserialize the token data
         let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
@@ -603,26 +595,21 @@ async fn test_inscription_without_checksig() -> Result<()> {
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
-        Instruction::PushBytes(empty),
+        Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
         Instruction::PushBytes(kntr),
-        Instruction::Op(op_pushnum_1),
+        Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
         Instruction::PushBytes(_key),
     ] = instructions.as_slice()
     {
         // Verify the opcodes
+        assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(*op_pushnum_1, OP_PUSHNUM_1, "Expected OP_PUSHNUM_1");
-        assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
-        // assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
-
-        // Verify the KNTR identifier
         assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
-
-        // The first push is empty instead of OP_FALSE
-        assert!(empty.is_empty(), "Expected empty push bytes");
+        assert!(op_0.is_empty(), "Expected empty push bytes");
+        assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
         let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
@@ -765,26 +752,21 @@ async fn test_inscription_with_wrong_internal_key_without_checksig() -> Result<(
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
-        Instruction::PushBytes(empty),
+        Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
         Instruction::PushBytes(kntr),
-        Instruction::Op(op_pushnum_1),
+        Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
         Instruction::PushBytes(_key),
     ] = instructions.as_slice()
     {
         // Verify the opcodes
+        assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(*op_pushnum_1, OP_PUSHNUM_1, "Expected OP_PUSHNUM_1");
-        assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
-        // assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
-
-        // Verify the KNTR identifier
         assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
-
-        // The first push is empty instead of OP_FALSE
-        assert!(empty.is_empty(), "Expected empty push bytes");
+        assert!(op_0.is_empty(), "Expected empty push bytes");
+        assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
         let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;

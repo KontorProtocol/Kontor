@@ -4,10 +4,8 @@ use bitcoin::absolute::LockTime;
 use bitcoin::address::Address;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak, TweakedKeypair};
-use bitcoin::opcodes::OP_FALSE;
-use bitcoin::opcodes::all::{
-    OP_CHECKSIG, OP_ENDIF, OP_EQUALVERIFY, OP_IF, OP_PUSHNUM_1, OP_RETURN, OP_SHA256,
-};
+use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_EQUALVERIFY, OP_IF, OP_RETURN, OP_SHA256};
+use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::psbt::{Input, Output, PsbtSighashType};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::secp256k1::Message;
@@ -100,7 +98,7 @@ pub fn build_inscription_without_checksig(
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
         .push_slice(b"KNTR")
-        .push_opcode(OP_PUSHNUM_1)
+        .push_opcode(OP_0)
         .push_slice(PushBytesBuf::try_from(serialized_token_balance)?)
         .push_opcode(OP_ENDIF);
 
@@ -152,7 +150,6 @@ pub fn generate_taproot_address_from_mnemonic(
     // Get the public key
     let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
     let compressed_pubkey = bitcoin::CompressedPublicKey(public_key.inner);
-
 
     // Create a Taproot address
     let x_only_pubkey = public_key.inner.x_only_public_key().0;

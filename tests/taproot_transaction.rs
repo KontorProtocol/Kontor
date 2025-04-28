@@ -3,8 +3,6 @@ use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
 use bitcoin::hashes::Hash;
 use bitcoin::key::{TapTweak, TweakedKeypair};
-use bitcoin::opcodes::all::OP_RETURN;
-use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::secp256k1::Message;
 use bitcoin::sighash::Prevouts;
@@ -23,7 +21,7 @@ use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::witness_data::WitnessData;
-use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
+use kontor::{bitcoin_client::Client, config::Config};
 use std::str::FromStr;
 
 #[tokio::test]
@@ -72,10 +70,10 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
+    let tap_script = test_utils::build_inscription(
+        serialized_token_balance.clone(),
         test_utils::PublicKey::Taproot(&internal_key),
-        &serialized_token_balance,
-    );
+    )?;
 
     // Build the Taproot tree with the script
     let taproot_spend_info = TaprootBuilder::new()
@@ -95,20 +93,6 @@ async fn test_taproot_transaction() -> Result<()> {
         script_pubkey: script_spendable_address.script_pubkey(),
     };
 
-    let mut op_return_script = ScriptBuf::new();
-    op_return_script.push_opcode(OP_RETURN);
-    op_return_script.push_slice(b"KNTR");
-
-    let op_return_data = OpReturnData::A { output_index: 0 };
-    let mut s = Vec::new();
-    ciborium::into_writer(&op_return_data, &mut s).unwrap();
-    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
-
-    let op_return_out = TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: op_return_script,
-    };
-
     let change_out = TxOut {
         value: Amount::from_sat(7700), // 9000 - 1000 - 300 fee
         script_pubkey: seller_address.script_pubkey(),
@@ -119,7 +103,7 @@ async fn test_taproot_transaction() -> Result<()> {
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![input],
-        output: vec![unspendable_out.clone(), op_return_out, change_out],
+        output: vec![unspendable_out.clone(), change_out],
     };
     let input_index = 0;
 
@@ -196,10 +180,6 @@ async fn test_taproot_transaction() -> Result<()> {
 
     // Build the witness stack for script path spending
     spend_tx.input[0].witness.push(signature.to_vec());
-    spend_tx.input[0]
-        .witness
-        .push(serialized_token_balance.clone());
-    spend_tx.input[0].witness.push(b"KNTR");
     spend_tx.input[0].witness.push(tap_script.as_bytes());
     spend_tx.input[0].witness.push(control_block.serialize());
 
@@ -215,32 +195,20 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let witness = spend_tx.input[0].witness.clone();
     // 1. Check the total number of witness elements first
-    assert_eq!(witness.len(), 5, "Witness should have exactly 5 elements");
+    assert_eq!(witness.len(), 3, "Witness should have exactly 5 elements");
 
     // 2. Check each element individually
     let signature = witness.to_vec()[0].clone();
     assert!(!signature.is_empty(), "Signature should not be empty");
 
-    let token_balance_bytes = witness.to_vec()[1].clone();
-    assert_eq!(
-        token_balance_bytes, serialized_token_balance,
-        "Token balance in witness doesn't match expected value"
-    );
-
-    let kntr_bytes = witness.to_vec()[2].clone();
-    assert_eq!(
-        kntr_bytes, b"KNTR",
-        "KNTR string in witness doesn't match expected value"
-    );
-
-    let script_bytes = witness.to_vec()[3].clone();
+    let script_bytes = witness.to_vec()[1].clone();
     assert_eq!(
         script_bytes,
         tap_script.as_bytes().to_vec(),
         "Script in witness doesn't match expected script"
     );
 
-    let control_block_bytes = witness.to_vec()[4].clone();
+    let control_block_bytes = witness.to_vec()[2].clone();
     assert_eq!(
         control_block_bytes,
         control_block.serialize(),
