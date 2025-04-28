@@ -1,68 +1,87 @@
 # Kontor
 
-## Installation
+## Bitcoin
 
-Install [ZeroMQ](https://zeromq.org/download/)
-
-Create TLS certs for local development with [mkcert](https://github.com/FiloSottile/mkcert). In the project directory run:
+Install dependencies for compiling Bitcoin with [ZeroMQ](https://zeromq.org/download/):
+```bash
+brew install cmake boost pkgconf libevent zeromq
 ```
+
+Clone Bitcoin:
+```bash
+git clone https://github.com/bitcoin/bitcoin.git
+cd bitcoin
+git checkout v29.0
+```
+
+Compile Bitcoin:
+```bash
+cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
+cmake --build build
+```
+The binary is now located in `build/bin/bitcoind`
+
+It is recommended to store Bitcoin data in a custom directory, ideally on an external volume i.e. `/Volumes/ExternalDrive/bitcoin-data`
+Additionally, a `bitcoin.conf` file should be created in the Bitcoin data directory with the following content:
+```bash
+rpcuser=rpc
+rpcpassword=rpc
+server=1
+txindex=1
+prune=0
+mempoolfullrbf=1
+dbcache=4000
+rpcthreads=11
+rpcworkqueue=32
+zmqpubsequence=tcp://127.0.0.1:28332
+zmqpubsequencehwm=0
+```
+You can set `rpcthreads` to a higher or lower value depending on your system's resources.
+
+Bitcoin can be run with:
+```bash
+build/bin/bitcoind -datadir=<path to your bitcoin data dir>
+```
+
+Bitcoin should be running and synced before running the application.
+
+## Development TLS
+
+Create TLS certs for local development with [mkcert](https://github.com/FiloSottile/mkcert). In the project (`Kontor`) directory run:
+```bash
 mkcert -key-file key.pem -cert-file cert.pem localhost 127.0.0.1 ::1
 ```
 
-Specify options:
-```
---bitcoin-rpc-url <BITCOIN_RPC_URL>
-    URL of the Bitcoin RPC server (e.g., http://localhost:8332)
+## Run
 
-    [env: BITCOIN_RPC_URL=https://api.unspendablelabs.com:8332]
+To run the application, your `.envrc` should include the following environment variables:
+```bash
+export BITCOIN_RPC_URL="http://127.0.0.1:8332"
+export BITCOIN_RPC_USER="rpc"
+export BITCOIN_RPC_PASSWORD="rpc"
 
---bitcoin-rpc-user <BITCOIN_RPC_USER>
-    User for Bitcoin RPC authentication
+export ZMQ_PUB_SEQUENCE_ADDRESS="tcp://127.0.0.1:28332"
 
-    [env: BITCOIN_RPC_USER=rpc]
+export API_PORT="8443"
 
---bitcoin-rpc-password <BITCOIN_RPC_PASSWORD>
-    Password for Bitcoin RPC authentication
+export DATABASE_DIR="./"
 
-    [env: BITCOIN_RPC_PASSWORD=rpc]
-
---zmq-pub-sequence-address <ZMQ_PUB_SEQUENCE_ADDRESS>
-    ZMQ address for sequence notifications (e.g., tcp://localhost:28332)
-
-    [env: ZMQ_PUB_SEQUENCE_ADDRESS=tcp://127.0.0.1:28332]
-
---api-port <API_PORT>
-    Port number for the API server (e.g., 8080)
-
-    [env: API_PORT=8443]
-
---cert-dir <CERT_DIR>
-    Directory path for TLS cert.pem and key.pem files (e.g., /var/lib/myapp/certs)
-
-    [env: CERT_DIR=./]
-
---database-dir <DATABASE_DIR>
-    Directory path for the database (e.g., /var/lib/myapp/db)
-
-    [env: DATABASE_DIR=./]
-
---starting-block-height <STARTING_BLOCK_HEIGHT>
-    Block height to begin parsing at (e.g. 850000)
-
-    [env: STARTING_BLOCK_HEIGHT=]
-    [default: 850000]
+export CERT_DIR="./"
 ```
 
-# Test
-
-```
-cargo test
-```
-
-Tests expect options to be set.
-
-# Run
-
-```
+```bash
 cargo run
+```
+
+## Test
+
+To run tests, **in addition to the environment variables above**, your `.envrc` should also include the following:
+```bash
+export SEGWIT_BUYER_KEY_PATH="./segwit_buyer.key"
+export SEGWIT_SELLER_KEY_PATH="./segwit_seller.key"
+export TAPROOT_KEY_PATH="./taproot.key"
+```
+
+```bash
+cargo test
 ```
