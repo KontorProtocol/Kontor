@@ -131,7 +131,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
                 script_pubkey: {
                     let mut op_return_script = ScriptBuf::new();
                     op_return_script.push_opcode(OP_RETURN);
-                    op_return_script.push_slice(b"KNTR");
+                    op_return_script.push_slice(b"kon");
 
                     let reveal_data = OpReturnData::A { output_index: 0 };
                     let mut reveal_bytes = Vec::new();
@@ -224,20 +224,20 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
     let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
     if let [
+        Instruction::PushBytes(_key),
+        Instruction::Op(op_checksig),
         Instruction::PushBytes(op_false),
         Instruction::Op(op_if),
-        Instruction::PushBytes(kntr),
+        Instruction::PushBytes(kon),
         Instruction::PushBytes(op_0),
         Instruction::PushBytes(serialized_data),
         Instruction::Op(op_endif),
-        Instruction::PushBytes(_key),
-        Instruction::Op(op_checksig),
     ] = instructions.as_slice()
     {
         // Verify the opcodes
         assert!(op_false.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_if, OP_IF, "Expected OP_IF");
-        assert_eq!(kntr.as_bytes(), b"KNTR", "Expected KNTR identifier");
+        assert_eq!(kon.as_bytes(), b"kon", "Expected kon identifier");
         assert!(op_0.is_empty(), "Expected empty push bytes");
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
