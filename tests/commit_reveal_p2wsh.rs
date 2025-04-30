@@ -16,7 +16,7 @@ use bitcoin::{
 use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
-use kontor::witness_data::WitnessData;
+use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
 
 #[tokio::test]
@@ -34,7 +34,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };

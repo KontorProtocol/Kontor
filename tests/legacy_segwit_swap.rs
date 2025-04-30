@@ -13,9 +13,8 @@ use bitcoin::{
 use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
-use kontor::{
-    bitcoin_client::Client, config::Config, op_return::OpReturnData, witness_data::WitnessData,
-};
+use kontor::witness_data::TokenBalance;
+use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -30,7 +29,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -169,7 +168,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -251,7 +250,7 @@ async fn test_psbt_without_secret() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -332,7 +331,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -411,7 +410,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -491,7 +490,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -582,7 +581,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -612,7 +611,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     )?;
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(
-        &WitnessData::TokenBalance {
+        &TokenBalance {
             value: 1000,
             name: "wrong_token_name".to_string(),
         },
@@ -672,7 +671,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
         test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: 1000,
         name: "token_name".to_string(),
     };
@@ -702,7 +701,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     )?;
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(
-        &WitnessData::TokenBalance {
+        &TokenBalance {
             value: 900,
             name: "token_name".to_string(),
         },

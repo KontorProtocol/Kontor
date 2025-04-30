@@ -1,3 +1,4 @@
+use bitcoin::XOnlyPublicKey;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -10,4 +11,8 @@ pub enum OpReturnData {
         #[serde(rename = "d")]
         destination: Vec<u8>,
     }, // swap
+    D {
+        #[serde(rename = "d")]
+        destination: XOnlyPublicKey,
+    }, // detach
 }

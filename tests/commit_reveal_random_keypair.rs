@@ -38,7 +38,7 @@ use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::op_return::OpReturnData;
 use kontor::test_utils;
-use kontor::witness_data::WitnessData;
+use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
 
 #[tokio::test]
@@ -54,7 +54,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
         test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -243,7 +243,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(

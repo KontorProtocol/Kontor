@@ -20,7 +20,7 @@ use bitcoin::{
 use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
-use kontor::witness_data::WitnessData;
+use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
 use std::str::FromStr;
 
@@ -61,7 +61,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };

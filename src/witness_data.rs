@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct TokenBalance {
+    pub value: u64,
+    pub name: String,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum WitnessData {
-    TokenBalance { value: u64, name: String },
+    Attach {
+        output_index: u32,
+        token_balance: TokenBalance,
+    },
+    Detach {
+        output_index: u32,
+        token_balance: TokenBalance,
+    }
+
 }

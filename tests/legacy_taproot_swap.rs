@@ -12,7 +12,7 @@ use bitcoin::{
 use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
-use kontor::witness_data::WitnessData;
+use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
 use std::collections::HashMap;
 
@@ -34,7 +34,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -121,7 +121,7 @@ async fn test_taproot_transaction() -> Result<()> {
     assert!(!signature.is_empty(), "Signature should not be empty");
 
     let token_balance_bytes = witness.to_vec()[1].clone();
-    let token_balance_decoded: WitnessData =
+    let token_balance_decoded: TokenBalance =
         ciborium::from_reader(&token_balance_bytes[..]).unwrap();
     assert_eq!(
         token_balance_decoded, token_balance,
@@ -210,7 +210,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -317,7 +317,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -423,7 +423,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -467,7 +467,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
             &tap_script,
         )?;
 
-    let wrong_token_balance = WitnessData::TokenBalance {
+    let wrong_token_balance = TokenBalance {
         value: token_value,
         name: "wrong_token_name".to_string(),
     };
@@ -537,7 +537,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -580,7 +580,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
             &tap_script,
         )?;
 
-    let wrong_token_balance = WitnessData::TokenBalance {
+    let wrong_token_balance = TokenBalance {
         value: 900,
         name: "token_name".to_string(),
     };
@@ -650,7 +650,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -755,7 +755,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
 
     // Create token balance data
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };

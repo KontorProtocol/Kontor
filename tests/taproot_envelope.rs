@@ -15,7 +15,7 @@ use bitcoin::{
 use clap::Parser;
 use kontor::config::TestConfig;
 use kontor::test_utils;
-use kontor::witness_data::WitnessData;
+use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
 
 #[tokio::test]
@@ -35,7 +35,7 @@ async fn test_psbt_inscription() -> Result<()> {
     let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -141,7 +141,7 @@ async fn test_psbt_inscription() -> Result<()> {
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -178,7 +178,7 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
     let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -222,7 +222,7 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
             &tap_script,
         )?;
 
-    let malformed_token_balance = WitnessData::TokenBalance {
+    let malformed_token_balance = TokenBalance {
         value: token_value,
         name: "wrong_token_name".to_string(),
     };
@@ -312,7 +312,7 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -346,7 +346,7 @@ async fn test_inscription_wrong_internal_key() -> Result<()> {
     let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -471,7 +471,7 @@ async fn test_inscription_wrong_internal_key() -> Result<()> {
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -505,7 +505,7 @@ async fn test_inscription_without_checksig() -> Result<()> {
     let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -610,7 +610,7 @@ async fn test_inscription_without_checksig() -> Result<()> {
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -644,7 +644,7 @@ async fn test_inscription_with_wrong_internal_key_without_checksig() -> Result<(
     let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
-    let token_balance = WitnessData::TokenBalance {
+    let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
     };
@@ -767,7 +767,7 @@ async fn test_inscription_with_wrong_internal_key_without_checksig() -> Result<(
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
-        let token_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
