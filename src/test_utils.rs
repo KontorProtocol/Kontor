@@ -76,7 +76,7 @@ pub enum PublicKey<'a> {
 pub fn build_witness_script(key: PublicKey, serialized_token_balance: &[u8]) -> ScriptBuf {
     // Create the tapscript with x-only public key
     let base_witness_script = Builder::new()
-        .push_slice(b"KNTR")
+        .push_slice(b"KON")
         .push_opcode(OP_EQUALVERIFY)
         .push_opcode(OP_SHA256)
         .push_slice(sha256::Hash::hash(serialized_token_balance).as_byte_array())
@@ -90,30 +90,46 @@ pub fn build_witness_script(key: PublicKey, serialized_token_balance: &[u8]) -> 
     witness_script.push_opcode(OP_CHECKSIG).into_script()
 }
 
+fn build_script_after_pubkey(
+    base_witness_script: Builder,
+    serialized_token_balance: Vec<u8>,
+) -> Result<Builder> {
+    Ok(base_witness_script
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(b"KON")
+        .push_opcode(OP_0)
+        .push_slice(PushBytesBuf::try_from(serialized_token_balance)?)
+        .push_opcode(OP_ENDIF))
+}
+
 pub fn build_inscription_without_checksig(
     serialized_token_balance: Vec<u8>,
     key: PublicKey,
 ) -> Result<Builder> {
-    let base_witness_script = Builder::new()
-        .push_opcode(OP_FALSE)
-        .push_opcode(OP_IF)
-        .push_slice(b"KNTR")
-        .push_opcode(OP_0)
-        .push_slice(PushBytesBuf::try_from(serialized_token_balance)?)
-        .push_opcode(OP_ENDIF);
-
-    let witness_script = match key {
-        PublicKey::Segwit(compressed) => base_witness_script.push_slice(compressed.to_bytes()),
-        PublicKey::Taproot(x_only) => base_witness_script.push_slice(x_only.serialize()),
+    // First push the public key
+    let base_witness_script = match key {
+        PublicKey::Segwit(compressed) => Builder::new().push_slice(compressed.to_bytes()),
+        PublicKey::Taproot(x_only) => Builder::new().push_slice(x_only.serialize()),
     };
 
-    Ok(witness_script)
+    // Then add the rest of the script
+    build_script_after_pubkey(base_witness_script, serialized_token_balance)
 }
 
 pub fn build_inscription(serialized_token_balance: Vec<u8>, key: PublicKey) -> Result<ScriptBuf> {
-    let tap_script =
-        build_inscription_without_checksig(serialized_token_balance, key)?.push_opcode(OP_CHECKSIG);
+    // First push the public key and CHECKSIG
+    let base_witness_script = match key {
+        PublicKey::Segwit(compressed) => Builder::new()
+            .push_slice(compressed.to_bytes())
+            .push_opcode(OP_CHECKSIG),
+        PublicKey::Taproot(x_only) => Builder::new()
+            .push_slice(x_only.serialize())
+            .push_opcode(OP_CHECKSIG),
+    };
 
+    // Then add the rest of the script
+    let tap_script = build_script_after_pubkey(base_witness_script, serialized_token_balance)?;
     Ok(tap_script.into_script())
 }
 
@@ -166,7 +182,7 @@ pub fn build_signed_taproot_attach_tx(
 ) -> Result<Transaction> {
     let mut op_return_script = ScriptBuf::new();
     op_return_script.push_opcode(OP_RETURN);
-    op_return_script.push_slice(b"KNTR");
+    op_return_script.push_slice(b"KON");
 
     let op_return_data = OpReturnData::A { output_index: 0 };
     let mut s = Vec::new();
@@ -390,7 +406,7 @@ pub fn build_signed_buyer_psbt_taproot(
                     script_pubkey: {
                         let mut op_return_script = ScriptBuf::new();
                         op_return_script.push_opcode(OP_RETURN);
-                        op_return_script.push_slice(b"KNTR");
+                        op_return_script.push_slice(b"KON");
 
                         // Create transfer data pointing to output 2 (buyer's address)
                         let transfer_data = OpReturnData::S {
@@ -510,7 +526,7 @@ pub fn build_signed_attach_tx_segwit(
 
     let mut op_return_script = ScriptBuf::new();
     op_return_script.push_opcode(OP_RETURN);
-    op_return_script.push_slice(b"KNTR");
+    op_return_script.push_slice(b"KON");
 
     let op_return_data = OpReturnData::A { output_index: 0 };
     let mut s = Vec::new();
@@ -634,7 +650,7 @@ pub fn build_signed_buyer_psbt_segwit(
 ) -> Result<Psbt> {
     let mut buyer_op_return_script = ScriptBuf::new();
     buyer_op_return_script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
-    buyer_op_return_script.push_slice(b"KNTR");
+    buyer_op_return_script.push_slice(b"KON");
 
     let buyer_op_return_data = OpReturnData::S {
         destination: buyer_address.script_pubkey().as_bytes().to_vec(),

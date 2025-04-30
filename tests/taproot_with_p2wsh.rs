@@ -89,7 +89,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     spend_tx.input[0].witness = witness;
 

@@ -61,7 +61,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -103,7 +103,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     else {
         panic!("Invalid OP_RETURN script format");
     };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
+    assert_eq!(prefix.as_bytes(), b"KON");
     let attach_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
     assert_eq!(attach_op_return_data, OpReturnData::A { output_index: 0 });
 
@@ -120,7 +120,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     else {
         panic!("Invalid OP_RETURN script format");
     };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
+    assert_eq!(prefix.as_bytes(), b"KON");
     let swap_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
     assert_eq!(
         swap_op_return_data,
@@ -147,7 +147,7 @@ async fn test_psbt_with_secret() -> Result<()> {
         token_balance, serialized_token_balance,
         "Second element should be token balance"
     );
-    assert_eq!(prefix, b"KNTR", "Third element should be prefix KNTR");
+    assert_eq!(prefix, b"KON", "Third element should be prefix KON");
     assert_eq!(
         final_witness_script,
         witness_script.as_bytes(),
@@ -282,7 +282,7 @@ async fn test_psbt_without_secret() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(seller_address.script_pubkey().as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -361,7 +361,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     )?;
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -520,7 +520,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         &witness_script,
     )?;
     let malformedwitness_script = Builder::new()
-        .push_slice(b"KNTR")
+        .push_slice(b"KON")
         .push_opcode(OP_EQUALVERIFY)
         .push_opcode(OP_SHA256)
         .push_slice(sha256::Hash::hash(b"SECRET").as_byte_array())
@@ -532,7 +532,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(malformedwitness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -622,7 +622,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -712,7 +712,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -790,7 +790,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -845,7 +845,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
         token_balance, serialized_token_balance,
         "Second element should be token balance"
     );
-    assert_eq!(prefix, b"KNTR", "Third element should be prefix KNTR");
+    assert_eq!(prefix, b"KON", "Third element should be prefix KON");
     assert_eq!(
         final_witness_script,
         witness_script.as_bytes(),

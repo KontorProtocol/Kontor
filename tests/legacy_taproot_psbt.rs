@@ -82,7 +82,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
@@ -128,10 +128,10 @@ async fn test_taproot_transaction() -> Result<()> {
         "Token balance in witness doesn't match expected value"
     );
 
-    let kntr_bytes = witness.to_vec()[2].clone();
+    let kon_bytes = witness.to_vec()[2].clone();
     assert_eq!(
-        kntr_bytes, b"KNTR",
-        "KNTR string in witness doesn't match expected value"
+        kon_bytes, b"KON",
+        "KON string in witness doesn't match expected value"
     );
 
     let script_bytes = witness.to_vec()[3].clone();
@@ -163,7 +163,7 @@ async fn test_taproot_transaction() -> Result<()> {
     else {
         panic!("Invalid OP_RETURN script format");
     };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
+    assert_eq!(prefix.as_bytes(), b"KON");
     let attach_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
     assert_eq!(attach_op_return_data, OpReturnData::A { output_index: 0 });
 
@@ -180,7 +180,7 @@ async fn test_taproot_transaction() -> Result<()> {
     else {
         panic!("Invalid OP_RETURN script format");
     };
-    assert_eq!(prefix.as_bytes(), b"KNTR");
+    assert_eq!(prefix.as_bytes(), b"KON");
     let swap_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
     assert_eq!(
         swap_op_return_data,
@@ -365,7 +365,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -479,7 +479,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_wrong_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
@@ -592,7 +592,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_wrong_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
@@ -697,7 +697,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     // Build the witness stack for script path spending
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
@@ -803,7 +803,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
@@ -904,7 +904,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     let mut witness = Witness::new();
     witness.push(signature.to_vec());
     witness.push(&serialized_token_balance);
-    witness.push(b"KNTR");
+    witness.push(b"KON");
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
@@ -956,10 +956,10 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
         "Token balance in witness doesn't match expected value"
     );
 
-    let kntr_bytes = witness.to_vec()[2].clone();
+    let kon_bytes = witness.to_vec()[2].clone();
     assert_eq!(
-        kntr_bytes, b"KNTR",
-        "KNTR string in witness doesn't match expected value"
+        kon_bytes, b"KON",
+        "KON string in witness doesn't match expected value"
     );
 
     let script_bytes = witness.to_vec()[3].clone();
