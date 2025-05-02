@@ -5,27 +5,18 @@ use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::Sequence;
-use bitcoin::TapLeafHash;
-use bitcoin::TapSighash;
-use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use bitcoin::absolute::LockTime;
-use bitcoin::hashes::Hash;
-use bitcoin::key::TapTweak;
-use bitcoin::key::TweakedKeypair;
 use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::psbt::Input;
 use bitcoin::psbt::Output;
 use bitcoin::script::Instruction;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Keypair;
-use bitcoin::secp256k1::Message;
-use bitcoin::sighash::Prevouts;
-use bitcoin::sighash::SighashCache;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
@@ -115,34 +106,12 @@ async fn test_psbt_inscription() -> Result<()> {
             },
         ],
     };
-    let input_index = 0;
-
-    // Sign the transaction
-    let sighash_type = TapSighashType::Default;
     let prevouts = vec![TxOut {
         value: Amount::from_sat(9000), // existing utxo with 9000 sats
         script_pubkey: seller_address.script_pubkey(),
     }];
-    let prevouts = Prevouts::All(&prevouts);
 
-    let mut sighasher = SighashCache::new(&attach_commit_tx);
-    let sighash: TapSighash = sighasher
-        .taproot_key_spend_signature_hash(input_index, &prevouts, sighash_type)
-        .expect("failed to construct sighash");
-
-    // Sign the sighash
-    let tweaked: TweakedKeypair = keypair.tap_tweak(&secp, None);
-    let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
-
-    // Update the witness stack
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    attach_commit_tx.input[input_index]
-        .witness
-        .push(signature.to_vec());
+    test_utils::sign_key_spend(&secp, &mut attach_commit_tx, &prevouts, &keypair, 0)?;
 
     let detach_data = WitnessData::Detach {
         output_index: 0,
@@ -203,53 +172,22 @@ async fn test_psbt_inscription() -> Result<()> {
         ],
     };
 
-    let mut reveal_sighasher = SighashCache::new(&attach_reveal_tx);
-    let prevout = vec![
+    let prevouts = vec![
         attach_commit_tx.output[1].clone(),
         attach_commit_tx.output[0].clone(),
     ];
-    let prevouts = Prevouts::All(&prevout);
-    let reveal_sighash: TapSighash = reveal_sighasher
-        .taproot_key_spend_signature_hash(0, &prevouts, sighash_type)
-        .expect("failed to construct sighash");
 
-    let tweaked: TweakedKeypair = keypair.tap_tweak(&secp, None);
-    let msg = Message::from_digest(reveal_sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
+    test_utils::sign_key_spend(&secp, &mut attach_reveal_tx, &prevouts, &keypair, 0)?;
 
-    // Update the witness stack
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-
-    let attach_reveal_sighash: TapSighash = reveal_sighasher
-        .taproot_script_spend_signature_hash(
-            1,
-            &prevouts,
-            TapLeafHash::from_script(&attach_tap_script, LeafVersion::TapScript),
-            sighash_type,
-        )
-        .expect("Failed to create sighash");
-    attach_reveal_tx.input[0].witness.push(signature.to_vec());
-
-    let msg = Message::from_digest(attach_reveal_sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &keypair);
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    attach_reveal_tx.input[1].witness.push(signature.to_vec());
-    attach_reveal_tx.input[1]
-        .witness
-        .push(attach_tap_script.as_bytes());
-
-    let attach_control_block = attach_taproot_spend_info
-        .control_block(&(attach_tap_script.clone(), LeafVersion::TapScript))
-        .expect("Failed to create control block");
-    attach_reveal_tx.input[1]
-        .witness
-        .push(attach_control_block.serialize());
+    test_utils::sign_script_spend(
+        &secp,
+        &attach_taproot_spend_info,
+        &attach_tap_script,
+        &mut attach_reveal_tx,
+        &prevouts,
+        &keypair,
+        1,
+    )?;
 
     let attach_reveal_witness = attach_reveal_tx.input[1].witness.clone();
     // Get the script from the witness
@@ -349,27 +287,16 @@ async fn test_psbt_inscription() -> Result<()> {
         proprietary: Default::default(),
         unknown: Default::default(),
     };
-
-    let seller_sighash = SighashCache::new(&seller_detach_psbt.unsigned_tx)
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[attach_reveal_tx.output[0].clone()]),
-            TapLeafHash::from_script(&detach_tap_script, LeafVersion::TapScript),
-            TapSighashType::SinglePlusAnyoneCanPay,
-        )
-        .expect("Failed to create sighash");
-
-    let msg = Message::from_digest(seller_sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &keypair);
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type: TapSighashType::SinglePlusAnyoneCanPay,
-    };
-    let mut witness = Witness::new();
-    witness.push(signature.to_vec());
-    witness.push(detach_tap_script.as_bytes());
-    witness.push(detach_control_block.serialize());
-    seller_detach_psbt.inputs[0].final_script_witness = Some(witness);
+    let prevouts = vec![attach_reveal_tx.output[0].clone()];
+    test_utils::sign_seller_side_psbt(
+        &secp,
+        &mut seller_detach_psbt,
+        &detach_tap_script,
+        internal_key,
+        detach_control_block,
+        &keypair,
+        &prevouts,
+    );
 
     let buyer_keypair = Keypair::from_secret_key(&secp, &buyer_child_key.private_key);
     let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
@@ -455,52 +382,16 @@ async fn test_psbt_inscription() -> Result<()> {
         unknown: Default::default(),
     };
 
-    // Sign the buyer's input (key path spending)
-    let buyer_sighash = {
-        // Create a new SighashCache for the transaction
-        let mut sighasher = SighashCache::new(&buyer_psbt.unsigned_tx);
+    // Define the prevouts explicitly in the same order as inputs
+    let prevouts = [
+        attach_reveal_tx.output[0].clone(),
+        TxOut {
+            value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
+            script_pubkey: buyer_address.script_pubkey(),
+        },
+    ];
 
-        // Define the prevouts explicitly in the same order as inputs
-        let prevouts = [
-            attach_reveal_tx.output[0].clone(),
-            TxOut {
-                value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
-                script_pubkey: buyer_address.script_pubkey(),
-            },
-        ];
-
-        // Calculate the sighash for key path spending
-        let sighash = sighasher
-            .taproot_key_spend_signature_hash(
-                1, // Buyer's input index (back to 1)
-                &Prevouts::All(&prevouts),
-                TapSighashType::Default,
-            )
-            .expect("Failed to create sighash");
-
-        sighash
-    };
-
-    // Sign with the buyer's tweaked key
-    let msg = Message::from_digest(buyer_sighash.to_byte_array());
-
-    // Create the tweaked keypair
-    let buyer_tweaked = buyer_keypair.tap_tweak(&secp, None);
-    // Sign with the tweaked keypair since we're doing key path spending
-    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
-
-    let buyer_signature = bitcoin::taproot::Signature {
-        signature: buyer_signature,
-        sighash_type: TapSighashType::Default,
-    };
-
-    // Add the signature to the PSBT
-    buyer_psbt.inputs[1].tap_key_sig = Some(buyer_signature);
-
-    // Construct the witness stack for key path spending
-    let mut buyer_witness = Witness::new();
-    buyer_witness.push(buyer_signature.to_vec());
-    buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
+    test_utils::sign_buyer_side_psbt(&secp, &mut buyer_psbt, &buyer_keypair, &prevouts);
 
     let final_tx = buyer_psbt.extract_tx()?;
     let attach_commit_tx_hex = hex::encode(serialize_tx(&attach_commit_tx));

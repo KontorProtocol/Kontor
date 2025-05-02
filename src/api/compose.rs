@@ -135,10 +135,8 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
                 let chained_reveal_outputs = compose_reveal(chained_reveal_inputs)?;
 
                 base_builder
-                    .chained_tap_script(chained_reveal_outputs.chained_tap_script.unwrap())
-                    .chained_reveal_transaction(
-                        chained_reveal_outputs.chained_reveal_transaction.unwrap(),
-                    )
+                    .chained_tap_script(chained_tap_script)
+                    .chained_reveal_transaction(chained_reveal_outputs.reveal_transaction)
                     .build()
             }
             _ => base_builder.build(),
@@ -217,7 +215,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         .tap_script(tap_script)
         .taproot_spend_info(taproot_spend_info)
         .build();
-
     Ok(commit_outputs)
 }
 
@@ -259,7 +256,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let mut chained_taproot_spend_info_opt: Option<TaprootSpendInfo> = None;
 
     if let Some(chained_script_data) = chained_script_data {
-        // if chained_script_data is provided, build the output for the new commit
+        // if chained_script_data is provided, script_spendable_address output for the new commit
         let (
             chained_tap_script_for_return,
             chained_taproot_spend_info_for_return,
@@ -295,14 +292,21 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         fee_rate,
         false,
     );
+
     let commit_outputs_sum: u64 = commit_transaction
         .output
         .iter()
         .map(|o| o.value.to_sat())
         .sum();
 
+    let mut change_deduction = fee;
+    if chained_script_data.is_some() {
+        change_deduction = fee + dust;
+    }
+
+    println!("commit_outputs_sum: {}", commit_outputs_sum);
     let reveal_change = commit_outputs_sum
-        .checked_sub(fee)
+        .checked_sub(change_deduction)
         .ok_or(anyhow!("Reveal change amount is negative"))?;
 
     if reveal_change > dust {
@@ -315,7 +319,12 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             true,
         );
 
-        let reveal_change = commit_outputs_sum.checked_sub(fee);
+        let mut change_deduction = fee;
+        if chained_script_data.is_some() {
+            change_deduction = fee + dust;
+        }
+
+        let reveal_change = commit_outputs_sum.checked_sub(change_deduction);
 
         if let Some(v) = reveal_change {
             if v > dust {
