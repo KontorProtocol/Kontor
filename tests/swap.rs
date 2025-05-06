@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use bitcoin::Amount;
+use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::Sequence;
@@ -27,6 +28,8 @@ use bitcoin::{
     key::Secp256k1,
 };
 use clap::Parser;
+use kontor::api::compose::ComposeInputs;
+use kontor::api::compose::compose;
 use kontor::config::TestConfig;
 use kontor::op_return::OpReturnData;
 use kontor::test_utils;
@@ -62,57 +65,6 @@ async fn test_psbt_inscription() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&attach_witness_data, &mut serialized_token_balance).unwrap();
 
-    let attach_tap_script = test_utils::build_inscription(
-        serialized_token_balance,
-        test_utils::PublicKey::Taproot(&internal_key),
-    )?;
-
-    // Build the Taproot tree with the script
-    let attach_taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, attach_tap_script.clone())
-        .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
-        .expect("Failed to finalize Taproot tree");
-
-    // Get the output key which commits to both the internal key and the script tree
-    let output_key = attach_taproot_spend_info.output_key();
-
-    // Create the address from the output key
-    let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
-
-    // Create the transaction
-    let mut attach_commit_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_str(
-                    "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8",
-                )?,
-                vout: 0,
-            }, // The output we are spending
-            script_sig: ScriptBuf::default(), // For a p2tr script_sig is empty
-            sequence: Sequence::MAX,
-            witness: Witness::default(), // Filled in after signing
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(546),
-                script_pubkey: script_spendable_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(8154), // 9000 - 546 - 300 fee
-                script_pubkey: seller_address.script_pubkey(),
-            },
-        ],
-    };
-    let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000), // existing utxo with 9000 sats
-        script_pubkey: seller_address.script_pubkey(),
-    }];
-
-    test_utils::sign_key_spend(&secp, &mut attach_commit_tx, &prevouts, &keypair, 0)?;
-
     let detach_data = WitnessData::Detach {
         output_index: 0,
         token_balance: TokenBalance {
@@ -123,61 +75,45 @@ async fn test_psbt_inscription() -> Result<()> {
     let mut serialized_detach_data = Vec::new();
     ciborium::into_writer(&detach_data, &mut serialized_detach_data).unwrap();
 
-    let detach_tap_script = test_utils::build_inscription(
-        serialized_detach_data,
-        test_utils::PublicKey::Taproot(&internal_key),
-    )?;
+    let outpoint = OutPoint {
+        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
+        vout: 0,
+    };
 
-    let detach_tapscript_spend_info = TaprootBuilder::new()
-        .add_leaf(0, detach_tap_script.clone())
+    let txout = TxOut {
+        value: Amount::from_sat(9000),
+        script_pubkey: seller_address.script_pubkey(),
+    };
+
+    let compose_params = ComposeInputs::builder()
+        .sender_address(&seller_address)
+        .internal_key(&internal_key)
+        .sender_utxos(vec![(outpoint, txout)])
+        .script_data(&serialized_token_balance)
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .chained_script_data(&serialized_detach_data)
+        .build();
+
+    let compose_outputs = compose(compose_params)?;
+    let mut attach_commit_tx = compose_outputs.commit_transaction;
+    let mut attach_reveal_tx = compose_outputs.reveal_transaction;
+    let attach_tap_script = compose_outputs.tap_script;
+    let detach_tap_script = compose_outputs.chained_tap_script.unwrap();
+
+    let prevouts = vec![TxOut {
+        value: Amount::from_sat(9000), // existing utxo with 9000 sats
+        script_pubkey: seller_address.script_pubkey(),
+    }];
+
+    test_utils::sign_key_spend(&secp, &mut attach_commit_tx, &prevouts, &keypair, 0)?;
+
+    let attach_taproot_spend_info = TaprootBuilder::new()
+        .add_leaf(0, attach_tap_script.clone())
         .expect("Failed to add leaf")
         .finalize(&secp, internal_key)
         .expect("Failed to finalize Taproot tree");
 
-    let detach_script_address =
-        Address::p2tr_tweaked(detach_tapscript_spend_info.output_key(), KnownHrp::Mainnet);
-
-    let mut attach_reveal_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![
-            TxIn {
-                previous_output: OutPoint {
-                    txid: attach_commit_tx.compute_txid(),
-                    vout: 1,
-                },
-                script_sig: ScriptBuf::default(),
-                sequence: Sequence::MAX,
-                witness: Witness::default(),
-            },
-            TxIn {
-                previous_output: OutPoint {
-                    txid: attach_commit_tx.compute_txid(),
-                    vout: 0,
-                },
-                script_sig: ScriptBuf::default(),
-                sequence: Sequence::MAX,
-                witness: Witness::default(),
-            },
-        ],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(546),
-                script_pubkey: detach_script_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(7854), // 8154 - 300
-                script_pubkey: seller_address.script_pubkey(),
-            },
-        ],
-    };
-
-    let prevouts = vec![
-        attach_commit_tx.output[1].clone(),
-        attach_commit_tx.output[0].clone(),
-    ];
-
-    test_utils::sign_key_spend(&secp, &mut attach_reveal_tx, &prevouts, &keypair, 0)?;
+    let prevouts = vec![attach_commit_tx.output[0].clone()];
 
     test_utils::sign_script_spend(
         &secp,
@@ -186,10 +122,10 @@ async fn test_psbt_inscription() -> Result<()> {
         &mut attach_reveal_tx,
         &prevouts,
         &keypair,
-        1,
+        0,
     )?;
 
-    let attach_reveal_witness = attach_reveal_tx.input[1].witness.clone();
+    let attach_reveal_witness = attach_reveal_tx.input[0].witness.clone();
     // Get the script from the witness
     let script_bytes = attach_reveal_witness.to_vec()[1].clone();
     let script = ScriptBuf::from_bytes(script_bytes);
@@ -239,13 +175,21 @@ async fn test_psbt_inscription() -> Result<()> {
             let detach_script_address_2 =
                 Address::p2tr_tweaked(detach_spend_info.output_key(), KnownHrp::Mainnet);
 
-            assert_eq!(detach_script_address_2, detach_script_address);
+            assert_eq!(
+                detach_script_address_2.script_pubkey(),
+                attach_reveal_tx.output[0].script_pubkey
+            );
         } else {
             panic!("Invalid witness data");
         }
     } else {
         panic!("Invalid script instructions");
     }
+    let detach_tapscript_spend_info = TaprootBuilder::new()
+        .add_leaf(0, detach_tap_script.clone())
+        .expect("Failed to add leaf")
+        .finalize(&secp, internal_key)
+        .expect("Failed to finalize Taproot tree");
 
     let detach_control_block = detach_tapscript_spend_info
         .control_block(&(detach_tap_script.clone(), LeafVersion::TapScript))

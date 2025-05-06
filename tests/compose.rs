@@ -1,13 +1,13 @@
 use anyhow::Result;
-use bitcoin::FeeRate;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
+use bitcoin::{FeeRate, Witness};
 use clap::Parser;
-use kontor::api::compose::compose;
+use kontor::api::compose::{RevealInputs, compose, compose_reveal};
 
 use kontor::api::compose::ComposeInputs;
 use kontor::config::TestConfig;
@@ -64,18 +64,47 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.tap_script;
     let mut reveal_tx = compose_outputs.reveal_transaction;
-    let chained_reveal_tx = compose_outputs.chained_reveal_transaction;
-    let chained_tap_script = compose_outputs.chained_tap_script;
+    let chained_tap_script = compose_outputs.chained_tap_script.unwrap();
+    println!("commit_tx: {:#?}", commit_tx);
+    println!("reveal_tx: {:#?}", reveal_tx);
+
+    let chained_reveal_taproot_spend_info = TaprootBuilder::new()
+        .add_leaf(0, chained_tap_script.clone())
+        .expect("Failed to add leaf")
+        .finalize(&secp, internal_key)
+        .expect("Failed to finalize Taproot tree");
+
+    let chained_reveal_tx = compose_reveal(
+        RevealInputs::builder()
+            .internal_key(&internal_key)
+            .sender_address(&seller_address)
+            .commit_output((
+                OutPoint {
+                    txid: reveal_tx.compute_txid(),
+                    vout: 0,
+                },
+                reveal_tx.output[0].clone(),
+            ))
+            .funding_outputs(vec![(
+                OutPoint {
+                    txid: reveal_tx.compute_txid(),
+                    vout: 1,
+                },
+                reveal_tx.output[1].clone(),
+            )])
+            .tap_script(&chained_tap_script)
+            .taproot_spend_info(&chained_reveal_taproot_spend_info)
+            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+            // .op_return_recipient(&internal_key)
+            .build(),
+    )?;
 
     // 1. SIGN THE ORIGINAL COMMIT
     test_utils::sign_key_spend(&secp, &mut commit_tx, &[utxo_for_output], &keypair, 0)?;
 
-    let spend_tx_prevouts = vec![commit_tx.output[1].clone(), commit_tx.output[0].clone()];
+    let spend_tx_prevouts = vec![commit_tx.output[0].clone()];
 
     // 2. SIGN THE REVEAL
-
-    // sign the key_spend input for the reveal
-    test_utils::sign_key_spend(&secp, &mut reveal_tx, &spend_tx_prevouts, &keypair, 0)?;
 
     // sign the script_spend input for the reveal transaction
     let reveal_taproot_spend_info = TaprootBuilder::new()
@@ -91,22 +120,13 @@ async fn test_taproot_transaction() -> Result<()> {
         &mut reveal_tx,
         &spend_tx_prevouts,
         &keypair,
-        1,
-    )?;
-
-    // 3. SIGN THE CHAINED REVEAL
-    let mut chained_reveal_tx = chained_reveal_tx.unwrap();
-    let chained_tap_script = chained_tap_script.unwrap();
-    let reveal_tx_prevouts = vec![reveal_tx.output[1].clone(), reveal_tx.output[0].clone()];
-
-    // sign the key_spend input for the chained reveal
-    test_utils::sign_key_spend(
-        &secp,
-        &mut chained_reveal_tx,
-        &reveal_tx_prevouts,
-        &keypair,
         0,
     )?;
+
+    let mut chained_reveal_tx = chained_reveal_tx.reveal_transaction;
+
+    // 3. SIGN THE CHAINED REVEAL
+    let reveal_tx_prevouts = vec![reveal_tx.output[0].clone()];
 
     // sign the script_spend input for the chained reveal transaction
     let chained_taproot_spend_info = TaprootBuilder::new()
@@ -122,7 +142,7 @@ async fn test_taproot_transaction() -> Result<()> {
         &mut chained_reveal_tx,
         &reveal_tx_prevouts,
         &keypair,
-        1,
+        0,
     )?;
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
@@ -132,7 +152,6 @@ async fn test_taproot_transaction() -> Result<()> {
     let result = client
         .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex, chained_reveal_tx_hex])
         .await?;
-    println!("result: {:#?}", result);
 
     assert_eq!(result.len(), 3, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Commit transaction was rejected");

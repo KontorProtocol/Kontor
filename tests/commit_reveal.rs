@@ -68,13 +68,9 @@ async fn test_taproot_transaction() -> Result<()> {
     // Sign the attach transaction
     test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
 
-    let spend_tx_prevouts = vec![attach_tx.output[1].clone(), attach_tx.output[0].clone()];
-
-    // sign the key_spend input for the spend transaction
-    test_utils::sign_key_spend(&secp, &mut spend_tx, &spend_tx_prevouts, &keypair, 0)?;
+    let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 
     // sign the script_spend input for the spend transaction
-
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone())
         .expect("Failed to add leaf")
@@ -88,7 +84,7 @@ async fn test_taproot_transaction() -> Result<()> {
         &mut spend_tx,
         &spend_tx_prevouts,
         &keypair,
-        1,
+        0,
     )?;
 
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
@@ -98,11 +94,13 @@ async fn test_taproot_transaction() -> Result<()> {
         .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
         .await?;
 
+    println!("result: {:#?}", result);
+
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Attach transaction was rejected");
     assert!(result[1].allowed, "Spend transaction was rejected");
 
-    let witness = spend_tx.input[1].witness.clone();
+    let witness = spend_tx.input[0].witness.clone();
     // 1. Check the total number of witness elements first
     assert_eq!(witness.len(), 3, "Witness should have exactly 3 elements");
 
