@@ -15,6 +15,5 @@ pub enum WitnessData {
     Detach {
         output_index: u32,
         token_balance: TokenBalance,
-    }
-
+    },
 }

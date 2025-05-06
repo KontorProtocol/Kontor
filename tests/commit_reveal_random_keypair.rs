@@ -4,16 +4,12 @@ use anyhow::Result;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Sequence;
-use bitcoin::TapLeafHash;
-use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use bitcoin::absolute::LockTime;
-use bitcoin::hashes::Hash;
-use bitcoin::key::TapTweak;
 use bitcoin::key::rand;
 use bitcoin::opcodes::all::OP_CHECKSIG;
 use bitcoin::opcodes::all::OP_ENDIF;
@@ -22,10 +18,6 @@ use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::script::Instruction;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Keypair;
-use bitcoin::secp256k1::Message;
-use bitcoin::sighash::Prevouts;
-use bitcoin::sighash::SighashCache;
-use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
 use bitcoin::{
@@ -80,7 +72,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
 
     let sender_keypair = Keypair::from_secret_key(&secp, &sender_child_key.private_key);
 
-    let commit_tx = Transaction {
+    let mut commit_tx = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
@@ -109,7 +101,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
     };
 
     // Create the reveal transaction - simple spend back to sender's address
-    let reveal_tx = Transaction {
+    let mut reveal_tx = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
@@ -143,65 +135,31 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
             },
         ],
     };
+    // Sign the commit transaction
+    test_utils::sign_key_spend(
+        &secp,
+        &mut commit_tx,
+        &[TxOut {
+            value: Amount::from_sat(9000), // seller's utxo value
+            script_pubkey: sender_address.script_pubkey(),
+        }],
+        &sender_keypair,
+        0,
+    )?;
 
     // Sign the reveal transaction using script path spending
-    let control_block = taproot_spend_info
-        .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
-        .expect("Failed to create control block");
+    test_utils::sign_script_spend(
+        &secp,
+        &taproot_spend_info,
+        &reveal_script,
+        &mut reveal_tx,
+        &[commit_tx.output[0].clone()],
+        &random_keypair,
+        0,
+    )?;
 
-    let mut sighasher = SighashCache::new(&reveal_tx);
-    let sighash = sighasher
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[commit_tx.output[0].clone()]),
-            TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
-            TapSighashType::Default,
-        )
-        .expect("Failed to create sighash");
-
-    // Sign with the random key
-    let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &random_keypair);
-
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type: TapSighashType::Default,
-    };
-
-    // Create the final reveal transaction with witness
-    let mut final_reveal_tx = reveal_tx.clone();
-    let mut witness = Witness::new();
-    witness.push(signature.to_vec());
-    witness.push(reveal_script.as_bytes());
-    witness.push(control_block.serialize());
-    final_reveal_tx.input[0].witness = witness;
-
-    // Then, sign the commit transaction
-    let sighash_type = TapSighashType::Default;
-    let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000), // seller's utxo value
-        script_pubkey: sender_address.script_pubkey(),
-    }];
-
-    let mut sighasher = SighashCache::new(&commit_tx);
-    let sighash = sighasher
-        .taproot_key_spend_signature_hash(0, &Prevouts::All(&prevouts), sighash_type)
-        .expect("Failed to construct sighash");
-
-    // Sign with sender's key
-    let tweaked_sender = sender_keypair.tap_tweak(&secp, None);
-    let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_inner());
-
-    let mut final_commit_tx = commit_tx.clone();
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    final_commit_tx.input[0].witness.push(signature.to_vec());
-
-    let raw_commit_tx_hex = hex::encode(serialize_tx(&final_commit_tx));
-    let raw_reveal_tx_hex = hex::encode(serialize_tx(&final_reveal_tx));
+    let raw_commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
+    let raw_reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx));
 
     let result = client
         .test_mempool_accept(&[raw_commit_tx_hex, raw_reveal_tx_hex])
@@ -213,7 +171,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
     assert!(result[1].allowed, "Reveal transaction was rejected");
 
     // Verify the witness structure in the reveal transaction
-    let witness = final_reveal_tx.input[0].witness.clone();
+    let witness = reveal_tx.input[0].witness.clone();
     assert_eq!(witness.len(), 3, "Witness should have exactly 3 elements");
 
     // Get the script from the witness

@@ -45,6 +45,7 @@ futures-util = "0.3"
 hex = "0.4"
 bip39 = "1.0"
 ciborium = "0.2"
+bon = "3.6"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }

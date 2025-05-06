@@ -15,6 +15,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use kontor::config::TestConfig;
+use kontor::legacy_test_utils;
 use kontor::test_utils;
 use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
@@ -42,14 +43,14 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
     let script_address: Address = Address::p2wsh(&witness_script, Network::Bitcoin);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,

@@ -11,9 +11,9 @@ use bitcoin::{
 };
 use clap::Parser;
 use kontor::config::TestConfig;
-use kontor::test_utils;
 use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
+use kontor::{legacy_test_utils, test_utils};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -43,8 +43,8 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -60,7 +60,7 @@ async fn test_taproot_transaction() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -68,7 +68,7 @@ async fn test_taproot_transaction() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -87,7 +87,7 @@ async fn test_taproot_transaction() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -219,8 +219,8 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -236,7 +236,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -244,7 +244,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -263,7 +263,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -326,8 +326,8 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -343,7 +343,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -351,7 +351,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -369,7 +369,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -432,8 +432,8 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -449,7 +449,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -457,7 +457,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -484,7 +484,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -546,8 +546,8 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
     // Build the Taproot tree with the script
@@ -562,7 +562,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -570,7 +570,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -597,7 +597,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -659,8 +659,8 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -676,7 +676,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -684,7 +684,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -702,7 +702,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -764,8 +764,8 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -781,7 +781,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -789,7 +789,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, _control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -807,7 +807,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     witness.push(tap_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,
@@ -859,14 +859,14 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let token_balances = test_utils::build_long_token_balance();
+    let token_balances = legacy_test_utils::build_long_token_balance();
 
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balances, &mut serialized_token_balance).unwrap();
 
     // Create the tapscript with x-only public key
-    let tap_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Taproot(&internal_key),
+    let tap_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Taproot(&internal_key),
         &serialized_token_balance,
     );
 
@@ -882,7 +882,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     // Create the address from the output key
     let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
 
-    let attach_tx = test_utils::build_signed_taproot_attach_tx(
+    let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
         &keypair,
         &seller_address,
@@ -890,7 +890,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     )?;
 
     let (mut seller_psbt, signature, control_block) =
-        test_utils::build_seller_psbt_and_sig_taproot(
+        legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
             &keypair,
             &seller_address,
@@ -909,7 +909,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     witness.push(control_block.serialize());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_taproot(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
         &buyer_child_key,
         &buyer_address,

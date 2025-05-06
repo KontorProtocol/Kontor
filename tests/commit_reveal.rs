@@ -1,13 +1,6 @@
 use anyhow::Result;
-use bitcoin::TapLeafHash;
-use bitcoin::TapSighash;
-use bitcoin::TapSighashType;
-use bitcoin::hashes::Hash;
-use bitcoin::key::{TapTweak, TweakedKeypair};
+use bitcoin::FeeRate;
 use bitcoin::secp256k1::Keypair;
-use bitcoin::secp256k1::Message;
-use bitcoin::sighash::Prevouts;
-use bitcoin::sighash::SighashCache;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
@@ -16,6 +9,8 @@ use bitcoin::{
 };
 use clap::Parser;
 use kontor::api::compose::compose;
+
+use kontor::api::compose::ComposeInputs;
 use kontor::config::TestConfig;
 use kontor::test_utils;
 use kontor::witness_data::TokenBalance;
@@ -56,92 +51,41 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let (mut attach_tx, mut spend_tx, tap_script) = compose(
-        &seller_address,
-        &internal_key,
-        vec![(out_point, utxo_for_output.clone())],
-        serialized_token_balance.as_slice(),
-        2,
-    )?;
+    let compose_params = ComposeInputs::builder()
+        .sender_address(&seller_address)
+        .internal_key(&internal_key)
+        .sender_utxos(vec![(out_point, utxo_for_output.clone())])
+        .script_data(serialized_token_balance.as_slice())
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .build();
 
-    let input_index = 0;
+    let compose_outputs = compose(compose_params)?;
+
+    let mut attach_tx = compose_outputs.commit_transaction;
+    let mut spend_tx = compose_outputs.reveal_transaction;
+    let tap_script = compose_outputs.tap_script;
 
     // Sign the attach transaction
-    let sighash_type = TapSighashType::Default;
-    let prevouts = vec![utxo_for_output];
-    let prevouts = Prevouts::All(&prevouts);
+    test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
 
-    let mut sighasher = SighashCache::new(&attach_tx);
-    let sighash = sighasher
-        .taproot_key_spend_signature_hash(input_index, &prevouts, sighash_type)
-        .expect("failed to construct sighash");
+    let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 
-    let tweaked: TweakedKeypair = keypair.tap_tweak(&secp, None);
-    let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
-
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    attach_tx.input[input_index]
-        .witness
-        .push(signature.to_vec());
-
-    // Sign the spend transaction
-    let mut spend_sighasher = SighashCache::new(&spend_tx);
-
-    // First sign the keyspend input
-    let prevout = vec![attach_tx.output[1].clone(), attach_tx.output[0].clone()];
-    let prevouts = Prevouts::All(&prevout);
-
-    // Get the sighash for the keyspend
-    let key_sighash: TapSighash = spend_sighasher
-        .taproot_key_spend_signature_hash(0, &prevouts, sighash_type)
-        .expect("failed to construct sighash");
-
-    let tweaked: TweakedKeypair = keypair.tap_tweak(&secp, None);
-    let msg = Message::from_digest(key_sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
-
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-
-    // Get the sighash for the scriptspend
-    let script_sighash: TapSighash = spend_sighasher
-        .taproot_script_spend_signature_hash(
-            1,
-            &prevouts,
-            TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
-            sighash_type,
-        )
-        .expect("Failed to create sighash");
-
-    // push the key spend sig onto the witness
-    spend_tx.input[0].witness.push(signature.to_vec());
-
-    // Sign the script spend input
-    let msg = Message::from_digest(script_sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &keypair);
-    let signature = bitcoin::taproot::Signature {
-        signature,
-        sighash_type,
-    };
-    spend_tx.input[1].witness.push(signature.to_vec());
-    spend_tx.input[1].witness.push(tap_script.as_bytes());
-
+    // sign the script_spend input for the spend transaction
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone())
         .expect("Failed to add leaf")
         .finalize(&secp, internal_key)
         .expect("Failed to finalize Taproot tree");
 
-    let control_block = taproot_spend_info
-        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
-        .expect("Failed to create control block");
-    spend_tx.input[1].witness.push(control_block.serialize());
+    test_utils::sign_script_spend(
+        &secp,
+        &taproot_spend_info,
+        &tap_script,
+        &mut spend_tx,
+        &spend_tx_prevouts,
+        &keypair,
+        0,
+    )?;
 
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let spend_tx_hex = hex::encode(serialize_tx(&spend_tx));
@@ -154,7 +98,7 @@ async fn test_taproot_transaction() -> Result<()> {
     assert!(result[0].allowed, "Attach transaction was rejected");
     assert!(result[1].allowed, "Spend transaction was rejected");
 
-    let witness = spend_tx.input[1].witness.clone();
+    let witness = spend_tx.input[0].witness.clone();
     // 1. Check the total number of witness elements first
     assert_eq!(witness.len(), 3, "Witness should have exactly 3 elements");
 
@@ -172,7 +116,10 @@ async fn test_taproot_transaction() -> Result<()> {
     let control_block_bytes = witness.to_vec()[2].clone();
     assert_eq!(
         control_block_bytes,
-        control_block.serialize(),
+        taproot_spend_info
+            .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+            .expect("Failed to create control block")
+            .serialize(),
         "Control block in witness doesn't match expected control block"
     );
 

@@ -12,7 +12,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use kontor::config::TestConfig;
-use kontor::test_utils;
+use kontor::legacy_test_utils;
 use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
 use std::collections::HashMap;
@@ -24,10 +24,10 @@ async fn test_psbt_with_secret() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -37,12 +37,12 @@ async fn test_psbt_with_secret() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -50,7 +50,7 @@ async fn test_psbt_with_secret() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -64,7 +64,7 @@ async fn test_psbt_with_secret() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -163,10 +163,10 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -176,12 +176,12 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -189,7 +189,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -204,7 +204,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -245,10 +245,10 @@ async fn test_psbt_without_secret() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -258,12 +258,12 @@ async fn test_psbt_without_secret() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -271,7 +271,7 @@ async fn test_psbt_without_secret() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -285,7 +285,7 @@ async fn test_psbt_without_secret() -> Result<()> {
     witness.push(seller_address.script_pubkey().as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -326,10 +326,10 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -339,11 +339,11 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -351,7 +351,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -364,7 +364,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -405,10 +405,10 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -418,12 +418,12 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -431,7 +431,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -444,7 +444,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -485,10 +485,10 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -498,12 +498,12 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -511,7 +511,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -535,7 +535,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     witness.push(malformedwitness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -576,10 +576,10 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -589,12 +589,12 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -602,7 +602,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -625,7 +625,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -666,10 +666,10 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -679,12 +679,12 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -692,7 +692,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -715,7 +715,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
@@ -756,22 +756,22 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
 
     let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
+        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
-    let token_balances = test_utils::build_long_token_balance();
+    let token_balances = legacy_test_utils::build_long_token_balance();
 
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balances, &mut serialized_token_balance).unwrap();
 
-    let witness_script = test_utils::build_witness_script(
-        test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+    let witness_script = legacy_test_utils::build_witness_script(
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
         &serialized_token_balance,
     );
 
-    let attach_tx = test_utils::build_signed_attach_tx_segwit(
+    let attach_tx = legacy_test_utils::build_signed_attach_tx_segwit(
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
@@ -779,7 +779,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
         &witness_script,
     )?;
 
-    let (mut seller_psbt, sig) = test_utils::build_seller_psbt_and_sig_segwit(
+    let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
         &seller_child_key,
@@ -793,7 +793,7 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     witness.push(witness_script.as_bytes());
     seller_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_psbt = test_utils::build_signed_buyer_psbt_segwit(
+    let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
         &buyer_child_key,
