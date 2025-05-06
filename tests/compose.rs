@@ -65,8 +65,6 @@ async fn test_taproot_transaction() -> Result<()> {
     let tap_script = compose_outputs.tap_script;
     let mut reveal_tx = compose_outputs.reveal_transaction;
     let chained_tap_script = compose_outputs.chained_tap_script.unwrap();
-    println!("commit_tx: {:#?}", commit_tx);
-    println!("reveal_tx: {:#?}", reveal_tx);
 
     let chained_reveal_taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, chained_tap_script.clone())

@@ -78,7 +78,7 @@ pub struct RevealInputs<'a> {
 
     pub reveal_output: Option<TxOut>,
     pub chained_script_data: Option<&'a [u8]>,
-    pub op_return_data: Option<&'a [u8]>,
+    pub op_return_data: Option<&'a Vec<u8>>,
 }
 
 #[derive(Builder)]

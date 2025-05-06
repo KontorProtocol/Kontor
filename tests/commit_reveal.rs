@@ -94,8 +94,6 @@ async fn test_taproot_transaction() -> Result<()> {
         .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
         .await?;
 
-    println!("result: {:#?}", result);
-
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Attach transaction was rejected");
     assert!(result[1].allowed, "Spend transaction was rejected");

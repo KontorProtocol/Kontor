@@ -5,31 +5,30 @@ use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
-use bitcoin::Sequence;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use bitcoin::absolute::LockTime;
-use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::psbt::Input;
 use bitcoin::psbt::Output;
 use bitcoin::script::Instruction;
-use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
 use bitcoin::{
-    ScriptBuf, Witness,
+    ScriptBuf,
     address::{Address, KnownHrp},
     consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
 };
 use clap::Parser;
 use kontor::api::compose::ComposeInputs;
+use kontor::api::compose::RevealInputs;
 use kontor::api::compose::compose;
+use kontor::api::compose::compose_reveal;
 use kontor::config::TestConfig;
 use kontor::op_return::OpReturnData;
 use kontor::test_utils;
@@ -225,7 +224,7 @@ async fn test_psbt_inscription() -> Result<()> {
             },
             ..Default::default()
         }],
-        outputs: vec![Output::default()], // No outputs
+        outputs: vec![Output::default()],
         version: 0,
         xpub: Default::default(),
         proprietary: Default::default(),
@@ -245,86 +244,59 @@ async fn test_psbt_inscription() -> Result<()> {
     let buyer_keypair = Keypair::from_secret_key(&secp, &buyer_child_key.private_key);
     let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
 
-    // Create buyer's PSBT that combines with seller's PSBT
-    let mut buyer_psbt = Psbt {
-        unsigned_tx: Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![
-                // Seller's signed input (from the unspendable output)
-                TxIn {
-                    previous_output: OutPoint {
-                        txid: attach_reveal_tx.compute_txid(),
-                        vout: 0,
-                    },
-                    script_sig: ScriptBuf::default(),
-                    sequence: Sequence::MAX,
-                    witness: Witness::default(),
-                },
-                // Buyer's UTXO input
-                TxIn {
-                    previous_output: OutPoint {
-                        txid: Txid::from_str(
-                            "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
-                        )?,
-                        vout: 0,
-                    },
-                    script_sig: ScriptBuf::default(),
-                    sequence: Sequence::MAX,
-                    witness: Witness::default(),
-                },
-            ],
-            output: vec![
-                // Seller receives payment
-                TxOut {
-                    value: Amount::from_sat(600),
-                    script_pubkey: seller_address.script_pubkey(),
-                },
-                // Buyer receives the token (create a new OP_RETURN with transfer data)
-                TxOut {
-                    value: Amount::from_sat(0),
-                    script_pubkey: {
-                        let mut op_return_script = ScriptBuf::new();
-                        op_return_script.push_opcode(OP_RETURN);
-                        op_return_script.push_slice(b"kon");
-
-                        // Create transfer data pointing to output 2 (buyer's address)
-                        let transfer_data = OpReturnData::D {
-                            destination: buyer_internal_key,
-                        };
-                        let mut transfer_bytes = Vec::new();
-                        ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
-                        op_return_script.push_slice(PushBytesBuf::try_from(transfer_bytes)?);
-
-                        op_return_script
-                    },
-                },
-                // Buyer's change
-                TxOut {
-                    value: Amount::from_sat(9546), // 10000 - 600 - 400 + 546
-                    script_pubkey: buyer_address.script_pubkey(),
-                },
-            ],
-        },
-        inputs: vec![
-            // Seller's input (copy from seller's PSBT)
-            seller_detach_psbt.inputs[0].clone(),
-            // Buyer's input
-            Input {
-                witness_utxo: Some(TxOut {
-                    script_pubkey: buyer_address.script_pubkey(),
-                    value: Amount::from_sat(10000),
-                }),
-                tap_internal_key: Some(buyer_internal_key),
-                ..Default::default()
-            },
-        ],
-        outputs: vec![Output::default(), Output::default(), Output::default()],
-        version: 0,
-        xpub: Default::default(),
-        proprietary: Default::default(),
-        unknown: Default::default(),
+    // Create transfer data pointing to output 2 (buyer's address)
+    let transfer_data = OpReturnData::D {
+        destination: buyer_internal_key,
     };
+    let mut transfer_bytes = Vec::new();
+    ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
+
+    let reveal_inputs = RevealInputs::builder()
+        .internal_key(&buyer_internal_key)
+        .sender_address(&buyer_address)
+        .commit_output((
+            OutPoint {
+                txid: attach_reveal_tx.compute_txid(),
+                vout: 0,
+            },
+            attach_reveal_tx.output[0].clone(),
+        ))
+        .funding_outputs(vec![(
+            OutPoint {
+                txid: Txid::from_str(
+                    "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
+                )?,
+                vout: 0,
+            },
+            TxOut {
+                value: Amount::from_sat(10000),
+                script_pubkey: buyer_address.script_pubkey(),
+            },
+        )])
+        .tap_script(&detach_tap_script)
+        .taproot_spend_info(&detach_tapscript_spend_info)
+        .reveal_output(TxOut {
+            value: Amount::from_sat(600),
+            script_pubkey: seller_address.script_pubkey(),
+        })
+        .op_return_data(&transfer_bytes)
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .build();
+    let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
+
+    // Create buyer's PSBT that combines with seller's PSBT
+    let mut buyer_psbt = buyer_reveal_outputs.reveal_psbt;
+
+    buyer_psbt.inputs.clear();
+    buyer_psbt.inputs.push(seller_detach_psbt.inputs[0].clone());
+    buyer_psbt.inputs.push(Input {
+        witness_utxo: Some(TxOut {
+            script_pubkey: buyer_address.script_pubkey(),
+            value: Amount::from_sat(10000),
+        }),
+        tap_internal_key: Some(buyer_internal_key),
+        ..Default::default()
+    });
 
     // Define the prevouts explicitly in the same order as inputs
     let prevouts = [
