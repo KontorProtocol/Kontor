@@ -27,18 +27,14 @@ use crate::{
 };
 
 
-
-#[derive(Debug)]
-struct Producer {
-    handle: JoinHandle<()>,
-    rx: Receiver<(u64, u64)>,
-}
-
-fn spawn_producer(
+fn run_producer(
     start_height: u64,
     bitcoin: bitcoin_client::Client,
     cancel_token: CancellationToken,
-) -> Producer {
+) -> (
+    JoinHandle<()>,
+    Receiver<(u64, u64)>,
+) {
 
     let (tx, rx) = mpsc::channel(10);
 
@@ -97,10 +93,7 @@ fn spawn_producer(
         }
     });
 
-    Producer {
-        handle: producer,
-        rx: rx,
-    }
+    (producer, rx)
 }
 
 
@@ -142,7 +135,7 @@ impl<T: Tx + 'static> Fetcher<T> {
             let f = self.f;
             let tx = self.tx.clone();
             async move {
-                let mut producer = spawn_producer(start_height, bitcoin.clone(), cancel_token.clone());
+                let (producer, mut rx_1) = run_producer(start_height, bitcoin.clone(), cancel_token.clone());
 
                 let fetcher = tokio::spawn({
                     let cancel_token = cancel_token.clone();
@@ -155,7 +148,7 @@ impl<T: Tx + 'static> Fetcher<T> {
                                     info!("Fetcher cancelled");
                                     break;
                                 }
-                                option_height = producer.rx.recv() => {
+                                option_height = rx_1.recv() => {
                                     match option_height {
                                         Some((target_height, height)) => {
                                             let bitcoin = bitcoin.clone();
@@ -198,8 +191,8 @@ impl<T: Tx + 'static> Fetcher<T> {
                             }
                         }
 
-                        producer.rx.close();
-                        while producer.rx.recv().await.is_some() {}
+                        rx_1.close();
+                        while rx_1.recv().await.is_some() {} // drain messages to free up blocked senders
                         info!("Fetcher exited");
                     }
                 });
@@ -304,7 +297,7 @@ impl<T: Tx + 'static> Fetcher<T> {
                     }
                 });
 
-                for handle in [producer.handle, fetcher, processor, orderer] {
+                for handle in [producer, fetcher, processor, orderer] {
                     if let Err(e) = handle.await {
                         error!("Fetcher sub task panicked on join: {}", e);
                     }
