@@ -7,7 +7,10 @@ use crate::database::{
 
 use super::{
     Env,
-    compose::{ComposeInputs, ComposeOutputs, ComposeQuery, compose},
+    compose::{
+        CommitInputs, CommitOutputs, ComposeInputs, ComposeOutputs, ComposeQuery, RevealInputs,
+        RevealOutputs, RevealQuery, compose, compose_commit, compose_reveal,
+    },
     error::HttpError,
     result::Result,
 };
@@ -30,9 +33,31 @@ pub async fn get_compose(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>,
 ) -> Result<ComposeOutputs> {
-    let inputs = ComposeInputs::from_query(query).await?;
+    let inputs = ComposeInputs::from_query(query, &env.bitcoin).await?;
 
     let outputs = compose(inputs)?;
+
+    Ok(outputs.into())
+}
+
+pub async fn get_compose_commit(
+    Query(query): Query<ComposeQuery>,
+    State(env): State<Env>, // TODO
+) -> Result<CommitOutputs> {
+    let inputs = ComposeInputs::from_query(query, &env.bitcoin).await?;
+    let commit_inputs = CommitInputs::from(inputs);
+
+    let outputs = compose_commit(commit_inputs)?;
+
+    Ok(outputs.into())
+}
+
+pub async fn get_compose_reveal(
+    Query(query): Query<RevealQuery>,
+    State(env): State<Env>,
+) -> Result<RevealOutputs> {
+    let inputs = RevealInputs::from_query(query, &env.bitcoin).await?;
+    let outputs = compose_reveal(inputs)?;
 
     Ok(outputs.into())
 }

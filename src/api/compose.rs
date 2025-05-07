@@ -15,31 +15,27 @@ use bitcoin::{
 
 use bon::Builder;
 
+use base64::engine::general_purpose::STANDARD as base64;
 use bitcoin::Txid;
-use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::{api::error::HttpError, bitcoin_client::Client, config::Config};
+use crate::bitcoin_client::Client;
 
 #[derive(Serialize, Deserialize)]
 pub struct ComposeQuery {
     address: String,
     x_only_public_key: String,
-    funding_utxos: String,
+    funding_utxo_ids: String,
     script_data: String,
     sat_per_vbyte: u64,
-    #[serde(default)]
     change_output: Option<bool>,
-    #[serde(default)]
     envelope: Option<u64>,
-    #[serde(default)]
     chained_script_data: Option<String>,
 }
 
 #[derive(Serialize, Builder)]
 pub struct ComposeInputs {
-    // TODO: why do lifetimes not work here ??
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
@@ -51,73 +47,20 @@ pub struct ComposeInputs {
 }
 
 impl ComposeInputs {
-    pub async fn from_query(query: ComposeQuery) -> Result<Self> {
+    pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
         let address =
             Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
         let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
-        let fee_rate = FeeRate::from_sat_per_vb(query.sat_per_vbyte).unwrap();
-        let client = Client::new_from_config(Config::try_parse()?)?;
+        let fee_rate =
+            FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-        let txids: Result<Vec<Txid>, _> = query
-            .funding_utxos
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .map(|pair| {
-                let txid_str = pair.split(':').next().unwrap_or_default();
+        let funding_utxos = get_utxos(bitcoin_client, query.funding_utxo_ids).await?;
 
-                Txid::from_str(txid_str).map_err(|e| format!("Invalid txid '{}': {}", txid_str, e))
-            })
-            .collect(); // CLEANER ITER ?
+        let script_data = base64.decode(&query.script_data)?;
 
-        // Handle any parsing errors -- what is this for??
-        let txids =
-            txids.map_err(|e| HttpError::BadRequest(format!("Error parsing txids: {}", e)))?;
-
-        let funding_utxos = client.get_raw_transactions(txids.as_slice()).await;
-        let funding_utxos = funding_utxos
-            .map_err(|e| HttpError::BadRequest(format!("Error getting funding utxos: {}", e)))?; // what does map err do?
-
-        let funding_utxos: Vec<Transaction> =
-            funding_utxos.into_iter().collect::<Result<Vec<_>, _>>()?;
-        let funding_utxos: Vec<(OutPoint, TxOut)> = query // probably use a better iter??
-            .funding_utxos
-            .split(',')
-            .map(|pair| {
-                let txid_str = pair.split(':').next().unwrap_or_default();
-                let vout_str = pair.split(':').nth(1).unwrap_or_default();
-                let txid = Txid::from_str(txid_str).unwrap();
-                let vout = u32::from_str(vout_str).unwrap();
-                (
-                    OutPoint::new(txid, vout),
-                    funding_utxos
-                        .iter()
-                        .find(|tx| tx.compute_txid() == txid)
-                        .unwrap()
-                        .output[vout as usize]
-                        .clone(),
-                )
-            })
-            .collect();
-        let script_data = base64::engine::general_purpose::URL_SAFE
-            .decode(&query.script_data)
-            .map_err(|e| {
-                HttpError::BadRequest(format!("Invalid base64-encoded script data: {}", e))
-            })?;
-
-        let chained_script_data_bytes = if let Some(chained_data) = &query.chained_script_data {
-            Some(
-                base64::engine::general_purpose::URL_SAFE
-                    .decode(chained_data)
-                    .map_err(|e| {
-                        HttpError::BadRequest(format!(
-                            "Invalid base64-encoded chained script data: {}",
-                            e
-                        ))
-                    })?,
-            )
-        } else {
-            None
-        };
+        let chained_script_data_bytes = query
+            .chained_script_data
+            .and_then(|chained_data| base64.decode(chained_data).ok());
 
         Ok(Self {
             address,
@@ -165,29 +108,100 @@ impl From<ComposeInputs> for CommitInputs {
     }
 }
 
-#[derive(Builder)]
+#[derive(Builder, Serialize, Deserialize)]
 pub struct CommitOutputs {
     pub commit_transaction: Transaction,
     pub tap_script: ScriptBuf,
-    pub taproot_spend_info: TaprootSpendInfo,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RevealQuery {
+    pub address: String,
+    pub x_only_public_key: String,
+    pub commit_output: String,
+    pub commit_script_data: String,
+    pub sat_per_vbyte: u64,
+    pub funding_utxo_ids: Option<String>,
+    pub envelope: Option<u64>,
+    pub reveal_output: Option<String>,
+    pub chained_script_data: Option<String>,
+    pub op_return_data: Option<String>,
 }
 
 #[derive(Builder)]
 pub struct RevealInputs {
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
+    pub commit_script_data: Vec<u8>,
     pub commit_output: (OutPoint, TxOut),
-    pub tap_script: ScriptBuf,
-    pub taproot_spend_info: TaprootSpendInfo,
     pub fee_rate: FeeRate,
-    pub funding_outputs: Option<Vec<(OutPoint, TxOut)>>,
+    pub funding_utxos: Option<Vec<(OutPoint, TxOut)>>,
     pub envelope: Option<u64>,
     pub reveal_output: Option<TxOut>,
     pub chained_script_data: Option<Vec<u8>>,
     pub op_return_data: Option<Vec<u8>>,
 }
 
-#[derive(Builder)]
+impl RevealInputs {
+    pub async fn from_query(query: RevealQuery, bitcoin_client: &Client) -> Result<Self> {
+        let address =
+            Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
+        let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
+
+        let commit_script_data = base64.decode(&query.commit_script_data)?;
+
+        let commit_output_split = query.commit_output.split(':').collect::<Vec<&str>>();
+        let txid = Txid::from_str(commit_output_split[0])?;
+        let vout = u32::from_str(commit_output_split[1])?;
+        let commit_output = (
+            OutPoint::new(txid, vout),
+            bitcoin_client.get_raw_transaction(&txid).await?.output[vout as usize].clone(),
+        );
+
+        let fee_rate =
+            FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
+        let funding_utxos = if let Some(funding_utxo_ids) = query.funding_utxo_ids {
+            Some(get_utxos(bitcoin_client, funding_utxo_ids).await?)
+        } else {
+            None
+        };
+
+        // TODO!
+        let reveal_output = if let Some(reveal_output) = query.reveal_output {
+            let reveal_output_split = reveal_output.split(':').collect::<Vec<&str>>();
+            let value = u64::from_str(reveal_output_split[0])?;
+            let script_pubkey = ScriptBuf::from_hex(reveal_output_split[1])?;
+            Some(TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey,
+            })
+        } else {
+            None
+        };
+        let chained_script_data_bytes = query
+            .chained_script_data
+            .and_then(|chained_data| base64.decode(chained_data).ok());
+
+        let op_return_data_bytes = query
+            .op_return_data
+            .and_then(|op_return_data| base64.decode(op_return_data).ok());
+
+        Ok(Self {
+            address,
+            x_only_public_key,
+            commit_script_data,
+            commit_output,
+            fee_rate,
+            funding_utxos,
+            envelope: query.envelope,
+            reveal_output,
+            chained_script_data: chained_script_data_bytes,
+            op_return_data: op_return_data_bytes,
+        })
+    }
+}
+
+#[derive(Builder, Serialize, Deserialize)]
 pub struct RevealOutputs {
     pub transaction: Transaction,
     pub psbt: Psbt,
@@ -200,7 +214,7 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
         address: params.address.clone(),
         x_only_public_key: params.x_only_public_key,
         funding_utxos: params.funding_utxos.clone(),
-        script_data: params.script_data,
+        script_data: params.script_data.clone(),
         fee_rate: params.fee_rate,
         change_output: params.change_output,
         envelope: params.envelope,
@@ -218,8 +232,7 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
                 },
                 commit_outputs.commit_transaction.output[0].clone(),
             ))
-            .tap_script(commit_outputs.tap_script.clone())
-            .taproot_spend_info(commit_outputs.taproot_spend_info.clone())
+            .commit_script_data(params.script_data.clone())
             .fee_rate(params.fee_rate);
 
         // apply chained data if provided
@@ -274,7 +287,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
 
     let mut outputs = Vec::new();
 
-    let (tap_script, taproot_spend_info, script_spendable_address) =
+    let (tap_script, _, script_spendable_address) =
         build_tap_script_and_script_address(params.x_only_public_key, params.script_data)?;
 
     outputs.push(TxOut {
@@ -316,7 +329,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     let commit_outputs = CommitOutputs::builder()
         .commit_transaction(commit_transaction)
         .tap_script(tap_script)
-        .taproot_spend_info(taproot_spend_info)
         .build();
     Ok(commit_outputs)
 }
@@ -367,10 +379,11 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             },
         });
     }
+    let (tap_script, taproot_spend_info, _) =
+        build_tap_script_and_script_address(params.x_only_public_key, params.commit_script_data)?;
 
-    let control_block = params
-        .taproot_spend_info
-        .control_block(&(params.tap_script.clone(), LeafVersion::TapScript))
+    let control_block = taproot_spend_info
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
         .ok_or(anyhow!("Failed to create control block"))?;
 
     let f = |i: usize, witness: &mut Witness| {
@@ -378,7 +391,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
         } else {
             witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
-            witness.push(params.tap_script.clone());
+            witness.push(tap_script.clone());
             witness.push(control_block.serialize());
         }
     };
@@ -396,9 +409,9 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     );
 
     if change_amount.is_none() {
-        match params.funding_outputs {
-            Some(funding_outputs) => {
-                funding_outputs.iter().for_each(|(outpoint, _)| {
+        match params.funding_utxos {
+            Some(funding_utxos) => {
+                funding_utxos.iter().for_each(|(outpoint, _)| {
                     reveal_transaction.input.push(TxIn {
                         previous_output: *outpoint,
                         ..Default::default()
@@ -411,7 +424,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                     .zip(
                         vec![params.commit_output]
                             .into_iter()
-                            .chain(funding_outputs)
+                            .chain(funding_utxos)
                             .map(|(_, txout)| txout),
                     )
                     .collect();
@@ -561,4 +574,41 @@ where
     let fee = fee_rate.fee_vb(vsize).unwrap().to_sat();
 
     input_sum.checked_sub(output_sum + fee)
+}
+
+async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(OutPoint, TxOut)>> {
+    let outpoints: Vec<OutPoint> = utxo_ids
+        .split(',')
+        .filter_map(|s| {
+            let parts = s.split(':').collect::<Vec<&str>>();
+            if parts.len() == 2 {
+                let txid = Txid::from_str(parts[0]).ok()?;
+                let vout = u32::from_str(parts[1]).ok()?;
+                Some(OutPoint::new(txid, vout))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let funding_txs: Vec<Transaction> = bitcoin_client
+        .get_raw_transactions(
+            outpoints
+                .iter()
+                .map(|outpoint| outpoint.txid)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
+        .await?
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+
+    let funding_utxos: Vec<(OutPoint, TxOut)> = outpoints
+        .into_iter()
+        .zip(funding_txs.into_iter())
+        .map(|(outpoint, tx)| (outpoint, tx.output[outpoint.vout as usize].clone()))
+        .collect();
+
+    Ok(funding_utxos)
 }

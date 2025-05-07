@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
             cancel_token: cancel_token.clone(),
             reader: reader.clone(),
             event_subscriber,
+            bitcoin: bitcoin.clone(),
         })
         .await?,
     );

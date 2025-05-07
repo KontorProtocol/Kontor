@@ -5,6 +5,7 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use kontor::{
     api::{self, Env, ws::Response},
+    bitcoin_client::Client,
     config::Config,
     logging,
     reactor::events::{Event, EventSubscriber},
@@ -21,6 +22,7 @@ async fn test_websocket_server() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let config = Config::try_parse()?;
     let (reader, _writer, _temp_dir) = new_test_db().await?;
+    let bitcoin = Client::new_from_config(config.clone())?;
     let (event_tx, event_rx) = mpsc::channel(10); // Channel to send test events
     let event_subscriber = EventSubscriber::new();
     let mut handles = vec![];
@@ -35,6 +37,7 @@ async fn test_websocket_server() -> Result<()> {
             cancel_token: cancel_token.clone(),
             reader: reader.clone(),
             event_subscriber: event_subscriber.clone(), // Clone for shared use
+            bitcoin: bitcoin.clone(),
         })
         .await?,
     );

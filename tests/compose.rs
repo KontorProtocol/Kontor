@@ -62,7 +62,7 @@ async fn test_taproot_transaction() -> Result<()> {
         .funding_utxos(vec![(out_point, utxo_for_output.clone())])
         .script_data(b"Hello, world!".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .chained_script_data(serialized_token_balance)
+        .chained_script_data(serialized_token_balance.clone())
         .build();
 
     let compose_outputs = compose(compose_params)?;
@@ -71,12 +71,6 @@ async fn test_taproot_transaction() -> Result<()> {
     let tap_script = compose_outputs.tap_script;
     let mut reveal_tx = compose_outputs.reveal_transaction;
     let chained_tap_script = compose_outputs.chained_tap_script.unwrap();
-
-    let chained_reveal_taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, chained_tap_script.clone())
-        .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
-        .expect("Failed to finalize Taproot tree");
 
     let chained_reveal_tx = compose_reveal(
         RevealInputs::builder()
@@ -89,17 +83,15 @@ async fn test_taproot_transaction() -> Result<()> {
                 },
                 reveal_tx.output[0].clone(),
             ))
-            .funding_outputs(vec![(
+            .funding_utxos(vec![(
                 OutPoint {
                     txid: reveal_tx.compute_txid(),
                     vout: 1,
                 },
                 reveal_tx.output[1].clone(),
             )])
-            .tap_script(chained_tap_script.clone())
-            .taproot_spend_info(chained_reveal_taproot_spend_info)
+            .commit_script_data(serialized_token_balance)
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-            // .op_return_recipient(&internal_key)
             .build(),
     )?;
 

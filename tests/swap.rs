@@ -90,7 +90,7 @@ async fn test_psbt_inscription() -> Result<()> {
         .funding_utxos(vec![(outpoint, txout)])
         .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .chained_script_data(serialized_detach_data)
+        .chained_script_data(serialized_detach_data.clone())
         .build();
 
     let compose_outputs = compose(compose_params)?;
@@ -261,7 +261,7 @@ async fn test_psbt_inscription() -> Result<()> {
             },
             attach_reveal_tx.output[0].clone(),
         ))
-        .funding_outputs(vec![(
+        .funding_utxos(vec![(
             OutPoint {
                 txid: Txid::from_str(
                     "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
@@ -273,8 +273,7 @@ async fn test_psbt_inscription() -> Result<()> {
                 script_pubkey: buyer_address.script_pubkey(),
             },
         )])
-        .tap_script(detach_tap_script)
-        .taproot_spend_info(detach_tapscript_spend_info)
+        .commit_script_data(serialized_detach_data)
         .reveal_output(TxOut {
             value: Amount::from_sat(600),
             script_pubkey: seller_address.script_pubkey(),
