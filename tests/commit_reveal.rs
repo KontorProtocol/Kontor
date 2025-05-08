@@ -52,10 +52,10 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .sender_address(&seller_address)
-        .internal_key(&internal_key)
-        .sender_utxos(vec![(out_point, utxo_for_output.clone())])
-        .script_data(serialized_token_balance.as_slice())
+        .address(seller_address.clone())
+        .x_only_public_key(internal_key)
+        .funding_utxos(vec![(out_point, utxo_for_output.clone())])
+        .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .build();
 
