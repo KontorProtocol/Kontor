@@ -1,5 +1,4 @@
 use anyhow::Result;
-use base64::prelude::*;
 use bitcoin::FeeRate;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
@@ -50,7 +49,6 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
-    let x = base64::engine::general_purpose::URL_SAFE.encode(&serialized_token_balance);
 
     let compose_params = ComposeInputs::builder()
         .address(seller_address.clone())

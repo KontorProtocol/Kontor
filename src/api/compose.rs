@@ -12,6 +12,7 @@ use bitcoin::{
     taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo},
     transaction::{Transaction, TxIn, Version},
 };
+use futures_util::future::OptionFuture;
 
 use bon::Builder;
 
@@ -164,13 +165,13 @@ impl RevealInputs {
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-        let funding_utxos_future = query
-            .funding_utxo_ids
-            .map(|ids| get_utxos(bitcoin_client, ids));
-        let funding_utxos = match funding_utxos_future {
-            Some(future) => Some(future.await?),
-            None => None,
-        };
+        let funding_utxos = OptionFuture::from(
+            query
+                .funding_utxo_ids
+                .map(|ids| get_utxos(bitcoin_client, ids)),
+        )
+        .await
+        .and_then(Result::ok);
 
         let reveal_output = query.reveal_output.and_then(|output| {
             let output_split = output.split(':').collect::<Vec<&str>>();
