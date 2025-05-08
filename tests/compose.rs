@@ -27,11 +27,8 @@ async fn test_taproot_transaction() -> Result<()> {
     let (seller_address, seller_child_key, _) =
         test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
 
-    println!("seller_address: {}", seller_address);
-
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
-    println!("internal_key: {}", internal_key);
 
     // UTXO loaded with 9000 sats
     let out_point = OutPoint {
@@ -54,7 +51,6 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
     let x = base64::engine::general_purpose::URL_SAFE.encode(&serialized_token_balance);
-    println!("x: {}", x);
 
     let compose_params = ComposeInputs::builder()
         .address(seller_address.clone())
