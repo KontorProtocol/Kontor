@@ -150,34 +150,38 @@ impl RevealInputs {
 
         let commit_script_data = base64.decode(&query.commit_script_data)?;
 
-        let commit_output_split = query.commit_output.split(':').collect::<Vec<&str>>();
-        let txid = Txid::from_str(commit_output_split[0])?;
-        let vout = u32::from_str(commit_output_split[1])?;
+        let commit_outpoint = OutPoint::from_str(&query.commit_output)?;
+
         let commit_output = (
-            OutPoint::new(txid, vout),
-            bitcoin_client.get_raw_transaction(&txid).await?.output[vout as usize].clone(),
+            commit_outpoint,
+            bitcoin_client
+                .get_raw_transaction(&commit_outpoint.txid)
+                .await?
+                .output[commit_outpoint.vout as usize]
+                .clone(),
         );
 
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
-        let funding_utxos = if let Some(funding_utxo_ids) = query.funding_utxo_ids {
-            Some(get_utxos(bitcoin_client, funding_utxo_ids).await?)
-        } else {
-            None
+
+        let funding_utxos_future = query
+            .funding_utxo_ids
+            .map(|ids| get_utxos(bitcoin_client, ids));
+        let funding_utxos = match funding_utxos_future {
+            Some(future) => Some(future.await?),
+            None => None,
         };
 
-        // TODO!
-        let reveal_output = if let Some(reveal_output) = query.reveal_output {
-            let reveal_output_split = reveal_output.split(':').collect::<Vec<&str>>();
-            let value = u64::from_str(reveal_output_split[0])?;
-            let script_pubkey = ScriptBuf::from_hex(reveal_output_split[1])?;
+        let reveal_output = query.reveal_output.and_then(|output| {
+            let output_split = output.split(':').collect::<Vec<&str>>();
+            let value = u64::from_str(output_split[0]).ok()?;
+            let script_pubkey = ScriptBuf::from_hex(output_split[1]).ok()?;
             Some(TxOut {
                 value: Amount::from_sat(value),
                 script_pubkey,
             })
-        } else {
-            None
-        };
+        });
+
         let chained_script_data_bytes = query
             .chained_script_data
             .and_then(|chained_data| base64.decode(chained_data).ok());
