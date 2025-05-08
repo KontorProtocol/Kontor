@@ -12,7 +12,7 @@ pub struct Request {
     pub params: Vec<Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Response {
     pub result: Option<Value>,
     pub error: Option<Value>,
