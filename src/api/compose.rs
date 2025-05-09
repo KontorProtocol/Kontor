@@ -16,7 +16,7 @@ use futures_util::future::OptionFuture;
 
 use bon::Builder;
 
-use base64::engine::general_purpose::STANDARD as base64;
+use base64::engine::general_purpose::URL_SAFE as base64;
 use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -25,14 +25,14 @@ use crate::bitcoin_client::Client;
 
 #[derive(Serialize, Deserialize)]
 pub struct ComposeQuery {
-    address: String,
-    x_only_public_key: String,
-    funding_utxo_ids: String,
-    script_data: String,
-    sat_per_vbyte: u64,
-    change_output: Option<bool>,
-    envelope: Option<u64>,
-    chained_script_data: Option<String>,
+    pub address: String,
+    pub x_only_public_key: String,
+    pub funding_utxo_ids: String,
+    pub script_data: String,
+    pub sat_per_vbyte: u64,
+    pub change_output: Option<bool>,
+    pub envelope: Option<u64>,
+    pub chained_script_data: Option<String>,
 }
 
 #[derive(Serialize, Builder)]
@@ -77,7 +77,7 @@ impl ComposeInputs {
     }
 }
 
-#[derive(Serialize, Deserialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 pub struct ComposeOutputs {
     pub commit_transaction: Transaction,
     pub reveal_transaction: Transaction,
