@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use base64::prelude::*;
 use bitcoin::{
-    Address, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
+    Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
     absolute::LockTime,
     opcodes::{
         OP_0, OP_FALSE,
@@ -51,7 +51,15 @@ impl ComposeInputs {
     pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
         let address =
             Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
+        let address_type = address.address_type();
+
+        if let Some(address_type) = address_type {
+            if address_type != AddressType::P2tr {
+                return Err(anyhow!("Invalid address type"));
+            }
+        }
         let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
+
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
@@ -159,7 +167,8 @@ impl RevealInputs {
             commit_outpoint,
             bitcoin_client
                 .get_raw_transaction(&commit_outpoint.txid)
-                .await?
+                .await
+                .map_err(|e| anyhow!("Failed to fetch transaction: {}", e))?
                 .output[commit_outpoint.vout as usize]
                 .clone(),
         );
@@ -630,10 +639,14 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
                 .collect::<Vec<_>>()
                 .as_slice(),
         )
-        .await?
+        .await
+        .map_err(|e| anyhow!("Failed to fetch transactions: {}", e))?
         .into_iter()
         .filter_map(Result::ok)
         .collect::<Vec<_>>();
+    if funding_txs.is_empty() {
+        return Err(anyhow!("No funding transactions found"));
+    }
 
     let funding_utxos: Vec<(OutPoint, TxOut)> = outpoints
         .into_iter()
