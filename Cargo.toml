@@ -46,6 +46,8 @@ hex = "0.4"
 bip39 = "1.0"
 ciborium = "0.2"
 bon = "3.6"
+axum-test = "17.3"
+urlencoding = "2.1"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }

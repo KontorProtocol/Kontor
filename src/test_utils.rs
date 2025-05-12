@@ -1,4 +1,6 @@
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD as base64;
+use base64::prelude::*;
 use bip39::Mnemonic;
 use bitcoin::address::Address;
 use bitcoin::hashes::Hash;
@@ -19,6 +21,7 @@ use bitcoin::{
     bip32::{DerivationPath, Xpriv},
     key::{CompressedPublicKey, Secp256k1},
 };
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -260,4 +263,11 @@ pub fn sign_buyer_side_psbt(
     let mut buyer_witness = Witness::new();
     buyer_witness.push(buyer_signature.to_vec());
     buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
+}
+
+pub fn base64_serialize<T: ?Sized + Serialize>(data: &T) -> String {
+    let mut serialized = Vec::new();
+    ciborium::into_writer(&data, &mut serialized).unwrap();
+
+    base64.encode(serialized)
 }

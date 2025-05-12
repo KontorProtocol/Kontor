@@ -33,9 +33,11 @@ pub async fn get_compose(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>,
 ) -> Result<ComposeOutputs> {
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin).await?;
+    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
-    let outputs = compose(inputs)?;
+    let outputs = compose(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
     Ok(outputs.into())
 }
@@ -44,10 +46,13 @@ pub async fn get_compose_commit(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>, // TODO
 ) -> Result<CommitOutputs> {
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin).await?;
+    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let commit_inputs = CommitInputs::from(inputs);
 
-    let outputs = compose_commit(commit_inputs)?;
+    let outputs =
+        compose_commit(commit_inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
     Ok(outputs.into())
 }
@@ -56,8 +61,10 @@ pub async fn get_compose_reveal(
     Query(query): Query<RevealQuery>,
     State(env): State<Env>,
 ) -> Result<RevealOutputs> {
-    let inputs = RevealInputs::from_query(query, &env.bitcoin).await?;
-    let outputs = compose_reveal(inputs)?;
+    let inputs = RevealInputs::from_query(query, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let outputs = compose_reveal(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
     Ok(outputs.into())
 }

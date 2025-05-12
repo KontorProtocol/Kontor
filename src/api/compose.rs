@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use base64::prelude::*;
 use bitcoin::{
-    Address, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
+    Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
     absolute::LockTime,
     opcodes::{
         OP_0, OP_FALSE,
@@ -25,14 +25,14 @@ use crate::bitcoin_client::Client;
 
 #[derive(Serialize, Deserialize)]
 pub struct ComposeQuery {
-    address: String,
-    x_only_public_key: String,
-    funding_utxo_ids: String,
-    script_data: String,
-    sat_per_vbyte: u64,
-    change_output: Option<bool>,
-    envelope: Option<u64>,
-    chained_script_data: Option<String>,
+    pub address: String,
+    pub x_only_public_key: String,
+    pub funding_utxo_ids: String,
+    pub script_data: String,
+    pub sat_per_vbyte: u64,
+    pub change_output: Option<bool>,
+    pub envelope: Option<u64>,
+    pub chained_script_data: Option<String>,
 }
 
 #[derive(Serialize, Builder)]
@@ -42,8 +42,8 @@ pub struct ComposeInputs {
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
     pub script_data: Vec<u8>,
     pub fee_rate: FeeRate,
+    pub envelope: u64,
     pub change_output: Option<bool>,
-    pub envelope: Option<u64>,
     pub chained_script_data: Option<Vec<u8>>,
 }
 
@@ -51,7 +51,15 @@ impl ComposeInputs {
     pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
         let address =
             Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
+        let address_type = address.address_type();
+
+        if let Some(address_type) = address_type {
+            if address_type != AddressType::P2tr {
+                return Err(anyhow!("Invalid address type"));
+            }
+        }
         let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
+
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
@@ -63,6 +71,7 @@ impl ComposeInputs {
             .chained_script_data
             .map(|chained_data| base64.decode(chained_data))
             .transpose()?;
+        let envelope = query.envelope.unwrap_or(546);
 
         Ok(Self {
             address,
@@ -71,13 +80,13 @@ impl ComposeInputs {
             script_data,
             fee_rate,
             change_output: query.change_output,
-            envelope: query.envelope,
+            envelope,
             chained_script_data: chained_script_data_bytes,
         })
     }
 }
 
-#[derive(Serialize, Deserialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 pub struct ComposeOutputs {
     pub commit_transaction: Transaction,
     pub reveal_transaction: Transaction,
@@ -92,8 +101,8 @@ pub struct CommitInputs {
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
     pub script_data: Vec<u8>,
     pub fee_rate: FeeRate,
+    pub envelope: u64,
     pub change_output: Option<bool>,
-    pub envelope: Option<u64>,
 }
 
 impl From<ComposeInputs> for CommitInputs {
@@ -137,8 +146,8 @@ pub struct RevealInputs {
     pub commit_script_data: Vec<u8>,
     pub commit_output: (OutPoint, TxOut),
     pub fee_rate: FeeRate,
+    pub envelope: u64,
     pub funding_utxos: Option<Vec<(OutPoint, TxOut)>>,
-    pub envelope: Option<u64>,
     pub reveal_output: Option<TxOut>,
     pub chained_script_data: Option<Vec<u8>>,
     pub op_return_data: Option<Vec<u8>>,
@@ -158,7 +167,8 @@ impl RevealInputs {
             commit_outpoint,
             bitcoin_client
                 .get_raw_transaction(&commit_outpoint.txid)
-                .await?
+                .await
+                .map_err(|e| anyhow!("Failed to fetch transaction: {}", e))?
                 .output[commit_outpoint.vout as usize]
                 .clone(),
         );
@@ -197,6 +207,8 @@ impl RevealInputs {
             .map(|op_return_data| base64.decode(op_return_data))
             .transpose()?;
 
+        let envelope = query.envelope.unwrap_or(546);
+
         Ok(Self {
             address,
             x_only_public_key,
@@ -204,7 +216,7 @@ impl RevealInputs {
             commit_output,
             fee_rate,
             funding_utxos,
-            envelope: query.envelope,
+            envelope,
             reveal_output,
             chained_script_data: chained_script_data_bytes,
             op_return_data: op_return_data_bytes,
@@ -236,6 +248,7 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
         let builder = RevealInputs::builder()
             .x_only_public_key(params.x_only_public_key)
             .address(params.address.clone())
+            .envelope(params.envelope)
             .commit_output((
                 OutPoint {
                     txid: commit_outputs.commit_transaction.compute_txid(),
@@ -247,9 +260,28 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
             .fee_rate(params.fee_rate);
 
         // apply chained data if provided
-        match params.chained_script_data {
-            Some(chained_data) => builder.chained_script_data(chained_data).build(),
-            None => builder.build(),
+        match (params.chained_script_data, params.change_output) {
+            (Some(chained_data), Some(true)) => builder
+                .chained_script_data(chained_data)
+                .funding_utxos(vec![(
+                    OutPoint {
+                        txid: commit_outputs.commit_transaction.compute_txid(),
+                        vout: 1,
+                    },
+                    commit_outputs.commit_transaction.output[1].clone(),
+                )])
+                .build(),
+            (Some(chained_data), None) => builder.chained_script_data(chained_data).build(),
+            (None, Some(true)) => builder
+                .funding_utxos(vec![(
+                    OutPoint {
+                        txid: commit_outputs.commit_transaction.compute_txid(),
+                        vout: 1,
+                    },
+                    commit_outputs.commit_transaction.output[1].clone(),
+                )])
+                .build(),
+            _ => builder.build(),
         }
     };
 
@@ -273,8 +305,6 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
 }
 
 pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
-    let envelope = params.envelope.unwrap_or(546);
-
     let inputs: Vec<TxIn> = params
         .funding_utxos
         .iter()
@@ -302,7 +332,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         build_tap_script_and_script_address(params.x_only_public_key, params.script_data)?;
 
     outputs.push(TxOut {
-        value: Amount::from_sat(envelope),
+        value: Amount::from_sat(params.envelope),
         script_pubkey: script_spendable_address.script_pubkey(),
     });
 
@@ -345,7 +375,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
 }
 
 pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
-    let envelope = params.envelope.unwrap_or(546);
     const SCHNORR_SIGNATURE_SIZE: usize = 64;
 
     let mut reveal_transaction = Transaction {
@@ -369,7 +398,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             build_tap_script_and_script_address(params.x_only_public_key, chained_script_data)?;
 
         reveal_transaction.output.push(TxOut {
-            value: Amount::from_sat(envelope),
+            value: Amount::from_sat(params.envelope),
             script_pubkey: chained_script_spendable_address.script_pubkey(),
         });
         chained_tap_script_opt = Some(chained_tap_script_for_return);
@@ -610,10 +639,14 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
                 .collect::<Vec<_>>()
                 .as_slice(),
         )
-        .await?
+        .await
+        .map_err(|e| anyhow!("Failed to fetch transactions: {}", e))?
         .into_iter()
         .filter_map(Result::ok)
         .collect::<Vec<_>>();
+    if funding_txs.is_empty() {
+        return Err(anyhow!("No funding transactions found"));
+    }
 
     let funding_utxos: Vec<(OutPoint, TxOut)> = outpoints
         .into_iter()
