@@ -56,6 +56,7 @@ async fn test_taproot_transaction() -> Result<()> {
         .funding_utxos(vec![(out_point, utxo_for_output.clone())])
         .script_data(b"Hello, world!".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .envelope(546)
         .chained_script_data(serialized_token_balance.clone())
         .build();
 
@@ -84,6 +85,7 @@ async fn test_taproot_transaction() -> Result<()> {
                 },
                 reveal_tx.output[1].clone(),
             )])
+            .envelope(546)
             .commit_script_data(serialized_token_balance)
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
             .build(),

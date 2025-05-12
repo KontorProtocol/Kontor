@@ -91,6 +91,7 @@ async fn test_psbt_inscription() -> Result<()> {
         .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .chained_script_data(serialized_detach_data.clone())
+        .envelope(546)
         .build();
 
     let compose_outputs = compose(compose_params)?;
@@ -280,6 +281,7 @@ async fn test_psbt_inscription() -> Result<()> {
         })
         .op_return_data(transfer_bytes)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .envelope(546)
         .build();
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
 
