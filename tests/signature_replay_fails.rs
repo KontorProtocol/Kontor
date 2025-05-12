@@ -22,7 +22,7 @@ use kontor::{bitcoin_client::Client, config::Config};
 use std::str::FromStr;
 
 #[tokio::test]
-async fn test_taproot_transaction_seller_sig() -> Result<()> {
+async fn test_signature_replay_failse() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
@@ -169,7 +169,7 @@ async fn test_taproot_transaction_seller_sig() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_psbt_seller_sig() -> Result<()> {
+async fn test_psbt_signature_replay_fails() -> Result<()> {
     let client = Client::new_from_config(Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
