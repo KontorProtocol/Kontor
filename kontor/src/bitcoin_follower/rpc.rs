@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::Result;
-use bitcoin::Transaction;
+use bitcoin::{
+    self,
+    Transaction,
+};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
@@ -39,9 +42,6 @@ pub fn run_producer<C: bitcoin_client::client::BitcoinRpc>(
     let (tx, rx) = mpsc::channel(10);
 
     let producer = tokio::spawn({
-        let cancel_token = cancel_token.clone();
-        let bitcoin = bitcoin.clone();
-
         async move {
             let mut height = start_height;
             let mut target_height = height - 1;
@@ -96,6 +96,201 @@ pub fn run_producer<C: bitcoin_client::client::BitcoinRpc>(
     (producer, rx)
 }
 
+pub fn run_fetcher<C: bitcoin_client::client::BitcoinRpc>(
+    mut rx_in: Receiver<(u64, u64)>,
+    bitcoin: C,
+    cancel_token: CancellationToken,
+) -> (
+    JoinHandle<()>,
+    Receiver<(u64, u64, bitcoin::Block)>,
+) {
+
+    let (tx_out, rx_out) = mpsc::channel(10);
+
+    let fetcher = tokio::spawn({
+        async move {
+            let semaphore = Arc::new(Semaphore::new(10));
+            loop {
+                select! {
+                    _ = cancel_token.cancelled() => {
+                        info!("Fetcher cancelled");
+                        break;
+                    }
+                    option_height = rx_in.recv() => {
+                        match option_height {
+                            Some((target_height, height)) => {
+                                let bitcoin = bitcoin.clone();
+                                let cancel_token = cancel_token.clone();
+                                let tx = tx_out.clone();
+                                let permit = semaphore
+                                    .clone()
+                                    .acquire_owned()
+                                    .await
+                                    .expect("semaphore.acquired_owned failed despite never being closed");
+                                tokio::spawn(
+                                    async move {
+                                        if let Ok(block_hash) = retry(
+                                            || bitcoin.get_block_hash(height),
+                                            "get block hash",
+                                            new_backoff_unlimited(),
+                                            cancel_token.clone(),
+                                        )
+                                        .await {
+                                            if let Ok(block) = retry(
+                                                || bitcoin.get_block(&block_hash),
+                                                "get block",
+                                                new_backoff_unlimited(),
+                                                cancel_token.clone(),
+                                            )
+                                            .await {
+                                                let _ = tx.send((target_height, height, block)).await;
+                                            }
+                                        }
+                                        drop(permit);
+                                    }
+                                );
+                            },
+                            None => {
+                                info!("Fetcher received None message, exiting");
+                                break;
+                            },
+                        }
+                    }
+                }
+            }
+
+            rx_in.close();
+            while rx_in.recv().await.is_some() {} // drain messages to free up blocked senders
+            info!("Fetcher exited");
+        }
+    });
+
+    (fetcher, rx_out)
+}
+
+pub fn run_processor<T: Tx + 'static>(
+    mut rx_in: Receiver<(u64, u64, bitcoin::Block)>,
+    f: fn(Transaction) -> Option<T>,
+    cancel_token: CancellationToken,
+) -> (
+    JoinHandle<()>,
+    Receiver<(u64, Block<T>)>,
+) {
+
+    let (tx_out, rx_out) = mpsc::channel(10);
+
+    let processor = tokio::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            let semaphore = Arc::new(Semaphore::new(10));
+            loop {
+                select! {
+                    _ = cancel_token.cancelled() => {
+                        info!("Processor cancelled");
+                        break;
+                    }
+                    option_block = rx_in.recv() => {
+                        match option_block {
+                            Some((target_height, height, block)) => {
+                                let tx = tx_out.clone();
+                                let permit = semaphore
+                                    .clone()
+                                    .acquire_owned()
+                                    .await
+                                    .expect("semaphore.acquired_owned failed despite never being closed");
+                                tokio::spawn(
+                                    async move {
+                                        let _ = tx.send((
+                                            target_height,
+                                            Block {
+                                                height,
+                                                hash: block.block_hash(),
+                                                prev_hash: block.header.prev_blockhash,
+                                                transactions: block.txdata.into_par_iter().filter_map(f).collect(),
+                                            })
+                                        ).await;
+                                        drop(permit);
+                                    }
+                                );
+                            },
+                            None => {
+                                info!("Procesor received None message, exiting");
+                                break;
+                            },
+                        }
+                    }
+                }
+            }
+
+            rx_in.close();
+            while rx_in.recv().await.is_some() {}
+            info!("Processor exited");
+        }
+    });
+
+    (processor, rx_out)
+}
+
+
+pub fn run_orderer<T: Tx + 'static>(
+    start_height: u64,
+    mut rx: Receiver<(u64, Block<T>)>,
+    tx: Sender<(u64, Block<T>)>,
+    cancel_token: CancellationToken,
+) -> JoinHandle<()> {
+
+    let orderer = tokio::spawn({
+        async move {
+            let mut heap = BinaryHeap::new();
+            let mut next_index = start_height;
+            let mut pending_blocks = HashMap::new();
+            loop {
+                let mut target_height = 0;
+                select! {
+                    _ = cancel_token.cancelled() => {
+                        info!("Orderer cancelled");
+                        break;
+                    }
+                    option_pair = rx.recv() => {
+                        match option_pair {
+                            Some((new_target_height, block)) => {
+                                if new_target_height > target_height {
+                                    target_height = new_target_height;
+                                }
+                                heap.push(Reverse(block.height));
+                                pending_blocks.insert(block.height, block);
+                                while let Some(&Reverse(maybe_next_index)) = heap.peek() {
+                                    if maybe_next_index == next_index {
+                                        heap.pop();
+                                        if let Some(block) = pending_blocks.remove(&next_index) {
+                                            if tx.send((target_height, block)).await.is_err() {
+                                                info!("Orderer send channel closed, exiting");
+                                                break;
+                                            };
+                                            next_index += 1;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            },
+                            None => {
+                                info!("Orderer received None message, exiting");
+                                break;
+                            },
+                        }
+                    }
+                }
+            }
+
+            rx.close();
+            while rx.recv().await.is_some() {}
+            info!("Orderer exited");
+        }
+    });
+
+    orderer
+}
 
 #[derive(Debug)]
 pub struct Fetcher<T: Tx> {
@@ -130,172 +325,14 @@ impl<T: Tx + 'static> Fetcher<T> {
         self.handle = Some(tokio::spawn({
             let bitcoin = self.bitcoin.clone();
             let cancel_token = self.cancel_token.clone();
-            let (tx_2, mut rx_2) = mpsc::channel(10);
-            let (tx_3, mut rx_3) = mpsc::channel(10);
             let f = self.f;
             let tx = self.tx.clone();
+
             async move {
-                let (producer, mut rx_1) = run_producer(start_height, bitcoin.clone(), cancel_token.clone());
-
-                let fetcher = tokio::spawn({
-                    let cancel_token = cancel_token.clone();
-                    let bitcoin = bitcoin.clone();
-                    async move {
-                        let semaphore = Arc::new(Semaphore::new(10));
-                        loop {
-                            select! {
-                                _ = cancel_token.cancelled() => {
-                                    info!("Fetcher cancelled");
-                                    break;
-                                }
-                                option_height = rx_1.recv() => {
-                                    match option_height {
-                                        Some((target_height, height)) => {
-                                            let bitcoin = bitcoin.clone();
-                                            let cancel_token = cancel_token.clone();
-                                            let tx = tx_2.clone();
-                                            let permit = semaphore
-                                                .clone()
-                                                .acquire_owned()
-                                                .await
-                                                .expect("semaphore.acquired_owned failed despite never being closed");
-                                            tokio::spawn(
-                                                async move {
-                                                    if let Ok(block_hash) = retry(
-                                                        || bitcoin.get_block_hash(height),
-                                                        "get block hash",
-                                                        new_backoff_unlimited(),
-                                                        cancel_token.clone(),
-                                                    )
-                                                    .await {
-                                                        if let Ok(block) = retry(
-                                                            || bitcoin.get_block(&block_hash),
-                                                            "get block",
-                                                            new_backoff_unlimited(),
-                                                            cancel_token.clone(),
-                                                        )
-                                                        .await {
-                                                            let _ = tx.send((target_height, height, block)).await;
-                                                        }
-                                                    }
-                                                    drop(permit);
-                                                }
-                                            );
-                                        },
-                                        None => {
-                                            info!("Fetcher received None message, exiting");
-                                            break;
-                                        },
-                                    }
-                                }
-                            }
-                        }
-
-                        rx_1.close();
-                        while rx_1.recv().await.is_some() {} // drain messages to free up blocked senders
-                        info!("Fetcher exited");
-                    }
-                });
-
-                let processor = tokio::spawn({
-                    let cancel_token = cancel_token.clone();
-                    async move {
-                        let semaphore = Arc::new(Semaphore::new(10));
-                        loop {
-                            select! {
-                                _ = cancel_token.cancelled() => {
-                                    info!("Processor cancelled");
-                                    break;
-                                }
-                                option_block = rx_2.recv() => {
-                                    match option_block {
-                                        Some((target_height, height, block)) => {
-                                            let tx = tx_3.clone();
-                                            let permit = semaphore
-                                                .clone()
-                                                .acquire_owned()
-                                                .await
-                                                .expect("semaphore.acquired_owned failed despite never being closed");
-                                            tokio::spawn(
-                                                async move {
-                                                    let _ = tx.send((
-                                                        target_height,
-                                                        Block {
-                                                            height,
-                                                            hash: block.block_hash(),
-                                                            prev_hash: block.header.prev_blockhash,
-                                                            transactions: block.txdata.into_par_iter().filter_map(f).collect(),
-                                                        })
-                                                    ).await;
-                                                    drop(permit);
-                                                }
-                                            );
-                                        },
-                                        None => {
-                                            info!("Procesor received None message, exiting");
-                                            break;
-                                        },
-                                    }
-                                }
-                            }
-                        }
-
-                        rx_2.close();
-                        while rx_2.recv().await.is_some() {}
-                        info!("Processor exited");
-                    }
-                });
-
-                let orderer = tokio::spawn({
-                    let cancel_token = cancel_token.clone();
-                    async move {
-                        let mut heap = BinaryHeap::new();
-                        let mut next_index = start_height;
-                        let mut pending_blocks = HashMap::new();
-                        loop {
-                            let mut target_height = 0;
-                            select! {
-                                _ = cancel_token.cancelled() => {
-                                    info!("Orderer cancelled");
-                                    break;
-                                }
-                                option_pair = rx_3.recv() => {
-                                    match option_pair {
-                                        Some((new_target_height, block)) => {
-                                            if new_target_height > target_height {
-                                                target_height = new_target_height;
-                                            }
-                                            heap.push(Reverse(block.height));
-                                            pending_blocks.insert(block.height, block);
-                                            while let Some(&Reverse(maybe_next_index)) = heap.peek() {
-                                                if maybe_next_index == next_index {
-                                                    heap.pop();
-                                                    if let Some(block) = pending_blocks.remove(&next_index) {
-                                                        if tx.send((target_height, block)).await.is_err() {
-                                                            info!("Orderer send channel closed, exiting");
-                                                            break;
-                                                        };
-                                                        next_index += 1;
-                                                    }
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                        },
-                                        None => {
-                                            info!("Orderer received None message, exiting");
-                                            break;
-                                        },
-                                    }
-                                }
-                            }
-                        }
-
-                        rx_3.close();
-                        while rx_3.recv().await.is_some() {}
-                        info!("Orderer exited");
-                    }
-                });
+                let (producer, rx_1) = run_producer(start_height, bitcoin.clone(), cancel_token.clone());
+                let (fetcher, rx_2) = run_fetcher(rx_1, bitcoin.clone(), cancel_token.clone());
+                let (processor, rx_3) = run_processor(rx_2, f, cancel_token.clone());
+                let orderer = run_orderer(start_height, rx_3, tx, cancel_token.clone());
 
                 for handle in [producer, fetcher, processor, orderer] {
                     if let Err(e) = handle.await {
