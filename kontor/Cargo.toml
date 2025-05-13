@@ -50,6 +50,7 @@ ciborium = "0.2"
 bon = "3.6"
 axum-test = "17.3"
 urlencoding = "2.1"
+ntest = "0.9.3"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }

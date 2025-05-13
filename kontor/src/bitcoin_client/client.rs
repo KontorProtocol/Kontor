@@ -177,10 +177,20 @@ impl Client {
 
 pub trait BitcoinRpc: Send + Sync + Clone + 'static {
     fn get_blockchain_info(&self) -> impl std::future::Future<Output = Result<GetBlockchainInfoResult, Error>> + std::marker::Send;
+
+    fn get_block_hash(&self, height: u64) -> impl std::future::Future<Output = Result<BlockHash, Error>> + std::marker::Send;
+
+    fn get_block(&self, hash: &BlockHash) -> impl std::future::Future<Output = Result<Block, Error>> + std::marker::Send;
 }
 
 impl BitcoinRpc for Client {
     async fn get_blockchain_info(&self) -> Result<GetBlockchainInfoResult, Error> {
         self.get_blockchain_info().await
+    }
+    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
+        self.get_block_hash(height).await
+    }
+    async fn get_block(&self, hash: &BlockHash) -> Result<Block, Error> {
+        self.get_block(hash).await
     }
 }
