@@ -1,0 +1,12 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.7.2"
+tokio = { version = "1.32.0", features = ["full"] }
+tower-http = { version = "0.5.0", features = ["fs", "trace", "compression-full"] }
+http = "1.0"
+tower = "0.4"
+hyper = { version = "1.0", features = ["full"] }
