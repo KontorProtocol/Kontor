@@ -64,10 +64,11 @@ export ZMQ_PUB_SEQUENCE_ADDRESS="tcp://127.0.0.1:28332"
 
 export API_PORT="8443"
 
-export DATABASE_DIR="./"
+export DATABASE_DIR="../"
 
-export CERT_DIR="./"
+export CERT_DIR="../"
 ```
+`../` for when files and directories are in the root workspace folder instead of the `kontor` crate folder.
 
 ```bash
 cargo run
@@ -77,10 +78,11 @@ cargo run
 
 To run tests, **in addition to the environment variables above**, your `.envrc` should also include the following:
 ```bash
-export SEGWIT_BUYER_KEY_PATH="./segwit_buyer.key"
-export SEGWIT_SELLER_KEY_PATH="./segwit_seller.key"
-export TAPROOT_KEY_PATH="./taproot.key"
+export SEGWIT_BUYER_KEY_PATH="../segwit_buyer.key"
+export SEGWIT_SELLER_KEY_PATH="../segwit_seller.key"
+export TAPROOT_KEY_PATH="../taproot.key"
 ```
+`../` for when files and directories are in the root workspace folder instead of the `kontor` crate folder.
 
 ```bash
 cargo test
