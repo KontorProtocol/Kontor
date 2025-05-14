@@ -6,16 +6,13 @@ use std::{
 };
 
 use anyhow::Result;
-use bitcoin::{
-    self,
-    Transaction,
-};
+use bitcoin::{self, Transaction};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
     sync::{
         Semaphore,
-        mpsc::{self, Sender, Receiver},
+        mpsc::{self, Receiver, Sender},
     },
     task::JoinHandle,
     time::sleep,
@@ -29,16 +26,11 @@ use crate::{
     retry::{new_backoff_unlimited, retry},
 };
 
-
 pub fn run_producer<C: bitcoin_client::client::BitcoinRpc>(
     start_height: u64,
     bitcoin: C,
     cancel_token: CancellationToken,
-) -> (
-    JoinHandle<()>,
-    Receiver<(u64, u64)>,
-) {
-
+) -> (JoinHandle<()>, Receiver<(u64, u64)>) {
     let (tx, rx) = mpsc::channel(10);
 
     let producer = tokio::spawn({
@@ -64,10 +56,7 @@ pub fn run_producer<C: bitcoin_client::client::BitcoinRpc>(
                             target_height = info.blocks;
                         }
                         Err(e) => {
-                            info!(
-                                "Producer cancelled while fetching blockchain info: {}",
-                                e
-                            );
+                            info!("Producer cancelled while fetching blockchain info: {}", e);
                         }
                     }
                 }
@@ -100,11 +89,7 @@ pub fn run_fetcher<C: bitcoin_client::client::BitcoinRpc>(
     mut rx_in: Receiver<(u64, u64)>,
     bitcoin: C,
     cancel_token: CancellationToken,
-) -> (
-    JoinHandle<()>,
-    Receiver<(u64, u64, bitcoin::Block)>,
-) {
-
+) -> (JoinHandle<()>, Receiver<(u64, u64, bitcoin::Block)>) {
     let (tx_out, rx_out) = mpsc::channel(10);
 
     let fetcher = tokio::spawn({
@@ -172,11 +157,7 @@ pub fn run_processor<T: Tx + 'static>(
     mut rx_in: Receiver<(u64, u64, bitcoin::Block)>,
     f: fn(Transaction) -> Option<T>,
     cancel_token: CancellationToken,
-) -> (
-    JoinHandle<()>,
-    Receiver<(u64, Block<T>)>,
-) {
-
+) -> (JoinHandle<()>, Receiver<(u64, Block<T>)>) {
     let (tx_out, rx_out) = mpsc::channel(10);
 
     let processor = tokio::spawn({
@@ -231,15 +212,13 @@ pub fn run_processor<T: Tx + 'static>(
     (processor, rx_out)
 }
 
-
 pub fn run_orderer<T: Tx + 'static>(
     start_height: u64,
     mut rx: Receiver<(u64, Block<T>)>,
     tx: Sender<(u64, Block<T>)>,
     cancel_token: CancellationToken,
 ) -> JoinHandle<()> {
-
-    let orderer = tokio::spawn({
+    tokio::spawn({
         async move {
             let mut heap = BinaryHeap::new();
             let mut next_index = start_height;
@@ -287,9 +266,7 @@ pub fn run_orderer<T: Tx + 'static>(
             while rx.recv().await.is_some() {}
             info!("Orderer exited");
         }
-    });
-
-    orderer
+    })
 }
 
 #[derive(Debug)]
@@ -329,7 +306,8 @@ impl<T: Tx + 'static> Fetcher<T> {
             let tx = self.tx.clone();
 
             async move {
-                let (producer, rx_1) = run_producer(start_height, bitcoin.clone(), cancel_token.clone());
+                let (producer, rx_1) =
+                    run_producer(start_height, bitcoin.clone(), cancel_token.clone());
                 let (fetcher, rx_2) = run_fetcher(rx_1, bitcoin.clone(), cancel_token.clone());
                 let (processor, rx_3) = run_processor(rx_2, f, cancel_token.clone());
                 let orderer = run_orderer(start_height, rx_3, tx, cancel_token.clone());
