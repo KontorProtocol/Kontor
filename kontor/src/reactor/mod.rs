@@ -2,7 +2,7 @@ pub mod events;
 
 use tokio::{select, sync::mpsc::Receiver, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 use crate::{
     bitcoin_follower::events::Event,
@@ -58,7 +58,7 @@ pub fn run<T: Tx + 'static>(
                                         info!("Rollback {}" ,height);
                                     },
                                     Event::MempoolUpdate {removed, added} => {
-                                        info!("MempoolUpdates removed {} added {}", removed.len(), added.len());
+                                        debug!("MempoolUpdates removed {} added {}", removed.len(), added.len());
                                     },
                                     Event::MempoolSet(txs) => {
                                         info!("MempoolSet {}", txs.len());

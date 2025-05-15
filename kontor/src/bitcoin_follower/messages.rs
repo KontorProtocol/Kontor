@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use bitcoin::{BlockHash, Txid, hashes::Hash};
+use bitcoin::{BlockHash, Txid, Transaction, hashes::Hash, consensus::encode};
 
 #[derive(Debug, PartialEq)]
 pub enum MonitorMessage {
@@ -97,9 +97,11 @@ impl MonitorMessage {
 }
 
 pub const SEQUENCE: &str = "sequence";
+pub const RAWTX: &str = "rawtx";
 
 #[derive(Debug)]
-pub enum SequenceMessage {
+pub enum DataMessage {
+    // topic: sequence
     BlockConnected(BlockHash),
     BlockDisconnected(BlockHash),
     TransactionAdded {
@@ -110,49 +112,61 @@ pub enum SequenceMessage {
         txid: Txid,
         mempool_sequence_number: u64,
     },
+
+    // topic: rawtx
+    RawTransaction(Transaction),
 }
 
-impl SequenceMessage {
-    pub fn from_zmq_message(mut multipart: Vec<Vec<u8>>) -> Result<(u32, Self)> {
-        if multipart.len() != 3 || multipart[0] != SEQUENCE.as_bytes() {
+impl DataMessage {
+    pub fn from_zmq_message(mut multipart: Vec<Vec<u8>>) -> Result<(Option<u32>, Self)> {
+        if multipart.len() != 3 {
             return Err(anyhow!("Received invalid multipart message"));
         }
+        if multipart[0] == SEQUENCE.as_bytes() {
+            let sequence_number = u32::from_le_bytes(multipart[2][..].try_into()?);
 
-        let sequence_number = u32::from_le_bytes(multipart[2][..].try_into()?);
+            let data = &mut multipart[1];
+            let len = data.len();
+            if len < 33 {
+                return Err(anyhow!("Received message of invalid length"));
+            }
 
-        let data = &mut multipart[1];
-        let len = data.len();
-        if len < 33 {
-            return Err(anyhow!("Received message of invalid length"));
-        }
-
-        let flag = data[32];
-        data[..32].reverse();
-        let hash_slice = &data[..32];
-        match (flag, len) {
-            (b'C', 33) => Ok((
-                sequence_number,
-                SequenceMessage::BlockConnected(BlockHash::from_slice(hash_slice)?),
-            )),
-            (b'D', 33) => Ok((
-                sequence_number,
-                SequenceMessage::BlockDisconnected(BlockHash::from_slice(hash_slice)?),
-            )),
-            (b'A', 41) => Ok((
-                sequence_number,
-                SequenceMessage::TransactionAdded {
-                    txid: Txid::from_slice(hash_slice)?,
-                    mempool_sequence_number: u64::from_le_bytes(data[33..41].try_into()?),
-                },
-            )),
-            (b'R', 41) => Ok((
-                sequence_number,
-                SequenceMessage::TransactionRemoved {
-                    txid: Txid::from_slice(hash_slice)?,
-                    mempool_sequence_number: u64::from_le_bytes(data[33..41].try_into()?),
-                },
-            )),
-            _ => Err(anyhow!("Received message with unknown flag")),
+            let flag = data[32];
+            data[..32].reverse();
+            let hash_slice = &data[..32];
+            match (flag, len) {
+                (b'C', 33) => Ok((
+                    Some(sequence_number),
+                    DataMessage::BlockConnected(BlockHash::from_slice(hash_slice)?),
+                )),
+                (b'D', 33) => Ok((
+                    Some(sequence_number),
+                    DataMessage::BlockDisconnected(BlockHash::from_slice(hash_slice)?),
+                )),
+                (b'A', 41) => Ok((
+                    Some(sequence_number),
+                    DataMessage::TransactionAdded {
+                        txid: Txid::from_slice(hash_slice)?,
+                        mempool_sequence_number: u64::from_le_bytes(data[33..41].try_into()?),
+                    },
+                )),
+                (b'R', 41) => Ok((
+                    Some(sequence_number),
+                    DataMessage::TransactionRemoved {
+                        txid: Txid::from_slice(hash_slice)?,
+                        mempool_sequence_number: u64::from_le_bytes(data[33..41].try_into()?),
+                    },
+                )),
+                _ => Err(anyhow!("Received message with unknown flag: {}", flag)),
+            }
+        } else if multipart[0] == RAWTX.as_bytes() {
+            return Ok((
+                None,
+                DataMessage::RawTransaction(encode::deserialize::<Transaction>(&multipart[1])?),
+            ));
+        } else {
+            return Err(anyhow!("Received multipart message for unknown topic {:?})",
+                String::from_utf8(multipart[0].clone()).unwrap()));
         }
     }
 }
