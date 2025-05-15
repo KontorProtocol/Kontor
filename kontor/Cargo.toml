@@ -52,9 +52,6 @@ axum-test = "17.3"
 urlencoding = "2.1"
 ntest = "0.9.3"
 wasmtime = { version = "32.0.0", features = ["wave"] }
-wasmparser = "0.230.0"
-wit-component = "0.230.0"
-wit-parser = "0.230.0"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
