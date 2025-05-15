@@ -3,8 +3,6 @@ import './App.css'
 import type { AddressEntry, GetAddressesResult } from '@stacks/connect/dist/types/methods'
 import {
   request as satsConnectRequest,
-
-  type RpcResult,
 } from "sats-connect";
 
 import { request as connectRequest } from '@stacks/connect'
@@ -13,6 +11,15 @@ import { request as connectRequest } from '@stacks/connect'
 import * as bitcoin from 'bitcoinjs-lib'
 
 import './App.css'
+
+import * as ecc from 'tiny-secp256k1'; // Import the ECC library
+import { ECPairFactory } from 'ecpair'; // Import ECPair factory
+
+// Initialize the ECC library
+bitcoin.initEccLib(ecc);
+
+// Initialize ECPair factory
+ECPairFactory(ecc);
 
 
 interface ExtendedAddressEntry extends AddressEntry {
@@ -53,127 +60,87 @@ interface Transaction {
 
 interface ComposeResult {
   commit_transaction: Transaction
+  commit_transaction_hex: string
   reveal_transaction: Transaction
+  reveal_transaction_hex: string
+  commit_psbt_hex: string
+  reveal_psbt_hex: string
   tap_script: string
   chained_tap_script: string | null
 }
 
-const handleBroadcastTransaction = async () => {
-
+interface TestMempoolAcceptResult {
+  txid: string;
+  wtxid: string;
+  allowed: boolean;
+  reject_reason: string | null;
+  vsize: number | null;
+  fee: number | null;
 }
 
-// Add a function to sign the commit transaction using sign_message
-const signCommitTransaction = async (composeResult: ComposeResult, address: ExtendedAddressEntry, utxos: Utxo[]) => {
-  try {
-    // 1. Create a bitcoinjs-lib transaction from your compose result
-    const tx = new bitcoin.Transaction();
-    tx.version = composeResult.commit_transaction.version;
-    tx.locktime = composeResult.commit_transaction.lock_time;
+interface TestMempoolAcceptResultWrapper {
+  result: TestMempoolAcceptResult[]
+}
 
-    // Add inputs
-    composeResult.commit_transaction.input.forEach(input => {
-      // Parse the previous output (txid:vout format)
-      const [txid, voutStr] = input.previous_output.split(':');
-      const vout = parseInt(voutStr, 10);
-
-      // Add the input to the transaction
-      tx.addInput(
-        Buffer.from(txid, 'hex').reverse(), // Bitcoin txids are byte-reversed
-        vout,
-        input.sequence
-      );
-    });
-
-    // Add outputs
-    composeResult.commit_transaction.output.forEach(output => {
-      tx.addOutput(
-        Buffer.from(output.script_pubkey, 'hex'),
-        output.value
-      );
-    });
-
-    // 2. Create a map of txid:vout to UTXO details for easy lookup
-    const utxoMap = utxos.reduce((map, utxo) => {
-      map[`${utxo.txid}:${utxo.vout}`] = utxo;
-      return map;
-    }, {} as Record<string, Utxo>);
-
-    // 3. For each input, create the signature hash and sign it
-    const signedTx = tx.clone();
-
-    // Create arrays to hold all the previous output scripts and values
-    const prevOutScripts = [];
-    const prevOutValues = [];
-
-    // Prepare data for all inputs
-    for (let i = 0; i < composeResult.commit_transaction.input.length; i++) {
-      const input = composeResult.commit_transaction.input[i];
-      const utxo = utxoMap[input.previous_output];
-
-      if (!utxo) {
-        throw new Error(`UTXO not found for input ${input.previous_output}`);
-      }
-
-      // For Taproot key spend, the script is P2TR with the x-only pubkey
-      const p2trScript = Buffer.from('5120' + address.publicKey, 'hex');
-      prevOutScripts.push(p2trScript);
-      prevOutValues.push(utxo.value);
-    }
-
-    // Sign each input
-    for (let inputIndex = 0; inputIndex < tx.ins.length; inputIndex++) {
-      // For Taproot key spend, create the hash for witness v1
-      const hashForSignature = tx.hashForWitnessV1(
-        inputIndex,
-        prevOutScripts,
-        prevOutValues,
-        bitcoin.Transaction.SIGHASH_DEFAULT // Taproot default sighash
-      );
-
-      // Convert the hash to hex for signing
-      const hashHex = hashForSignature.toString('hex');
-
-      // const signResult = signMessage({
-      //   message: hashHex,
-      // })
-      // const sign = signTransaction()
-
-      // const sign = await signMessage
-      let signResult: RpcResult<"signMessage">
-
-      try {
-
-        // Sign the hash using Xverse wallet's sign_message
-        signResult = await satsConnectRequest('signMessage', {
-          message: hashHex,
-          address: address.address,
-        });
-        if (signResult.status === 'error') {
-          throw new Error(`Error signing message: ${signResult.error.message}`);
-        }
-      } catch (error) {
-        console.error('Error signing message:', error);
-        throw error;
-      }
-
-      // The signature from Xverse will be in base64, convert it to buffer
-      const signature = Buffer.from(signResult.result.signature, 'base64');
-
-      // Add the signature to the transaction's witness
-      signedTx.ins[inputIndex].witness = [signature];
-    }
-
-    // Get the signed transaction hex
-    const signedTxHex = signedTx.toHex();
-
-    console.log('Signed transaction:', signedTxHex);
-    return { tx: signedTxHex };
-
-  } catch (error) {
-    console.error('Error signing transaction:', error);
-    throw error;
-  }
+// Add conversion function
+const convertKebabToSnake = (obj: Record<string, any>): Record<string, any> => {
+  return Object.entries(obj).reduce((acc, [key, value]) => {
+    const snakeKey = key.replace(/-([a-z])/g, (_, letter) => `_${letter}`);
+    acc[snakeKey] = value;
+    return acc;
+  }, {} as Record<string, any>);
 };
+
+
+
+async function signPsbt(
+  psbtHex: string,
+  sourceAddress: string,
+  scriptSpend: boolean
+): Promise<string> {
+  const psbt = bitcoin.Psbt.fromHex(psbtHex);
+  console.log("PSBT:", psbt);
+
+  if (scriptSpend) {
+    psbt.updateInput(
+      0,
+      // https://github.com/bitcoinjs/bitcoinjs-lib/blob/248789d25b9833ed286c9ca4b9bfd93f099fd8a3/test/fixtures/psbt.json#L493
+      {
+        tapLeafScript: [
+  
+        ]
+      }
+    )
+  }
+  // FOR SCRIPT_SPEND, TAP_LEAF_SCRIPT
+  // set these, check the signature after adding
+  // 
+
+  const res = await satsConnectRequest('signPsbt', {
+    psbt: psbt.toBase64(),
+    broadcast: false,
+    signInputs: { [sourceAddress]: Array.from({ length: psbt.txInputs.length }, (_, i) => i) },
+
+  });
+
+  if (res.status === 'error') {
+    throw new Error(`Signing failed: ${res.error || 'Unknown error'}`);
+  }
+
+
+
+  const signedPsbt = bitcoin.Psbt.fromBase64(res.result.psbt);
+
+  signedPsbt.finalizeAllInputs();
+
+  console.log("Signed PSBT:", signedPsbt);
+  const tx = signedPsbt.extractTransaction();
+
+  console.log("Xverse response:", tx, tx.getId());
+
+  return tx.toHex();
+}
+
 
 function WalletComponent() {
   const [address, setAddress] = useState<ExtendedAddressEntry | undefined>()
@@ -181,7 +148,7 @@ function WalletComponent() {
   const [composeResult, setComposeResult] = useState<ComposeResult | undefined>()
   const [error, setError] = useState<string>('')
   const [signedTx, setSignedTx] = useState<string>('');
-
+  const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>([])
 
 
   const handleGetAddresses = async () => {
@@ -201,7 +168,7 @@ function WalletComponent() {
           throw new Error('Failed to fetch UTXOs')
         }
         const utxoData = await utxoResponse.json()
-        setUtxos(utxoData)
+        setUtxos(utxoData.filter((utxo: Utxo) => utxo.value == 9000))
       }
     } catch (err) {
       setError('Failed to get addresses or UTXOs')
@@ -217,6 +184,11 @@ function WalletComponent() {
       const kontorResponse = await fetch(`${kontorUrl}/compose?address=${address.address}&x_only_public_key=${address.publicKey}&funding_utxo_ids=${utxos.map(utxo => utxo.txid + ':' + utxo.vout).join(',')}&sat_per_vbyte=2&script_data=${base64EncodedData}`)
       const kontorData = await kontorResponse.json()
       console.log('Kontor data:', kontorData)
+      const tx = bitcoin.Transaction.fromHex(kontorData.result.commit_transaction_hex)
+      console.log('kontor commit tx id: ', tx.getId())
+
+      const revealTx = bitcoin.Transaction.fromHex(kontorData.result.reveal_transaction_hex)
+      console.log('kontor reveal tx id: ', revealTx.getId())
       setComposeResult(kontorData.result)
     }
   }
@@ -228,13 +200,32 @@ function WalletComponent() {
     }
 
     try {
-      const result = await signCommitTransaction(composeResult, address, utxos);
-      setSignedTx(result.tx);
+      // const utxoMap = utxos.reduce((map, utxo) => {
+      //   map[`${utxo.txid}:${utxo.vout}`] = { txid: utxo.txid, value: utxo.value };
+      //   return map;
+      // }, {} as Record<string, { txid: string, value: number }>);
+      const commit_sign_result = await signPsbt(composeResult.commit_psbt_hex, address.address, false);
+      const reveal_sign_result = await signPsbt(composeResult.reveal_psbt_hex, address.address, true);
+      console.log('reveal_sign_result', reveal_sign_result)
+      // const result = await signTaprootKeyPathTransaction(composeResult.commit_transaction_hex, address.address, address.publicKey, utxoMap);
+      setSignedTx([commit_sign_result, reveal_sign_result].join(','));
     } catch (err) {
       setError('Failed to sign transaction');
       console.error(err);
     }
   };
+
+  const handleBroadcastTransaction = async (signedTx: string) => {
+    const kontorUrl = import.meta.env.VITE_KONTOR_URL
+    const kontorResponse = await fetch(`${kontorUrl}/api/test_mempool_accept?txs=${signedTx}`)
+    const rawData = await kontorResponse.json()
+    // Convert the response from kebab-case to snake_case
+    const convertedData = {
+      result: rawData.result.map((item: any) => convertKebabToSnake(item))
+    } as TestMempoolAcceptResultWrapper
+    setBroadcastedTx(convertedData.result)
+    console.log('Kontor data:', convertedData)
+  }
 
   return (
     <div className="wallet-container">
@@ -345,9 +336,25 @@ function WalletComponent() {
                 <p className="tx-hex">{signedTx}</p>
               </div>
 
-              <button onClick={handleBroadcastTransaction}>Broadcast Transaction</button>
+              <button onClick={() => handleBroadcastTransaction(signedTx)}>Broadcast Transaction</button>
             </>
           )}
+        </div>
+      )}
+      {broadcastedTx.length > 0 && (
+        <div className="broadcasted-transaction">
+          <h3>Broadcasted Transaction:</h3>
+          <ul>
+            {broadcastedTx.map((tx, index) => (
+              <li key={index}>
+                <strong>TXID:</strong> {tx.txid}
+                <p>Allowed: {tx.allowed ? 'Yes' : 'No'}</p>
+                <p>Reject Reason: {tx.reject_reason}</p>
+                <p>Vsize: {tx.vsize}</p>
+                <p>Fee: {tx.fee}</p>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {error && <p className="error">{error}</p>}
@@ -360,3 +367,5 @@ function App() {
 }
 
 export default App
+
+

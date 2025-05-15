@@ -3,6 +3,7 @@ use base64::prelude::*;
 use bitcoin::{
     Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
     absolute::LockTime,
+    consensus::encode::serialize as serialize_tx,
     opcodes::{
         OP_0, OP_FALSE,
         all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
@@ -89,7 +90,11 @@ impl ComposeInputs {
 #[derive(Debug, Serialize, Deserialize, Builder)]
 pub struct ComposeOutputs {
     pub commit_transaction: Transaction,
+    pub commit_transaction_hex: String,
+    pub commit_psbt_hex: String,
     pub reveal_transaction: Transaction,
+    pub reveal_transaction_hex: String,
+    pub reveal_psbt_hex: String,
     pub tap_script: ScriptBuf,
     pub chained_tap_script: Option<ScriptBuf>,
 }
@@ -122,6 +127,8 @@ impl From<ComposeInputs> for CommitInputs {
 #[derive(Builder, Serialize, Deserialize)]
 pub struct CommitOutputs {
     pub commit_transaction: Transaction,
+    pub commit_transaction_hex: String,
+    pub commit_psbt_hex: String,
     pub tap_script: ScriptBuf,
 }
 
@@ -227,7 +234,9 @@ impl RevealInputs {
 #[derive(Builder, Serialize, Deserialize)]
 pub struct RevealOutputs {
     pub transaction: Transaction,
+    pub transaction_hex: String,
     pub psbt: Psbt,
+    pub psbt_hex: String,
     pub chained_tap_script: Option<ScriptBuf>,
 }
 
@@ -292,7 +301,11 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
     let compose_outputs = {
         let base_builder = ComposeOutputs::builder()
             .commit_transaction(commit_outputs.commit_transaction)
+            .commit_transaction_hex(commit_outputs.commit_transaction_hex)
+            .commit_psbt_hex(commit_outputs.commit_psbt_hex)
             .reveal_transaction(reveal_outputs.transaction.clone())
+            .reveal_transaction_hex(reveal_outputs.transaction_hex)
+            .reveal_psbt_hex(reveal_outputs.psbt_hex)
             .tap_script(commit_outputs.tap_script);
 
         match reveal_outputs.chained_tap_script {
@@ -367,9 +380,24 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         output: outputs,
     };
 
+    let commit_transaction_hex = hex::encode(serialize_tx(&commit_transaction));
+
+    let mut commit_psbt = Psbt::from_unsigned_tx(commit_transaction.clone()).unwrap();
+    commit_psbt
+        .inputs
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, input)| {
+            input.witness_utxo = Some(params.funding_utxos[i].1.clone());
+            input.tap_internal_key = Some(params.x_only_public_key);
+        });
+    let commit_psbt_hex = commit_psbt.serialize_hex();
+
     let commit_outputs = CommitOutputs::builder()
         .commit_transaction(commit_transaction)
         .tap_script(tap_script)
+        .commit_transaction_hex(commit_transaction_hex)
+        .commit_psbt_hex(commit_psbt_hex)
         .build();
     Ok(commit_outputs)
 }
@@ -386,6 +414,8 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         }],
         output: vec![],
     };
+    let commit_output = params.commit_output.clone();
+
     if let Some(reveal_output) = params.reveal_output {
         reveal_transaction.output.push(reveal_output);
     }
@@ -449,7 +479,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     );
 
     if change_amount.is_none() {
-        match params.funding_utxos {
+        match params.funding_utxos.clone() {
             Some(funding_utxos) => {
                 funding_utxos.iter().for_each(|(outpoint, _)| {
                     reveal_transaction.input.push(TxIn {
@@ -531,11 +561,28 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             }
         };
     }
-    let psbt = Psbt::from_unsigned_tx(reveal_transaction.clone()).unwrap();
+    let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
+    let mut psbt = Psbt::from_unsigned_tx(reveal_transaction.clone()).unwrap();
+    psbt.inputs[0].witness_utxo = Some(commit_output.1.clone());
+    psbt.inputs[0].tap_internal_key = Some(params.x_only_public_key);
+    psbt.inputs[0].tap_merkle_root = Some(taproot_spend_info.merkle_root().unwrap());
 
+    if let Some(funding_utxos) = params.funding_utxos {
+        psbt.inputs
+            .iter_mut()
+            .skip(1)
+            .enumerate()
+            .for_each(|(i, input)| {
+                input.witness_utxo = Some(funding_utxos[i].1.clone());
+                input.tap_internal_key = Some(params.x_only_public_key);
+            });
+    }
+    let psbt_hex = psbt.serialize_hex();
     let base_builder = RevealOutputs::builder()
         .transaction(reveal_transaction)
-        .psbt(psbt);
+        .transaction_hex(reveal_transaction_hex)
+        .psbt(psbt)
+        .psbt_hex(psbt_hex);
 
     // if the reveal tx also contains a commit, append the chained commit data
     let reveal_outputs = match chained_tap_script_opt {
