@@ -4,7 +4,7 @@ To run the kontor server
 
 To run the rust webserver
 
-`cd ui` 
+`cd kontor_ui` 
 `cargo run`
 
 App runs on localhost:3000

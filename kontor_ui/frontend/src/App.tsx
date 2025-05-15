@@ -12,14 +12,10 @@ import * as bitcoin from 'bitcoinjs-lib'
 
 import './App.css'
 
-import * as ecc from 'tiny-secp256k1'; // Import the ECC library
-import { ECPairFactory } from 'ecpair'; // Import ECPair factory
+import * as ecc from 'tiny-secp256k1';
+import { ECPairFactory } from 'ecpair';
 
-// Initialize the ECC library
-bitcoin.initEccLib(ecc);
 
-// Initialize ECPair factory
-ECPairFactory(ecc);
 
 
 interface ExtendedAddressEntry extends AddressEntry {
@@ -89,7 +85,6 @@ interface TestMempoolAcceptResultWrapper {
   result: TestMempoolAcceptResult[]
 }
 
-// Add conversion function
 const convertKebabToSnake = (obj: Record<string, any>): Record<string, any> => {
   return Object.entries(obj).reduce((acc, [key, value]) => {
     const snakeKey = key.replace(/-([a-z])/g, (_, letter) => `_${letter}`);
@@ -106,12 +101,10 @@ async function signPsbt(
   scriptLeafData?: TapLeafScript
 ): Promise<string> {
   const psbt = bitcoin.Psbt.fromHex(psbtHex);
-  console.log("PSBT:", psbt);
 
   if (scriptLeafData) {
     psbt.updateInput(
       0,
-      // https://github.com/bitcoinjs/bitcoinjs-lib/blob/248789d25b9833ed286c9ca4b9bfd93f099fd8a3/test/fixtures/psbt.json#L493
       {
         tapLeafScript: [{
           leafVersion: scriptLeafData.leafVersion,
@@ -134,15 +127,9 @@ async function signPsbt(
     throw new Error(`Signing failed: ${res.error || 'Unknown error'}`);
   }
 
-
-
   const signedPsbt = bitcoin.Psbt.fromBase64(res.result.psbt);
-
   signedPsbt.finalizeAllInputs();
-
-  console.log("Signed PSBT:", signedPsbt);
   const tx = signedPsbt.extractTransaction();
-
 
   return tx.toHex();
 }
@@ -155,11 +142,11 @@ function WalletComponent() {
   const [error, setError] = useState<string>('')
   const [signedTx, setSignedTx] = useState<string>('');
   const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>([])
+  const [inputData, setInputData] = useState<string>('')
 
 
   const handleGetAddresses = async () => {
     try {
-      // Fetch addresses
       const response: GetAddressesResult = await connectRequest('getAddresses')
       const paymentAddress = (response.addresses as ExtendedAddressEntry[]).find(
         addr => addr.addressType === 'p2tr'
@@ -167,38 +154,26 @@ function WalletComponent() {
       setAddress(paymentAddress)
 
       if (paymentAddress) {
-        // Fetch UTXOs for the address
         const electrsUrl = import.meta.env.VITE_ELECTRS_URL
         const utxoResponse = await fetch(`${electrsUrl}/address/${paymentAddress.address}/utxo`)
         if (!utxoResponse.ok) {
           throw new Error('Failed to fetch UTXOs')
         }
         const utxoData = await utxoResponse.json()
-        setUtxos(utxoData.filter((utxo: Utxo) => utxo.value == 9000))
+        setUtxos(utxoData)
       }
     } catch (err) {
       setError('Failed to get addresses or UTXOs')
-      console.error(err)
     }
   }
 
-  // useCallback 
-  // FIX ENV VAR
-  // Textbox for script data
   const handleCompose = async (address: ExtendedAddressEntry, utxos: Utxo[]) => {
     if (utxos.length > 0) {
       const kontorUrl = import.meta.env.VITE_KONTOR_URL
-      const base64EncodedData = btoa('Hello, world!')
+      const base64EncodedData = btoa(inputData || '')
       const kontorResponse = await fetch(`${kontorUrl}/compose?address=${address.address}&x_only_public_key=${address.publicKey}&funding_utxo_ids=${utxos.map(utxo => utxo.txid + ':' + utxo.vout).join(',')}&sat_per_vbyte=2&script_data=${base64EncodedData}`)
       const kontorData = await kontorResponse.json()
-      console.log('Kontor data:', kontorData)
-      const tx = bitcoin.Transaction.fromHex(kontorData.result.commit_transaction_hex)
-      console.log('kontor commit tx id: ', tx.getId())
 
-      const revealTx = bitcoin.Transaction.fromHex(kontorData.result.reveal_transaction_hex)
-      console.log('kontor reveal tx id: ', revealTx.getId())
-
-      console.log('tap script: ', kontorData.result.tap_script)
       setComposeResult(kontorData.result)
     }
   }
@@ -211,14 +186,16 @@ function WalletComponent() {
     }
 
     try {
+      bitcoin.initEccLib(ecc);
+
+      ECPairFactory(ecc);
 
       const commit_sign_result = await signPsbt(composeResult.commit_psbt_hex, address.address);
       const reveal_sign_result = await signPsbt(composeResult.reveal_psbt_hex, address.address, composeResult.tap_leaf_script);
-      console.log('reveal_sign_result', reveal_sign_result)
+
       setSignedTx([commit_sign_result, reveal_sign_result].join(','));
     } catch (err) {
       setError('Failed to sign transaction');
-      console.error(err);
     }
   };
 
@@ -226,12 +203,11 @@ function WalletComponent() {
     const kontorUrl = import.meta.env.VITE_KONTOR_URL
     const kontorResponse = await fetch(`${kontorUrl}/api/test_mempool_accept?txs=${signedTx}`)
     const rawData = await kontorResponse.json()
-    // Convert the response from kebab-case to snake_case
+
     const convertedData = {
       result: rawData.result.map((item: any) => convertKebabToSnake(item))
     } as TestMempoolAcceptResultWrapper
     setBroadcastedTx(convertedData.result)
-    console.log('Kontor data:', convertedData)
   }
 
   return (
@@ -328,7 +304,26 @@ function WalletComponent() {
       )}
       {
         !composeResult && address && utxos.length > 0 && (
-          <button onClick={() => handleCompose(address, utxos)}>Compose Commit/Reveal Transactions</button>
+          <div className="compose-section">
+            <div className="input-container">
+              <input
+                type="text"
+                value={inputData}
+                onChange={(e) => setInputData(e.target.value)}
+                placeholder="Enter data to encode"
+                className="data-input"
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  marginBottom: '16px',
+                  fontSize: '16px',
+                  borderRadius: '4px',
+                  border: '1px solid #ccc'
+                }}
+              />
+            </div>
+            <button onClick={() => handleCompose(address, utxos)}>Compose Commit/Reveal Transactions</button>
+          </div>
         )
       }
       {composeResult && (
