@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
-use kontor::logging;
+use tokio::fs::read;
 use wasmtime::{
     Engine, Store,
     component::{Component, Linker, Type, Val, wasm_wave::parser::Parser as WaveParser},
@@ -76,31 +76,32 @@ fn default_val_for_type(ty: &Type) -> Val {
 #[tokio::test]
 #[ignore]
 async fn test_fib_contract() -> Result<()> {
-    logging::setup();
+    let mut config = wasmtime::Config::new();
+    config.async_support(true);
+    let engine = Engine::new(&config)?;
+    let mut store = Store::new(&engine, ());
+    let linker = Linker::new(&engine);
 
-    let path = Path::new("../target/wasm32-unknown-unknown/debug/fib.wasm");
     let n = 8;
     let s = format!("fib({})", n);
     let call = WaveParser::new(s.as_str()).parse_raw_func_call()?;
 
-    let mut config = wasmtime::Config::new();
-    config.async_support(true);
-    let engine = Engine::new(&config)?;
-    let component = Component::from_file(&engine, path)?;
-    let mut store = Store::new(&engine, ());
-    let linker = Linker::new(&engine);
-
+    let path = Path::new("../target/wasm32-unknown-unknown/debug/fib.wasm");
+    let wasm = read(path).await?;
+    let component = Component::from_binary(&engine, &wasm)?;
     let instance = linker.instantiate_async(&mut store, &component).await?;
-    let f = instance
+
+    let func = instance
         .get_func(&mut store, call.name())
         .ok_or(anyhow!("can't find fib"))?;
-    let params: Vec<Val> = call.to_wasm_params(f.params(&store).iter().map(|(_, t)| t))?;
-    let mut results = f
+    let params = call.to_wasm_params(func.params(&store).iter().map(|(_, t)| t))?;
+    let mut results = func
         .results(&store)
         .iter()
         .map(default_val_for_type)
         .collect::<Vec<_>>();
-    f.call_async(&mut store, &params, &mut results).await?;
+    func.call_async(&mut store, &params, &mut results).await?;
     assert_eq!(results[0], Val::U64(21));
+
     Ok(())
 }
