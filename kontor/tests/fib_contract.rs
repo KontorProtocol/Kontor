@@ -98,7 +98,7 @@ async fn test_fib_contract() -> Result<()> {
     let mut results = func
         .results(&store)
         .iter()
-        .map(default_val_for_type).
+        .map(default_val_for_type)
         .collect::<Vec<_>>();
     func.call_async(&mut store, &params, &mut results).await?;
     assert_eq!(results[0], Val::U64(21));
