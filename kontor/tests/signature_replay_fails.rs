@@ -448,8 +448,6 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         .test_mempool_accept(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
         .await?;
 
-    println!("result: {:#?}", result);
-
     assert_eq!(
         result.len(),
         3,

@@ -20,7 +20,10 @@ use tracing::{Level, Span, error, field, info, span};
 use super::{
     Env,
     error::ErrorResponse,
-    handlers::{get_block, get_block_latest, get_compose, get_compose_commit, get_compose_reveal},
+    handlers::{
+        get_block, get_block_latest, get_compose, get_compose_commit, get_compose_reveal,
+        test_mempool_accept,
+    },
     ws,
 };
 
@@ -87,7 +90,8 @@ pub fn new(context: Env) -> Router {
             "/api",
             Router::new()
                 .route("/block/{height}", get(get_block))
-                .route("/block/latest", get(get_block_latest)),
+                .route("/block/latest", get(get_block_latest))
+                .route("/test_mempool_accept", get(test_mempool_accept)),
         )
         .nest(
             "/compose",

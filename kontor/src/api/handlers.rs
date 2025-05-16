@@ -1,8 +1,11 @@
 use axum::extract::{Path, Query, State};
 
-use crate::database::{
-    queries::{select_block_at_height, select_block_latest},
-    types::BlockRow,
+use crate::{
+    bitcoin_client::types::TestMempoolAcceptResult,
+    database::{
+        queries::{select_block_at_height, select_block_latest},
+        types::BlockRow,
+    },
 };
 
 use super::{
@@ -14,6 +17,14 @@ use super::{
     error::HttpError,
     result::Result,
 };
+
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct TxsQuery {
+    txs: String,
+}
 
 pub async fn get_block(State(env): State<Env>, Path(height): Path<u64>) -> Result<BlockRow> {
     match select_block_at_height(&*env.reader.connection().await?, height).await? {
@@ -27,6 +38,16 @@ pub async fn get_block_latest(State(env): State<Env>) -> Result<BlockRow> {
         Some(block_row) => Ok(block_row.into()),
         None => Err(HttpError::NotFound("No blocks written".to_owned()).into()),
     }
+}
+
+pub async fn test_mempool_accept(
+    Query(query): Query<TxsQuery>,
+    State(env): State<Env>,
+) -> Result<Vec<TestMempoolAcceptResult>> {
+    let txs: Vec<String> = query.txs.split(',').map(|s| s.to_string()).collect();
+
+    let results = env.bitcoin.test_mempool_accept(&txs).await?;
+    Ok(results.into())
 }
 
 pub async fn get_compose(

@@ -1,3 +1,10 @@
 [workspace]
-members = ["contracts/fib", "kontor", "macro"]
+members = ["contracts/fib", "kontor", "macro", "ui"]
 resolver = "2"
+
+
+[workspace.dependencies]
+axum = { version = "0.8", features = ["http2", "ws"] }
+tokio = { version = "1.32.0", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-full", "request-id", "timeout", "catch-panic", "cors"] }
+tower = "0.5"

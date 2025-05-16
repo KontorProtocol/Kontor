@@ -1,0 +1,136 @@
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+.wallet-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+button {
+  background-color: #4CAF50;
+  border: none;
+  color: white;
+  padding: 15px 32px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 4px 2px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+button:hover {
+  background-color: #45a049;
+}
+
+.addresses {
+  margin-top: 2rem;
+  text-align: left;
+}
+
+.addresses ul {
+  list-style: none;
+  padding: 0;
+}
+
+.addresses li {
+  padding: 0.5rem;
+  margin: 0.5rem 0;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.error {
+  color: #ff0000;
+  margin-top: 1rem;
+}
+
+.transactions {
+  margin-top: 2rem;
+  text-align: left;
+}
+
+.transaction-details {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.transaction-details h4 {
+  margin: 1rem 0 0.5rem 0;
+  color: #495057;
+}
+
+.transaction-details ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.transaction-details li {
+  padding: 0.5rem;
+  margin: 0.5rem 0;
+  background-color: #fff;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+}
+
+.tap-script {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 1rem;
+  margin: 1rem 0;
+  word-break: break-all;
+  font-family: monospace;
+}

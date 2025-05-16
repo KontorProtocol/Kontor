@@ -17,7 +17,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7.13"
 tracing = "0.1"
 tracing-subscriber = "0.3"
@@ -25,8 +24,11 @@ zmq = "0.10.0"
 scopeguard = "1.2.0"
 rayon = "1.10.0"
 indexmap = "2.7.1"
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tower = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
-axum = { version = "0.8", features = ["http2", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", features = [
   "logging",
@@ -34,14 +36,6 @@ rustls = { version = "0.23", features = [
   "ring",
   "tls12",
 ], default-features = false }
-tower-http = { version = "0.6", features = [
-  "request-id",
-  "trace",
-  "timeout",
-  "catch-panic",
-  "cors",
-] }
-tower = "0.5"
 rustls-native-certs = "0.8"
 futures-util = "0.3"
 hex = "0.4"
