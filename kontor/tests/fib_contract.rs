@@ -20,7 +20,7 @@ fn default_val_for_type(ty: &Type) -> Val {
         Type::U64 => Val::U64(0),
         Type::Float32 => Val::Float32(0.0),
         Type::Float64 => Val::Float64(0.0),
-        Type::Char => Val::Char('\0'),
+        Type::Char => Val::Char(' '),
         Type::String => Val::String("".to_string()),
         Type::List(_) => Val::List(Vec::new()),
         Type::Record(record_ty) => {
@@ -57,16 +57,19 @@ fn default_val_for_type(ty: &Type) -> Val {
         }
         Type::Option(_) => Val::Option(None),
         Type::Result(result_ty) => {
-            let ok_ty = result_ty.ok();
-            if ok_ty.is_some() {
-                Val::Result(Ok(None))
+            if let Some(ty) = result_ty.ok() {
+                Val::Result(Ok(Some(Box::new(default_val_for_type(&ty)))))
+            } else if let Some(ty) = result_ty.err() {
+                Val::Result(Err(Some(Box::new(default_val_for_type(&ty)))))
             } else {
-                Val::Result(Err(None))
+                Val::Result(Ok(None))
             }
         }
         Type::Flags(_) => Val::Flags(Vec::new()),
-        Type::Own(_) => unimplemented!(),
-        Type::Borrow(_) => unimplemented!(),
+        Type::Own(_) => panic!("Cannot create a default Own value without a resource context"),
+        Type::Borrow(_) => {
+            panic!("Cannot create a default Borrow value without a resource context")
+        }
     }
 }
 

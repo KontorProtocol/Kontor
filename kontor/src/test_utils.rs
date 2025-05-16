@@ -232,15 +232,13 @@ pub fn sign_buyer_side_psbt(
         let mut sighasher = SighashCache::new(&buyer_psbt.unsigned_tx);
 
         // Calculate the sighash for key path spending
-        let sighash = sighasher
+        sighasher
             .taproot_key_spend_signature_hash(
                 1, // Buyer's input index (back to 1)
                 &Prevouts::All(prevouts),
                 TapSighashType::Default,
             )
-            .expect("Failed to create sighash");
-
-        sighash
+            .expect("Failed to create sighash")
     };
 
     // Sign with the buyer's tweaked key
