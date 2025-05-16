@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use kontor::logging;
 use wasmtime::{
     Engine, Store,
@@ -75,7 +75,7 @@ fn default_val_for_type(ty: &Type) -> Val {
 
 #[tokio::test]
 #[ignore]
-async fn test_fib_contract() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_fib_contract() -> Result<()> {
     logging::setup();
 
     let path = Path::new("../target/wasm32-unknown-unknown/debug/fib.wasm");

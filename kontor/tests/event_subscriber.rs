@@ -14,7 +14,7 @@ fn dummy_event() -> Event {
 }
 
 #[tokio::test]
-async fn test_subscriber_all() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_subscriber_all() -> Result<()> {
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
     let mut subscriber = EventSubscriber::new();
@@ -35,7 +35,7 @@ async fn test_subscriber_all() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn test_subscriber_no_signature() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_subscriber_no_signature() -> Result<()> {
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
     let mut subscriber = EventSubscriber::new();
@@ -59,7 +59,7 @@ async fn test_subscriber_no_signature() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[tokio::test]
-async fn test_subscriber_with_signature_no_topics() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_subscriber_with_signature_no_topics() -> Result<()> {
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
     let mut subscriber = EventSubscriber::new();
@@ -86,7 +86,7 @@ async fn test_subscriber_with_signature_no_topics() -> Result<(), Box<dyn std::e
 }
 
 #[tokio::test]
-async fn test_subscriber_with_topics() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_subscriber_with_topics() -> Result<()> {
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
     let mut subscriber = EventSubscriber::new();
@@ -113,7 +113,7 @@ async fn test_subscriber_with_topics() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[tokio::test]
-async fn test_subscriber_wildcard() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_subscriber_wildcard() -> Result<()> {
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
     let mut subscriber = EventSubscriber::new();
