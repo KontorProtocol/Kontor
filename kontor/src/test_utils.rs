@@ -127,7 +127,7 @@ pub fn sign_key_spend(
 
     let tweaked_sender = keypair.tap_tweak(secp, None);
     let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_inner());
+    let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_keypair());
 
     let signature = bitcoin::taproot::Signature {
         signature,
@@ -247,7 +247,7 @@ pub fn sign_buyer_side_psbt(
     // Create the tweaked keypair
     let buyer_tweaked = buyer_keypair.tap_tweak(secp, None);
     // Sign with the tweaked keypair since we're doing key path spending
-    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
+    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_keypair());
 
     let buyer_signature = bitcoin::taproot::Signature {
         signature: buyer_signature,
