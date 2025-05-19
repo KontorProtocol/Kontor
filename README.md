@@ -67,6 +67,8 @@ export API_PORT="8443"
 export DATABASE_DIR="../"
 
 export CERT_DIR="../"
+
+export NETWORK="bitcoin"
 ```
 `../` for when files and directories are in the root workspace folder instead of the `kontor` crate folder.
 
