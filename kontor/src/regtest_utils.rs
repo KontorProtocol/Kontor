@@ -3,7 +3,7 @@ use std::str::FromStr;
 use anyhow::Result;
 use bitcoin::{Amount, OutPoint, TxOut, Txid};
 
-use crate::bitcoin_client::{Client, types::RawTransactionInput};
+use crate::bitcoin_client::{Client, client::RegtestRpc, types::RawTransactionInput};
 
 pub async fn ensure_wallet_setup(client: &Client) -> Result<()> {
     // Check if wallet exists

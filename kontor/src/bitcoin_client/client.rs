@@ -175,101 +175,6 @@ impl Client {
     ) -> Result<Vec<TestMempoolAcceptResult>, Error> {
         self.call("testmempoolaccept", vec![raw_txs.into()]).await
     }
-
-    pub async fn create_wallet(&self, name: &str) -> Result<CreateWalletResult, Error> {
-        let params = vec![name.into()];
-        let result: CreateWalletResult = self.call("createwallet", params).await?;
-        Ok(result)
-    }
-
-    pub async fn load_wallet(&self, name: &str) -> Result<(), Error> {
-        let params = vec![name.into()];
-        self.call::<()>("loadwallet", params).await?;
-        Ok(())
-    }
-
-    pub async fn get_new_address(&self) -> Result<String, Error> {
-        self.call("getnewaddress", vec![]).await
-    }
-
-    pub async fn generate_to_address(
-        &self,
-        blocks: u64,
-        address: &str,
-    ) -> Result<Vec<String>, Error> {
-        let params = vec![blocks.into(), address.into()];
-        self.call("generatetoaddress", params).await
-    }
-
-    pub async fn get_balance(&self) -> Result<f64, Error> {
-        let balance: f64 = self.call("getbalance", vec![]).await?;
-        Ok(balance)
-    }
-
-    pub async fn send_to_address(&self, address: &str, amount: Amount) -> Result<String, Error> {
-        let params = vec![address.into(), amount.to_sat().into()];
-        self.call("sendtoaddress", params).await
-    }
-
-    pub async fn send_to_address_with_options(
-        &self,
-        address: &str,
-        amount: Amount,
-    ) -> Result<String, Error> {
-        let params = vec![address.into(), amount.to_sat().into()];
-        self.call("sendtoaddress", params).await
-    }
-
-    pub async fn list_unspent(
-        &self,
-        min_conf: u32,
-        max_conf: u32,
-        addresses: &[String],
-    ) -> Result<Vec<UnspentOutput>, Error> {
-        let params = vec![min_conf.into(), max_conf.into(), addresses.into()];
-        self.call("listunspent", params).await
-    }
-
-    pub async fn list_wallets(&self) -> Result<Vec<String>, Error> {
-        self.call("listwallets", vec![]).await
-    }
-
-    pub async fn get_immature_balance(&self) -> Result<f64, Error> {
-        self.call("getimmaturebalance", vec![]).await
-    }
-
-    pub async fn get_unconfirmed_balance(&self) -> Result<f64, Error> {
-        self.call("getunconfirmedbalance", vec![]).await
-    }
-
-    pub async fn create_raw_transaction(
-        &self,
-        inputs: &[RawTransactionInput],
-        outputs: &std::collections::HashMap<String, f64>,
-        locktime: Option<u32>,
-        replaceable: Option<bool>,
-    ) -> Result<String, Error> {
-        let params = vec![
-            serde_json::to_value(inputs)?,
-            serde_json::to_value(outputs)?,
-            locktime.into(),
-            replaceable.into(),
-        ];
-        self.call("createrawtransaction", params).await
-    }
-
-    pub async fn sign_raw_transaction_with_wallet(
-        &self,
-        raw_tx: &str,
-    ) -> Result<SignRawTransactionResult, Error> {
-        let params = vec![raw_tx.into()];
-        self.call("signrawtransactionwithwallet", params).await
-    }
-
-    pub async fn send_raw_transaction(&self, raw_tx: &str) -> Result<String, Error> {
-        let params = vec![raw_tx.into()];
-        self.call("sendrawtransaction", params).await
-    }
 }
 
 pub trait BitcoinRpc: Send + Sync + Clone + 'static {
@@ -297,5 +202,154 @@ impl BitcoinRpc for Client {
     }
     async fn get_block(&self, hash: &BlockHash) -> Result<Block, Error> {
         self.get_block(hash).await
+    }
+}
+
+pub trait RegtestRpc: Send + Sync + Clone + 'static {
+    fn create_wallet(&self, name: &str) -> impl Future<Output = Result<CreateWalletResult, Error>>;
+
+    fn load_wallet(&self, name: &str) -> impl Future<Output = Result<(), Error>>;
+
+    fn get_new_address(&self) -> impl Future<Output = Result<String, Error>>;
+
+    fn generate_to_address(
+        &self,
+        blocks: u64,
+        address: &str,
+    ) -> impl Future<Output = Result<Vec<String>, Error>>;
+
+    fn get_balance(&self) -> impl Future<Output = Result<f64, Error>>;
+
+    fn send_to_address(
+        &self,
+        address: &str,
+        amount: Amount,
+    ) -> impl Future<Output = Result<String, Error>>;
+
+    fn send_to_address_with_options(
+        &self,
+        address: &str,
+        amount: Amount,
+    ) -> impl Future<Output = Result<String, Error>>;
+
+    fn list_unspent(
+        &self,
+        min_conf: u32,
+        max_conf: u32,
+        addresses: &[String],
+    ) -> impl Future<Output = Result<Vec<UnspentOutput>, Error>>;
+
+    fn list_wallets(&self) -> impl Future<Output = Result<Vec<String>, Error>>;
+
+    fn get_immature_balance(&self) -> impl Future<Output = Result<f64, Error>>;
+
+    fn get_unconfirmed_balance(&self) -> impl Future<Output = Result<f64, Error>>;
+
+    fn create_raw_transaction(
+        &self,
+        inputs: &[RawTransactionInput],
+        outputs: &std::collections::HashMap<String, f64>,
+        locktime: Option<u32>,
+        replaceable: Option<bool>,
+    ) -> impl Future<Output = Result<String, Error>>;
+
+    fn sign_raw_transaction_with_wallet(
+        &self,
+        raw_tx: &str,
+    ) -> impl Future<Output = Result<SignRawTransactionResult, Error>>;
+
+    fn send_raw_transaction(&self, raw_tx: &str) -> impl Future<Output = Result<String, Error>>;
+}
+
+impl RegtestRpc for Client {
+    async fn create_wallet(&self, name: &str) -> Result<CreateWalletResult, Error> {
+        let params = vec![name.into()];
+        let result: CreateWalletResult = self.call("createwallet", params).await?;
+        Ok(result)
+    }
+
+    async fn load_wallet(&self, name: &str) -> Result<(), Error> {
+        let params = vec![name.into()];
+        self.call::<()>("loadwallet", params).await?;
+        Ok(())
+    }
+
+    async fn get_new_address(&self) -> Result<String, Error> {
+        self.call("getnewaddress", vec![]).await
+    }
+
+    async fn generate_to_address(&self, blocks: u64, address: &str) -> Result<Vec<String>, Error> {
+        let params = vec![blocks.into(), address.into()];
+        self.call("generatetoaddress", params).await
+    }
+
+    async fn get_balance(&self) -> Result<f64, Error> {
+        let balance: f64 = self.call("getbalance", vec![]).await?;
+        Ok(balance)
+    }
+
+    async fn send_to_address(&self, address: &str, amount: Amount) -> Result<String, Error> {
+        let params = vec![address.into(), amount.to_sat().into()];
+        self.call("sendtoaddress", params).await
+    }
+
+    async fn send_to_address_with_options(
+        &self,
+        address: &str,
+        amount: Amount,
+    ) -> Result<String, Error> {
+        let params = vec![address.into(), amount.to_sat().into()];
+        self.call("sendtoaddress", params).await
+    }
+
+    async fn list_unspent(
+        &self,
+        min_conf: u32,
+        max_conf: u32,
+        addresses: &[String],
+    ) -> Result<Vec<UnspentOutput>, Error> {
+        let params = vec![min_conf.into(), max_conf.into(), addresses.into()];
+        self.call("listunspent", params).await
+    }
+
+    async fn list_wallets(&self) -> Result<Vec<String>, Error> {
+        self.call("listwallets", vec![]).await
+    }
+
+    async fn get_immature_balance(&self) -> Result<f64, Error> {
+        self.call("getimmaturebalance", vec![]).await
+    }
+
+    async fn get_unconfirmed_balance(&self) -> Result<f64, Error> {
+        self.call("getunconfirmedbalance", vec![]).await
+    }
+
+    async fn create_raw_transaction(
+        &self,
+        inputs: &[RawTransactionInput],
+        outputs: &std::collections::HashMap<String, f64>,
+        locktime: Option<u32>,
+        replaceable: Option<bool>,
+    ) -> Result<String, Error> {
+        let params = vec![
+            serde_json::to_value(inputs)?,
+            serde_json::to_value(outputs)?,
+            locktime.into(),
+            replaceable.into(),
+        ];
+        self.call("createrawtransaction", params).await
+    }
+
+    async fn sign_raw_transaction_with_wallet(
+        &self,
+        raw_tx: &str,
+    ) -> Result<SignRawTransactionResult, Error> {
+        let params = vec![raw_tx.into()];
+        self.call("signrawtransactionwithwallet", params).await
+    }
+
+    async fn send_raw_transaction(&self, raw_tx: &str) -> Result<String, Error> {
+        let params = vec![raw_tx.into()];
+        self.call("sendrawtransaction", params).await
     }
 }
