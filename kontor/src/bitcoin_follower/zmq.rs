@@ -103,6 +103,81 @@ fn run_socket(
     })
 }
 
+pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    data_message: DataMessage,
+    cancel_token: CancellationToken,
+    bitcoin: C,
+    f: fn(Transaction) -> Option<T>,
+    last_raw_transaction: Option<Transaction>,
+) -> Result<(Option<ZmqEvent<T>>, Option<Transaction>)> {
+
+    match data_message {
+        DataMessage::BlockConnected(block_hash) => {
+            let block = retry(
+                || bitcoin.get_block(&block_hash),
+                "get block",
+                new_backoff_limited(),
+                cancel_token.clone(),
+            )
+            .await
+            .context("Failed to get block handling BlockConnected sequence message")?;
+            Ok((Some(ZmqEvent::BlockConnected(Block {
+                height: block.bip34_block_height()?,
+                hash: block.block_hash(),
+                prev_hash: block.header.prev_blockhash,
+                transactions: block.txdata.into_par_iter().filter_map(f).collect(),
+            })), None))
+        },
+        DataMessage::TransactionAdded{txid, ..} => {
+            match last_raw_transaction {
+                Some(tx) => {
+                    if txid == tx.compute_txid() {
+                        return Ok((f(tx).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None))
+                    } else {
+                        warn!("TransactionAdded({}): not matching cached tx {}",
+                              txid, tx.compute_txid());
+                    }
+                }
+                None => {
+                    warn!("TransactionAdded({}): no cached tx", txid);
+                }
+            }
+
+            info!("TransactionAdded({}): fetching tx with get_raw_transaction()", txid);
+            let cancel_token = cancel_token.clone();
+            match (|| bitcoin.get_raw_transaction(&txid))
+                .retry(new_backoff_limited())
+                .notify(notify("get raw transaction"))
+                .when(move |e| {
+                    !e.to_string().contains("No such mempool or blockchain transaction") && !cancel_token.is_cancelled()
+                })
+                .await
+            {
+                Ok(transaction) => {
+                    Ok((f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None))
+                }
+                Err(e) => {
+                    warn!(
+                        "Skipping adding mempool transaction due to get error: {}",
+                        e
+                    );
+                    Ok((None, None))
+                }
+            }
+        },
+        DataMessage::BlockDisconnected(block_hash) => {
+            Ok((Some(ZmqEvent::BlockDisconnected(block_hash)), None))
+        },
+        DataMessage::TransactionRemoved {txid, ..} => {
+            Ok((Some(ZmqEvent::MempoolTransactionRemoved(txid)), None))
+        }
+        DataMessage::RawTransaction(tx) => {
+            let last_raw_transaction = Some(tx.clone());
+            Ok((None, last_raw_transaction))
+        }
+    }
+}
+
 pub async fn run<T: Tx + 'static>(
     config: Config,
     cancel_token: CancellationToken,
@@ -223,7 +298,7 @@ pub async fn run<T: Tx + 'static>(
 
                 option_message = socket_rx.recv() => {
                     match option_message {
-                        Some(Ok((sequence_number, sequence_message))) => {
+                        Some(Ok((sequence_number, data_message))) => {
                             match sequence_number {
                                 Some(sn) => {
                                     if let Some(n) = last_sequence_number {
@@ -239,85 +314,20 @@ pub async fn run<T: Tx + 'static>(
                                 None => {},
                             }
 
-                            if let Some(event) = match sequence_message {
-                                DataMessage::BlockConnected(block_hash) => {
-                                    let block = retry(
-                                        || bitcoin.get_block(&block_hash),
-                                        "get block",
-                                        new_backoff_limited(),
-                                        cancel_token.clone(),
-                                    )
-                                    .await
-                                    .context("Failed to get block handling BlockConnected sequence message")?;
-                                    Some(ZmqEvent::BlockConnected(Block {
-                                        height: block.bip34_block_height()?,
-                                        hash: block.block_hash(),
-                                        prev_hash: block.header.prev_blockhash,
-                                        transactions: block.txdata.into_par_iter().filter_map(f).collect(),
-                                    }))
-                                },
-                                DataMessage::TransactionAdded{txid, ..} => {
-                                    let mut transaction = None;
-                                    match last_raw_transaction {
-                                        Some(tx) => {
-                                            if txid == tx.compute_txid() {
-                                                transaction = Some(tx);
-                                            } else {
-                                                warn!("TransactionAdded({}): not matching cached tx {}",
-                                                      txid, tx.compute_txid());
-                                            }
-                                            last_raw_transaction = None
-                                        }
-                                        None => {
-                                            warn!("TransactionAdded({}): no cached tx", txid);
-                                        }
+                            if let Ok((event, raw_transaction)) = process_data_message(
+                                    data_message,
+                                    cancel_token.clone(),
+                                    bitcoin.clone(),
+                                    f,
+                                    last_raw_transaction.clone(),
+                            ).await {
+                                if let Some(e) = event {
+                                    if tx.send(e).is_err() {
+                                        info!("Send channel is closed, exiting");
+                                        return Ok(())
                                     }
-
-                                    match transaction {
-                                        Some(tx) => {
-                                            f(tx).map(|t| ZmqEvent::MempoolTransactionAdded(t))
-                                        }
-                                        None => {
-                                            info!("TransactionAdded({}): fetching tx with get_raw_transaction()", txid);
-                                            let cancel_token = cancel_token.clone();
-                                            match (|| bitcoin.get_raw_transaction(&txid))
-                                                .retry(new_backoff_limited())
-                                                .notify(notify("get raw transaction"))
-                                                .when(move |e| {
-                                                    !e.to_string().contains("No such mempool or blockchain transaction") && !cancel_token.is_cancelled()
-                                                })
-                                                .await
-                                            {
-                                                Ok(transaction) => {
-                                                    f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t))
-                                                }
-                                                Err(e) => {
-                                                    warn!(
-                                                        "Skipping adding mempool transaction due to get error: {}",
-                                                        e
-                                                    );
-                                                    None
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                DataMessage::BlockDisconnected(block_hash) => {
-                                    Some(ZmqEvent::BlockDisconnected(block_hash))
-                                },
-                                DataMessage::TransactionRemoved {txid, ..} => {
-                                    Some(ZmqEvent::MempoolTransactionRemoved(txid))
                                 }
-                                DataMessage::RawTransaction(tx) => {
-                                    last_raw_transaction = Some(tx.clone());
-                                    None
-                                }
-                            }
-                            {
-                                if tx.send(event).is_err() {
-                                    info!("Send channel is closed, exiting");
-                                    return Ok(())
-                                }
+                                last_raw_transaction = raw_transaction;
                             }
                         },
                         Some(Err(e)) => {

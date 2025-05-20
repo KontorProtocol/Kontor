@@ -6,6 +6,7 @@ use bitcoin::{
     self,
     Network,
     BlockHash,
+    Txid,
     hashes::Hash,
 };
 
@@ -16,8 +17,11 @@ use kontor::{
         run_processor,
         run_orderer,
     },
+    bitcoin_follower::zmq::process_data_message,
     bitcoin_client::{ client, types, error },
-    block::{ Block },
+    bitcoin_follower::messages::DataMessage,
+    bitcoin_follower::events::ZmqEvent,
+    block::{ Block, HasTxid },
     utils::{ MockTransaction },
 };
 
@@ -26,7 +30,20 @@ use ntest::timeout;
 #[derive(Clone)]
 struct MockClient {
     height: u64,
+    expect_get_raw_transaction_txid: Option<Txid>,
 }
+
+impl MockClient {
+    fn new(height: u64) -> Self {
+        MockClient{
+            height,
+            expect_get_raw_transaction_txid: None,
+        }
+    }
+}
+
+// dummy transaction grabbed from bitcoin-rs test-code
+const SOME_TX: &str = "0100000001a15d57094aa7a21a28cb20b59aab8fc7d1149a3bdbcddba9c622e4f5f6a99ece010000006c493046022100f93bb0e7d8db7bd46e40132d1f8242026e045f03a0efe71bbb8e3f475e970d790221009337cd7f1f929f00cc6ff01f03729b069a7c21b59b1736ddfee5db5946c5da8c0121033b9b137ee87d5a812d6f506efdd37f0affa7ffc310711c06c7f3e097c9447c52ffffffff0100e1f505000000001976a9140389035a9225b3839e2bbf32d826a1e222031fd888ac00000000";
 
 impl client::BitcoinRpc for MockClient {
     async fn get_blockchain_info(&self) -> Result<types::GetBlockchainInfoResult, error::Error> {
@@ -63,6 +80,17 @@ impl client::BitcoinRpc for MockClient {
             txdata: vec![],
         })
     }
+
+    async fn get_raw_transaction(&self, txid: &Txid) -> Result<bitcoin::Transaction, error::Error> {
+        if let Some(id) = self.expect_get_raw_transaction_txid {
+            assert_eq!(*txid, id);
+        }
+
+        // note: the returned transaction will not match the requested txid
+        let raw_tx = hex::decode(SOME_TX).unwrap();
+        let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+        Ok(tx)
+    }
 }
 
 #[tokio::test]
@@ -70,7 +98,7 @@ impl client::BitcoinRpc for MockClient {
 async fn test_producer() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
-    let client = MockClient{ height: 1000 };
+    let client = MockClient::new(1000);
     let (producer, mut rx) = run_producer(700, client, cancel_token.clone());
 
     let (target_height, height) = rx.recv().await.unwrap();
@@ -94,7 +122,7 @@ async fn test_producer() -> Result<()> {
 async fn test_fetcher() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
-    let client = MockClient{ height: 1000 };
+    let client = MockClient::new(1000);
     let (tx_in, rx_in) = mpsc::channel(10);
 
     let (fetcher, mut rx_out) = run_fetcher(rx_in, client, cancel_token.clone());
@@ -120,8 +148,6 @@ async fn test_processor() -> Result<()> {
 
     let (tx_in, rx_in) = mpsc::channel(10);
 
-    // dummy transaction grabbed from bitcoin-rs test-code
-    const SOME_TX: &str = "0100000001a15d57094aa7a21a28cb20b59aab8fc7d1149a3bdbcddba9c622e4f5f6a99ece010000006c493046022100f93bb0e7d8db7bd46e40132d1f8242026e045f03a0efe71bbb8e3f475e970d790221009337cd7f1f929f00cc6ff01f03729b069a7c21b59b1736ddfee5db5946c5da8c0121033b9b137ee87d5a812d6f506efdd37f0affa7ffc310711c06c7f3e097c9447c52ffffffff0100e1f505000000001976a9140389035a9225b3839e2bbf32d826a1e222031fd888ac00000000";
     let raw_tx = hex::decode(SOME_TX).unwrap();
     let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
@@ -218,6 +244,51 @@ async fn test_orderer() -> Result<()> {
     assert!(!orderer.is_finished());
     cancel_token.cancel();
     let _ = orderer.await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zmq_cache_raw_transaction() -> Result<()> {
+    let cancel_token = CancellationToken::new();
+    let mut client = MockClient::new(1000);
+
+    // only this txid should be attempted fetched
+    let txid_fetched = Txid::from_byte_array([0x11; 32]);
+    client.expect_get_raw_transaction_txid = Some(txid_fetched);
+
+    let mock_tx = MockTransaction::new(123);
+    fn f(_t: bitcoin::Transaction) -> Option<MockTransaction> {
+        Some(MockTransaction::new(123))
+    }
+
+    // send tx added to trigger rpc fetch
+    let (event, last_raw_tx) = process_data_message(DataMessage::TransactionAdded {
+        txid: txid_fetched.clone(),
+        mempool_sequence_number: 0, // ignored
+    }, cancel_token.clone(), client.clone(), f, None).await?;
+
+    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else { panic!() };
+    assert_eq!(e.txid(), mock_tx.txid());
+    assert_eq!(last_raw_tx, None);
+
+    // send a raw transaction
+    let raw_tx = hex::decode(SOME_TX).unwrap();
+    let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+    let (event, last_raw_tx) = process_data_message(DataMessage::RawTransaction(tx.clone()),
+        cancel_token.clone(), client.clone(), f, None).await?;
+    assert!(event.is_none());
+    assert_eq!(last_raw_tx.clone().unwrap().compute_txid(), tx.compute_txid());
+
+    // follow up with tx add for the raw transaction, should not send an rpc
+    let (event, last_raw_tx) = process_data_message(DataMessage::TransactionAdded {
+        txid: tx.compute_txid(),
+        mempool_sequence_number: 0, // ignored
+    }, cancel_token.clone(), client.clone(), f, last_raw_tx).await?;
+
+    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else { panic!() };
+    assert_eq!(e.txid(), mock_tx.txid());
+    assert_eq!(last_raw_tx, None);
 
     Ok(())
 }
