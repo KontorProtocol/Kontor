@@ -1,0 +1,14 @@
+[package]
+name = "fib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "component:fib"
+target = { world = "fib", dependencies = {} }

@@ -8,6 +8,7 @@ pub mod legacy_test_utils;
 pub mod logging;
 pub mod op_return;
 pub mod reactor;
+pub mod regtest_utils;
 pub mod retry;
 pub mod stopper;
 pub mod test_utils;

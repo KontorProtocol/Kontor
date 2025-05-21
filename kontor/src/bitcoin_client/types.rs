@@ -4,7 +4,7 @@ use bitcoin::{Amount, Network, Txid};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct Request {
     pub jsonrpc: String,
     pub id: String,
@@ -95,4 +95,57 @@ pub struct TestMempoolAcceptResult {
 pub struct TestMempoolAcceptResultFees {
     #[serde(with = "bitcoin::amount::serde::as_btc")]
     pub base: Amount,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct CreateWalletResult {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UnspentOutput {
+    pub txid: String,
+    pub vout: u32,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(rename = "scriptPubKey")]
+    pub script_pubkey: String,
+    pub amount: f64, // Note: Changed from f32 to f64 for better precision
+    pub confirmations: u32,
+    #[serde(
+        rename = "redeemScript",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub redeem_script: String,
+    #[serde(
+        rename = "witnessScript",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub witness_script: String,
+    #[serde(default)]
+    pub spendable: bool,
+    #[serde(default)]
+    pub solvable: bool,
+    #[serde(default)]
+    pub reused: bool,
+    #[serde(default)]
+    pub desc: String,
+    #[serde(default)]
+    pub safe: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RawTransactionInput {
+    pub txid: String,
+    pub vout: u32,
+    pub sequence: Option<u32>,
+}
+#[derive(Debug, Deserialize)]
+pub struct SignRawTransactionResult {
+    pub hex: String,
+    pub complete: bool,
 }

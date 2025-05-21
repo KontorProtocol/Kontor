@@ -152,7 +152,7 @@ pub fn build_signed_taproot_attach_tx(
     // Sign the sighash
     let tweaked: TweakedKeypair = keypair.tap_tweak(secp, None);
     let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked.to_inner());
+    let signature = secp.sign_schnorr(&msg, &tweaked.to_keypair());
 
     // Update the witness stack
     let signature = bitcoin::taproot::Signature {
@@ -389,15 +389,13 @@ pub fn build_signed_buyer_psbt_taproot(
         ];
 
         // Calculate the sighash for key path spending
-        let sighash = sighasher
+        sighasher
             .taproot_key_spend_signature_hash(
                 1, // Buyer's input index (back to 1)
                 &Prevouts::All(&prevouts),
                 TapSighashType::Default,
             )
-            .expect("Failed to create sighash");
-
-        sighash
+            .expect("Failed to create sighash")
     };
 
     // Sign with the buyer's tweaked key
@@ -406,7 +404,7 @@ pub fn build_signed_buyer_psbt_taproot(
     // Create the tweaked keypair
     let buyer_tweaked = buyer_keypair.tap_tweak(secp, None);
     // Sign with the tweaked keypair since we're doing key path spending
-    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
+    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_keypair());
 
     let buyer_signature = bitcoin::taproot::Signature {
         signature: buyer_signature,

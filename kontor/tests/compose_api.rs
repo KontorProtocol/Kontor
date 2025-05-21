@@ -64,7 +64,7 @@ async fn test_compose() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -194,7 +194,7 @@ async fn test_compose_all_fields() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -380,7 +380,7 @@ async fn test_compose_missing_params() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -420,7 +420,7 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -504,7 +504,7 @@ async fn test_compose_insufficient_funds() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 

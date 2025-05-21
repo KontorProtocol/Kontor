@@ -91,4 +91,11 @@ pub struct TestConfig {
         help = "Full path to the taproot key file"
     )]
     pub taproot_key_path: PathBuf,
+
+    #[clap(
+        long,
+        env = "NETWORK",
+        help = "Network to use (bitcoin, testnet, regtest)"
+    )]
+    pub network: bitcoin::Network,
 }

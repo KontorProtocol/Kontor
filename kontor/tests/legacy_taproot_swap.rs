@@ -24,10 +24,10 @@ async fn test_taproot_transaction() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -200,10 +200,10 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -307,10 +307,10 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -413,10 +413,10 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -527,10 +527,10 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -640,10 +640,10 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -745,10 +745,10 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -851,10 +851,10 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();

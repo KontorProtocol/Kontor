@@ -13,18 +13,19 @@ use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
-    KnownHrp, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut, Witness,
+    KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut, Witness,
     XOnlyPublicKey, secp256k1,
 };
 use bitcoin::{
-    Network, PrivateKey,
+    PrivateKey,
     bip32::{DerivationPath, Xpriv},
     key::{CompressedPublicKey, Secp256k1},
 };
 use serde::Serialize;
 use std::fs;
-use std::path::Path;
 use std::str::FromStr;
+
+use crate::config::TestConfig;
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -72,9 +73,10 @@ pub fn build_inscription(serialized_token_balance: Vec<u8>, key: PublicKey) -> R
 
 pub fn generate_taproot_address_from_mnemonic(
     secp: &Secp256k1<secp256k1::All>,
-    path: &Path,
+    config: &TestConfig,
     index: u32,
 ) -> Result<(Address, Xpriv, CompressedPublicKey), anyhow::Error> {
+    let path = config.taproot_key_path.clone();
     let mnemonic = fs::read_to_string(path)
         .expect("Failed to read mnemonic file")
         .trim()
@@ -87,18 +89,22 @@ pub fn generate_taproot_address_from_mnemonic(
     let seed = mnemonic.to_seed("");
 
     // Create master key
-    let master_key =
-        Xpriv::new_master(Network::Bitcoin, &seed).expect("Failed to create master key");
+    let master_key = Xpriv::new_master(config.network, &seed).expect("Failed to create master key");
+
+    let network_path: String = if config.network == Network::Testnet4 {
+        format!("m/86'/1'/0'/0/{}", index)
+    } else {
+        format!("m/86'/0'/0'/0/{}", index)
+    };
 
     // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
-        .expect("Invalid derivation path");
+    let path = DerivationPath::from_str(&network_path).expect("Invalid derivation path");
     let child_key = master_key
         .derive_priv(secp, &path)
         .expect("Failed to derive child key");
 
     // Get the private key
-    let private_key = PrivateKey::new(child_key.private_key, Network::Bitcoin);
+    let private_key = PrivateKey::new(child_key.private_key, config.network);
 
     // Get the public key
     let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
@@ -106,7 +112,7 @@ pub fn generate_taproot_address_from_mnemonic(
 
     // Create a Taproot address
     let x_only_pubkey = public_key.inner.x_only_public_key().0;
-    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::Mainnet);
+    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::from(config.network));
 
     Ok((address, child_key, compressed_pubkey))
 }
@@ -127,7 +133,7 @@ pub fn sign_key_spend(
 
     let tweaked_sender = keypair.tap_tweak(secp, None);
     let msg = Message::from_digest(sighash.to_byte_array());
-    let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_inner());
+    let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_keypair());
 
     let signature = bitcoin::taproot::Signature {
         signature,
@@ -232,15 +238,13 @@ pub fn sign_buyer_side_psbt(
         let mut sighasher = SighashCache::new(&buyer_psbt.unsigned_tx);
 
         // Calculate the sighash for key path spending
-        let sighash = sighasher
+        sighasher
             .taproot_key_spend_signature_hash(
                 1, // Buyer's input index (back to 1)
                 &Prevouts::All(prevouts),
                 TapSighashType::Default,
             )
-            .expect("Failed to create sighash");
-
-        sighash
+            .expect("Failed to create sighash")
     };
 
     // Sign with the buyer's tweaked key
@@ -249,7 +253,7 @@ pub fn sign_buyer_side_psbt(
     // Create the tweaked keypair
     let buyer_tweaked = buyer_keypair.tap_tweak(secp, None);
     // Sign with the tweaked keypair since we're doing key path spending
-    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_inner());
+    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_keypair());
 
     let buyer_signature = bitcoin::taproot::Signature {
         signature: buyer_signature,

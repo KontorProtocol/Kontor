@@ -29,7 +29,7 @@ async fn test_signature_replay_failse() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let seller_keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
@@ -112,7 +112,7 @@ async fn test_signature_replay_failse() -> Result<()> {
     assert!(result[1].allowed, "Reveal transaction was rejected");
 
     let (buyer_address, _, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let buyer_out_point = OutPoint {
         txid: Txid::from_str("ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3")?,
@@ -178,10 +178,10 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -447,8 +447,6 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let result = client
         .test_mempool_accept(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
         .await?;
-
-    println!("result: {:#?}", result);
 
     assert_eq!(
         result.len(),

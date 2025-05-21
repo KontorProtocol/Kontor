@@ -1,0 +1,5 @@
+package component:fib;
+
+world fib {
+    export fib: func(n: u64) -> u64;
+}

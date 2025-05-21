@@ -43,7 +43,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
     let (random_xonly_pubkey, _parity) = random_keypair.x_only_public_key();
 
     let (sender_address, sender_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config.taproot_key_path, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
 
     let token_value = 1000;
     let token_balance = TokenBalance {
