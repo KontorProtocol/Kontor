@@ -1,47 +1,54 @@
 use anyhow::Result;
+use bitcoin::FeeRate;
+use bitcoin::Network;
+use bitcoin::secp256k1::Keypair;
+use bitcoin::taproot::LeafVersion;
+use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
-    FeeRate, Network,
-    consensus::encode::serialize as serialize_tx,
-    key::{Keypair, Secp256k1},
-    taproot::{LeafVersion, TaprootBuilder},
+    Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
+    transaction::TxOut,
 };
 use clap::Parser;
-use kontor::{
-    api::compose::{ComposeInputs, compose},
-    bitcoin_client::Client,
-    config::{Config, TestConfig},
-    regtest_utils, test_utils,
-    witness_data::TokenBalance,
-};
+use kontor::api::compose::compose;
+
+use kontor::api::compose::ComposeInputs;
+use kontor::config::TestConfig;
+use kontor::test_utils;
+use kontor::witness_data::TokenBalance;
+use kontor::{bitcoin_client::Client, config::Config};
+use std::str::FromStr;
 
 #[tokio::test]
-async fn test_taproot_transaction_regtest() -> Result<()> {
+async fn test_taproot_transaction() -> Result<()> {
     // Initialize regtest client
     let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:18443".to_string();
+    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
 
     let client = Client::new_from_config(config.clone())?;
     let mut test_config = TestConfig::try_parse()?;
-    test_config.network = Network::Regtest;
-
-    // Set up wallet if needed - this will ensure we have funds
-    regtest_utils::ensure_wallet_setup(&client).await?;
+    test_config.network = Network::Testnet4;
 
     let secp = Secp256k1::new();
 
-    // Generate taproot address
     let (seller_address, seller_child_key, _) =
         test_utils::generate_taproot_address_from_mnemonic(&secp, &test_config, 0)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    // Get a UTXO from the regtest wallet - use a smaller amount (5000 sats)
-    let (out_point, utxo_for_output) =
-        regtest_utils::make_regtest_utxo(&client, &seller_address).await?;
+    // UTXO loaded with 9000 sats
+    let out_point = OutPoint {
+        txid: Txid::from_str("738c9c29646f2efe149fc3abb23976f4e3c3009656bdb4349a8e04570ed2ba9a")?,
+        vout: 1,
+    };
+
+    let utxo_for_output = TxOut {
+        value: Amount::from_sat(500000),
+        script_pubkey: seller_address.script_pubkey(),
+    };
 
     // Create token balance data
-    let token_value = 500;
+    let token_value = 1000;
     let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
@@ -55,22 +62,23 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
         .x_only_public_key(internal_key)
         .funding_utxos(vec![(out_point, utxo_for_output.clone())])
         .script_data(serialized_token_balance)
-        .fee_rate(FeeRate::from_sat_per_vb(1).unwrap()) // Lower fee rate for regtest
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
 
     let compose_outputs = compose(compose_params)?;
 
     let mut attach_tx = compose_outputs.commit_transaction;
+    println!("attach_tx: {:#?}", attach_tx);
     let mut spend_tx = compose_outputs.reveal_transaction;
     let tap_script = compose_outputs.tap_script;
 
     // Sign the attach transaction
     test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
-
+    println!("attach_tx after signing: {:#?}", attach_tx);
     let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 
-    // Sign the script_spend input for the spend transaction
+    // sign the script_spend input for the spend transaction
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone())
         .expect("Failed to add leaf")
@@ -90,26 +98,20 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let spend_tx_hex = hex::encode(serialize_tx(&spend_tx));
 
+    println!("attach_tx_hex: {:#?}", attach_tx_hex);
     let result = client
         .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
         .await?;
-
+    println!("result: {:#?}", result);
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
-    assert!(
-        result[0].allowed,
-        "Attach transaction was rejected: {}",
-        result[0].reject_reason.as_ref().unwrap_or(&"".to_string())
-    );
-    assert!(
-        result[1].allowed,
-        "Spend transaction was rejected: {}",
-        result[1].reject_reason.as_ref().unwrap_or(&"".to_string())
-    );
+    assert!(result[0].allowed, "Attach transaction was rejected");
+    assert!(result[1].allowed, "Spend transaction was rejected");
 
-    // Verify witness structure
     let witness = spend_tx.input[0].witness.clone();
+    // 1. Check the total number of witness elements first
     assert_eq!(witness.len(), 3, "Witness should have exactly 3 elements");
 
+    // 2. Check each element individually
     let signature = witness.to_vec()[0].clone();
     assert!(!signature.is_empty(), "Signature should not be empty");
 
