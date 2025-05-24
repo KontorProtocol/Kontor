@@ -90,6 +90,54 @@ export TAPROOT_KEY_PATH="../taproot.key"
 cargo test
 ```
 
+## Regtest Testing
+Some tests are setup to run against regtest.
+
+```bash
+cmake -B build -DENABLE_WALLET=ON -DWITH_ZMQ=ON`
+cmake --build build
+```
+
+Make a data dir for regtest.
+```bash
+mkdir -p "<path to your bitcoin data dir>/regtest"
+```
+
+Copy over the bitcoin config created earlier and put it in the `regtest` folder and add these two options:
+```bash
+regtest=1
+fallbackfee=0.0001
+```
+
+Run:
+```bash
+/build/bin/bitcoind -regtest -datadir="<path to your bitcoin data dir>/regtest
+```
+
+Test:
+```bash
+cargo test --test regtest_commit_reveal`
+```
+
+## Testnet4 testing
+Some tests are setup to run against testnet4
+Running these tests currently requires running a testnet4 node locally
+
+Make a data dir for testnet4 and copy over the bitcoin config created earlier.
+```bash
+mkdir -p "<path to your bitcoin data dir>/testnet4"
+```
+
+Run:
+```bash
+/build/bin/bitcoind -testnet4 -datadir="<path to your bitcoin data dir>/testnet4
+```
+
+Test:
+```bash
+cargo test --test testnet_commit_reveal
+```
+
 ## UI
 
 ### Run

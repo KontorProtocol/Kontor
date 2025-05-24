@@ -13,7 +13,7 @@ use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
-    KnownHrp, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut, Witness,
+    KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut, Witness,
     XOnlyPublicKey, secp256k1,
 };
 use bitcoin::{
@@ -91,9 +91,14 @@ pub fn generate_taproot_address_from_mnemonic(
     // Create master key
     let master_key = Xpriv::new_master(config.network, &seed).expect("Failed to create master key");
 
+    let network_path: String = if config.network == Network::Testnet4 {
+        format!("m/86'/1'/0'/0/{}", index)
+    } else {
+        format!("m/86'/0'/0'/0/{}", index)
+    };
+
     // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&format!("m/86'/0'/0'/0/{}", index))
-        .expect("Invalid derivation path");
+    let path = DerivationPath::from_str(&network_path).expect("Invalid derivation path");
     let child_key = master_key
         .derive_priv(secp, &path)
         .expect("Failed to derive child key");

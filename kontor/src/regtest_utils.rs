@@ -8,13 +8,24 @@ use crate::bitcoin_client::{Client, client::RegtestRpc, types::RawTransactionInp
 pub async fn ensure_wallet_setup(client: &Client) -> Result<()> {
     // Check if wallet exists
     let wallet_name = "regtest_taproot_wallet";
-    let wallets = client.list_wallets().await?;
 
-    if !wallets.contains(&wallet_name.to_string()) {
-        // Create wallet if it doesn't exist
-        client.create_wallet(wallet_name).await?;
-    } else {
-        // No-op -- errors if wallet is already created
+    // Try to load the wallet first - this is safer than checking if it exists
+    match client.load_wallet(wallet_name).await {
+        Ok(_) => {
+            println!("Successfully loaded existing wallet");
+        }
+        Err(_) => {
+            // If loading fails, try to create it
+            println!("Wallet not loaded, attempting to create it");
+            match client.create_wallet(wallet_name).await {
+                Ok(_) => println!("Created new wallet"),
+                Err(e) => {
+                    println!("Error creating wallet: {}", e);
+                    // If creation fails but it might be because the wallet exists,
+                    // continue anyway
+                }
+            }
+        }
     }
 
     // Check spendable funds
@@ -38,6 +49,8 @@ pub async fn ensure_wallet_setup(client: &Client) -> Result<()> {
         if new_unspent.is_empty() {
             return Err(anyhow::anyhow!("Failed to generate spendable UTXOs"));
         }
+    } else {
+        // No-op since utxos already exist
     }
 
     Ok(())
