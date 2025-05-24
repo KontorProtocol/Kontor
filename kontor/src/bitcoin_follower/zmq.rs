@@ -16,7 +16,7 @@ use zmq::Socket;
 
 use crate::{
     bitcoin_client,
-    bitcoin_follower::messages::{ SEQUENCE, RAWTX },
+    bitcoin_follower::messages::{RAWTX, SEQUENCE},
     block::{Block, Tx},
     config::Config,
     retry::{new_backoff_limited, notify, retry},
@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     events::ZmqEvent,
-    messages::{MonitorMessage, DataMessage},
+    messages::{DataMessage, MonitorMessage},
 };
 
 fn run_monitor_socket(
@@ -79,10 +79,7 @@ fn run_socket(
 
             match socket.recv_multipart(0) {
                 Ok(zmq_message) => {
-                    if tx
-                        .send(DataMessage::from_zmq_message(zmq_message))
-                        .is_err()
-                    {
+                    if tx.send(DataMessage::from_zmq_message(zmq_message)).is_err() {
                         info!("Send channel is closed, exiting socket thread");
                         break;
                     }
@@ -110,7 +107,6 @@ pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::Bi
     f: fn(Transaction) -> Option<T>,
     last_raw_transaction: Option<Transaction>,
 ) -> Result<(Option<ZmqEvent<T>>, Option<Transaction>)> {
-
     match data_message {
         DataMessage::BlockConnected(block_hash) => {
             let block = retry(
@@ -121,21 +117,27 @@ pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::Bi
             )
             .await
             .context("Failed to get block handling BlockConnected sequence message")?;
-            Ok((Some(ZmqEvent::BlockConnected(Block {
-                height: block.bip34_block_height()?,
-                hash: block.block_hash(),
-                prev_hash: block.header.prev_blockhash,
-                transactions: block.txdata.into_par_iter().filter_map(f).collect(),
-            })), None))
-        },
-        DataMessage::TransactionAdded{txid, ..} => {
+            Ok((
+                Some(ZmqEvent::BlockConnected(Block {
+                    height: block.bip34_block_height()?,
+                    hash: block.block_hash(),
+                    prev_hash: block.header.prev_blockhash,
+                    transactions: block.txdata.into_par_iter().filter_map(f).collect(),
+                })),
+                None,
+            ))
+        }
+        DataMessage::TransactionAdded { txid, .. } => {
             match last_raw_transaction {
                 Some(tx) => {
                     if txid == tx.compute_txid() {
-                        return Ok((f(tx).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None))
+                        return Ok((f(tx).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None));
                     } else {
-                        warn!("TransactionAdded({}): not matching cached tx {}",
-                              txid, tx.compute_txid());
+                        warn!(
+                            "TransactionAdded({}): not matching cached tx {}",
+                            txid,
+                            tx.compute_txid()
+                        );
                     }
                 }
                 None => {
@@ -143,19 +145,25 @@ pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::Bi
                 }
             }
 
-            info!("TransactionAdded({}): fetching tx with get_raw_transaction()", txid);
+            info!(
+                "TransactionAdded({}): fetching tx with get_raw_transaction()",
+                txid
+            );
             let cancel_token = cancel_token.clone();
             match (|| bitcoin.get_raw_transaction(&txid))
                 .retry(new_backoff_limited())
                 .notify(notify("get raw transaction"))
                 .when(move |e| {
-                    !e.to_string().contains("No such mempool or blockchain transaction") && !cancel_token.is_cancelled()
+                    !e.to_string()
+                        .contains("No such mempool or blockchain transaction")
+                        && !cancel_token.is_cancelled()
                 })
                 .await
             {
-                Ok(transaction) => {
-                    Ok((f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None))
-                }
+                Ok(transaction) => Ok((
+                    f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
+                    None,
+                )),
                 Err(e) => {
                     warn!(
                         "Skipping adding mempool transaction due to get error: {}",
@@ -164,11 +172,11 @@ pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::Bi
                     Ok((None, None))
                 }
             }
-        },
+        }
         DataMessage::BlockDisconnected(block_hash) => {
             Ok((Some(ZmqEvent::BlockDisconnected(block_hash)), None))
-        },
-        DataMessage::TransactionRemoved {txid, ..} => {
+        }
+        DataMessage::TransactionRemoved { txid, .. } => {
             Ok((Some(ZmqEvent::MempoolTransactionRemoved(txid)), None))
         }
         DataMessage::RawTransaction(tx) => {
@@ -299,19 +307,16 @@ pub async fn run<T: Tx + 'static>(
                 option_message = socket_rx.recv() => {
                     match option_message {
                         Some(Ok((sequence_number, data_message))) => {
-                            match sequence_number {
-                                Some(sn) => {
-                                    if let Some(n) = last_sequence_number {
-                                        if sequence_number.unwrap() != n.wrapping_add(1) {
-                                            return Err(anyhow!(
-                                                "Received out of sequence messages: {} {}",
-                                                n, sn
-                                            ));
-                                        }
+                            if let Some(sn) = sequence_number {
+                                if let Some(n) = last_sequence_number {
+                                    if sequence_number.unwrap() != n.wrapping_add(1) {
+                                        return Err(anyhow!(
+                                            "Received out of sequence messages: {} {}",
+                                            n, sn
+                                        ));
                                     }
-                                    last_sequence_number = sequence_number;
-                                },
-                                None => {},
+                                }
+                                last_sequence_number = sequence_number;
                             }
 
                             if let Ok((event, raw_transaction)) = process_data_message(

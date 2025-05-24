@@ -2,27 +2,16 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{
-    self,
-    Network,
-    BlockHash,
-    Txid,
-    hashes::Hash,
-};
+use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 
 use kontor::{
-    bitcoin_follower::rpc::{
-        run_producer,
-        run_fetcher,
-        run_processor,
-        run_orderer,
-    },
-    bitcoin_follower::zmq::process_data_message,
-    bitcoin_client::{ client, types, error },
-    bitcoin_follower::messages::DataMessage,
+    bitcoin_client::{client, error, types},
     bitcoin_follower::events::ZmqEvent,
-    block::{ Block, HasTxid },
-    utils::{ MockTransaction },
+    bitcoin_follower::messages::DataMessage,
+    bitcoin_follower::rpc::{run_fetcher, run_orderer, run_processor, run_producer},
+    bitcoin_follower::zmq::process_data_message,
+    block::{Block, HasTxid},
+    utils::MockTransaction,
 };
 
 #[derive(Clone)]
@@ -33,7 +22,7 @@ struct MockClient {
 
 impl MockClient {
     fn new(height: u64) -> Self {
-        MockClient{
+        MockClient {
             height,
             expect_get_raw_transaction_txid: None,
         }
@@ -45,7 +34,7 @@ const SOME_TX: &str = "0100000001a15d57094aa7a21a28cb20b59aab8fc7d1149a3bdbcddba
 
 impl client::BitcoinRpc for MockClient {
     async fn get_blockchain_info(&self) -> Result<types::GetBlockchainInfoResult, error::Error> {
-        Ok(types::GetBlockchainInfoResult{
+        Ok(types::GetBlockchainInfoResult {
             chain: Network::Bitcoin,
             blocks: self.height,
             headers: self.height,
@@ -66,8 +55,8 @@ impl client::BitcoinRpc for MockClient {
     }
 
     async fn get_block(&self, _hash: &BlockHash) -> Result<bitcoin::Block, error::Error> {
-        Ok(bitcoin::Block{
-            header: bitcoin::block::Header{
+        Ok(bitcoin::Block {
+            header: bitcoin::block::Header {
                 version: bitcoin::block::Version::ONE,
                 prev_blockhash: BlockHash::from_byte_array([0x99; 32]),
                 merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
@@ -86,7 +75,8 @@ impl client::BitcoinRpc for MockClient {
 
         // note: the returned transaction will not match the requested txid
         let raw_tx = hex::decode(SOME_TX).unwrap();
-        let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+        let tx: bitcoin::Transaction =
+            bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
         Ok(tx)
     }
 }
@@ -128,7 +118,10 @@ async fn test_fetcher() -> Result<()> {
     let (target_height, height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
     assert_eq!(height, 700);
-    assert_eq!(block.header.prev_blockhash, BlockHash::from_byte_array([0x99; 32]));
+    assert_eq!(
+        block.header.prev_blockhash,
+        BlockHash::from_byte_array([0x99; 32])
+    );
 
     assert!(!fetcher.is_finished());
     cancel_token.cancel();
@@ -144,11 +137,13 @@ async fn test_processor() -> Result<()> {
     let (tx_in, rx_in) = mpsc::channel(10);
 
     let raw_tx = hex::decode(SOME_TX).unwrap();
-    let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+    let tx: bitcoin::Transaction =
+        bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
     fn f(t: bitcoin::Transaction) -> Option<MockTransaction> {
         let raw_tx = hex::decode(SOME_TX).unwrap();
-        let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+        let tx: bitcoin::Transaction =
+            bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
         assert_eq!(t, tx);
 
@@ -157,17 +152,26 @@ async fn test_processor() -> Result<()> {
 
     let (processor, mut rx_out) = run_processor(rx_in, f, cancel_token.clone());
 
-    assert!(tx_in.send((1000, 700, bitcoin::Block{
-        header: bitcoin::block::Header{
-            version: bitcoin::block::Version::ONE,
-            prev_blockhash: BlockHash::from_byte_array([0x99; 32]),
-            merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
-            time: 123,
-            bits: bitcoin::CompactTarget::from_consensus(3),
-            nonce: 4,
-        },
-        txdata: vec![tx],
-    })).await.is_ok());
+    assert!(
+        tx_in
+            .send((
+                1000,
+                700,
+                bitcoin::Block {
+                    header: bitcoin::block::Header {
+                        version: bitcoin::block::Version::ONE,
+                        prev_blockhash: BlockHash::from_byte_array([0x99; 32]),
+                        merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
+                        time: 123,
+                        bits: bitcoin::CompactTarget::from_consensus(3),
+                        nonce: 4,
+                    },
+                    txdata: vec![tx],
+                }
+            ))
+            .await
+            .is_ok()
+    );
 
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
@@ -190,50 +194,83 @@ async fn test_orderer() -> Result<()> {
     let orderer = run_orderer::<MockTransaction>(700, rx_in, tx_out, cancel_token.clone());
 
     // send 3 blocks in mixed order
-    assert!(tx_in.send((1000, Block{
-        height: 702,
-        hash: BlockHash::from_byte_array([0x44; 32]),
-        prev_hash: BlockHash::from_byte_array([0x33; 32]),
-        transactions: vec![],
-    })).await.is_ok());
-    assert!(tx_in.send((1000, Block{
-        height: 700,
-        hash: BlockHash::from_byte_array([0x22; 32]),
-        prev_hash: BlockHash::from_byte_array([0x11; 32]),
-        transactions: vec![],
-    })).await.is_ok());
-    assert!(tx_in.send((1000, Block{
-        height: 701,
-        hash: BlockHash::from_byte_array([0x33; 32]),
-        prev_hash: BlockHash::from_byte_array([0x22; 32]),
-        transactions: vec![],
-    })).await.is_ok());
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 702,
+                    hash: BlockHash::from_byte_array([0x44; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x33; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 700,
+                    hash: BlockHash::from_byte_array([0x22; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x11; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 701,
+                    hash: BlockHash::from_byte_array([0x33; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x22; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
 
     // verify that they come out ordered
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
-    assert_eq!(block, Block{
-        height: 700,
-        hash: BlockHash::from_byte_array([0x22; 32]),
-        prev_hash: BlockHash::from_byte_array([0x11; 32]),
-        transactions: vec![],
-    });
+    assert_eq!(
+        block,
+        Block {
+            height: 700,
+            hash: BlockHash::from_byte_array([0x22; 32]),
+            prev_hash: BlockHash::from_byte_array([0x11; 32]),
+            transactions: vec![],
+        }
+    );
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
-    assert_eq!(block, Block{
-        height: 701,
-        hash: BlockHash::from_byte_array([0x33; 32]),
-        prev_hash: BlockHash::from_byte_array([0x22; 32]),
-        transactions: vec![],
-    });
+    assert_eq!(
+        block,
+        Block {
+            height: 701,
+            hash: BlockHash::from_byte_array([0x33; 32]),
+            prev_hash: BlockHash::from_byte_array([0x22; 32]),
+            transactions: vec![],
+        }
+    );
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
-    assert_eq!(block, Block{
-        height: 702,
-        hash: BlockHash::from_byte_array([0x44; 32]),
-        prev_hash: BlockHash::from_byte_array([0x33; 32]),
-        transactions: vec![],
-    });
+    assert_eq!(
+        block,
+        Block {
+            height: 702,
+            hash: BlockHash::from_byte_array([0x44; 32]),
+            prev_hash: BlockHash::from_byte_array([0x33; 32]),
+            transactions: vec![],
+        }
+    );
 
     assert!(!orderer.is_finished());
     cancel_token.cancel();
@@ -257,30 +294,58 @@ async fn test_zmq_cache_raw_transaction() -> Result<()> {
     }
 
     // send tx added to trigger rpc fetch
-    let (event, last_raw_tx) = process_data_message(DataMessage::TransactionAdded {
-        txid: txid_fetched.clone(),
-        mempool_sequence_number: 0, // ignored
-    }, cancel_token.clone(), client.clone(), f, None).await?;
+    let (event, last_raw_tx) = process_data_message(
+        DataMessage::TransactionAdded {
+            txid: txid_fetched,
+            mempool_sequence_number: 0, // ignored
+        },
+        cancel_token.clone(),
+        client.clone(),
+        f,
+        None,
+    )
+    .await?;
 
-    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else { panic!() };
+    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else {
+        panic!()
+    };
     assert_eq!(e.txid(), mock_tx.txid());
     assert_eq!(last_raw_tx, None);
 
     // send a raw transaction
     let raw_tx = hex::decode(SOME_TX).unwrap();
-    let tx: bitcoin::Transaction = bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
-    let (event, last_raw_tx) = process_data_message(DataMessage::RawTransaction(tx.clone()),
-        cancel_token.clone(), client.clone(), f, None).await?;
+    let tx: bitcoin::Transaction =
+        bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
+    let (event, last_raw_tx) = process_data_message(
+        DataMessage::RawTransaction(tx.clone()),
+        cancel_token.clone(),
+        client.clone(),
+        f,
+        None,
+    )
+    .await?;
     assert!(event.is_none());
-    assert_eq!(last_raw_tx.clone().unwrap().compute_txid(), tx.compute_txid());
+    assert_eq!(
+        last_raw_tx.clone().unwrap().compute_txid(),
+        tx.compute_txid()
+    );
 
     // follow up with tx add for the raw transaction, should not send an rpc
-    let (event, last_raw_tx) = process_data_message(DataMessage::TransactionAdded {
-        txid: tx.compute_txid(),
-        mempool_sequence_number: 0, // ignored
-    }, cancel_token.clone(), client.clone(), f, last_raw_tx).await?;
+    let (event, last_raw_tx) = process_data_message(
+        DataMessage::TransactionAdded {
+            txid: tx.compute_txid(),
+            mempool_sequence_number: 0, // ignored
+        },
+        cancel_token.clone(),
+        client.clone(),
+        f,
+        last_raw_tx,
+    )
+    .await?;
 
-    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else { panic!() };
+    let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else {
+        panic!()
+    };
     assert_eq!(e.txid(), mock_tx.txid());
     assert_eq!(last_raw_tx, None);
 
