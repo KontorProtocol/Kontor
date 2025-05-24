@@ -221,7 +221,7 @@ pub async fn run<T: Tx + 'static>(
         run_monitor_socket(monitor_socket, socket_cancel_token.clone(), monitor_tx);
 
     socket
-        .connect(&config.zmq_pub_sequence_address)
+        .connect(&config.zmq_address)
         .context("Could not connect to ZMQ address")?;
     let socket_handle = run_socket(socket, socket_cancel_token.clone(), socket_tx.clone());
 

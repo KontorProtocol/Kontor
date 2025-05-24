@@ -34,10 +34,10 @@ pub struct Config {
 
     #[clap(
         long,
-        env = "ZMQ_PUB_SEQUENCE_ADDRESS",
+        env = "ZMQ_ADDRESS",
         help = "ZMQ address for sequence notifications (e.g., tcp://localhost:28332)"
     )]
-    pub zmq_pub_sequence_address: String,
+    pub zmq_address: String,
 
     #[clap(
         long,

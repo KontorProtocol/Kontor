@@ -241,7 +241,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
 ) -> Result<Vec<Event<T>>> {
     let events = match zmq_event {
         ZmqEvent::Connected => {
-            info!("ZMQ connected: {}", env.config.zmq_pub_sequence_address);
+            info!("ZMQ connected: {}", env.config.zmq_address);
             state.zmq_connected = true;
             let mut events = vec![];
             if state.mode == Mode::Rpc {

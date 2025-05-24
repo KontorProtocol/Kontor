@@ -62,7 +62,7 @@ export BITCOIN_RPC_URL="http://127.0.0.1:8332"
 export BITCOIN_RPC_USER="rpc"
 export BITCOIN_RPC_PASSWORD="rpc"
 
-export ZMQ_PUB_SEQUENCE_ADDRESS="tcp://127.0.0.1:28332"
+export ZMQ_ADDRESS="tcp://127.0.0.1:28332"
 
 export API_PORT="8443"
 
