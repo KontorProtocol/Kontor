@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use bitcoin::{BlockHash, Transaction, Txid};
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use tokio::{
@@ -15,12 +15,15 @@ use tracing::{error, info, warn};
 use crate::{
     bitcoin_client,
     bitcoin_follower::rpc,
-    bitcoin_follower::queries::{select_block_at_height},
+    bitcoin_follower::queries::{
+        select_block_at_height,
+        select_block_with_hash
+    },
     block::{Block, Tx},
     config::Config,
     database::{
         self,
-        queries::{select_block_latest, select_block_with_hash},
+        queries::select_block_latest,
     },
     retry::{new_backoff_unlimited, retry},
 };
@@ -349,23 +352,8 @@ async fn handle_zmq_event<T: Tx + 'static>(
         }
         ZmqEvent::BlockDisconnected(block_hash) => {
             if state.mode == Mode::Zmq {
-                let block_row = retry(
-                    async || match select_block_with_hash(
-                        &*env.reader.connection().await?,
-                        &block_hash,
-                    )
-                    .await
-                    {
-                        Ok(Some(row)) => Ok(row),
-                        Ok(None) => Err(anyhow!("Block with hash not found: {}", &block_hash)),
-                        Err(e) => Err(e),
-                    },
-                    "get block with hash",
-                    new_backoff_unlimited(),
-                    env.cancel_token.clone(),
-                )
-                .await?;
-
+                let block_row = select_block_with_hash(&env.reader,
+                        &block_hash, env.cancel_token.clone()).await?;
                 let prev_block_row = select_block_at_height(&env.reader,
                         block_row.height - 1, env.cancel_token.clone()).await?;
                 state.zmq_latest_block_height = Some(prev_block_row.height);

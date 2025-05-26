@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use tokio_util::sync::CancellationToken;
+use bitcoin::BlockHash;
 
 use crate::{
     database::{
@@ -36,3 +37,26 @@ pub async fn select_block_at_height(
     .await
 }
 
+pub async fn select_block_with_hash(
+    reader: &database::Reader,
+    hash: &BlockHash,
+    cancel_token: CancellationToken,
+) -> Result<BlockRow> {
+
+    retry(
+        async || match queries::select_block_with_hash(
+            &*reader.connection().await?,
+            &hash,
+        )
+        .await
+        {
+            Ok(Some(row)) => Ok(row),
+            Ok(None) => Err(anyhow!("Block with hash not found: {}", &hash)),
+            Err(e) => Err(e),
+        },
+        "get block with hash",
+        new_backoff_unlimited(),
+        cancel_token.clone(),
+    )
+    .await
+}
