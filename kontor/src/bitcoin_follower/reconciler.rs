@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{BlockHash, Transaction, Txid};
 use indexmap::{IndexMap, IndexSet, map::Entry};
+use libsql::Connection;
 use tokio::{
     select,
     sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},
@@ -14,17 +15,11 @@ use tracing::{error, info, warn};
 
 use crate::{
     bitcoin_client,
+    bitcoin_follower::queries::{select_block_at_height, select_block_with_hash},
     bitcoin_follower::rpc,
-    bitcoin_follower::queries::{
-        select_block_at_height,
-        select_block_with_hash
-    },
     block::{Block, Tx},
     config::Config,
-    database::{
-        self,
-        queries::select_block_latest,
-    },
+    database::{self, queries::select_block_latest},
     retry::{new_backoff_unlimited, retry},
 };
 
@@ -192,7 +187,7 @@ pub fn handle_new_mempool_transactions<T: Tx>(
 
 pub async fn get_last_matching_block_height(
     cancel_token: CancellationToken,
-    reader: &database::Reader,
+    conn: &Connection,
     bitcoin: &bitcoin_client::Client,
     block_height: u64,
     block_prev_hash: BlockHash,
@@ -200,8 +195,8 @@ pub async fn get_last_matching_block_height(
     let mut prev_block_hash = block_prev_hash;
     let mut subtrahend = 1;
     loop {
-        let prev_block_row = select_block_at_height(reader,
-                block_height - subtrahend, cancel_token.clone()).await?;
+        let prev_block_row =
+            select_block_at_height(conn, block_height - subtrahend, cancel_token.clone()).await?;
         if prev_block_row.hash == prev_block_hash {
             break;
         }
@@ -230,6 +225,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
             info!("ZMQ connected: {}", env.config.zmq_address);
             state.zmq_connected = true;
             let mut events = vec![];
+            let conn = &*env.reader.connection().await?;
             if state.mode == Mode::Rpc {
                 let info = retry(
                     || env.bitcoin.get_blockchain_info(),
@@ -239,8 +235,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
                 )
                 .await?;
 
-                let option_block_row =
-                    select_block_latest(&*env.reader.connection().await?).await?;
+                let option_block_row = select_block_latest(conn).await?;
                 let caught_up = option_block_row
                     .as_ref()
                     .is_some_and(|b| b.height == info.blocks);
@@ -275,7 +270,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
                         .await?;
                         let last_matching_block_height = get_last_matching_block_height(
                             env.cancel_token.clone(),
-                            &env.reader,
+                            conn,
                             &env.bitcoin,
                             block_row.height,
                             block.header.prev_blockhash,
@@ -351,11 +346,13 @@ async fn handle_zmq_event<T: Tx + 'static>(
             }
         }
         ZmqEvent::BlockDisconnected(block_hash) => {
+            let conn = &*env.reader.connection().await?;
             if state.mode == Mode::Zmq {
-                let block_row = select_block_with_hash(&env.reader,
-                        &block_hash, env.cancel_token.clone()).await?;
-                let prev_block_row = select_block_at_height(&env.reader,
-                        block_row.height - 1, env.cancel_token.clone()).await?;
+                let block_row =
+                    select_block_with_hash(conn, &block_hash, env.cancel_token.clone()).await?;
+                let prev_block_row =
+                    select_block_at_height(conn, block_row.height - 1, env.cancel_token.clone())
+                        .await?;
                 state.zmq_latest_block_height = Some(prev_block_row.height);
                 vec![Event::Rollback(prev_block_row.height)]
             } else {
@@ -388,7 +385,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
         info!("In reorg window: {} {}", target_height, block.height);
         let last_matching_block_height = get_last_matching_block_height(
             env.cancel_token.clone(),
-            &env.reader,
+            &*env.reader.connection().await?,
             &env.bitcoin,
             block.height,
             block.prev_hash,
@@ -563,4 +560,3 @@ pub async fn run<T: Tx + 'static>(
         info!("Exited");
     }))
 }
-
