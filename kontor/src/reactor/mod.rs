@@ -76,7 +76,7 @@ impl Reactor {
         self.option_last_height = Some(height);
 
         if let Some(block) =
-            select_block_at_height(&*self.reader.connection().await.unwrap(), height)
+            select_block_at_height(&self.reader.connection().await.unwrap(), height)
                 .await
                 .unwrap()
         {

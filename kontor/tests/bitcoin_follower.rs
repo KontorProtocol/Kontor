@@ -88,7 +88,7 @@ impl client::BitcoinRpc for MockClient {
         &self,
         txids: &[Txid],
     ) -> Result<Vec<Result<bitcoin::Transaction, error::Error>>, error::Error> {
-        if txids.len() == 0 {
+        if txids.is_empty() {
             Ok(vec![])
         } else {
             assert_eq!(txids.len(), 1);

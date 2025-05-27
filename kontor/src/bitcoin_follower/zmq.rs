@@ -220,7 +220,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
         run_monitor_socket(monitor_socket, socket_cancel_token.clone(), monitor_tx);
 
     socket
-        .connect(&addr)
+        .connect(addr)
         .context("Could not connect to ZMQ address")?;
     let socket_handle = run_socket(socket, socket_cancel_token.clone(), socket_tx.clone());
 

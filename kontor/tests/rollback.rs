@@ -36,7 +36,7 @@ fn gen_block(prev_hash: &BlockHash, time: u32) -> bitcoin::Block {
             version: bitcoin::block::Version::ONE,
             prev_blockhash: *prev_hash,
             merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
-            time: time,
+            time,
             bits: bitcoin::CompactTarget::from_consensus(3),
             nonce: 4,
         },
@@ -113,7 +113,7 @@ impl client::BitcoinRpc for MockClient {
         &self,
         txids: &[Txid],
     ) -> Result<Vec<Result<bitcoin::Transaction, error::Error>>, error::Error> {
-        if txids.len() == 0 {
+        if txids.is_empty() {
             Ok(vec![])
         } else {
             assert_eq!(txids.len(), 1);
