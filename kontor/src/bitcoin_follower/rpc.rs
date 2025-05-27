@@ -270,20 +270,16 @@ pub fn run_orderer<T: Tx + 'static>(
 }
 
 #[derive(Debug)]
-pub struct Fetcher<T: Tx> {
+pub struct Fetcher<T: Tx, C: bitcoin_client::client::BitcoinRpc> {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
-    bitcoin: bitcoin_client::Client,
+    bitcoin: C,
     f: fn(Transaction) -> Option<T>,
     tx: Sender<(u64, Block<T>)>,
 }
 
-impl<T: Tx + 'static> Fetcher<T> {
-    pub fn new(
-        bitcoin: bitcoin_client::Client,
-        f: fn(Transaction) -> Option<T>,
-        tx: Sender<(u64, Block<T>)>,
-    ) -> Self {
+impl<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc> Fetcher<T, C> {
+    pub fn new(bitcoin: C, f: fn(Transaction) -> Option<T>, tx: Sender<(u64, Block<T>)>) -> Self {
         Self {
             handle: None,
             cancel_token: CancellationToken::new(),

@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use bitcoin::{BlockHash, Txid, Transaction, hashes::Hash, consensus::encode};
+use bitcoin::{BlockHash, Transaction, Txid, consensus::encode, hashes::Hash};
 
 #[derive(Debug, PartialEq)]
 pub enum MonitorMessage {
@@ -165,8 +165,10 @@ impl DataMessage {
                 DataMessage::RawTransaction(encode::deserialize::<Transaction>(&multipart[1])?),
             ));
         } else {
-            return Err(anyhow!("Received multipart message for unknown topic {:?})",
-                String::from_utf8(multipart[0].clone()).unwrap()));
+            return Err(anyhow!(
+                "Received multipart message for unknown topic {:?})",
+                String::from_utf8(multipart[0].clone()).unwrap()
+            ));
         }
     }
 }

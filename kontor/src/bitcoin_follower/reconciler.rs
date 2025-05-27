@@ -18,7 +18,6 @@ use crate::{
     bitcoin_follower::queries::{select_block_at_height, select_block_with_hash},
     bitcoin_follower::rpc,
     block::{Block, Tx},
-    config::Config,
     database::{self, queries::select_block_latest},
     retry::{new_backoff_unlimited, retry},
 };
@@ -28,23 +27,21 @@ use super::{
     zmq,
 };
 
-struct Env<T: Tx> {
+struct Env<T: Tx, C: bitcoin_client::client::BitcoinRpc> {
     pub cancel_token: CancellationToken,
-    pub config: Config,
     pub reader: database::Reader,
-    pub bitcoin: bitcoin_client::Client,
-    pub fetcher: rpc::Fetcher<T>,
+    pub bitcoin: C,
+    pub fetcher: rpc::Fetcher<T, C>,
     pub rpc_rx: Receiver<(u64, Block<T>)>,
     pub zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
     pub zmq_tx: UnboundedSender<ZmqEvent<T>>,
 }
 
-impl<T: Tx + 'static> Env<T> {
+impl<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc> Env<T, C> {
     pub fn new(
         cancel_token: CancellationToken,
-        config: Config,
         reader: database::Reader,
-        bitcoin: bitcoin_client::Client,
+        bitcoin: C,
         f: fn(Transaction) -> Option<T>,
     ) -> Self {
         let (zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<T>>();
@@ -52,7 +49,6 @@ impl<T: Tx + 'static> Env<T> {
         let fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
         Self {
             cancel_token,
-            config,
             reader,
             bitcoin,
             fetcher,
@@ -89,10 +85,10 @@ impl<T: Tx> State<T> {
     }
 }
 
-async fn zmq_runner<T: Tx + 'static>(
-    config: Config,
+async fn zmq_runner<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    addr: String,
     cancel_token: CancellationToken,
-    bitcoin: bitcoin_client::Client,
+    bitcoin: C,
     f: fn(Transaction) -> Option<T>,
     tx: UnboundedSender<ZmqEvent<T>>,
 ) -> JoinHandle<Result<()>> {
@@ -102,14 +98,8 @@ async fn zmq_runner<T: Tx + 'static>(
                 return Ok(());
             }
 
-            let handle = zmq::run(
-                config.clone(),
-                cancel_token.clone(),
-                bitcoin.clone(),
-                f,
-                tx.clone(),
-            )
-            .await?;
+            let handle =
+                zmq::run(&addr, cancel_token.clone(), bitcoin.clone(), f, tx.clone()).await?;
 
             match handle.await {
                 Ok(Ok(_)) => return Ok(()),
@@ -136,7 +126,11 @@ async fn zmq_runner<T: Tx + 'static>(
 }
 
 fn in_reorg_window(target_height: u64, height: u64, reorg_window: u64) -> bool {
-    height >= target_height - reorg_window
+    if reorg_window > target_height {
+        true
+    } else {
+        height >= target_height - reorg_window
+    }
 }
 
 fn handle_block<T: Tx>(
@@ -185,10 +179,10 @@ pub fn handle_new_mempool_transactions<T: Tx>(
     Event::MempoolUpdate { removed, added }
 }
 
-pub async fn get_last_matching_block_height(
+pub async fn get_last_matching_block_height<C: bitcoin_client::client::BitcoinRpc>(
     cancel_token: CancellationToken,
     conn: &Connection,
-    bitcoin: &bitcoin_client::Client,
+    bitcoin: C,
     block_height: u64,
     block_prev_hash: BlockHash,
 ) -> Result<u64> {
@@ -215,14 +209,14 @@ pub async fn get_last_matching_block_height(
     Ok(block_height - subtrahend)
 }
 
-async fn handle_zmq_event<T: Tx + 'static>(
-    env: &mut Env<T>,
+async fn handle_zmq_event<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    env: &mut Env<T, C>,
     state: &mut State<T>,
     zmq_event: ZmqEvent<T>,
 ) -> Result<Vec<Event<T>>> {
     let events = match zmq_event {
         ZmqEvent::Connected => {
-            info!("ZMQ connected: {}", env.config.zmq_address);
+            info!("ZMQ connected");
             state.zmq_connected = true;
             let mut events = vec![];
             let conn = &*env.reader.connection().await?;
@@ -271,7 +265,7 @@ async fn handle_zmq_event<T: Tx + 'static>(
                         let last_matching_block_height = get_last_matching_block_height(
                             env.cancel_token.clone(),
                             conn,
-                            &env.bitcoin,
+                            env.bitcoin.clone(),
                             block_row.height,
                             block.header.prev_blockhash,
                         )
@@ -376,8 +370,8 @@ async fn handle_zmq_event<T: Tx + 'static>(
     })
 }
 
-async fn handle_rpc_event<T: Tx + 'static>(
-    env: &mut Env<T>,
+async fn handle_rpc_event<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    env: &mut Env<T, C>,
     state: &mut State<T>,
     (target_height, block): (u64, Block<T>),
 ) -> Result<Vec<Event<T>>> {
@@ -386,7 +380,7 @@ async fn handle_rpc_event<T: Tx + 'static>(
         let last_matching_block_height = get_last_matching_block_height(
             env.cancel_token.clone(),
             &*env.reader.connection().await?,
-            &env.bitcoin,
+            env.bitcoin.clone(),
             block.height,
             block.prev_hash,
         )
@@ -441,38 +435,42 @@ async fn handle_rpc_event<T: Tx + 'static>(
     Ok(events)
 }
 
-pub async fn run<T: Tx + 'static>(
-    config: Config,
+pub async fn run<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    starting_block_height: u64,
+    addr: Option<String>,
     cancel_token: CancellationToken,
     reader: database::Reader,
-    bitcoin: bitcoin_client::Client,
+    bitcoin: C,
     f: fn(Transaction) -> Option<T>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
-    let mut env = Env::new(
-        cancel_token.clone(),
-        config.clone(),
-        reader.clone(),
-        bitcoin.clone(),
-        f,
-    );
+    let mut env = Env::new(cancel_token.clone(), reader.clone(), bitcoin.clone(), f);
 
     let start_height = select_block_latest(&*env.reader.connection().await?)
         .await?
         .map(|block_row| block_row.height)
-        .unwrap_or(config.starting_block_height - 1)
+        .unwrap_or(starting_block_height - 1)
         + 1;
     let mut state = State::new(start_height);
 
     let runner_cancel_token = CancellationToken::new();
-    let runner_handle = zmq_runner(
-        config.clone(),
-        runner_cancel_token.clone(),
-        bitcoin.clone(),
-        f,
-        env.zmq_tx.clone(),
-    )
-    .await;
+
+    let mut runner_handle = None;
+    if let Some(a) = addr {
+        runner_handle = Some(
+            zmq_runner(
+                a,
+                runner_cancel_token.clone(),
+                bitcoin.clone(),
+                f,
+                env.zmq_tx.clone(),
+            )
+            .await,
+        );
+    } else {
+        warn!("No ZMQ connection");
+        env.fetcher.start(start_height);
+    }
 
     Ok(tokio::spawn(async move {
         'outer: loop {
@@ -548,10 +546,12 @@ pub async fn run<T: Tx + 'static>(
         runner_cancel_token.cancel();
         env.rpc_rx.close();
         while env.rpc_rx.recv().await.is_some() {}
-        match runner_handle.await {
-            Err(_) => error!("ZMQ runner panicked on join"),
-            Ok(Err(e)) => error!("ZMQ runner failed to start with error: {}", e),
-            Ok(Ok(_)) => (),
+        if let Some(handle) = runner_handle {
+            match handle.await {
+                Err(_) => error!("ZMQ runner panicked on join"),
+                Ok(Err(e)) => error!("ZMQ runner failed to start with error: {}", e),
+                Ok(Ok(_)) => (),
+            }
         }
         if (env.fetcher.stop().await).is_err() {
             error!("RPC fetcher panicked on join");

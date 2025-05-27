@@ -68,6 +68,10 @@ impl client::BitcoinRpc for MockClient {
         })
     }
 
+    async fn get_raw_mempool(&self) -> Result<Vec<Txid>, error::Error> {
+        Ok(vec![])
+    }
+
     async fn get_raw_transaction(&self, txid: &Txid) -> Result<bitcoin::Transaction, error::Error> {
         if let Some(id) = self.expect_get_raw_transaction_txid {
             assert_eq!(*txid, id);
@@ -78,6 +82,19 @@ impl client::BitcoinRpc for MockClient {
         let tx: bitcoin::Transaction =
             bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
         Ok(tx)
+    }
+
+    async fn get_raw_transactions(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Result<bitcoin::Transaction, error::Error>>, error::Error> {
+        if txids.len() == 0 {
+            Ok(vec![])
+        } else {
+            assert_eq!(txids.len(), 1);
+            let tx = self.get_raw_transaction(&txids[0]).await?;
+            Ok(vec![Ok(tx)])
+        }
     }
 }
 

@@ -18,7 +18,6 @@ use crate::{
     bitcoin_client,
     bitcoin_follower::messages::{RAWTX, SEQUENCE},
     block::{Block, Tx},
-    config::Config,
     retry::{new_backoff_limited, notify, retry},
 };
 
@@ -186,10 +185,10 @@ pub async fn process_data_message<T: Tx + 'static, C: bitcoin_client::client::Bi
     }
 }
 
-pub async fn run<T: Tx + 'static>(
-    config: Config,
+pub async fn run<T: Tx + 'static, C: bitcoin_client::client::BitcoinRpc>(
+    addr: &str,
     cancel_token: CancellationToken,
-    bitcoin: bitcoin_client::Client,
+    bitcoin: C,
     f: fn(Transaction) -> Option<T>,
     tx: UnboundedSender<ZmqEvent<T>>,
 ) -> Result<JoinHandle<Result<()>>> {
@@ -221,7 +220,7 @@ pub async fn run<T: Tx + 'static>(
         run_monitor_socket(monitor_socket, socket_cancel_token.clone(), monitor_tx);
 
     socket
-        .connect(&config.zmq_address)
+        .connect(&addr)
         .context("Could not connect to ZMQ address")?;
     let socket_handle = run_socket(socket, socket_cancel_token.clone(), socket_tx.clone());
 
