@@ -35,13 +35,13 @@ impl stdlib::HostMonoid for HostCtx {
         Ok(self.table.push(rep)?)
     }
 
-    fn mzero(&mut self, handle: Resource<stdlib::Monoid>) -> Result<u64> {
+    fn mzero(&mut self, handle: Resource<MyMonoidHostRep>) -> Result<u64> {
         let rep = self.table.get(&handle)?;
         let result = (rep.mzero_operation)();
         Ok(result)
     }
 
-    fn mappend(&mut self, handle: Resource<stdlib::Monoid>, x: u64, y: u64) -> Result<u64> {
+    fn mappend(&mut self, handle: Resource<MyMonoidHostRep>, x: u64, y: u64) -> Result<u64> {
         let rep = self.table.get(&handle)?;
         let result = (rep.mappend_operation)(x, y);
         Ok(result)
