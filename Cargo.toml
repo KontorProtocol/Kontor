@@ -1,9 +1,10 @@
 [workspace]
-members = ["contracts/fib", "kontor", "macro", "ui"]
+members = ["contracts/fib", "contracts/stdlib", "kontor", "macro", "ui"]
 resolver = "2"
 
 
 [workspace.dependencies]
+anyhow = "1"
 axum = { version = "0.8", features = ["http2", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = [
@@ -16,3 +17,4 @@ tower-http = { version = "0.6", features = [
   "cors",
 ] }
 tower = "0.5"
+wasmtime = { version = "33.0.0", features = ["wave"] }

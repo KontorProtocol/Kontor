@@ -5,9 +5,10 @@ edition = "2024"
 
 [dependencies]
 kontor_macro = { path = "../macro" }
+stdlib = { path = "../contracts/stdlib" }
 
+anyhow = { workspace = true }
 backon = { version = "1.4", features = ["tokio-sleep"] }
-anyhow = "1"
 base64 = "0.22.1"
 bitcoin = { version = "0.32.6", features = ["serde", "rand", "rand-std"] }
 deadpool = "0.12"
@@ -44,8 +45,8 @@ ciborium = "0.2"
 bon = "3.6"
 axum-test = "17.3"
 urlencoding = "2.1"
-wasmtime = { version = "33.0.0", features = ["wave"] }
 proptest = "1.6"
+wasmtime = { workspace = true }
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
