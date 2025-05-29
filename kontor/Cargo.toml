@@ -46,6 +46,8 @@ axum-test = "17.3"
 urlencoding = "2.1"
 wasmtime = { version = "33.0.0", features = ["wave"] }
 proptest = "1.6"
+sha2 = "0.10"
+
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
