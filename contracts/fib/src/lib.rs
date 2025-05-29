@@ -1,11 +1,10 @@
-#[allow(warnings)]
-mod bindings;
+wit_bindgen::generate!({
+    path: "wit/world.wit",
+});
 
-use bindings::Guest;
-use bindings::Monoid;
-struct Component;
+struct Contract;
 
-impl Guest for Component {
+impl Guest for Contract {
     fn fib(n: u64) -> u64 {
         match n {
             0 | 1 => n,
@@ -26,4 +25,4 @@ impl Guest for Component {
     }
 }
 
-bindings::export!(Component with_types_in bindings);
+export!(Contract);

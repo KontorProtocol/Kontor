@@ -1,9 +1,9 @@
 wasmtime::component::bindgen!({
-    world: "contract",
     path: "wit/stdlib.wit",
     with: {
         "kontor:contract/stdlib/monoid": MyMonoidHostRep,
     },
+    async: true,
     trappable_imports: true,
 });
 

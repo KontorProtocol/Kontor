@@ -24,30 +24,30 @@ impl HostCtx {
 }
 
 impl stdlib::Host for HostCtx {
-    fn test(&mut self) -> Result<bool> {
+    async fn test(&mut self) -> Result<bool> {
         Ok(true)
     }
 }
 
 impl stdlib::HostMonoid for HostCtx {
-    fn new(&mut self, address: u64) -> Result<Resource<MyMonoidHostRep>> {
+    async fn new(&mut self, address: u64) -> Result<Resource<MyMonoidHostRep>> {
         let rep = MyMonoidHostRep::new(address)?;
         Ok(self.table.push(rep)?)
     }
 
-    fn mzero(&mut self, handle: Resource<MyMonoidHostRep>) -> Result<u64> {
+    async fn mzero(&mut self, handle: Resource<MyMonoidHostRep>) -> Result<u64> {
         let rep = self.table.get(&handle)?;
         let result = (rep.mzero_operation)();
         Ok(result)
     }
 
-    fn mappend(&mut self, handle: Resource<MyMonoidHostRep>, x: u64, y: u64) -> Result<u64> {
+    async fn mappend(&mut self, handle: Resource<MyMonoidHostRep>, x: u64, y: u64) -> Result<u64> {
         let rep = self.table.get(&handle)?;
         let result = (rep.mappend_operation)(x, y);
         Ok(result)
     }
 
-    fn drop(&mut self, handle: Resource<MyMonoidHostRep>) -> Result<()> {
+    async fn drop(&mut self, handle: Resource<MyMonoidHostRep>) -> Result<()> {
         let _rep: MyMonoidHostRep = self.table.delete(handle)?;
         Ok(())
     }
