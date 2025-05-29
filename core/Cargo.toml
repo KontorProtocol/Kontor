@@ -1,5 +1,5 @@
 [workspace]
-members = ["contracts/fib", "contracts/stdlib", "kontor", "macro", "ui"]
+members = ["stdlib", "kontor", "macro", "ui"]
 resolver = "2"
 
 [workspace.dependencies]

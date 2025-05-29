@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 kontor_macro = { path = "../macro" }
-stdlib = { path = "../contracts/stdlib" }
+stdlib = { path = "../stdlib" }
 
 anyhow = { workspace = true }
 backon = { version = "1.4", features = ["tokio-sleep"] }
@@ -47,6 +47,7 @@ axum-test = "17.3"
 urlencoding = "2.1"
 proptest = "1.6"
 wasmtime = { workspace = true }
+wit-component = "0.232"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }

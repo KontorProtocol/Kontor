@@ -10,6 +10,7 @@ use wasmtime::{
         wasm_wave::parser::Parser as WaveParser,
     },
 };
+use wit_component::ComponentEncoder;
 
 struct HostCtx {
     table: ResourceTable,
@@ -120,7 +121,6 @@ fn default_val_for_type(ty: &Type) -> Val {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_fib_contract() -> Result<()> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
@@ -137,9 +137,14 @@ async fn test_fib_contract() -> Result<()> {
     let s = format!("fib({})", n);
     let call = WaveParser::new(&s).parse_raw_func_call()?;
 
-    let path = Path::new("../target/wasm32-unknown-unknown/debug/fib.wasm");
-    let wasm = read(path).await?;
-    let component = Component::from_binary(&engine, &wasm)?;
+    let path = Path::new("../../contracts/target/wasm32-unknown-unknown/debug/fib.wasm");
+    let module_bytes = read(path).await?;
+    let component_bytes = ComponentEncoder::default()
+        .module(&module_bytes)?
+        .validate(true)
+        .encode()?;
+
+    let component = Component::from_binary(&engine, &component_bytes)?;
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
     let func = instance
