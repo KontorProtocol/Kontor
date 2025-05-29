@@ -1,0 +1,6 @@
+[workspace]
+members = ["fib"]
+resolver = "2"
+
+[workspace.dependencies]
+wit-bindgen = "0.42.1"

@@ -1,6 +1,8 @@
 package kontor:contract;
 
 interface stdlib {
+    test: func() -> bool;
+
     resource monoid {
         constructor(address: u64);
         mzero: func() -> u64;
@@ -9,9 +11,5 @@ interface stdlib {
 }
 
 world contract {
-    use stdlib.{monoid};
-    export fib: func(n: u64) -> u64;
-
-    export api-twice: func(address: u64, n: u64) -> u64;
-    export twice: func(m: monoid, n: u64) -> u64;
+    import stdlib;
 }

@@ -1,17 +1,28 @@
-#[allow(warnings)]
-mod bindings;
+wit_bindgen::generate!({
+    path: "wit/world.wit",
+});
 
-use bindings::Guest;
+struct Contract;
 
-struct Component;
-
-impl Guest for Component {
+impl Guest for Contract {
     fn fib(n: u64) -> u64 {
         match n {
             0 | 1 => n,
-            _ => Self::fib(n - 1) + Self::fib(n - 2),
+            _ => {
+                let m = Monoid::new(0);
+                m.mappend(Self::fib(n - 1), Self::fib(n - 2))
+            }
         }
+    }
+
+    fn api_twice(address: u64, n: u64) -> u64 {
+        let m = Monoid::new(address);
+        Self::twice(m, n)
+    }
+
+    fn twice(m: Monoid, n: u64) -> u64 {
+        m.mappend(n, n)
     }
 }
 
-bindings::export!(Component with_types_in bindings);
+export!(Contract);
