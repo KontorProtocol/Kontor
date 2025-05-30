@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_taproot_transaction() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -194,7 +194,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_incorrect_prefix() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -301,7 +301,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_without_tapscript() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -407,7 +407,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -521,7 +521,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -634,7 +634,7 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_without_token_balance() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -739,7 +739,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_without_control_block() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -845,7 +845,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
 
 #[tokio::test]
 async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();

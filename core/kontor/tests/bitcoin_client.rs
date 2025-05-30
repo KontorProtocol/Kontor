@@ -4,7 +4,7 @@ use kontor::{bitcoin_client::Client, config::Config};
 
 #[tokio::test]
 async fn test_bitcoin_client() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
 
     let info = client.get_blockchain_info().await?;
     let hash = client.get_block_hash(info.blocks).await?;

@@ -21,8 +21,8 @@ async fn test_websocket_server() -> Result<()> {
     logging::setup();
     let cancel_token = CancellationToken::new();
     let config = Config::try_parse()?;
-    let (reader, _writer, _temp_dir) = new_test_db().await?;
-    let bitcoin = Client::new_from_config(config.clone())?;
+    let (reader, _writer, _temp_dir) = new_test_db(&config).await?;
+    let bitcoin = Client::new_from_config(&config)?;
     let (event_tx, event_rx) = mpsc::channel(10); // Channel to send test events
     let event_subscriber = EventSubscriber::new();
     let mut handles = vec![];

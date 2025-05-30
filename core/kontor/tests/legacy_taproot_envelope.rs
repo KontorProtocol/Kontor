@@ -20,7 +20,7 @@ use kontor::witness_data::TokenBalance;
 use kontor::{bitcoin_client::Client, config::Config};
 #[tokio::test]
 async fn test_psbt_inscription() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -163,7 +163,7 @@ async fn test_psbt_inscription() -> Result<()> {
 
 #[tokio::test]
 async fn test_inscription_invalid_token_data() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -331,7 +331,7 @@ async fn test_inscription_invalid_token_data() -> Result<()> {
 
 #[tokio::test]
 async fn test_inscription_wrong_internal_key() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -490,7 +490,7 @@ async fn test_inscription_wrong_internal_key() -> Result<()> {
 
 #[tokio::test]
 async fn test_inscription_without_checksig() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -629,7 +629,7 @@ async fn test_inscription_without_checksig() -> Result<()> {
 
 #[tokio::test]
 async fn test_inscription_with_wrong_internal_key_without_checksig() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();

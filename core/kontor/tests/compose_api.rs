@@ -36,12 +36,13 @@ struct ComposeResponse {
 }
 
 async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
-    let (reader, _, _temp_dir) = new_test_db().await?;
+    let config = Config::try_parse()?;
+    let (reader, _, _temp_dir) = new_test_db(&config).await?;
 
     let env = Env {
         bitcoin: bitcoin_client,
         reader,
-        config: Config::try_parse()?,
+        config,
         cancel_token: CancellationToken::new(),
         event_subscriber: EventSubscriber::new(),
     };
@@ -56,7 +57,7 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
 
 #[tokio::test]
 async fn test_compose() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     // Arrange
     let app = create_test_app(bitcoin_client.clone()).await?;
@@ -187,7 +188,7 @@ async fn test_compose() -> Result<()> {
 
 #[tokio::test]
 async fn test_compose_all_fields() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     let app = create_test_app(bitcoin_client.clone()).await?;
     let config = TestConfig::try_parse()?;
@@ -373,7 +374,7 @@ async fn test_compose_all_fields() -> Result<()> {
 
 #[tokio::test]
 async fn test_compose_missing_params() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     let app = create_test_app(bitcoin_client.clone()).await?;
     let config = TestConfig::try_parse()?;
@@ -413,7 +414,7 @@ async fn test_compose_missing_params() -> Result<()> {
 
 #[tokio::test]
 async fn test_compose_nonexistent_utxo() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     let app = create_test_app(bitcoin_client.clone()).await?;
     let config = TestConfig::try_parse()?;
@@ -455,7 +456,7 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
 
 #[tokio::test]
 async fn test_compose_invalid_address() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     let app = create_test_app(bitcoin_client.clone()).await?;
     let config = TestConfig::try_parse()?;
@@ -497,7 +498,7 @@ async fn test_compose_invalid_address() -> Result<()> {
 
 #[tokio::test]
 async fn test_compose_insufficient_funds() -> Result<()> {
-    let bitcoin_client = Client::new_from_config(Config::try_parse()?)?;
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
     let app = create_test_app(bitcoin_client.clone()).await?;
     let config = TestConfig::try_parse()?;

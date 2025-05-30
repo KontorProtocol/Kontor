@@ -14,13 +14,13 @@ async fn main() -> Result<()> {
     info!("Kontor");
     let config = Config::try_parse()?;
     info!("{:#?}", config);
-    let bitcoin = bitcoin_client::Client::new_from_config(config.clone())?;
+    let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
     let mut handles = vec![];
     handles.push(stopper::run(cancel_token.clone())?);
-    let db_path = config.database_dir.join("state.db");
-    let reader = database::Reader::new(&db_path).await?;
-    let writer = database::Writer::new(&db_path).await?;
+    let filename = "state.db";
+    let reader = database::Reader::new(config.clone(), filename).await?;
+    let writer = database::Writer::new(&config, filename).await?;
     let (_, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));

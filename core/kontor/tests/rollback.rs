@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -7,6 +8,7 @@ use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 use kontor::{
     bitcoin_client::{client, error, types},
     bitcoin_follower::{self, queries::select_block_at_height},
+    config::Config,
     database::{queries::insert_block, types::BlockRow},
     reactor,
     utils::{MockTransaction, new_test_db},
@@ -134,7 +136,7 @@ fn block_row(height: u64, b: &bitcoin::Block) -> BlockRow {
 async fn test_follower_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let blocks = new_block_chain(5, 123);
     let conn = &writer.connection();
@@ -199,7 +201,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
 async fn test_follower_reactor_rollback() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let mut blocks = new_block_chain(3, 123);
     let conn = &writer.connection();

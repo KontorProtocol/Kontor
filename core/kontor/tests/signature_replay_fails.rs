@@ -23,7 +23,7 @@ use std::str::FromStr;
 
 #[tokio::test]
 async fn test_signature_replay_failse() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();
@@ -172,7 +172,7 @@ async fn test_signature_replay_failse() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_signature_replay_fails() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
 
     let secp = Secp256k1::new();

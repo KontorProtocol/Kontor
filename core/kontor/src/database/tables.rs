@@ -1,5 +1,9 @@
 use std::env;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SQLEAN_CRYPTO_EXTENSION: &[u8] =
+    include_bytes!("../../sqlean-0.27.2/macos-arm64/crypto.dylib");
+
 pub const CREATE_BLOCKS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS blocks (
         height INTEGER PRIMARY KEY,

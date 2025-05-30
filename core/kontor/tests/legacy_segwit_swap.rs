@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_psbt_with_secret() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -158,7 +158,7 @@ async fn test_psbt_with_secret() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_incorrect_prefix() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -240,7 +240,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_without_secret() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -321,7 +321,7 @@ async fn test_psbt_without_secret() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_without_token_balance() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -400,7 +400,7 @@ async fn test_psbt_without_token_balance() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_without_prefix() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -480,7 +480,7 @@ async fn test_psbt_without_prefix() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_malformed_witness_script() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -571,7 +571,7 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_wrong_token_name() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -661,7 +661,7 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_insufficient_funds() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
@@ -751,7 +751,7 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
 
 #[tokio::test]
 async fn test_psbt_with_long_witness_stack() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&Config::try_parse()?)?;
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 

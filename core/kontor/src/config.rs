@@ -48,17 +48,10 @@ pub struct Config {
 
     #[clap(
         long,
-        env = "CERT_DIR",
-        help = "Directory path for TLS cert.pem and key.pem files (e.g., /var/lib/myapp/certs)"
+        env = "DATA_DIR",
+        help = "Directory path for Kontor data, certs, database, etc"
     )]
-    pub cert_dir: PathBuf,
-
-    #[clap(
-        long,
-        env = "DATABASE_DIR",
-        help = "Directory path for the database (e.g., /var/lib/myapp/db)"
-    )]
-    pub database_dir: PathBuf,
+    pub data_dir: PathBuf,
 
     #[clap(
         long,
