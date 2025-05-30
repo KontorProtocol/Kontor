@@ -7,8 +7,10 @@ use kontor::{
         queries::{insert_block, select_block_at_height, select_block_latest},
         types::BlockRow,
     },
+    logging,
     utils::new_test_db,
 };
+use libsql::params;
 
 #[tokio::test]
 async fn test_database() -> Result<()> {
@@ -45,5 +47,22 @@ async fn test_transaction() -> Result<()> {
     insert_block(&tx, block).await?;
     assert!(select_block_latest(&tx).await?.is_some());
     tx.commit().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_crypto_extension() -> Result<()> {
+    logging::setup();
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let mut rows = conn
+        .query("SELECT hex(crypto_sha256('abc'))", params![])
+        .await?;
+    let row = rows.next().await?.unwrap();
+    let hash = row.get_str(0)?;
+    assert_eq!(
+        hash,
+        "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
+    );
     Ok(())
 }
