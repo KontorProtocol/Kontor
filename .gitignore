@@ -8,3 +8,4 @@
 **/*.db-wal
 **/*.key
 **/.vscode
+bindings.rs
