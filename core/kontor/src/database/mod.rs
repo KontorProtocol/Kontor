@@ -1,5 +1,6 @@
+pub mod checkpoint_queries;
 mod connection;
-mod init;
+pub mod init;
 mod pool;
 pub mod queries;
 pub mod reader;

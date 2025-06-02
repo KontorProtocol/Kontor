@@ -9,3 +9,5 @@
 **/*.key
 **/.vscode
 bindings.rs
+core/crypto.dylib
+core/crypto.so
