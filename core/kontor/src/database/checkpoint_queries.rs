@@ -3,8 +3,6 @@ use hex;
 use libsql::{Connection, params};
 use sha2::{Digest, Sha256};
 
-use super::types::ContractStateRow;
-
 pub async fn insert_checkpoint(conn: &Connection, height: u64, state_hash: &str) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO checkpoints (height, hash) VALUES (?, ?)",
@@ -17,49 +15,70 @@ pub async fn insert_checkpoint(conn: &Connection, height: u64, state_hash: &str)
     Ok(())
 }
 
-pub async fn create_checkpoint_from_state(
-    conn: &Connection,
-    height: u64,
-    contract_state_row: &ContractStateRow,
-    previous_hash: Option<&str>,
-) -> Result<String> {
-    // 1. Hash the new contract state row
-    let state_data = match &contract_state_row.value {
-        Some(value) => format!( // can this be done in sql rather than rust?
-            "{}:{}:{}:{}",
-            contract_state_row.contract_id,
-            contract_state_row.path,
-            hex::encode(value),
-            contract_state_row.deleted
-        ),
-        None => format!(
-            "{}:{}:{}",
-            contract_state_row.contract_id, contract_state_row.path, contract_state_row.deleted
-        ),
-    };
-    // do a select and call hex on each column and then concat on each column in the row? https://www.sqlite.org/lang_corefunc.html#hex
-    // do one piece at a time - query to hash the row, query to wrap last checkpoint hash with new checkpoint hash 
-    let row_hash = calculate_hash(&state_data);
+pub async fn create_checkpoint_from_state(conn: &Connection, height: u64) -> Result<String> {
+    // Perform the entire checkpoint creation in a single SQL query
+    let mut query_result = conn
+        .query(
+            "WITH latest_row AS (
+                SELECT 
+                    contract_id,
+                    path,
+                    value,
+                    deleted
+                FROM contract_state 
+                WHERE id = (SELECT MAX(id) FROM contract_state WHERE deleted = FALSE)
+            ),
+            row_data AS (
+                SELECT 
+                    CONCAT(
+                        contract_id,
+                        path,
+                        value,
+                        deleted
+                    ) as concatenated_data
+                FROM latest_row
+            ),
+            row_hash AS (
+                SELECT hex(crypto_sha256(concatenated_data)) as hash
+                FROM row_data
+            ),
+            prev_hash AS (
+                SELECT hash
+                FROM checkpoints
+                WHERE id = (SELECT MAX(id) FROM checkpoints)
+            ),
+            new_hash AS (
+                SELECT 
+                    CASE 
+                        WHEN p.hash IS NOT NULL THEN 
+                            hex(crypto_sha256(CONCAT(r.hash, p.hash)))
+                        ELSE 
+                            r.hash
+                    END AS hash
+                FROM row_hash r
+                LEFT JOIN prev_hash p ON 1=1
+            )
+            SELECT hash FROM new_hash",
+            params![],
+        )
+        .await?;
 
-    // 2. Combine with previous hash if available
-    let new_hash = match previous_hash {
-        Some(prev) => calculate_hash(&format!("{}{}", row_hash, prev)),
-        None => row_hash,
+    // Get the calculated hash
+    let hash_row = match query_result.next().await? {
+        Some(row) => row,
+        None => return Err(anyhow::anyhow!("Failed to calculate checkpoint hash")),
     };
 
-    // 3. Insert the new checkpoint
-    insert_checkpoint(conn, height, &new_hash).await?;
+    let new_hash = hash_row.get::<String>(0)?;
+
+    // Insert the new checkpoint
+    conn.execute(
+        "INSERT INTO checkpoints (height, hash) VALUES (?, ?)",
+        params![height, new_hash.clone()],
+    )
+    .await?;
 
     Ok(new_hash)
-}
-
-fn calculate_hash(data: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(result) // should I be hex encoding here -- try to get the hex and concat in sql
-    // concat everything, pull out as concat string, turn that to byte array, hash it
-
 }
 
 pub async fn get_latest_checkpoint_hash(conn: &Connection) -> Result<Option<String>> {
@@ -80,24 +99,18 @@ pub async fn maybe_create_checkpoint(
     conn: &Connection,
     height: u64,
     checkpoint_interval: u64,
-    contract_state_row: &ContractStateRow,
 ) -> Result<Option<String>> {
     // Only create checkpoints at the specified interval
-    if height % checkpoint_interval == 0 {  // if height difference is not greater than n rows, we replace the existing highest, otherwise create a new row
+    if height % checkpoint_interval == 0 {
+        // if height difference is not greater than n rows, we replace the existing highest, otherwise create a new row
         // do we just update or create a new one
-        // if the gap is beneath the trheshold, keep updating 
+        // if the gap is beneath the trheshold, keep updating
 
         // Get the previous checkpoint hash
         let previous_hash = get_latest_checkpoint_hash(conn).await?;
 
         // Create the new checkpoint
-        let new_hash = create_checkpoint_from_state(
-            conn,
-            height,
-            contract_state_row,
-            previous_hash.as_deref(),
-        )
-        .await?;
+        let new_hash = create_checkpoint_from_state(conn, height).await?;
 
         Ok(Some(new_hash))
     } else {

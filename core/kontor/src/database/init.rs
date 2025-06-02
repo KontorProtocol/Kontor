@@ -25,6 +25,7 @@ pub const CREATE_BLOCKS_TABLE: &str = "
 
 pub const CREATE_CHECKPOINTS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS checkpoints (
+        id INTEGER PRIMARY KEY,
         height INTEGER UNIQUE,
         hash TEXT NOT NULL UNIQUE,
         FOREIGN KEY (height) REFERENCES blocks(height) ON DELETE CASCADE

@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
         .await?,
     );
     handles.push(reactor::run(
-        config.starting_block_height,
+        config.starting_block_height - 1,
         cancel_token,
         reader,
         writer,
