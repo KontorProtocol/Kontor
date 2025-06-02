@@ -14,12 +14,13 @@ use libsql::params;
 
 #[tokio::test]
 async fn test_database() -> Result<()> {
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let config = Config::try_parse()?;
+    let client = Client::new_from_config(&config)?;
     let height = 800000;
     let hash = client.get_block_hash(height).await?;
     let block = BlockRow { height, hash };
 
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
 
     insert_block(&writer.connection(), block).await?;
     let block_at_height = select_block_at_height(&*reader.connection().await?, height)
@@ -38,10 +39,11 @@ async fn test_database() -> Result<()> {
 
 #[tokio::test]
 async fn test_transaction() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let config = Config::try_parse()?;
+    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
     let tx = writer.connection().transaction().await?;
     let height = 800000;
-    let client = Client::new_from_config(Config::try_parse()?)?;
+    let client = Client::new_from_config(&config)?;
     let hash = client.get_block_hash(height).await?;
     let block = BlockRow { height, hash };
     insert_block(&tx, block).await?;
@@ -53,7 +55,8 @@ async fn test_transaction() -> Result<()> {
 #[tokio::test]
 async fn test_crypto_extension() -> Result<()> {
     logging::setup();
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let config = Config::try_parse()?;
+    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
     let conn = writer.connection();
     let mut rows = conn
         .query("SELECT hex(crypto_sha256('abc'))", params![])

@@ -39,11 +39,11 @@ impl Client {
         Ok(Client { client, url })
     }
 
-    pub fn new_from_config(config: Config) -> Result<Self, Error> {
+    pub fn new_from_config(config: &Config) -> Result<Self, Error> {
         Client::new(
-            config.bitcoin_rpc_url,
-            config.bitcoin_rpc_user,
-            config.bitcoin_rpc_password,
+            config.bitcoin_rpc_url.to_owned(),
+            config.bitcoin_rpc_user.to_owned(),
+            config.bitcoin_rpc_password.to_owned(),
         )
     }
 

@@ -1,24 +1,25 @@
-use std::{
-    path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use deadpool::managed::{self, Pool, RecycleError};
-use libsql::{Builder, Error};
+use libsql::Error;
 
-use super::tables::initialize_database;
+use crate::config::Config;
+
+use super::connection::new_connection;
 
 #[derive(Debug)]
 pub struct Manager {
-    path: String,
+    config: Config,
+    filename: String,
     recycle_count: AtomicUsize,
 }
 
 impl Manager {
-    pub fn new(path: &Path) -> Self {
+    pub fn new(config: Config, filename: String) -> Self {
         Self {
-            path: path.to_string_lossy().into_owned(),
+            config,
+            filename,
             recycle_count: AtomicUsize::new(0),
         }
     }
@@ -29,10 +30,7 @@ impl managed::Manager for Manager {
     type Error = Error;
 
     async fn create(&self) -> Result<Self::Type, Error> {
-        let db = Builder::new_local(&self.path).build().await?;
-        let conn = db.connect()?;
-        initialize_database(&conn).await?;
-        Ok(conn)
+        new_connection(&self.config, &self.filename).await
     }
 
     async fn recycle(
@@ -60,8 +58,8 @@ impl managed::Manager for Manager {
     }
 }
 
-pub async fn new_pool(path: &Path) -> anyhow::Result<Pool<Manager>> {
-    let manager = Manager::new(path);
+pub async fn new_pool(config: Config, filename: &str) -> anyhow::Result<Pool<Manager>> {
+    let manager = Manager::new(config, filename.to_string());
     Pool::builder(manager)
         .max_size(10)
         .build()

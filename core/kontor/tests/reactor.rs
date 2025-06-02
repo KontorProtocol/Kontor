@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -7,6 +8,7 @@ use bitcoin::{BlockHash, hashes::Hash};
 use kontor::{
     bitcoin_follower::{events::Event, queries::select_block_at_height},
     block::Block,
+    config::Config,
     reactor,
     utils::{MockTransaction, new_test_db},
 };
@@ -15,7 +17,7 @@ use kontor::{
 async fn test_reactor_rollback_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
         90,
@@ -122,7 +124,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
 async fn test_reactor_unexpected_block() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
         80,
@@ -158,7 +160,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
 async fn test_reactor_deduced_rollback() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
         90,

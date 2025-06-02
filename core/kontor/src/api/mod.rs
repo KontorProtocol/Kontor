@@ -16,8 +16,8 @@ use tracing::{error, info};
 
 pub async fn run(env: Env) -> Result<JoinHandle<()>> {
     let config = RustlsConfig::from_pem_file(
-        env.config.cert_dir.join("cert.pem"),
-        env.config.cert_dir.join("key.pem"),
+        env.config.data_dir.join("cert.pem"),
+        env.config.data_dir.join("key.pem"),
     )
     .await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], env.config.api_port));

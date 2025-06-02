@@ -21,7 +21,7 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let mut config = Config::try_parse()?;
     config.bitcoin_rpc_url = "http://127.0.0.1:18443".to_string();
 
-    let client = Client::new_from_config(config.clone())?;
+    let client = Client::new_from_config(&config)?;
     let mut test_config = TestConfig::try_parse()?;
     test_config.network = Network::Regtest;
 

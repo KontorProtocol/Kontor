@@ -1,8 +1,8 @@
 mod connection;
+mod init;
 mod pool;
 pub mod queries;
 pub mod reader;
-mod tables;
 pub mod types;
 pub mod writer;
 pub mod checkpoint_queries;

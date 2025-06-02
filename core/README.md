@@ -54,6 +54,8 @@ Create TLS certs for local development with [mkcert](https://github.com/FiloSott
 mkcert -key-file key.pem -cert-file cert.pem localhost 127.0.0.1 ::1
 ```
 
+Put these in your Kontor data directory as specified in the `.envrc` file.
+
 ## Run
 
 To run the application, your `.envrc` should include the following environment variables:
@@ -66,13 +68,10 @@ export ZMQ_ADDRESS="tcp://127.0.0.1:28332"
 
 export API_PORT="8443"
 
-export DATABASE_DIR="../"
-
-export CERT_DIR="../"
+export DATA_DIR="/Users/$(whoami)/kontor"
 
 export NETWORK="bitcoin"
 ```
-`../` for when files and directories are in the root workspace folder instead of the `kontor` crate folder.
 
 ```bash
 cargo run
@@ -82,9 +81,9 @@ cargo run
 
 To run tests, **in addition to the environment variables above**, your `.envrc` should also include the following:
 ```bash
-export SEGWIT_BUYER_KEY_PATH="../segwit_buyer.key"
-export SEGWIT_SELLER_KEY_PATH="../segwit_seller.key"
-export TAPROOT_KEY_PATH="../taproot.key"
+export SEGWIT_BUYER_KEY_PATH="$DATA_DIR/segwit_buyer.key"
+export SEGWIT_SELLER_KEY_PATH="$DATA_DIR/segwit_seller.key"
+export TAPROOT_KEY_PATH="$DATA_DIR/taproot.key"
 ```
 `../` for when files and directories are in the root workspace folder instead of the `kontor` crate folder.
 
