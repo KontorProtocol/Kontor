@@ -20,3 +20,9 @@ pub enum Event<T: Tx> {
     Block((u64, Block<T>)),
     Rollback(u64),
 }
+
+#[derive(Debug)]
+pub enum Signal {
+    Start(u64),
+    Stop(),
+}

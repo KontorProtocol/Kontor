@@ -24,7 +24,7 @@ use crate::{
 };
 
 use super::{
-    events::{Event, ZmqEvent},
+    events::{Event, ZmqEvent, Signal},
     zmq,
 };
 
@@ -69,17 +69,17 @@ enum Mode {
 struct State<T: Tx> {
     mempool_cache: IndexMap<Txid, T>,
     zmq_latest_block_height: Option<u64>,
-    rpc_latest_block_height: u64,
+    rpc_latest_block_height: Option<u64>,
     zmq_connected: bool,
     mode: Mode,
 }
 
 impl<T: Tx> State<T> {
-    pub fn new(start_height: u64) -> Self {
+    pub fn new() -> Self {
         Self {
             mempool_cache: IndexMap::new(),
             zmq_latest_block_height: None,
-            rpc_latest_block_height: start_height - 1,
+            rpc_latest_block_height: None,
             zmq_connected: false,
             mode: Mode::Rpc,
         }
@@ -371,6 +371,15 @@ async fn handle_zmq_event<T: Tx + 'static, C: BitcoinRpc>(
     })
 }
 
+async fn stop_fetcher<T: Tx + 'static, C: BitcoinRpc>(env: &mut Env<T, C>) {
+    if let Err(e) = env.fetcher.stop().await {
+        error!("Fetcher panicked on join: {}", e);
+    }
+    while !env.rpc_rx.is_empty() {
+        let _ = env.rpc_rx.recv().await;
+    }
+}
+
 async fn handle_rpc_event<T: Tx + 'static, C: BitcoinRpc>(
     env: &mut Env<T, C>,
     state: &mut State<T>,
@@ -391,12 +400,7 @@ async fn handle_rpc_event<T: Tx + 'static, C: BitcoinRpc>(
                 "Reorganization occured while RPC fetching: {}, {}",
                 block.height, last_matching_block_height
             );
-            if let Err(e) = env.fetcher.stop().await {
-                error!("Fetcher panicked on join: {}", e);
-            }
-            while !env.rpc_rx.is_empty() {
-                let _ = env.rpc_rx.recv().await;
-            }
+            stop_fetcher(env).await;
             env.fetcher.start(last_matching_block_height + 1);
             return Ok(vec![Event::Rollback(last_matching_block_height)]);
         }
@@ -437,44 +441,59 @@ async fn handle_rpc_event<T: Tx + 'static, C: BitcoinRpc>(
 }
 
 pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
-    starting_block_height: u64,
     addr: Option<String>,
     cancel_token: CancellationToken,
     reader: database::Reader,
     bitcoin: C,
     f: fn(Transaction) -> Option<T>,
+    ctrl: Receiver<Signal>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let mut env = Env::new(cancel_token.clone(), reader.clone(), bitcoin.clone(), f);
 
-    let start_height = select_block_latest(&*env.reader.connection().await?)
-        .await?
-        .map(|block_row| block_row.height)
-        .unwrap_or(starting_block_height - 1)
-        + 1;
-    let mut state = State::new(start_height);
+    let mut state = State::new();
 
-    let runner_cancel_token = CancellationToken::new();
-
-    let runner_handle = OptionFuture::from(addr.map(|a| {
-        zmq_runner(
-            a,
-            runner_cancel_token.clone(),
-            bitcoin.clone(),
-            f,
-            env.zmq_tx.clone(),
-        )
-    }))
-    .await;
-
-    if runner_handle.is_none() {
+    if addr.is_none() {
         warn!("No ZMQ connection");
-        env.fetcher.start(start_height);
     }
 
+    let mut runner_cancel_token = CancellationToken::new();
+    let mut runner_handle = None;
     Ok(tokio::spawn(async move {
         'outer: loop {
             select! {
+                signal = ctrl.recv() => {
+                    match signal {
+                        Signal::Start(start_height) => {
+                            if addr.is_none() {
+                                if env.fetcher.running() {
+                                    panic!("Start attempted while fetcher was already running, aborting");
+                                    cancel_token.cancel();
+                                }
+                                env.fetcher.start(start_height);
+                            } else {
+                                runner_handle = OptionFuture::from(addr.map(|a| {
+                                    zmq_runner(
+                                        a,
+                                        runner_cancel_token.clone(),
+                                        bitcoin.clone(),
+                                        f,
+                                        env.zmq_tx.clone(),
+                                    )
+                                }))
+                                .await;
+                            }
+                        }
+                        Signal::Stop() => {
+                            if addr.is_none() {
+                                stop_fetcher(env).await;
+                            } else {
+                                runner_cancel_token.cancel();
+                                runner_cancel_token = CancellationToken::new();
+                            }
+                        }
+                    }
+                }
                 option_zmq_event = env.zmq_rx.recv() => {
                     match option_zmq_event {
                         Some(zmq_event) => {

@@ -15,7 +15,6 @@ pub mod rpc;
 pub mod zmq;
 
 pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
-    starting_block_height: u64,
     zmq_address: Option<String>,
     cancel_token: CancellationToken,
     reader: Reader,
@@ -24,7 +23,6 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let handle = reconciler::run(
-        starting_block_height,
         zmq_address,
         cancel_token.clone(),
         reader,
