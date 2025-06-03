@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{BlockHash, Transaction, Txid};
 use futures_util::future::OptionFuture;
-use indexmap::{IndexMap, IndexSet, map::Entry};
+use indexmap::{map::Entry, IndexMap, IndexSet};
 use libsql::Connection;
 use tokio::{
     select,
@@ -19,12 +19,12 @@ use crate::{
     bitcoin_follower::queries::{select_block_at_height, select_block_with_hash},
     bitcoin_follower::rpc,
     block::{Block, Tx},
-    database::{self, queries::select_block_latest},
+    database,
     retry::{new_backoff_unlimited, retry},
 };
 
 use super::{
-    events::{Event, ZmqEvent, Signal},
+    events::{Event, Signal, ZmqEvent},
     zmq,
 };
 
@@ -70,6 +70,7 @@ struct State<T: Tx> {
     mempool_cache: IndexMap<Txid, T>,
     zmq_latest_block_height: Option<u64>,
     rpc_latest_block_height: Option<u64>,
+    target_block_height: Option<u64>,
     zmq_connected: bool,
     mode: Mode,
 }
@@ -80,6 +81,7 @@ impl<T: Tx> State<T> {
             mempool_cache: IndexMap::new(),
             zmq_latest_block_height: None,
             rpc_latest_block_height: None,
+            target_block_height: None,
             zmq_connected: false,
             mode: Mode::Rpc,
         }
@@ -219,69 +221,16 @@ async fn handle_zmq_event<T: Tx + 'static, C: BitcoinRpc>(
         ZmqEvent::Connected => {
             info!("ZMQ connected");
             state.zmq_connected = true;
+
             let mut events = vec![];
-            let conn = &*env.reader.connection().await?;
             if state.mode == Mode::Rpc {
-                let info = retry(
-                    || env.bitcoin.get_blockchain_info(),
-                    "get blockchain info",
-                    new_backoff_unlimited(),
-                    env.cancel_token.clone(),
-                )
-                .await?;
+                let caught_up = state.rpc_latest_block_height.is_some()
+                    && state.target_block_height == state.rpc_latest_block_height;
 
-                let option_block_row = select_block_latest(conn).await?;
-                let caught_up = option_block_row
-                    .as_ref()
-                    .is_some_and(|b| b.height == info.blocks);
-
-                // Program just started and is not caught up
-                if !caught_up && !env.fetcher.running() {
-                    env.fetcher.start(state.rpc_latest_block_height + 1);
-                // Program just started and is already caught up
-                } else if caught_up && !env.fetcher.running() {
-                    let block_row = option_block_row
-                        .expect("option_block_row is None despite caught_up being true");
-                    let block_hash = retry(
-                        || env.bitcoin.get_block_hash(block_row.height),
-                        "get block hash",
-                        new_backoff_unlimited(),
-                        env.cancel_token.clone(),
-                    )
-                    .await?;
-
-                    if block_row.hash == block_hash {
-                        state.mode = Mode::Zmq;
-                        events.push(Event::MempoolSet(
-                            state.mempool_cache.values().cloned().collect(),
-                        ))
-                    } else {
-                        let block = retry(
-                            || env.bitcoin.get_block(&block_hash),
-                            "get block hash",
-                            new_backoff_unlimited(),
-                            env.cancel_token.clone(),
-                        )
-                        .await?;
-                        let last_matching_block_height = get_last_matching_block_height(
-                            env.cancel_token.clone(),
-                            conn,
-                            env.bitcoin.clone(),
-                            block_row.height,
-                            block.header.prev_blockhash,
-                        )
-                        .await?;
-
-                        env.fetcher.start(last_matching_block_height + 1);
-                        events.push(Event::Rollback(last_matching_block_height))
-                    }
-                // Program has recovered from ZMQ disconnect and no new blocks have arrrived in that time
-                } else if caught_up && env.fetcher.running() {
-                    if let Err(e) = env.fetcher.stop().await {
-                        error!("Fetcher panicked on join: {}", e);
-                    }
-                    while !env.rpc_rx.is_empty() {
-                        let _ = env.rpc_rx.recv().await;
+                // RPC fetching is caught up (or not necessary), switching to ZMQ
+                if caught_up {
+                    if env.fetcher.running() {
+                        stop_fetcher(env).await;
                     }
 
                     state.mode = Mode::Zmq;
@@ -302,7 +251,10 @@ async fn handle_zmq_event<T: Tx + 'static, C: BitcoinRpc>(
                 let height = if let Some(height) = state.zmq_latest_block_height {
                     height + 1
                 } else {
-                    state.rpc_latest_block_height + 1
+                    let height = state
+                        .rpc_latest_block_height
+                        .expect("must have start height before using ZMQ");
+                    height + 1
                 };
                 env.fetcher.start(height);
             }
@@ -356,7 +308,10 @@ async fn handle_zmq_event<T: Tx + 'static, C: BitcoinRpc>(
             }
         }
         ZmqEvent::BlockConnected(block) => {
-            if block.height > state.rpc_latest_block_height {
+            let last_height = state
+                .rpc_latest_block_height
+                .expect("must have start height before using ZMQ");
+            if block.height > last_height {
                 state.zmq_latest_block_height = Some(block.height);
                 handle_block(&mut state.mempool_cache, block.height, block)
             } else {
@@ -406,12 +361,24 @@ async fn handle_rpc_event<T: Tx + 'static, C: BitcoinRpc>(
         }
     }
 
-    state.rpc_latest_block_height = block.height;
+    let height = block.height;
+    state.rpc_latest_block_height = Some(height);
+
+    match state.target_block_height {
+        Some(target) => {
+            if target < target_height {
+                state.target_block_height = Some(target_height);
+            }
+        }
+        None => {
+            state.target_block_height = Some(target_height);
+        }
+    }
 
     let mut events = handle_block(&mut state.mempool_cache, target_height, block);
     events[0] = Event::MempoolSet(vec![]);
 
-    if state.zmq_connected && target_height == state.rpc_latest_block_height {
+    if state.zmq_connected && target_height == height {
         let info = retry(
             || env.bitcoin.get_blockchain_info(),
             "get blockchain info",
@@ -423,13 +390,7 @@ async fn handle_rpc_event<T: Tx + 'static, C: BitcoinRpc>(
             info!("RPC caught up: {}", target_height);
 
             state.mode = Mode::Zmq;
-
-            if let Err(e) = env.fetcher.stop().await {
-                error!("Fetcher panicked on join: {}", e);
-            }
-            while !env.rpc_rx.is_empty() {
-                let _ = env.rpc_rx.recv().await;
-            }
+            stop_fetcher(env).await;
 
             events.push(Event::MempoolSet(
                 state.mempool_cache.values().cloned().collect(),
@@ -446,51 +407,87 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     reader: database::Reader,
     bitcoin: C,
     f: fn(Transaction) -> Option<T>,
-    ctrl: Receiver<Signal>,
+    mut ctrl: Receiver<Signal>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let mut env = Env::new(cancel_token.clone(), reader.clone(), bitcoin.clone(), f);
 
     let mut state = State::new();
 
-    if addr.is_none() {
+    let runner_cancel_token = CancellationToken::new();
+    let runner_handle = OptionFuture::from(addr.map(|a| {
+        zmq_runner(
+            a,
+            runner_cancel_token.clone(),
+            bitcoin.clone(),
+            f,
+            env.zmq_tx.clone(),
+        )
+    }))
+    .await;
+
+    if runner_handle.is_none() {
         warn!("No ZMQ connection");
     }
 
-    let mut runner_cancel_token = CancellationToken::new();
-    let mut runner_handle = None;
     Ok(tokio::spawn(async move {
         'outer: loop {
             select! {
-                signal = ctrl.recv() => {
-                    match signal {
-                        Signal::Start(start_height) => {
-                            if addr.is_none() {
-                                if env.fetcher.running() {
-                                    panic!("Start attempted while fetcher was already running, aborting");
-                                    cancel_token.cancel();
-                                }
-                                env.fetcher.start(start_height);
-                            } else {
-                                runner_handle = OptionFuture::from(addr.map(|a| {
-                                    zmq_runner(
-                                        a,
-                                        runner_cancel_token.clone(),
-                                        bitcoin.clone(),
-                                        f,
-                                        env.zmq_tx.clone(),
+                option_signal = ctrl.recv() => {
+                    match option_signal {
+                        Some(signal) => {
+                            match signal {
+                                Signal::Seek((start_height, option_last_hash)) => {
+                                    // (re)start fetcher from new height
+                                    if env.fetcher.running() {
+                                        stop_fetcher(&mut env).await;
+                                    }
+
+                                    // check if we need to roll back before starting
+                                    if let Some(last_hash) = option_last_hash {
+                                        let block_hash = retry(
+                                            || env.bitcoin.get_block_hash(start_height - 1),
+                                            "get block hash",
+                                            new_backoff_unlimited(),
+                                            env.cancel_token.clone(),
+                                        )
+                                        .await.expect("failed to get block hash of previous block");
+
+                                        if last_hash != block_hash {
+                                            warn!("Hash of last block at height {} doesn't match",
+                                                start_height - 1);
+                                            let event = Event::Rollback(start_height - 2);
+                                            if tx.send(event).await.is_err() {
+                                                info!("Send channel closed, exiting");
+                                                break;
+                                            }
+
+                                            // Await new Seek for earlier block before starting
+                                            continue;
+                                        }
+                                    }
+
+                                    let info = retry(
+                                        || env.bitcoin.get_blockchain_info(),
+                                        "get blockchain info",
+                                        new_backoff_unlimited(),
+                                        env.cancel_token.clone(),
                                     )
-                                }))
-                                .await;
+                                    .await.expect("failed to get blockchain info");
+
+                                    state.mode = Mode::Rpc;
+                                    state.rpc_latest_block_height = Some(start_height - 1);
+
+                                    // set initial target, may get pushed higher by RPC Fetcher events
+                                    state.target_block_height = Some(info.blocks);
+
+                                    env.fetcher.start(start_height);
+                                }
                             }
-                        }
-                        Signal::Stop() => {
-                            if addr.is_none() {
-                                stop_fetcher(env).await;
-                            } else {
-                                runner_cancel_token.cancel();
-                                runner_cancel_token = CancellationToken::new();
-                            }
+                        },
+                        None => {
+                            info!("Received None signal, exiting");
+                            break;
                         }
                     }
                 }

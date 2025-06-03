@@ -1,7 +1,10 @@
 use anyhow::Result;
 use bitcoin::Transaction;
-use events::Event;
-use tokio::{sync::mpsc::Sender, task::JoinHandle};
+use events::{Event, Signal};
+use tokio::{
+    sync::mpsc::{Receiver, Sender},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -20,6 +23,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     reader: Reader,
     bitcoin: C,
     f: fn(Transaction) -> Option<T>,
+    ctrl: Receiver<Signal>,
     tx: Sender<Event<T>>,
 ) -> Result<JoinHandle<()>> {
     let handle = reconciler::run(
@@ -28,9 +32,11 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
         reader,
         bitcoin,
         f,
+        ctrl,
         tx,
     )
     .await?;
+
     Ok(tokio::spawn(async move {
         if handle.await.is_err() {
             error!("Panicked on join");

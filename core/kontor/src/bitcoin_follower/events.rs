@@ -23,6 +23,5 @@ pub enum Event<T: Tx> {
 
 #[derive(Debug)]
 pub enum Signal {
-    Start(u64),
-    Stop(),
+    Seek((u64, Option<BlockHash>)),
 }

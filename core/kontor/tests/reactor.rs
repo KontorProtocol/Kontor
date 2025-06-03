@@ -3,20 +3,21 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::{hashes::Hash, BlockHash};
 
 use kontor::{
     bitcoin_follower::{events::Event, queries::select_block_at_height},
     block::Block,
     config::Config,
     reactor,
-    utils::{MockTransaction, new_test_db},
+    utils::{new_test_db, MockTransaction},
 };
 
 #[tokio::test]
 async fn test_reactor_rollback_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
+    let (ctrl_tx, _rx) = mpsc::channel(1);
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
@@ -24,11 +25,12 @@ async fn test_reactor_rollback_event() -> Result<()> {
         cancel_token.clone(),
         reader.clone(),
         writer.clone(),
+        ctrl_tx,
         rx,
     );
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 91,
@@ -38,11 +40,10 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -52,11 +53,10 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -66,8 +66,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
     let conn = &*reader.connection().await?;
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
@@ -76,8 +75,8 @@ async fn test_reactor_rollback_event() -> Result<()> {
 
     assert!(tx.send(Event::Rollback(91)).await.is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -87,11 +86,10 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -101,8 +99,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
     assert_eq!(block.height, 92);
@@ -124,6 +121,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
 async fn test_reactor_unexpected_block() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
+    let (ctrl_tx, _rx) = mpsc::channel(1);
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
@@ -131,11 +129,12 @@ async fn test_reactor_unexpected_block() -> Result<()> {
         cancel_token.clone(),
         reader.clone(),
         writer.clone(),
+        ctrl_tx,
         rx,
     );
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 82, // skipping 81
@@ -145,8 +144,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
     cancel_token.cancelled().await;
     assert!(cancel_token.is_cancelled());
@@ -160,6 +158,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
 async fn test_reactor_deduced_rollback() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
+    let (ctrl_tx, _rx) = mpsc::channel(1);
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let handle = reactor::run::<MockTransaction>(
@@ -167,11 +166,12 @@ async fn test_reactor_deduced_rollback() -> Result<()> {
         cancel_token.clone(),
         reader.clone(),
         writer.clone(),
+        ctrl_tx,
         rx,
     );
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 91,
@@ -181,11 +181,10 @@ async fn test_reactor_deduced_rollback() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -195,11 +194,10 @@ async fn test_reactor_deduced_rollback() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
-    assert!(
-        tx.send(Event::Block((
+    assert!(tx
+        .send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -209,8 +207,7 @@ async fn test_reactor_deduced_rollback() -> Result<()> {
             },
         )))
         .await
-        .is_ok()
-    );
+        .is_ok());
 
     let conn = &*reader.connection().await?;
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;

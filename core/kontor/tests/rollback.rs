@@ -3,7 +3,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
+use bitcoin::{self, hashes::Hash, BlockHash, Network, Txid};
 
 use kontor::{
     bitcoin_client::{client, error, types},
@@ -11,7 +11,7 @@ use kontor::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},
     reactor,
-    utils::{MockTransaction, new_test_db},
+    utils::{new_test_db, MockTransaction},
 };
 
 #[derive(Clone)]
@@ -134,6 +134,7 @@ fn block_row(height: u64, b: &bitcoin::Block) -> BlockRow {
 
 #[tokio::test]
 async fn test_follower_reactor_fetching() -> Result<()> {
+    panic!("foo");
     let cancel_token = CancellationToken::new();
     let (tx, rx) = mpsc::channel(1);
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
@@ -158,25 +159,27 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         Some(MockTransaction::new(123))
     }
 
-    let start_height = 2; // will be overriden by stored blocks
+    let (ctrl_tx, ctrl_rx) = mpsc::channel(1);
     handles.push(
         bitcoin_follower::run(
-            start_height,
             None, // no ZMQ connection
             cancel_token.clone(),
             reader.clone(),
             client,
             f,
+            ctrl_rx,
             tx,
         )
         .await?,
     );
 
+    let start_height = 2; // will be overriden by stored blocks
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
         reader.clone(),
         writer.clone(),
+        ctrl_tx,
         rx,
     ));
 
@@ -231,25 +234,27 @@ async fn test_follower_reactor_rollback() -> Result<()> {
         Some(MockTransaction::new(123))
     }
 
-    let start_height = 2; // will be overriden by stored blocks
+    let (ctrl_tx, ctrl_rx) = mpsc::channel(1);
     handles.push(
         bitcoin_follower::run(
-            start_height,
             None, // no ZMQ connection
             cancel_token.clone(),
             reader.clone(),
             client,
             f,
+            ctrl_rx,
             tx,
         )
         .await?,
     );
 
+    let start_height = 2; // will be overriden by stored blocks
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
         reader.clone(),
         writer.clone(),
+        ctrl_tx,
         rx,
     ));
 

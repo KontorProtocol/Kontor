@@ -1,13 +1,17 @@
 pub mod events;
 
-use tokio::{select, sync::mpsc::Receiver, task::JoinHandle};
+use tokio::{
+    select,
+    sync::mpsc::{Receiver, Sender},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::events::Event,
+    bitcoin_follower::events::{Event, Signal},
     block::{Block, Tx},
     database::{
         self,
@@ -129,11 +133,25 @@ pub fn run<T: Tx + 'static>(
     cancel_token: CancellationToken,
     reader: database::Reader,
     writer: database::Writer,
+    ctrl: Sender<Signal>,
     mut rx: Receiver<Event<T>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
-            let mut reactor = Reactor::new(starting_block_height, reader, writer, cancel_token.clone()).await;
+            let mut reactor =
+                Reactor::new(starting_block_height, reader, writer, cancel_token.clone()).await;
+
+            if ctrl
+                .send(Signal::Seek((
+                    reactor.last_height + 1,
+                    reactor.option_last_hash,
+                )))
+                .await
+                .is_err()
+            {
+                info!("Ctrl channel closed, exiting");
+                return;
+            }
 
             loop {
                 select! {
