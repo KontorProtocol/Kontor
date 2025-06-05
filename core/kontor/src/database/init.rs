@@ -57,7 +57,85 @@ pub const CREATE_CONTRACT_STATE_TABLE: &str = "
 pub const CREATE_CONTRACT_STATE_INDEX: &str = "
     CREATE INDEX IF NOT EXISTS idx_contract_state_lookup 
     ON contract_state(contract_id, height, path)
-    "; // what type of index??
+    ";
+
+pub const CREATE_CONTRACT_STATE_TRIGGER: &str = "
+    CREATE TRIGGER IF NOT EXISTS trigger_checkpoint_on_contract_state_insert
+    AFTER INSERT ON contract_state
+    BEGIN
+        -- Get the most recent checkpoint using MAX(id)
+        WITH latest_checkpoint AS (
+            SELECT id, height FROM checkpoints WHERE id = (SELECT MAX(id) FROM checkpoints)
+        ),
+
+        -- Calculate the new hash using your existing logic
+        latest_row AS (
+            SELECT 
+                contract_id,
+                path,
+                value,
+                deleted
+            FROM contract_state 
+            WHERE id = (SELECT MAX(id) FROM contract_state WHERE deleted = FALSE)
+        ),
+        row_data AS (
+            SELECT 
+                CONCAT(
+                    contract_id,
+                    path,
+                    value,
+                    deleted
+                ) as concatenated_data
+            FROM latest_row
+        ),
+        row_hash AS (
+            SELECT hex(crypto_sha256(concatenated_data)) as hash
+            FROM row_data
+        ),
+        prev_hash AS (
+            SELECT hash
+            FROM checkpoints
+            WHERE id = (SELECT MAX(id) FROM checkpoints)
+        ),
+        new_hash AS (
+            SELECT 
+                CASE 
+                    WHEN p.hash IS NOT NULL THEN 
+                        hex(crypto_sha256(CONCAT(r.hash, p.hash)))
+                    ELSE 
+                        r.hash
+                END AS hash
+            FROM row_hash r
+            LEFT JOIN prev_hash p ON 1=1
+        )
+
+        -- Now perform the appropriate action
+        SELECT
+            CASE
+                -- If no previous checkpoint exists, insert a new one
+                WHEN NOT EXISTS (SELECT 1 FROM latest_checkpoint) THEN
+                    INSERT INTO checkpoints (height, hash)
+                    SELECT NEW.height, hash FROM new_hash
+
+                -- If a checkpoint already exists for this exact height, update it
+                WHEN EXISTS (SELECT 1 FROM checkpoints WHERE height = NEW.height) THEN
+                    UPDATE checkpoints 
+                    SET hash = (SELECT hash FROM new_hash)
+                    WHERE height = NEW.height
+
+                -- If the current height has crossed into a new interval band compared to the latest checkpoint
+                WHEN (NEW.height / 10) > ((SELECT height FROM latest_checkpoint) / 10) THEN -- Replace 10 with your interval
+                    INSERT INTO checkpoints (height, hash)
+                    SELECT NEW.height, hash FROM new_hash
+
+                -- Otherwise, update the most recent checkpoint
+                ELSE
+                    UPDATE checkpoints 
+                    SET height = NEW.height, hash = (SELECT hash FROM new_hash)
+                    WHERE id = (SELECT id FROM latest_checkpoint)
+            END;
+    END;
+";
 
 pub async fn initialize_database(config: &Config, conn: &libsql::Connection) -> Result<(), Error> {
     conn.query("PRAGMA foreign_keys = ON;", ()).await?;
@@ -66,6 +144,7 @@ pub async fn initialize_database(config: &Config, conn: &libsql::Connection) -> 
     conn.execute(CREATE_TRANSACTIONS_TABLE, ()).await?;
     conn.execute(CREATE_CONTRACT_STATE_TABLE, ()).await?;
     conn.execute(CREATE_CONTRACT_STATE_INDEX, ()).await?;
+    conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
     conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
     let p = config.data_dir.join(format!("crypto.{}", LIB_FILE_EXT));

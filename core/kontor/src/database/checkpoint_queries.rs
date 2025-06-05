@@ -1,7 +1,6 @@
 use anyhow::Result;
 use hex;
 use libsql::{Connection, params};
-use sha2::{Digest, Sha256};
 
 pub async fn insert_checkpoint(conn: &Connection, height: u64, state_hash: &str) -> Result<()> {
     conn.execute(
