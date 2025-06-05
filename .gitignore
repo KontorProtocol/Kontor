@@ -12,3 +12,5 @@
 **/*.so
 !/core/kontor/sqlean*/**/*.so
 !/core/kontor/sqlean*/**/*.dylib
+contracts/**/bindings.rs
+core/stdlib/**/bindings.rs
