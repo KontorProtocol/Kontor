@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{Transaction, Txid};
 use futures_util::future::OptionFuture;
-use indexmap::{map::Entry, IndexMap, IndexSet};
+use indexmap::{IndexMap, IndexSet, map::Entry};
 use tokio::{
     select,
     sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},

@@ -11,8 +11,8 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
     sync::{
-        mpsc::{self, Receiver, Sender},
         Semaphore,
+        mpsc::{self, Receiver, Sender},
     },
     task::JoinHandle,
     time::sleep,

@@ -2,7 +2,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{self, hashes::Hash, BlockHash, Network, Txid};
+use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 
 use kontor::{
     bitcoin_client::{client, error, types},
@@ -169,24 +169,26 @@ async fn test_processor() -> Result<()> {
 
     let (processor, mut rx_out) = run_processor(rx_in, f, cancel_token.clone());
 
-    assert!(tx_in
-        .send((
-            1000,
-            700,
-            bitcoin::Block {
-                header: bitcoin::block::Header {
-                    version: bitcoin::block::Version::ONE,
-                    prev_blockhash: BlockHash::from_byte_array([0x99; 32]),
-                    merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
-                    time: 123,
-                    bits: bitcoin::CompactTarget::from_consensus(3),
-                    nonce: 4,
-                },
-                txdata: vec![tx],
-            }
-        ))
-        .await
-        .is_ok());
+    assert!(
+        tx_in
+            .send((
+                1000,
+                700,
+                bitcoin::Block {
+                    header: bitcoin::block::Header {
+                        version: bitcoin::block::Version::ONE,
+                        prev_blockhash: BlockHash::from_byte_array([0x99; 32]),
+                        merkle_root: bitcoin::TxMerkleNode::from_byte_array([0x77; 32]),
+                        time: 123,
+                        bits: bitcoin::CompactTarget::from_consensus(3),
+                        nonce: 4,
+                    },
+                    txdata: vec![tx],
+                }
+            ))
+            .await
+            .is_ok()
+    );
 
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
@@ -209,42 +211,48 @@ async fn test_orderer() -> Result<()> {
     let orderer = run_orderer::<MockTransaction>(700, rx_in, tx_out, cancel_token.clone());
 
     // send 3 blocks in mixed order
-    assert!(tx_in
-        .send((
-            1000,
-            Block {
-                height: 702,
-                hash: BlockHash::from_byte_array([0x44; 32]),
-                prev_hash: BlockHash::from_byte_array([0x33; 32]),
-                transactions: vec![],
-            }
-        ))
-        .await
-        .is_ok());
-    assert!(tx_in
-        .send((
-            1000,
-            Block {
-                height: 700,
-                hash: BlockHash::from_byte_array([0x22; 32]),
-                prev_hash: BlockHash::from_byte_array([0x11; 32]),
-                transactions: vec![],
-            }
-        ))
-        .await
-        .is_ok());
-    assert!(tx_in
-        .send((
-            1000,
-            Block {
-                height: 701,
-                hash: BlockHash::from_byte_array([0x33; 32]),
-                prev_hash: BlockHash::from_byte_array([0x22; 32]),
-                transactions: vec![],
-            }
-        ))
-        .await
-        .is_ok());
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 702,
+                    hash: BlockHash::from_byte_array([0x44; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x33; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 700,
+                    hash: BlockHash::from_byte_array([0x22; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x11; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tx_in
+            .send((
+                1000,
+                Block {
+                    height: 701,
+                    hash: BlockHash::from_byte_array([0x33; 32]),
+                    prev_hash: BlockHash::from_byte_array([0x22; 32]),
+                    transactions: vec![],
+                }
+            ))
+            .await
+            .is_ok()
+    );
 
     // verify that they come out ordered
     let (target_height, block) = rx_out.recv().await.unwrap();

@@ -2,10 +2,10 @@ use anyhow::Result;
 use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{self, hashes::Hash, BlockHash, Network, Txid};
+use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 
 use kontor::{
     bitcoin_client::{client, error, types},
@@ -13,12 +13,12 @@ use kontor::{
         self,
         events::{Event, Signal},
         queries::select_block_at_height,
-        reconciler::{self, handle_control_signal, Env, State},
+        reconciler::{self, Env, State, handle_control_signal},
     },
     config::Config,
     database::{queries::insert_block, types::BlockRow},
     reactor,
-    utils::{new_test_db, MockTransaction},
+    utils::{MockTransaction, new_test_db},
 };
 
 // TODO: implement forking of the mock blockchain to allow us to trigger rollbacks

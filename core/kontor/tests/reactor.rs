@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{hashes::Hash, BlockHash};
+use bitcoin::{BlockHash, hashes::Hash};
 
 use kontor::{
     bitcoin_follower::{
@@ -14,7 +14,7 @@ use kontor::{
     block::Block,
     config::Config,
     reactor,
-    utils::{new_test_db, MockTransaction},
+    utils::{MockTransaction, new_test_db},
 };
 
 #[tokio::test]
@@ -35,8 +35,8 @@ async fn test_reactor_rollback_event() -> Result<()> {
 
     assert_eq!(ctrl_rx.recv().await.unwrap(), Signal::Seek((91, None)));
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 91,
@@ -46,10 +46,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -59,10 +60,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -72,7 +74,8 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
     let conn = &*reader.connection().await?;
@@ -87,8 +90,8 @@ async fn test_reactor_rollback_event() -> Result<()> {
         Signal::Seek((92, Some(BlockHash::from_byte_array([0x10; 32]))))
     );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -98,10 +101,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -111,10 +115,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
-                                            //
+    //
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x21; 32]));
@@ -149,8 +154,8 @@ async fn test_reactor_unexpected_block() -> Result<()> {
 
     assert_eq!(ctrl_rx.recv().await.unwrap(), Signal::Seek((81, None)));
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 82, // skipping 81
@@ -160,7 +165,8 @@ async fn test_reactor_unexpected_block() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     cancel_token.cancelled().await;
     assert!(cancel_token.is_cancelled());
@@ -188,8 +194,8 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
 
     assert_eq!(ctrl_rx.recv().await.unwrap(), Signal::Seek((91, None)));
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 91,
@@ -199,10 +205,11 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -212,10 +219,11 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -225,7 +233,8 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     let conn = &*reader.connection().await?;
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
@@ -237,8 +246,8 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
         Signal::Seek((92, Some(BlockHash::from_byte_array([0x01; 32]))))
     );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -248,7 +257,8 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
     let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
@@ -281,8 +291,8 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
 
     assert_eq!(ctrl_rx.recv().await.unwrap(), Signal::Seek((91, None)));
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 91,
@@ -292,10 +302,11 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -305,10 +316,11 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 93,
@@ -318,10 +330,11 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,                                   // lower height
@@ -331,7 +344,8 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     // we're re-requesting the block we just received, which is wasteful but
     // it doesn't seem worth having a special code-path for what should be
@@ -342,8 +356,8 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
         Signal::Seek((92, Some(BlockHash::from_byte_array([0x01; 32]))))
     );
 
-    assert!(tx
-        .send(Event::Block((
+    assert!(
+        tx.send(Event::Block((
             100,
             Block {
                 height: 92,
@@ -353,7 +367,8 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
             },
         )))
         .await
-        .is_ok());
+        .is_ok()
+    );
 
     let conn = &*reader.connection().await?;
     sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
