@@ -4,3 +4,4 @@ resolver = "2"
 
 [workspace.dependencies]
 wit-bindgen = "0.42.1"
+kontor-macro = { path = "../core/macro" }

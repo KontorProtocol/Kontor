@@ -2189,7 +2189,7 @@ dependencies = [
  "futures-util",
  "hex",
  "indexmap 2.9.0",
- "kontor_macro",
+ "kontor-macro",
  "libsql",
  "proptest",
  "rayon",
@@ -2212,11 +2212,12 @@ dependencies = [
  "urlencoding",
  "wasmtime",
  "wit-component",
+ "wit-parser 0.232.0",
  "zmq",
 ]
 
 [[package]]
-name = "kontor_macro"
+name = "kontor-macro"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

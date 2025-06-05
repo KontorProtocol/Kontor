@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 wit-bindgen = { workspace = true }
+kontor-macro = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]

@@ -1,5 +1,5 @@
 [package]
-name = "kontor_macro"
+name = "kontor-macro"
 version = "0.1.0"
 edition = "2024"
 

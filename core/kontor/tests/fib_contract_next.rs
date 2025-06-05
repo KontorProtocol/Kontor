@@ -1,33 +1,64 @@
-use std::path::Path;
 use std::sync::Arc;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
+use kontor::logging;
 use stdlib::{Contract, MyMonoidHostRep};
 use tokio::fs::read;
+use tracing::info;
+use wasmtime::component::ResourceType;
 use wasmtime::{
-    Engine, Store,
+    Engine, Store, StoreContextMut,
     component::{
         Component, Linker, Resource, ResourceTable, Type, Val,
         wasm_wave::parser::Parser as WaveParser,
     },
 };
 use wit_component::ComponentEncoder;
+use wit_parser::WorldItem;
+
+struct MyStorage {
+    data: HashMap<String, u64>,
+}
+
+impl MyStorage {
+    fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+        }
+    }
+
+    fn set(&mut self, key: String, value: u64) {
+        self.data.insert(key, value);
+    }
+
+    fn get(&self, key: &str) -> u64 {
+        self.data.get(key).unwrap().to_owned()
+    }
+}
 
 struct HostCtx {
-    table: ResourceTable,
+    pub table: ResourceTable,
+    storage: HashMap<String, String>,
 }
 
 impl HostCtx {
     fn new() -> Self {
         Self {
             table: ResourceTable::new(),
+            storage: HashMap::new(),
         }
     }
 }
 
 impl stdlib::Host for HostCtx {
-    async fn test(&mut self) -> Result<bool> {
-        Ok(true)
+    async fn set(&mut self, key: String, value: String) -> Result<()> {
+        self.storage.insert(key, value);
+        Ok(())
+    }
+
+    async fn get(&mut self, key: String) -> Result<Option<String>> {
+        Ok(self.storage.get(&key).cloned())
     }
 }
 
@@ -69,25 +100,27 @@ impl SumService {
             .validate(true)
             .encode()?;
         let component = Component::from_binary(engine, &component_bytes)?;
-        
-        let service = Arc::new(Self { 
+
+        let service = Arc::new(Self {
             engine: engine.clone(),
-            component 
+            component,
         });
         Ok(service)
     }
-    
+
     async fn call_sum(&self, x: u64, y: u64) -> Result<u64> {
         let host_ctx = HostCtx::new();
         let mut store = Store::new(&self.engine, host_ctx);
         let mut linker = Linker::<HostCtx>::new(&self.engine);
         Contract::add_to_linker(&mut linker, |s| s)?;
-        
+
         let s = format!("sum({}, {})", x, y);
         let call = WaveParser::new(&s).parse_raw_func_call()?;
-        
-        let instance = linker.instantiate_async(&mut store, &self.component).await?;
-        
+
+        let instance = linker
+            .instantiate_async(&mut store, &self.component)
+            .await?;
+
         let func = instance
             .get_func(&mut store, call.name())
             .ok_or_else(|| anyhow::anyhow!("sum function not found in instance"))?;
@@ -98,7 +131,7 @@ impl SumService {
             .map(default_val_for_type)
             .collect::<Vec<_>>();
         func.call_async(&mut store, &params, &mut results).await?;
-        
+
         match &results[0] {
             Val::U64(value) => Ok(*value),
             _ => Err(anyhow::anyhow!("Expected u64 result from sum function")),
@@ -203,12 +236,14 @@ async fn test_fib_contract() -> Result<()> {
     // Add the sum function implementation to the linker using store context
     linker.root().func_wrap_async(
         "sum",
-        |store_context: wasmtime::StoreContextMut<'_, FibCtx>,
+        |store_context: StoreContextMut<'_, FibCtx>,
          (x, y): (u64, u64)|
-         -> Box<dyn std::future::Future<Output = Result<(u64,), wasmtime::Error>> + Send> {
+         -> Box<dyn Future<Output = Result<(u64,), wasmtime::Error>> + Send> {
             Box::new(async move {
                 let sum_service = store_context.data().sum_service.clone();
-                let result = sum_service.call_sum(x, y).await
+                let result = sum_service
+                    .call_sum(x, y)
+                    .await
                     .map_err(|e| wasmtime::Error::msg(format!("Sum WASM call failed: {}", e)))?;
                 Ok((result,))
             })
@@ -225,6 +260,84 @@ async fn test_fib_contract() -> Result<()> {
         .module(&module_bytes)?
         .validate(true)
         .encode()?;
+
+    logging::setup();
+    linker.root().resource_async(
+        "storage",
+        ResourceType::host::<MyStorage>(),
+        |mut context, id| {
+            Box::new(async move {
+                let handle = Resource::<MyStorage>::new_own(id);
+                match context.data_mut().host_ctx.table.delete(handle) {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.into()),
+                }
+            })
+        },
+    )?;
+    linker
+        .root()
+        .func_wrap_async("[constructor]storage", |mut context, ()| {
+            Box::new(async move {
+                let rep = MyStorage::new();
+                context
+                    .data_mut()
+                    .host_ctx
+                    .table
+                    .push(rep)
+                    .map(|r| (r,))
+                    .map_err(Into::into)
+            })
+        })?;
+    let wit = wit_component::decode(&component_bytes)?;
+    let resolve = wit.resolve();
+    for (_, i) in resolve.worlds.iter() {
+        i.imports.iter().for_each(|(_, i)| {
+            if let WorldItem::Function(f) = i {
+                if f.name == "[method]storage.prop1" {
+                    info!("Implementing {}", f.name);
+                    linker
+                        .root()
+                        .func_wrap_async(
+                            &f.name,
+                            |mut context, (handle,): (Resource<MyStorage>,)| {
+                                Box::new(async move {
+                                    let rep = context.data_mut().host_ctx.table.get_mut(&handle)?;
+                                    Ok((rep.get("prop1"),))
+                                })
+                            },
+                        )
+                        .unwrap();
+                } else if f.name == "[method]storage.set-prop1" {
+                    info!("Implementing {}", f.name);
+                    linker
+                        .root()
+                        .func_wrap_async(
+                            &f.name,
+                            |mut context, (handle, value): (Resource<MyStorage>, u64)| {
+                                Box::new(async move {
+                                    let rep = context.data_mut().host_ctx.table.get_mut(&handle)?;
+                                    rep.set("prop1".to_string(), value);
+                                    Ok(())
+                                })
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+        });
+    }
+    linker.root().func_wrap_async(
+        "[resource-drop]monoid",
+        |mut context, (rep,): (Resource<MyStorage>,)| {
+            Box::new(async move {
+                match context.data_mut().host_ctx.table.delete(rep) {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.into()),
+                }
+            })
+        },
+    )?;
 
     let component = Component::from_binary(&engine, &component_bytes)?;
     let instance = linker.instantiate_async(&mut store, &component).await?;

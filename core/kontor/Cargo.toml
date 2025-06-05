@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kontor_macro = { path = "../macro" }
+kontor-macro = { path = "../macro" }
 stdlib = { path = "../stdlib" }
 
 anyhow = { workspace = true }
@@ -48,6 +48,7 @@ urlencoding = "2.1"
 proptest = "1.6"
 wasmtime = { workspace = true }
 wit-component = "0.232"
+wit-parser = "0.232"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
