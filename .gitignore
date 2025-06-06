@@ -8,6 +8,7 @@
 **/*.db-wal
 **/*.key
 **/.vscode
-bindings.rs
-core/crypto.dylib
-core/crypto.so
+**/*.dylib
+**/*.so
+!/core/kontor/sqlean*/**/*.so
+!/core/kontor/sqlean*/**/*.dylib
