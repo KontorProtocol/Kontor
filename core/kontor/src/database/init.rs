@@ -84,18 +84,22 @@ pub const CREATE_CONTRACT_STATE_TRIGGER: &str = "
             (
                 WITH row_hash AS (
                     SELECT hex(crypto_sha256(
-                        NEW.contract_id ||
-                        NEW.path ||
-                        COALESCE(CAST(NEW.value AS TEXT), '') ||
-                        CAST(NEW.deleted AS TEXT)
+                        concat(
+                            NEW.contract_id,
+                            NEW.path,
+                            NEW.value,
+                            NEW.deleted
+                        )
                     )) AS hash
                 )
                 SELECT
                     CASE
                         WHEN EXISTS(SELECT 1 FROM checkpoints) THEN
                             hex(crypto_sha256(
-                                (SELECT hash FROM row_hash) ||
-                                (SELECT hash FROM checkpoints WHERE id = (SELECT MAX(id) FROM checkpoints))
+                                concat(
+                                    (SELECT hash FROM row_hash),
+                                    (SELECT hash FROM checkpoints WHERE id = (SELECT MAX(id) FROM checkpoints))
+                                )
                             ))
                         ELSE
                             (SELECT hash FROM row_hash)
