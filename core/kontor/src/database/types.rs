@@ -1,4 +1,5 @@
 use bitcoin::BlockHash;
+use bon::Builder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,15 +15,14 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct TransactionRow {
     pub id: Option<i64>,
-    pub tx_index: u32,
+    pub height: u64,
     pub txid: String,
-    pub block_index: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
     pub id: Option<i64>,
     pub contract_id: String,
@@ -30,5 +30,6 @@ pub struct ContractStateRow {
     pub height: u64,
     pub path: String,
     pub value: Option<Vec<u8>>,
+    #[builder(default = false)]
     pub deleted: bool,
 }
