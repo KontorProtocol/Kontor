@@ -2199,6 +2199,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
+ "sha2",
  "stdlib",
  "tempfile",
  "thiserror 2.0.12",

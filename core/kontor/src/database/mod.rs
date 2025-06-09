@@ -1,5 +1,5 @@
 mod connection;
-mod init;
+pub mod init;
 mod pool;
 pub mod queries;
 pub mod reader;

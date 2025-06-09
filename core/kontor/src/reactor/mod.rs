@@ -133,7 +133,8 @@ pub fn run<T: Tx + 'static>(
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
-            let mut reactor = Reactor::new(starting_block_height, reader, writer, cancel_token.clone()).await;
+            let mut reactor =
+                Reactor::new(starting_block_height, reader, writer, cancel_token.clone()).await;
 
             loop {
                 select! {
