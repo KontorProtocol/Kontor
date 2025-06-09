@@ -17,7 +17,7 @@ pub async fn select_block_at_height(
         async || match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => Ok(row),
             Ok(None) => Err(anyhow!("Block at height not found: {}", height)),
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         },
         "read block at height",
         new_backoff_unlimited(),
@@ -35,7 +35,7 @@ pub async fn select_block_with_hash(
         async || match queries::select_block_with_hash(conn, hash).await {
             Ok(Some(row)) => Ok(row),
             Ok(None) => Err(anyhow!("Block with hash not found: {}", &hash)),
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         },
         "get block with hash",
         new_backoff_unlimited(),

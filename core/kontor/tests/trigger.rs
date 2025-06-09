@@ -4,7 +4,7 @@ use clap::Parser;
 use kontor::{
     config::Config,
     database::{
-        queries::insert_block,
+        queries::{insert_block, insert_contract_state},
         types::{BlockRow, CheckpointRow, ContractStateRow},
     },
     utils::new_test_db,
@@ -27,15 +27,13 @@ async fn test_checkpoint_trigger() -> Result<()> {
     }
 
     // Test case 1: First insertion creates a checkpoint with ID 1
-    let contract_state1 = ContractStateRow {
-        id: None,
-        contract_id: "contract1".to_string(),
-        tx_id: 1,
-        height: 10,
-        path: "/test/path1".to_string(),
-        value: Some(b"test value 1".to_vec()),
-        deleted: false,
-    };
+    let contract_state1 = ContractStateRow::builder()
+        .contract_id("contract1".to_string())
+        .tx_id(1)
+        .height(10)
+        .path("/test/path1".to_string())
+        .value(b"test value 1".to_vec())
+        .build();
     insert_contract_state(&conn, contract_state1.clone()).await?;
 
     // Verify the first checkpoint
@@ -50,15 +48,12 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count1, 1);
 
     // Test case 2: Second insertion within same interval updates the checkpoint
-    let contract_state2 = ContractStateRow {
-        id: None,
-        contract_id: "contract1".to_string(),
-        tx_id: 2,
-        height: 20, // Still within the first 50-block interval
-        path: "/test/path2".to_string(),
-        value: None,
-        deleted: false,
-    };
+    let contract_state2 = ContractStateRow::builder()
+        .contract_id("contract1".to_string())
+        .tx_id(2)
+        .height(20)
+        .path("/test/path2".to_string())
+        .build();
     insert_contract_state(&conn, contract_state2.clone()).await?;
 
     // Verify the checkpoint was updated
@@ -73,15 +68,13 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count2, 1);
 
     // Test case 3: Insertion in a new interval creates a new checkpoint
-    let contract_state3 = ContractStateRow {
-        id: None,
-        contract_id: "contract2".to_string(),
-        tx_id: 3,
-        height: 60, // In the second 50-block interval
-        path: "/test/path3".to_string(),
-        value: Some(b"test value 3".to_vec()),
-        deleted: false,
-    };
+    let contract_state3 = ContractStateRow::builder()
+        .contract_id("contract2".to_string())
+        .tx_id(3)
+        .height(60)
+        .path("/test/path3".to_string())
+        .value(b"test value 3".to_vec())
+        .build();
     insert_contract_state(&conn, contract_state3.clone()).await?;
 
     // Verify a new checkpoint was created
@@ -96,15 +89,13 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count3, 2);
 
     // Test case 4: Another insertion in the same new interval updates that checkpoint
-    let contract_state4 = ContractStateRow {
-        id: None,
-        contract_id: "contract2".to_string(),
-        tx_id: 4,
-        height: 75, // Still in the second 50-block interval
-        path: "/test/path4".to_string(),
-        value: Some(b"test value 4".to_vec()),
-        deleted: false,
-    };
+    let contract_state4 = ContractStateRow::builder()
+        .contract_id("contract2".to_string())
+        .tx_id(4)
+        .height(75)
+        .path("/test/path4".to_string())
+        .value(b"test value 4".to_vec())
+        .build();
     insert_contract_state(&conn, contract_state4.clone()).await?;
 
     // Verify the second checkpoint was updated
@@ -119,15 +110,13 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count4, 2);
 
     // Test case 5: Insertion in yet another new interval creates another checkpoint
-    let contract_state5 = ContractStateRow {
-        id: None,
-        contract_id: "contract3".to_string(),
-        tx_id: 5,
-        height: 120, // In the third 50-block interval
-        path: "/test/path5".to_string(),
-        value: Some(b"test value 5".to_vec()),
-        deleted: false,
-    };
+    let contract_state5 = ContractStateRow::builder()
+        .contract_id("contract3".to_string())
+        .tx_id(5)
+        .height(120)
+        .path("/test/path5".to_string())
+        .value(b"test value 5".to_vec())
+        .build();
     insert_contract_state(&conn, contract_state5.clone()).await?;
 
     // Verify a third checkpoint was created
@@ -142,15 +131,12 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count5, 3);
 
     // Test case 6: Insertion in another new interval creates another checkpoint without a value
-    let contract_state6 = ContractStateRow {
-        id: None,
-        contract_id: "contract4".to_string(),
-        tx_id: 6,
-        height: 190, // In the fourth 50-block interval
-        path: "/test/path6".to_string(),
-        value: None,
-        deleted: false,
-    };
+    let contract_state6 = ContractStateRow::builder()
+        .contract_id("contract4".to_string())
+        .tx_id(6)
+        .height(190)
+        .path("/test/path6".to_string())
+        .build();
     insert_contract_state(&conn, contract_state6.clone()).await?;
 
     // Verify a fourth checkpoint was created
@@ -165,15 +151,13 @@ async fn test_checkpoint_trigger() -> Result<()> {
     assert_eq!(checkpoint_count6, 4);
 
     // Test case 7: Insertion in the same interval overwrites previous checkpoint
-    let contract_state7 = ContractStateRow {
-        id: None,
-        contract_id: "contract4".to_string(),
-        tx_id: 7,
-        height: 199, // Still in the fourth 50-block interval
-        path: "/test/path7".to_string(),
-        value: Some(b"test value 7".to_vec()),
-        deleted: false,
-    };
+    let contract_state7 = ContractStateRow::builder()
+        .contract_id("contract4".to_string())
+        .tx_id(7)
+        .height(199)
+        .path("/test/path7".to_string())
+        .value(b"test value 7".to_vec())
+        .build();
     insert_contract_state(&conn, contract_state7.clone()).await?;
 
     // Verify the fourth checkpoint was updated
@@ -253,26 +237,4 @@ fn calculate_combined_hash(state: &ContractStateRow, prev_hash: &str) -> Result<
 
     // Convert to uppercase hex to match SQLite's hex() function
     Ok(hex::encode(result).to_uppercase())
-}
-
-async fn insert_contract_state(conn: &libsql::Connection, row: ContractStateRow) -> Result<i64> {
-    let _result = conn
-        .execute(
-            "INSERT INTO contract_state (contract_id, tx_id, height, path, value, deleted) 
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params![
-                row.contract_id,
-                row.tx_id,
-                row.height,
-                row.path,
-                row.value,
-                row.deleted
-            ],
-        )
-        .await?;
-
-    // Get the last inserted row ID
-    let last_id = conn.last_insert_rowid();
-
-    Ok(last_id)
 }

@@ -48,8 +48,8 @@ urlencoding = "2.1"
 proptest = "1.6"
 wasmtime = { workspace = true }
 wit-component = "0.232"
-sha2 = "0.10.9"
 wit-parser = "0.232"
 
 [dev-dependencies]
+sha2 = "0.10.9"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
