@@ -121,10 +121,10 @@ pub async fn get_latest_contract_state(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-pub async fn insert_transaction(conn: &Connection, height: u64, txid: &str) -> Result<i64, Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid) VALUES (?, ?)",
-        params![height, txid],
+        params![row.height, row.txid],
     )
     .await?;
 
@@ -162,7 +162,7 @@ pub async fn get_transaction_by_txid(
 pub async fn get_transactions_at_height(
     conn: &Connection,
     height: u64,
-) -> Result<Vec<(i64, String)>, Error> {
+) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
             "SELECT id, txid, height FROM transactions WHERE height = ?",
