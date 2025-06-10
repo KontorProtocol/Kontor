@@ -1,11 +1,14 @@
-use std::path::Path;
 use std::future::Future;
+use std::path::Path;
 
 use anyhow::Result;
 use tokio::fs::read;
 use wasmtime::{
     Engine, Store, StoreContextMut,
-    component::{Component, Linker, Type, Val, Resource, ResourceTable, ResourceType, wasm_wave::parser::Parser as WaveParser},
+    component::{
+        Component, Linker, Resource, ResourceTable, ResourceType, Type, Val,
+        wasm_wave::parser::Parser as WaveParser,
+    },
 };
 
 type MzeroFn = fn() -> u64;
@@ -71,7 +74,10 @@ fn monoid_linker_destructor<'a>(
         let resource_to_delete = Resource::<MyMonoidHostRep>::new_own(handle);
         match store.data_mut().table.delete(resource_to_delete) {
             Ok(_deleted_host_rep) => {
-                println!("Host: Successfully deleted resource with handle {} from table via linker destructor.", handle);
+                println!(
+                    "Host: Successfully deleted resource with handle {} from table via linker destructor.",
+                    handle
+                );
                 Ok(())
             }
             Err(e) => {
@@ -81,8 +87,7 @@ fn monoid_linker_destructor<'a>(
                 // Depending on desired semantics, this might not be a fatal error for the *linker destructor*.
                 eprintln!(
                     "Host: Error in linker destructor for handle {}: {:?}. This might be okay if already dropped by guest.",
-                    handle,
-                    e
+                    handle, e
                 );
                 // We might choose to return Ok(()) here if an error (like already dropped) is acceptable.
                 // For now, let's propagate the error to see its nature during testing.
@@ -105,10 +110,7 @@ fn host_monoid_constructor<'a>(
     (address,): (u64,),
 ) -> Box<dyn Future<Output = Result<(Resource<MyMonoidHostRep>,), anyhow::Error>> + Send + 'a> {
     Box::new(async move {
-        println!(
-            "Host: monoid.new(address: {}) called from Wasm",
-            address
-        );
+        println!("Host: monoid.new(address: {}) called from Wasm", address);
         match MyMonoidHostRep::new(address) {
             Ok(monoid_rep) => store_context
                 .data_mut()
@@ -163,17 +165,17 @@ fn host_monoid_drop<'a>(
         // Note: Resource<T>::handle() is not directly available in this version or context.
         // We will log the debug representation of the resource which typically includes the handle.
         let resource_dbg_for_log = format!("{:?}", resource);
-        println!("Host: [resource-drop]monoid called for {}", resource_dbg_for_log);
-        
+        println!(
+            "Host: [resource-drop]monoid called for {}",
+            resource_dbg_for_log
+        );
+
         match store_context.data_mut().table.delete(resource) {
-            Ok(_deleted_host_rep) => {
-                Ok(((),))
-            }
+            Ok(_deleted_host_rep) => Ok(((),)),
             Err(e) => {
                 eprintln!(
                     "Host: Error in [resource-drop]monoid for {}: {:?}",
-                    resource_dbg_for_log,
-                    e
+                    resource_dbg_for_log, e
                 );
                 Err(anyhow::Error::from(e))
             }
@@ -254,40 +256,36 @@ async fn test_fib_contract() -> Result<()> {
     config.async_support(true);
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
-    
+
     let host_ctx = HostCtx::new();
     let mut store = Store::new(&engine, host_ctx);
-    
+
     let mut linker = Linker::<HostCtx>::new(&engine);
 
     linker.root().resource_async(
         "monoid",
         ResourceType::host::<MyMonoidHostRep>(),
-        monoid_linker_destructor
+        monoid_linker_destructor,
     )?;
 
-    linker.root().func_wrap_async(
-        "[constructor]monoid",
-        host_monoid_constructor,
-    )?;
+    linker
+        .root()
+        .func_wrap_async("[constructor]monoid", host_monoid_constructor)?;
 
-    linker.root().func_wrap_async(
-        "[method]monoid.mzero",
-        host_monoid_mzero,
-    )?;
+    linker
+        .root()
+        .func_wrap_async("[method]monoid.mzero", host_monoid_mzero)?;
 
-    linker.root().func_wrap_async(
-        "[method]monoid.mappend",
-        host_monoid_mappend,
-    )?;
+    linker
+        .root()
+        .func_wrap_async("[method]monoid.mappend", host_monoid_mappend)?;
 
     // Link [resource-drop]monoid. This is crucial.
     // This is the function the Wasm guest calls to signal it's done with a resource instance.
     // Our implementation (`host_monoid_drop`) will remove it from the ResourceTable.
-    linker.root().func_wrap_async(
-        "[resource-drop]monoid",
-        host_monoid_drop,
-    )?;
+    linker
+        .root()
+        .func_wrap_async("[resource-drop]monoid", host_monoid_drop)?;
 
     let n = 8;
     let s = format!("fib({})", n);

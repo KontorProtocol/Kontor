@@ -1,6 +1,10 @@
 package kontor:contract;
 
 interface stdlib {
+    // option 1: low level dynamic storage methods
+    set: func(key: string, value: string);
+    get: func(key: string) -> option<string>;
+
     resource monoid {
         constructor(address: u64);
         mzero: func() -> u64;
@@ -9,7 +13,16 @@ interface stdlib {
 }
 
 world contract {
+    import stdlib;
     use stdlib.{monoid};
+
+    // option 2: high level dynamically created and linked by the host storage resource
+    resource storage {
+        constructor();
+        prop1: func() -> u64;
+        set-prop1: func(value: u64);
+    }
+
     import sum: func(x: u64, y: u64) -> u64;
     export fib: func(n: u64) -> u64;
 

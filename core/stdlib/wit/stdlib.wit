@@ -1,7 +1,8 @@
 package kontor:contract;
 
 interface stdlib {
-    test: func() -> bool;
+    set: func(key: string, value: string);
+    get: func(key: string) -> option<string>;
 
     resource monoid {
         constructor(address: u64);

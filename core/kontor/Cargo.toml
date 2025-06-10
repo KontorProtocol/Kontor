@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kontor_macro = { path = "../macro" }
+kontor-macro = { path = "../macro" }
 stdlib = { path = "../stdlib" }
 
 anyhow = { workspace = true }
@@ -12,7 +12,7 @@ backon = { version = "1.4", features = ["tokio-sleep"] }
 base64 = "0.22.1"
 bitcoin = { version = "0.32.6", features = ["serde", "rand", "rand-std"] }
 deadpool = "0.12"
-libsql = "0.9.8"
+libsql = "0.9.9"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
@@ -40,7 +40,7 @@ rustls = { version = "0.23", features = [
 rustls-native-certs = "0.8"
 futures-util = "0.3"
 hex = "0.4"
-bip39 = "1.0"
+bip39 = "2.1"
 ciborium = "0.2"
 bon = "3.6"
 axum-test = "17.3"
@@ -48,6 +48,8 @@ urlencoding = "2.1"
 proptest = "1.6"
 wasmtime = { workspace = true }
 wit-component = "0.232"
+wit-parser = "0.232"
 
 [dev-dependencies]
+sha2 = "0.10.9"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
