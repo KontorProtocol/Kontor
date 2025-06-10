@@ -17,6 +17,11 @@ use tower_http::{
 };
 use tracing::{Level, Span, error, field, info, span};
 
+use crate::api::handlers::{
+    get_blocks_cursor, get_blocks_paginated, get_transaction_by_txid_handler,
+    get_transactions_cursor, get_transactions_paginated,
+};
+
 use super::{
     Env,
     error::ErrorResponse,
@@ -91,7 +96,12 @@ pub fn new(context: Env) -> Router {
             Router::new()
                 .route("/block/{height}", get(get_block))
                 .route("/block/latest", get(get_block_latest))
-                .route("/test_mempool_accept", get(test_mempool_accept)),
+                .route("/test_mempool_accept", get(test_mempool_accept))
+                .route("/blocks", get(get_blocks_paginated))
+                .route("/blocks/feed", get(get_blocks_cursor))
+                .route("/transactions", get(get_transactions_paginated))
+                .route("/transactions/feed", get(get_transactions_cursor))
+                .route("/transactions/{txid}", get(get_transaction_by_txid_handler)),
         )
         .nest(
             "/compose",
