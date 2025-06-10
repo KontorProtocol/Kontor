@@ -348,6 +348,8 @@ pub async fn handle_control_signal<T: Tx + 'static, C: BitcoinRpc>(
 ) -> Result<Vec<Event<T>>> {
     match signal {
         Signal::Seek((start_height, option_last_hash)) => {
+            info!("Received Seek to height {}", start_height);
+
             // stop fetcher before (re)starting from new height
             if env.fetcher.running() {
                 stop_fetcher(env).await;

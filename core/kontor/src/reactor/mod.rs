@@ -1,5 +1,6 @@
 pub mod events;
 
+use anyhow::Result;
 use tokio::{
     select,
     sync::mpsc::{Receiver, Sender},
@@ -8,7 +9,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     bitcoin_follower::events::{Event, Signal},
@@ -23,7 +24,7 @@ use crate::{
 struct Reactor {
     reader: database::Reader,
     writer: database::Writer,
-    cancel_token: CancellationToken,
+    _cancel_token: CancellationToken, // currently not used due to relaxed error handling
     ctrl_tx: Sender<Signal>,
 
     last_height: u64,
@@ -36,10 +37,10 @@ impl Reactor {
         reader: database::Reader,
         writer: database::Writer,
         ctrl_tx: Sender<Signal>,
-        cancel_token: CancellationToken,
-    ) -> Self {
-        let conn = &*reader.connection().await.unwrap();
-        match select_block_latest(conn).await.unwrap() {
+        _cancel_token: CancellationToken,
+    ) -> Result<Self> {
+        let conn = &*reader.connection().await?;
+        match select_block_latest(conn).await? {
             Some(block) => {
                 if block.height < starting_block_height - 1 {
                     panic!(
@@ -53,14 +54,14 @@ impl Reactor {
                     block.height, block.hash
                 );
 
-                Self {
+                Ok(Self {
                     reader,
                     writer,
-                    cancel_token,
+                    _cancel_token,
                     ctrl_tx,
                     last_height: block.height,
                     option_last_hash: Some(block.hash),
-                }
+                })
             }
             None => {
                 info!(
@@ -68,14 +69,14 @@ impl Reactor {
                     starting_block_height
                 );
 
-                Self {
+                Ok(Self {
                     reader,
                     writer,
-                    cancel_token,
+                    _cancel_token,
                     ctrl_tx,
                     last_height: starting_block_height - 1,
                     option_last_hash: None,
-                }
+                })
             }
         }
     }
@@ -97,6 +98,7 @@ impl Reactor {
             warn!("Rollback to height {}, no previous block found", height);
         }
 
+        info!("Seek: start fetching from height {}", self.last_height + 1);
         if self
             .ctrl_tx
             .send(Signal::Seek((self.last_height + 1, self.option_last_hash)))
@@ -123,12 +125,15 @@ impl Reactor {
             self.rollback(height - 1).await;
             return;
         } else if height > self.last_height + 1 {
-            error!(
+            // Receiving a block at a higher height than expected can happen
+            // during a rollback so we can't crash here. For the time being
+            // we'll throw the block away and hope that we eventually get
+            // the expected block.
+            warn!(
                 "Order exception, received block at height {}, expected height {}",
                 height,
                 self.last_height + 1
             );
-            self.cancel_token.cancel();
             return;
         }
 
@@ -178,7 +183,8 @@ pub fn run<T: Tx + 'static>(
                 ctrl.clone(),
                 cancel_token.clone(),
             )
-            .await;
+            .await
+            .expect("Failed to create Reactor, exiting");
 
             if ctrl
                 .send(Signal::Seek((
