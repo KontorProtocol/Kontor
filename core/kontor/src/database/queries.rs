@@ -3,7 +3,7 @@ use libsql::{Connection, de::from_row, params};
 use thiserror::Error as ThisError;
 
 use crate::database::types::{
-    BlockTransactionCursor, PaginationMeta, TransactionCursor, TransactionResponse, TransactionRow
+    PaginationMeta, TransactionCursor, TransactionResponse, TransactionRow, TransactionRowWithMeta,
 };
 
 use super::types::{BlockRow, ContractStateRow};
@@ -180,6 +180,7 @@ pub async fn get_transactions_at_height(
     }
     Ok(results)
 }
+
 pub async fn get_transactions_paginated(
     conn: &Connection,
     height: Option<u64>,
@@ -188,144 +189,98 @@ pub async fn get_transactions_paginated(
     limit: u32,
 ) -> Result<(Vec<TransactionResponse>, PaginationMeta), Error> {
     let mut params = Vec::new();
+    let mut where_clauses = Vec::new();
 
-    // Build height filter for /blocks/height/transactions
-    let height_filter_sql = if let Some(h) = height {
+    // Build height filter
+    if let Some(h) = height {
+        where_clauses.push("t.height = ?");
         params.push(libsql::Value::Integer(h as i64));
-        format!("AND t.height = ?{}", params.len())
-    } else {
+    }
+
+    // Build cursor filter
+    if let Some(c) = cursor.clone() {
+        let cursor = TransactionCursor::decode(&c).map_err(Error::InvalidCursor)?;
+        where_clauses.push("(t.height, t.tx_index) < (?, ?)");
+        params.push(libsql::Value::Integer(cursor.height as i64));
+        params.push(libsql::Value::Integer(cursor.tx_index as i64));
+    }
+
+    // Build WHERE clause
+    let where_sql = if where_clauses.is_empty() {
         String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    // Build cursor filter 
-    let cursor_filter_sql = if let Some(cursor_str) = cursor.clone() {
-        if height.is_some() {
-            // /blocks/height/transactions: decode as tx_index only
-            let cursor = BlockTransactionCursor::decode(&cursor_str)
-                .map_err(Error::InvalidCursor)?;
-            params.push(libsql::Value::Integer(cursor.tx_index as i64));
-            format!("AND t.tx_index < ?{}", params.len())
-        } else {
-            // /transactions: decode as height:tx_index
-            let cursor = TransactionCursor::decode(&cursor_str)
-                .map_err(Error::InvalidCursor)?;
-            params.push(libsql::Value::Integer(cursor.height as i64));
-            params.push(libsql::Value::Integer(cursor.tx_index as i64));
-            format!(
-                "AND ((t.height, t.tx_index) < (?{}, ?{}))",
-                params.len() - 1,
-                params.len()
-            )
-        }
-    } else {
-        String::new()
-    };
+    // Get total count first
+    let count_query = format!("SELECT COUNT(*) FROM transactions t {}", where_sql);
+    let mut count_rows = conn.query(&count_query, params.clone()).await?;
+    let total_count = count_rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0))
+        .transpose()?;
 
-    // Build OFFSET clause (only if no cursor)
-    let offset_clause = if cursor.is_none() {
-        if let Some(offset_val) = offset {
-            format!("OFFSET {}", offset_val)
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
+    // Build OFFSET clause
+    let offset_clause = cursor
+        .is_none()
+        .then_some(offset)
+        .flatten()
+        .map_or(String::new(), |val| format!("OFFSET {}", val));
 
+    // Main query for transactions
     let query = format!(
         r#"
-        SELECT 
-            t.txid,
-            t.height,
-            t.tx_index,
-            (SELECT MAX(height) FROM blocks) as latest_height,
-            COUNT(*) OVER() as total_count
+        SELECT t.txid, t.height, t.tx_index
         FROM transactions t
-        WHERE 1=1
-            {height_filter}
-            {cursor_filter}
+        {where_sql}
         ORDER BY t.height DESC, t.tx_index DESC
-        LIMIT {limit_plus_one}
+        LIMIT {}
         {offset_clause}
         "#,
-        height_filter = height_filter_sql,
-        cursor_filter = cursor_filter_sql,
-        limit_plus_one = limit + 1,
+        limit + 1,
+        where_sql = where_sql,
         offset_clause = offset_clause
     );
 
     let mut rows = conn.query(&query, params).await?;
 
-    // make sql query look like the returned results!!!
-    let mut transactions = Vec::new();
-    let mut latest_height = 0u64;
-    let mut total_count = 0u64;
-    let mut has_more = false;
-
-
-    // TODO: clean this all up!!
+    let mut transactions: Vec<TransactionResponse> = Vec::new();
     while let Some(row) = rows.next().await? {
-        let txid: String = row.get(0)?;
-        let height: i64 = row.get(1)?;
-        let tx_index: i64 = row.get(2)?;
-        let latest_height_from_db: i64 = row.get(3)?;
-        let total_count_from_db: i64 = row.get(4)?;
-
-        latest_height = latest_height_from_db as u64;
-        total_count = total_count_from_db as u64;
-
-        // Check if we have more results than requested
-        if transactions.len() >= limit as usize {
-            has_more = true;
-            break;
-        }
-
-        transactions.push(TransactionResponse {
-            txid,
-            height: height as u64,
-            tx_index: tx_index as i32,
-        });
+        transactions.push(from_row(&row)?);
     }
 
-    // Generate next cursor/offset based on pagination type
-    let (next_cursor, next_offset) = if cursor.is_some() {
-        // Cursor-based pagination
-        let next_cursor = if has_more && !transactions.is_empty() {
-            let last_tx = transactions.last().unwrap();
-            let cursor = TransactionCursor {
-                height: last_tx.height,
-                tx_index: last_tx.tx_index,
-            };
-            Some(cursor.encode())
-        } else {
-            None
+    let has_more = transactions.len() > limit as usize;
+    if has_more {
+        transactions.pop();
+    }
+
+    let next_cursor = if offset.is_none() && has_more && !transactions.is_empty() {
+        let last_tx = transactions.last().unwrap();
+        let cursor = TransactionCursor {
+            height: last_tx.height,
+            tx_index: last_tx.tx_index,
         };
-        (next_cursor, None)
+        Some(cursor.encode())
     } else {
-        // Offset-based pagination
+        None
+    };
+
+    let next_offset = if cursor.is_none() {
         match offset {
-            Some(current_offset) => {
-                let next_offset = if has_more {
-                    Some(current_offset + limit as u64)
-                } else {
-                    None
-                };
-                (None, next_offset)
-            }
-            None => {
-                // First page with offset-based pagination
-                let next_offset = if has_more { Some(limit as u64) } else { None };
-                (None, next_offset)
-            }
+            Some(current_offset) if has_more => Some(current_offset + limit as u64),
+            None if has_more => Some(limit as u64),
+            _ => None,
         }
+    } else {
+        None
     };
 
     let pagination_meta = PaginationMeta {
         next_cursor,
         next_offset,
         has_more,
-        latest_height,
-        total_count: Some(total_count),
+        total_count: total_count.map(|c| c as u64),
     };
 
     Ok((transactions, pagination_meta))

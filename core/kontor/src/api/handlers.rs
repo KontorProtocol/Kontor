@@ -7,10 +7,7 @@ use crate::{
             get_transaction_by_txid, get_transactions_paginated, select_block_at_height,
             select_block_latest,
         },
-        types::{
-            BlockRow, TransactionListResponse, TransactionPaginationQuery, TransactionQuery,
-            TransactionRow,
-        },
+        types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
     },
 };
 
@@ -96,7 +93,7 @@ pub async fn get_compose_reveal(
 }
 
 pub async fn get_transactions(
-    Path(height): Path<Option<u64>>,
+    path: Option<Path<u64>>,
     Query(query): Query<TransactionQuery>,
     State(env): State<Env>,
 ) -> Result<TransactionListResponse> {
@@ -109,23 +106,21 @@ pub async fn get_transactions(
         .into());
     }
 
+    // Extract height from optional path
+    let height = path.map(|Path(h)| h);
+
     let (transactions, meta) = get_transactions_paginated(
         &*env.reader.connection().await?,
-        height,       // height filter (None for /transactions, Some(height) for block-specific)
-        query.cursor, // cursor string
-        query.offset, // offset
+        height,
+        query.cursor,
+        query.offset,
         limit,
     )
     .await?;
 
     Ok(TransactionListResponse {
-        data: transactions,
-        next_cursor: meta.next_cursor,
-        next_offset: meta.next_offset,
-        has_more: meta.has_more,
-        latest_height: meta.latest_height,
-        total_count: meta.total_count,
-        block_height: height,
+        results: transactions,
+        pagination: meta,
     }
     .into())
 }

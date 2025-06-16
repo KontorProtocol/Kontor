@@ -29,27 +29,6 @@ pub struct ContractStateRow {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-pub struct BlockTransactionCursor {
-    pub tx_index: i32,
-}
-
-impl BlockTransactionCursor {
-    pub fn encode(&self) -> String {
-        general_purpose::STANDARD.encode(self.tx_index.to_string().as_bytes())
-    }
-
-    pub fn decode(cursor: &str) -> Result<Self, Error> {
-        let decoded_bytes = general_purpose::STANDARD
-            .decode(cursor)
-            .map_err(|_| Error::InvalidCursor)?;
-        let tx_index = String::from_utf8(decoded_bytes).map_err(|_| Error::InvalidCursor)?;
-        Ok(BlockTransactionCursor {
-            tx_index: tx_index.parse::<i32>().map_err(|_| Error::InvalidCursor)?,
-        })
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("LibSQL error: {0}")]
@@ -76,6 +55,14 @@ pub struct TransactionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionRowWithMeta {
+    pub txid: String,
+    pub height: u64,
+    pub tx_index: i32,
+    pub total_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionCursor {
     pub height: u64,
     pub tx_index: i32,
@@ -88,6 +75,7 @@ impl TransactionCursor {
     }
 
     pub fn decode(cursor: &str) -> Result<Self, Error> {
+        // rename base64_encode
         let decoded_bytes = general_purpose::STANDARD
             .decode(cursor)
             .map_err(|_| Error::InvalidCursor)?;
@@ -109,27 +97,16 @@ impl TransactionCursor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaginationMeta {
     pub next_cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u64>,
     pub has_more: bool,
-    pub latest_height: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionListResponse {
-    pub data: Vec<TransactionResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_offset: Option<u64>,
-    pub has_more: bool,
-    pub latest_height: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_height: Option<u64>,
+    pub results: Vec<TransactionResponse>,
+    pub pagination: PaginationMeta,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
