@@ -104,6 +104,11 @@ impl<T: Tx> Reactor<T> {
             .seek(self.last_height + 1, self.option_last_hash)
             .await;
 
+        // close and drain old channel before switching to the new one
+        if let Some(rx) = self.event_rx.as_mut() {
+            rx.close();
+            while rx.recv().await.is_some() {}
+        }
         self.event_rx = Some(event_rx);
     }
 
