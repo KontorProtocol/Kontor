@@ -3,7 +3,8 @@ use libsql::{Connection, de::from_row, params};
 use thiserror::Error as ThisError;
 
 use crate::database::types::{
-    PaginationMeta, TransactionCursor, TransactionResponse, TransactionRow, TransactionRowWithMeta,
+    PaginationMeta, TransactionCursor, TransactionResponse, TransactionResponseWithMeta,
+    TransactionRow,
 };
 
 use super::types::{BlockRow, ContractStateRow};
@@ -228,53 +229,63 @@ pub async fn get_transactions_paginated(
         .flatten()
         .map_or(String::new(), |val| format!("OFFSET {}", val));
 
-    // Main query for transactions
+    // Conditionally include LEAD columns based on pagination type
+    let select_columns = if offset.is_none() {
+        // Using cursor pagination - include LEAD for next cursor
+        "t.txid, t.height, t.tx_index, LEAD(t.height) OVER (ORDER BY t.height DESC, t.tx_index DESC) as next_height, LEAD(t.tx_index) OVER (ORDER BY t.height DESC, t.tx_index DESC) as next_tx_index"
+    } else {
+        // Using offset pagination - no need for LEAD
+        "t.txid, t.height, t.tx_index, NULL as next_height, NULL as next_tx_index"
+    };
+
+    println!("select_columns: {}", select_columns);
+
     let query = format!(
         r#"
-        SELECT t.txid, t.height, t.tx_index
-        FROM transactions t
-        {where_sql}
-        ORDER BY t.height DESC, t.tx_index DESC
-        LIMIT {}
-        {offset_clause}
-        "#,
+    SELECT {select_columns}
+    FROM transactions t
+    {where_sql}
+    ORDER BY t.height DESC, t.tx_index DESC
+    LIMIT {}
+    {offset_clause}
+    "#,
         limit + 1,
+        select_columns = select_columns,
         where_sql = where_sql,
         offset_clause = offset_clause
     );
 
     let mut rows = conn.query(&query, params).await?;
 
-    let mut transactions: Vec<TransactionResponse> = Vec::new();
+    let mut transaction_rows: Vec<TransactionResponseWithMeta> = Vec::new();
     while let Some(row) = rows.next().await? {
-        transactions.push(from_row(&row)?);
+        transaction_rows.push(from_row(&row)?);
     }
+
+    let mut transactions: Vec<TransactionResponse> = transaction_rows
+        .iter()
+        .map(TransactionResponse::from_meta)
+        .collect();
+
+    let next_cursor = offset
+        .is_none()
+        .then(|| {
+            transaction_rows
+                .last()
+                .map(|r| TransactionCursor::from_meta(r).encode())
+        })
+        .flatten();
+
+    println!("next_cursor: {:?}", next_cursor);
 
     let has_more = transactions.len() > limit as usize;
     if has_more {
+        // remove the last transaction over limit size (from using limit + 1)
         transactions.pop();
     }
 
-    let next_cursor = if offset.is_none() && has_more && !transactions.is_empty() {
-        let last_tx = transactions.last().unwrap();
-        let cursor = TransactionCursor {
-            height: last_tx.height,
-            tx_index: last_tx.tx_index,
-        };
-        Some(cursor.encode())
-    } else {
-        None
-    };
-
-    let next_offset = if cursor.is_none() {
-        match offset {
-            Some(current_offset) if has_more => Some(current_offset + limit as u64),
-            None if has_more => Some(limit as u64),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let next_offset = (cursor.is_none() && has_more)
+        .then(|| offset.map_or(limit as u64, |current| current + limit as u64));
 
     let pagination_meta = PaginationMeta {
         next_cursor,

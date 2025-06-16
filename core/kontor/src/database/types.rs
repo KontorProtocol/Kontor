@@ -54,12 +54,25 @@ pub struct TransactionResponse {
     pub tx_index: i32,
 }
 
+impl TransactionResponse {
+    pub fn from_meta(meta: &TransactionResponseWithMeta) -> Self {
+        Self {
+            txid: meta.txid.clone(),
+            height: meta.height,
+            tx_index: meta.tx_index,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionRowWithMeta {
+pub struct TransactionResponseWithMeta {
     pub txid: String,
     pub height: u64,
     pub tx_index: i32,
-    pub total_count: u64,
+    #[serde(skip)]
+    pub next_height: Option<u64>,
+    #[serde(skip)]
+    pub next_tx_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +104,13 @@ impl TransactionCursor {
         let tx_index = parts[1].parse::<i32>().map_err(|_| Error::InvalidCursor)?;
 
         Ok(TransactionCursor { height, tx_index })
+    }
+
+    pub fn from_meta(meta: &TransactionResponseWithMeta) -> Self {
+        Self {
+            height: meta.height,
+            tx_index: meta.tx_index,
+        }
     }
 }
 
