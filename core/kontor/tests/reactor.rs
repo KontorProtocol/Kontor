@@ -86,7 +86,6 @@ async fn test_reactor_rollback_event() -> Result<()> {
     assert_eq!(seek.last_hash, Some(BlockHash::from_byte_array([0x10; 32])));
     let tx = seek.event_tx;
 
-    // TODO check no more blocks on old tx
     assert!(
         tx.send(Event::Block((
             100,
