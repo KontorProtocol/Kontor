@@ -238,8 +238,6 @@ pub async fn get_transactions_paginated(
         "t.txid, t.height, t.tx_index, NULL as next_height, NULL as next_tx_index"
     };
 
-    println!("select_columns: {}", select_columns);
-
     let query = format!(
         r#"
     SELECT {select_columns}
@@ -266,23 +264,19 @@ pub async fn get_transactions_paginated(
         .iter()
         .map(TransactionResponse::from_meta)
         .collect();
+    let has_more = transactions.len() > limit as usize;
+    if has_more {
+        // remove the last transaction over limit size (from using limit + 1)
+        transactions.pop();
+    }
 
-    let next_cursor = offset
-        .is_none()
+    let next_cursor = (offset.is_none() && has_more)
         .then(|| {
             transaction_rows
                 .last()
                 .map(|r| TransactionCursor::from_meta(r).encode())
         })
         .flatten();
-
-    println!("next_cursor: {:?}", next_cursor);
-
-    let has_more = transactions.len() > limit as usize;
-    if has_more {
-        // remove the last transaction over limit size (from using limit + 1)
-        transactions.pop();
-    }
 
     let next_offset = (cursor.is_none() && has_more)
         .then(|| offset.map_or(limit as u64, |current| current + limit as u64));

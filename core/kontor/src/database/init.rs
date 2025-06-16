@@ -20,8 +20,7 @@ const LIB_FILE_EXT: &str = "so";
 pub const CREATE_BLOCKS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS blocks (
         height INTEGER PRIMARY KEY,
-        hash TEXT NOT NULL,
-        UNIQUE (height, hash)
+        hash TEXT NOT NULL UNIQUE
     )";
 
 pub const CREATE_CHECKPOINTS_TABLE: &str = "
