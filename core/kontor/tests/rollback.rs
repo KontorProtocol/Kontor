@@ -13,7 +13,7 @@ use kontor::{
         self,
         events::{Event, Signal},
         queries::select_block_at_height,
-        reconciler::{self, Env, State, handle_control_signal},
+        reconciler::{self, Reconciler},
     },
     config::Config,
     database::{queries::insert_block, types::BlockRow},
@@ -418,45 +418,39 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     }
 
     // start-up at block height 3
-    let mut env = Env::new(cancel_token.clone(), reader.clone(), client.clone(), f);
-    let mut state = State::new();
-    let res = handle_control_signal(&mut env, &mut state, Signal::Seek((3, None)))
+    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let res = rec
+        .handle_control_signal(Signal::Seek((3, None)))
         .await
         .unwrap();
     assert_eq!(res, vec![]);
-    assert_eq!(state.rpc_latest_block_height, Some(2));
-    assert_eq!(state.target_block_height, Some(5));
-    assert_eq!(state.mode, reconciler::Mode::Rpc);
-    assert_eq!(env.fetcher.running(), true);
+    assert_eq!(rec.state.rpc_latest_block_height, Some(2));
+    assert_eq!(rec.state.target_block_height, Some(5));
+    assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
+    assert_eq!(rec.fetcher.running(), true);
 
     // start-up at block height 3 with mismatching hash for last block at 2
-    let mut env = Env::new(cancel_token.clone(), reader.clone(), client.clone(), f);
-    let mut state = State::new();
-    let res = handle_control_signal(
-        &mut env,
-        &mut state,
-        Signal::Seek((3, Some(BlockHash::from_byte_array([0x00; 32])))), // not matching
-    )
-    .await
-    .unwrap();
+    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let res = rec
+        .handle_control_signal(
+            Signal::Seek((3, Some(BlockHash::from_byte_array([0x00; 32])))), // not matching
+        )
+        .await
+        .unwrap();
     assert_eq!(res, vec![Event::Rollback(1)]);
-    assert_eq!(env.fetcher.running(), false);
+    assert_eq!(rec.fetcher.running(), false);
 
     // start-up at block height 3 with matching hash for last block at 2
-    let mut env = Env::new(cancel_token.clone(), reader.clone(), client.clone(), f);
-    let mut state = State::new();
-    let res = handle_control_signal(
-        &mut env,
-        &mut state,
-        Signal::Seek((3, Some(blocks[2 - 1].block_hash()))),
-    )
-    .await
-    .unwrap();
+    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let res = rec
+        .handle_control_signal(Signal::Seek((3, Some(blocks[2 - 1].block_hash()))))
+        .await
+        .unwrap();
     assert_eq!(res, vec![]);
-    assert_eq!(state.rpc_latest_block_height, Some(2));
-    assert_eq!(state.target_block_height, Some(5));
-    assert_eq!(state.mode, reconciler::Mode::Rpc);
-    assert_eq!(env.fetcher.running(), true);
+    assert_eq!(rec.state.rpc_latest_block_height, Some(2));
+    assert_eq!(rec.state.target_block_height, Some(5));
+    assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
+    assert_eq!(rec.fetcher.running(), true);
 
     Ok(())
 }

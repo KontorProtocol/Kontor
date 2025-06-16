@@ -27,7 +27,7 @@ use super::{
     zmq,
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
     Zmq,
     Rpc,
@@ -64,7 +64,7 @@ pub struct Reconciler<T: Tx, C: BitcoinRpc> {
     pub zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
     pub zmq_tx: UnboundedSender<ZmqEvent<T>>,
 
-    state: State<T>,
+    pub state: State<T>,
 }
 
 impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
@@ -322,7 +322,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
     }
 
     pub async fn run_event_handler(&mut self, mut ctrl_rx: Receiver<Signal>, tx: Sender<Event<T>>) {
-        'outer: loop {
+        loop {
             let result = select! {
                 option_signal = ctrl_rx.recv() => {
                     match option_signal {
@@ -331,7 +331,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                         },
                         None => {
                             info!("Received None signal, exiting");
-                            break;
+                            return;
                         }
                     }
                 }
@@ -343,7 +343,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                         None => {
                             // Occurs when runner fails to start up and drops channel sender
                             info!("Received None event from zmq, exiting");
-                            break;
+                            return;
                         },
                     }
                 }
@@ -354,13 +354,13 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                         },
                         None => {
                             info!("Received None event from rpc, exiting");
-                            break;
+                            return;
                         }
                     }
                 }
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
-                    break;
+                    return;
                 }
             };
 
@@ -369,7 +369,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                     for event in events {
                         if tx.send(event).await.is_err() {
                             info!("Send channel closed, exiting");
-                            break 'outer;
+                            return;
                         }
                     }
                 }
@@ -379,7 +379,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                         e
                     );
                     self.cancel_token.cancel();
-                    break;
+                    return;
                 }
             }
         }
@@ -395,10 +395,6 @@ async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         loop {
-            if cancel_token.is_cancelled() {
-                return Ok(());
-            }
-
             let handle =
                 zmq::run(&addr, cancel_token.clone(), bitcoin.clone(), f, tx.clone()).await?;
 
@@ -416,9 +412,12 @@ async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
                 }
             }
 
+            info!("start sleep");
             select! {
                 _ = sleep(Duration::from_secs(10)) => {}
-                _ = cancel_token.cancelled() => {}
+                _ = cancel_token.cancelled() => {
+                    return Ok(());
+                }
             }
 
             info!("Restarting ZMQ listener");
