@@ -1,9 +1,6 @@
 use anyhow::Result;
 use bitcoin::Transaction;
-use tokio::{
-    sync::mpsc::Receiver,
-    task::JoinHandle,
-};
+use tokio::{sync::mpsc::Receiver, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
