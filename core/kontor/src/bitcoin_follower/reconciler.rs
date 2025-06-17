@@ -9,12 +9,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
+    bitcoin_follower::seek::SeekMessage,
     bitcoin_follower::{
+        info::BlockchainInfo,
         queries::{select_block_at_height, select_block_with_hash},
         rpc::BlockFetcher,
-        info::BlockchainInfo,
     },
-    bitcoin_follower::seek::SeekMessage,
     block::{Block, Tx},
     database,
 };
@@ -260,8 +260,11 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
 
         // check if we need to roll back before we start fetching
         if let Some(last_hash) = option_last_hash {
-            let block_hash = self.info.get_block_hash(start_height - 1).await
-            .expect("failed to get block hash of previous block");
+            let block_hash = self
+                .info
+                .get_block_hash(start_height - 1)
+                .await
+                .expect("failed to get block hash of previous block");
 
             if last_hash != block_hash {
                 warn!(
@@ -274,7 +277,11 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
             }
         }
 
-        let blockchain_height = self.info.get_blockchain_height().await.expect("failed to get blockchain info");
+        let blockchain_height = self
+            .info
+            .get_blockchain_height()
+            .await
+            .expect("failed to get blockchain info");
 
         self.state.mode = Mode::Rpc;
         self.state.rpc_latest_block_height = Some(start_height - 1);
@@ -292,7 +299,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
         self.seek(msg.start_height, msg.last_hash).await
     }
 
-    pub async fn run_event_handler(&mut self, mut ctrl_rx: Receiver<SeekMessage<T>>) {
+    pub async fn run_event_loop(&mut self, mut ctrl_rx: Receiver<SeekMessage<T>>) {
         loop {
             let result = select! {
                 option_seek = ctrl_rx.recv() => {
@@ -361,7 +368,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
     }
 
     pub async fn run(&mut self, ctrl_rx: Receiver<SeekMessage<T>>) {
-        self.run_event_handler(ctrl_rx).await;
+        self.run_event_loop(ctrl_rx).await;
 
         self.stop_fetcher().await;
     }
