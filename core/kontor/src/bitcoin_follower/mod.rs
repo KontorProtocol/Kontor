@@ -17,7 +17,6 @@ use crate::{bitcoin_client::client::BitcoinRpc, block::Tx};
 pub mod events;
 pub mod info;
 pub mod messages;
-pub mod queries;
 pub mod reconciler;
 pub mod rpc;
 pub mod seek;
