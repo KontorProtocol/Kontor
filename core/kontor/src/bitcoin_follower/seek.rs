@@ -1,3 +1,4 @@
+use anyhow::Result;
 use bitcoin::BlockHash;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -15,14 +16,18 @@ pub struct SeekChannel<T: Tx> {
     ctrl_tx: Sender<SeekMessage<T>>,
 }
 
-impl<T: Tx> SeekChannel<T> {
+impl<T: Tx + 'static> SeekChannel<T> {
     pub fn create() -> (Self, Receiver<SeekMessage<T>>) {
         let (ctrl_tx, ctrl_rx) = mpsc::channel(1);
 
         (Self { ctrl_tx }, ctrl_rx)
     }
 
-    pub async fn seek(self, start_height: u64, last_hash: Option<BlockHash>) -> Receiver<Event<T>> {
+    pub async fn seek(
+        self,
+        start_height: u64,
+        last_hash: Option<BlockHash>,
+    ) -> Result<Receiver<Event<T>>> {
         let (event_tx, event_rx) = mpsc::channel(10);
 
         self.ctrl_tx
@@ -31,9 +36,8 @@ impl<T: Tx> SeekChannel<T> {
                 last_hash,
                 event_tx,
             })
-            .await
-            .expect("failed to send seek message");
+            .await?;
 
-        event_rx
+        Ok(event_rx)
     }
 }

@@ -328,3 +328,23 @@ impl<T: Tx + 'static, C: BitcoinRpc> Fetcher<T, C> {
         Ok(())
     }
 }
+
+pub trait BlockFetcher {
+    fn running(&self) -> bool;
+    fn start(&mut self, start_height: u64);
+    fn stop(&mut self) -> impl Future<Output = Result<()>>;
+}
+
+impl<T: Tx + 'static, C: BitcoinRpc> BlockFetcher for Fetcher<T, C> {
+    fn running(&self) -> bool {
+        self.running()
+    }
+
+    fn start(&mut self, start_height: u64) {
+        self.start(start_height);
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        self.stop().await
+    }
+}

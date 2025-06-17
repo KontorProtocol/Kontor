@@ -5,19 +5,22 @@ use tokio::{select, sync::mpsc::Receiver, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::{events::Event, seek::SeekChannel},
     block::{Block, Tx},
     database::{
         self,
-        queries::{insert_block, rollback_to_height, select_block_at_height, select_block_latest},
+        queries::{
+            insert_block, rollback_to_height, select_block_at_height, select_block_latest,
+            select_block_with_hash,
+        },
         types::BlockRow,
     },
 };
 
-struct Reactor<T: Tx> {
+struct Reactor<T: Tx + 'static> {
     reader: database::Reader,
     writer: database::Writer,
     cancel_token: CancellationToken, // currently not used due to relaxed error handling
@@ -28,7 +31,7 @@ struct Reactor<T: Tx> {
     option_last_hash: Option<BlockHash>,
 }
 
-impl<T: Tx> Reactor<T> {
+impl<T: Tx + 'static> Reactor<T> {
     pub async fn new(
         starting_block_height: u64,
         reader: database::Reader,
@@ -98,18 +101,39 @@ impl<T: Tx> Reactor<T> {
         }
 
         info!("Seek: start fetching from height {}", self.last_height + 1);
-        let event_rx = self
+        match self
             .ctrl
             .clone()
             .seek(self.last_height + 1, self.option_last_hash)
-            .await;
-
-        // close and drain old channel before switching to the new one
-        if let Some(rx) = self.event_rx.as_mut() {
-            rx.close();
-            while rx.recv().await.is_some() {}
+            .await
+        {
+            Ok(event_rx) => {
+                // close and drain old channel before switching to the new one
+                if let Some(rx) = self.event_rx.as_mut() {
+                    rx.close();
+                    while rx.recv().await.is_some() {}
+                }
+                self.event_rx = Some(event_rx);
+            }
+            Err(e) => {
+                error!("Failed to execute seek: {}", e);
+                self.cancel_token.cancel();
+            }
         }
-        self.event_rx = Some(event_rx);
+    }
+
+    async fn rollback_hash(&mut self, hash: BlockHash) {
+        let conn = &self.writer.connection();
+        let block_row = select_block_with_hash(conn, &hash).await.unwrap();
+        if let Some(row) = block_row {
+            self.rollback(row.height - 1).await;
+        } else {
+            error!(
+                "attemped rollback to hash {} failed, block not found",
+                hash
+            );
+            self.cancel_token.cancel();
+        }
     }
 
     async fn handle_block(&mut self, block: Block<T>) {
@@ -127,7 +151,7 @@ impl<T: Tx> Reactor<T> {
             self.rollback(height - 1).await;
             return;
         } else if height > self.last_height + 1 {
-            warn!(
+            error!(
                 "Order exception, received block at height {}, expected height {}",
                 height,
                 self.last_height + 1
@@ -169,7 +193,8 @@ impl<T: Tx> Reactor<T> {
             .ctrl
             .clone()
             .seek(self.last_height + 1, self.option_last_hash)
-            .await;
+            .await
+            .expect("initial seek must execute");
         self.event_rx = Some(rx);
 
         loop {
@@ -194,6 +219,9 @@ impl<T: Tx> Reactor<T> {
                                 },
                                 Event::Rollback(height) => {
                                     self.rollback(height).await;
+                                },
+                                Event::RollbackHash(block_hash) => {
+                                    self.rollback_hash(block_hash).await;
                                 },
                                 Event::MempoolUpdate {removed, added} => {
                                     debug!("MempoolUpdates removed {} added {}",

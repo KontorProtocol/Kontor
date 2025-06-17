@@ -19,4 +19,5 @@ pub enum Event<T: Tx> {
     MempoolSet(Vec<T>),
     Block((u64, Block<T>)),
     Rollback(u64),
+    RollbackHash(BlockHash),
 }

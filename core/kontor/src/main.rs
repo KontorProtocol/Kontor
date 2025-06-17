@@ -41,7 +41,6 @@ async fn main() -> Result<()> {
         bitcoin_follower::run(
             Some(config.zmq_address),
             cancel_token.clone(),
-            reader.clone(),
             bitcoin,
             Some,
             ctrl_rx,

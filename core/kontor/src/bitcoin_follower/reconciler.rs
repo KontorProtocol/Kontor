@@ -1,32 +1,20 @@
-use std::time::Duration;
-
 use anyhow::Result;
-use bitcoin::{BlockHash, Transaction, Txid};
-use futures_util::future::OptionFuture;
+use bitcoin::{BlockHash, Txid};
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use tokio::{
     select,
-    sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
-    time::sleep,
+    sync::mpsc::{Receiver, Sender, UnboundedReceiver},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    bitcoin_client::client::BitcoinRpc,
-    bitcoin_follower::queries::{select_block_at_height, select_block_with_hash},
-    bitcoin_follower::rpc,
     bitcoin_follower::seek::SeekMessage,
+    bitcoin_follower::{info::BlockchainInfo, rpc::BlockFetcher},
     block::{Block, Tx},
-    database,
-    retry::{new_backoff_unlimited, retry},
 };
 
-use super::{
-    events::{Event, ZmqEvent},
-    zmq,
-};
+use super::events::{Event, ZmqEvent};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
@@ -36,8 +24,7 @@ pub enum Mode {
 
 pub struct State<T: Tx> {
     mempool_cache: IndexMap<Txid, T>,
-    zmq_latest_block_height: Option<u64>,
-    pub rpc_latest_block_height: Option<u64>,
+    pub latest_block_height: Option<u64>,
     pub target_block_height: Option<u64>,
     zmq_connected: bool,
     pub mode: Mode,
@@ -47,8 +34,7 @@ impl<T: Tx> State<T> {
     pub fn new() -> Self {
         Self {
             mempool_cache: IndexMap::new(),
-            zmq_latest_block_height: None,
-            rpc_latest_block_height: None,
+            latest_block_height: None,
             target_block_height: None,
             zmq_connected: false,
             mode: Mode::Rpc,
@@ -56,38 +42,32 @@ impl<T: Tx> State<T> {
     }
 }
 
-pub struct Reconciler<T: Tx, C: BitcoinRpc> {
+pub struct Reconciler<T: Tx, I: BlockchainInfo, F: BlockFetcher> {
     pub cancel_token: CancellationToken,
-    pub reader: database::Reader,
-    pub bitcoin: C,
-    pub fetcher: rpc::Fetcher<T, C>,
+    pub info: I,
+    pub fetcher: F,
     pub rpc_rx: Receiver<(u64, Block<T>)>,
     pub zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
-    pub zmq_tx: UnboundedSender<ZmqEvent<T>>,
 
     pub state: State<T>,
     event_tx: Option<Sender<Event<T>>>,
 }
 
-impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
+impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
     pub fn new(
         cancel_token: CancellationToken,
-        reader: database::Reader,
-        bitcoin: C,
-        f: fn(Transaction) -> Option<T>,
+        info: I,
+        fetcher: F,
+        rpc_rx: Receiver<(u64, Block<T>)>,
+        zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
     ) -> Self {
-        let (zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<T>>();
-        let (rpc_tx, rpc_rx) = mpsc::channel(10);
-        let fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
         let state = State::new();
         Self {
             cancel_token,
-            reader,
-            bitcoin,
+            info,
             fetcher,
             rpc_rx,
             zmq_rx,
-            zmq_tx,
             state,
             event_tx: None,
         }
@@ -101,8 +81,8 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
 
                 let mut events = vec![];
                 if self.state.mode == Mode::Rpc {
-                    let caught_up = self.state.rpc_latest_block_height.is_some()
-                        && self.state.target_block_height == self.state.rpc_latest_block_height;
+                    let caught_up = self.state.latest_block_height.is_some()
+                        && self.state.target_block_height == self.state.latest_block_height;
 
                     // RPC fetching is caught up (or not necessary), switching to ZMQ
                     if caught_up {
@@ -125,18 +105,12 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                 self.state.zmq_connected = false;
                 if self.state.mode == Mode::Zmq {
                     self.state.mode = Mode::Rpc;
-                    let height = if let Some(height) = self.state.zmq_latest_block_height {
-                        height + 1
-                    } else {
-                        let height = self
-                            .state
-                            .rpc_latest_block_height
-                            .expect("must have start height before using ZMQ");
-                        height + 1
-                    };
-                    self.fetcher.start(height);
+                    let last_height = self
+                        .state
+                        .latest_block_height
+                        .expect("must have start height before using ZMQ");
+                    self.fetcher.start(last_height + 1);
                 }
-                self.state.zmq_latest_block_height = None;
                 while !self.zmq_rx.is_empty() {
                     self.zmq_rx.recv().await;
                 }
@@ -171,32 +145,24 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
                 }
             }
             ZmqEvent::BlockDisconnected(block_hash) => {
-                let conn = &*self.reader.connection().await?;
                 if self.state.mode == Mode::Zmq {
-                    let block_row =
-                        select_block_with_hash(conn, &block_hash, self.cancel_token.clone())
-                            .await?;
-                    let prev_block_row = select_block_at_height(
-                        conn,
-                        block_row.height - 1,
-                        self.cancel_token.clone(),
-                    )
-                    .await?;
-                    self.state.zmq_latest_block_height = Some(prev_block_row.height);
-                    vec![Event::Rollback(prev_block_row.height)]
+                    vec![Event::RollbackHash(block_hash)]
                 } else {
-                    self.state.zmq_latest_block_height = None;
                     vec![]
                 }
             }
             ZmqEvent::BlockConnected(block) => {
-                let last_height = self
-                    .state
-                    .rpc_latest_block_height
-                    .expect("must have start height before using ZMQ");
-                if block.height > last_height {
-                    self.state.zmq_latest_block_height = Some(block.height);
-                    handle_block(&mut self.state.mempool_cache, block.height, block)
+                if self.state.mode == Mode::Zmq {
+                    let last_height = self
+                        .state
+                        .latest_block_height
+                        .expect("must have start height before using ZMQ");
+                    if block.height == last_height + 1 {
+                        self.state.latest_block_height = Some(block.height);
+                        handle_block(&mut self.state.mempool_cache, block.height, block)
+                    } else {
+                        vec![]
+                    }
                 } else {
                     vec![]
                 }
@@ -223,7 +189,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
         (target_height, block): (u64, Block<T>),
     ) -> Result<Vec<Event<T>>> {
         let height = block.height;
-        self.state.rpc_latest_block_height = Some(height);
+        self.state.latest_block_height = Some(height);
 
         match self.state.target_block_height {
             Some(target) => {
@@ -240,14 +206,8 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
         events[0] = Event::MempoolSet(vec![]);
 
         if self.state.zmq_connected && target_height == height {
-            let info = retry(
-                || self.bitcoin.get_blockchain_info(),
-                "get blockchain info",
-                new_backoff_unlimited(),
-                self.cancel_token.clone(),
-            )
-            .await?;
-            if target_height == info.blocks {
+            let blockchain_height = self.info.get_blockchain_height().await?;
+            if target_height == blockchain_height {
                 info!("RPC caught up: {}", target_height);
 
                 self.state.mode = Mode::Zmq;
@@ -276,14 +236,10 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
 
         // check if we need to roll back before we start fetching
         if let Some(last_hash) = option_last_hash {
-            let block_hash = retry(
-                || self.bitcoin.get_block_hash(start_height - 1),
-                "get block hash",
-                new_backoff_unlimited(),
-                self.cancel_token.clone(),
-            )
-            .await
-            .expect("failed to get block hash of previous block");
+            let block_hash = self
+                .info
+                .get_block_hash(start_height - 1)
+                .await?;
 
             if last_hash != block_hash {
                 warn!(
@@ -296,20 +252,16 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
             }
         }
 
-        let info = retry(
-            || self.bitcoin.get_blockchain_info(),
-            "get blockchain info",
-            new_backoff_unlimited(),
-            self.cancel_token.clone(),
-        )
-        .await
-        .expect("failed to get blockchain info");
+        let blockchain_height = self
+            .info
+            .get_blockchain_height()
+            .await?;
 
         self.state.mode = Mode::Rpc;
-        self.state.rpc_latest_block_height = Some(start_height - 1);
+        self.state.latest_block_height = Some(start_height - 1);
 
         // set initial target, may get pushed higher by RPC Fetcher events
-        self.state.target_block_height = Some(info.blocks);
+        self.state.target_block_height = Some(blockchain_height);
 
         self.fetcher.start(start_height);
 
@@ -321,7 +273,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
         self.seek(msg.start_height, msg.last_hash).await
     }
 
-    pub async fn run(&mut self, mut ctrl_rx: Receiver<SeekMessage<T>>) {
+    pub async fn run_event_loop(&mut self, mut ctrl_rx: Receiver<SeekMessage<T>>) {
         loop {
             let result = select! {
                 option_seek = ctrl_rx.recv() => {
@@ -389,51 +341,11 @@ impl<T: Tx + 'static, C: BitcoinRpc> Reconciler<T, C> {
         }
     }
 
-    async fn stop(&mut self) {
-        self.rpc_rx.close();
-        while self.rpc_rx.recv().await.is_some() {}
-        if (self.fetcher.stop().await).is_err() {
-            error!("RPC fetcher panicked on join");
-        }
+    pub async fn run(&mut self, ctrl_rx: Receiver<SeekMessage<T>>) {
+        self.run_event_loop(ctrl_rx).await;
+
+        self.stop_fetcher().await;
     }
-}
-
-async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
-    addr: String,
-    cancel_token: CancellationToken,
-    bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
-    tx: UnboundedSender<ZmqEvent<T>>,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        loop {
-            let handle =
-                zmq::run(&addr, cancel_token.clone(), bitcoin.clone(), f, tx.clone()).await?;
-
-            match handle.await {
-                Ok(Ok(_)) => return Ok(()),
-                Ok(Err(e)) => {
-                    if tx.send(ZmqEvent::Disconnected(e)).is_err() {
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
-                    if tx.send(ZmqEvent::Disconnected(e.into())).is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-
-            select! {
-                _ = sleep(Duration::from_secs(10)) => {}
-                _ = cancel_token.cancelled() => {
-                    return Ok(());
-                }
-            }
-
-            info!("Restarting ZMQ listener");
-        }
-    })
 }
 
 fn handle_block<T: Tx>(
@@ -480,48 +392,4 @@ pub fn handle_new_mempool_transactions<T: Tx>(
 
     *mempool_cache = new_mempool_cache;
     Event::MempoolUpdate { removed, added }
-}
-
-pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
-    addr: Option<String>,
-    cancel_token: CancellationToken,
-    reader: database::Reader,
-    bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
-    ctrl_rx: Receiver<SeekMessage<T>>,
-) -> Result<JoinHandle<()>> {
-    let mut reconciler = Reconciler::new(cancel_token.clone(), reader.clone(), bitcoin.clone(), f);
-
-    let runner_cancel_token = CancellationToken::new();
-    let runner_handle = OptionFuture::from(addr.map(|a| {
-        zmq_runner(
-            a,
-            runner_cancel_token.clone(),
-            bitcoin.clone(),
-            f,
-            reconciler.zmq_tx.clone(),
-        )
-    }))
-    .await;
-
-    if runner_handle.is_none() {
-        warn!("No ZMQ connection");
-    }
-
-    Ok(tokio::spawn(async move {
-        reconciler.run(ctrl_rx).await;
-
-        reconciler.stop().await;
-
-        runner_cancel_token.cancel();
-        if let Some(handle) = runner_handle {
-            match handle.await {
-                Err(_) => error!("ZMQ runner panicked on join"),
-                Ok(Err(e)) => error!("ZMQ runner failed to start with error: {}", e),
-                Ok(Ok(_)) => (),
-            }
-        }
-
-        info!("Exited");
-    }))
 }

@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Error, Result, anyhow};
 use clap::Parser;
+use libsql::Connection;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
@@ -8,17 +9,19 @@ use tokio_util::sync::CancellationToken;
 use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 
 use kontor::{
-    bitcoin_client::{client, error, types},
+    bitcoin_client::{client::BitcoinRpc, error, types},
     bitcoin_follower::{
         self,
         events::Event,
-        queries::select_block_at_height,
+        info,
         reconciler::{self, Reconciler},
+        rpc::Fetcher,
         seek::{SeekChannel, SeekMessage},
     },
     config::Config,
-    database::{queries::insert_block, types::BlockRow},
+    database::{queries, types::BlockRow},
     reactor,
+    retry::{new_backoff_unlimited, retry},
     utils::{MockTransaction, new_test_db},
 };
 
@@ -89,7 +92,7 @@ fn new_block_chain(n: u64, time: u32) -> Vec<bitcoin::Block> {
     gen_blocks(0, n, time, BlockHash::from_byte_array([0x00; 32]))
 }
 
-impl client::BitcoinRpc for MockClient {
+impl BitcoinRpc for MockClient {
     async fn get_blockchain_info(&self) -> Result<types::GetBlockchainInfoResult, error::Error> {
         let len = self.blocks.lock().unwrap().len() as u64;
         Ok(types::GetBlockchainInfoResult {
@@ -170,6 +173,45 @@ fn block_row(height: u64, b: &bitcoin::Block) -> BlockRow {
     }
 }
 
+#[derive(Clone)]
+struct MockInfo {
+    blocks: Vec<bitcoin::Block>,
+}
+
+impl MockInfo {
+    fn new(blocks: Vec<bitcoin::Block>) -> Self {
+        Self { blocks }
+    }
+}
+
+impl info::BlockchainInfo for MockInfo {
+    async fn get_blockchain_height(&self) -> Result<u64, Error> {
+        Ok(self.blocks.len() as u64)
+    }
+
+    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
+        Ok(self.blocks[height as usize - 1].block_hash())
+    }
+}
+
+async fn select_block_at_height(
+    conn: &Connection,
+    height: u64,
+    cancel_token: CancellationToken,
+) -> Result<BlockRow> {
+    retry(
+        async || match queries::select_block_at_height(conn, height).await {
+            Ok(Some(row)) => Ok(row),
+            Ok(None) => Err(anyhow!("Block at height not found: {}", height)),
+            Err(e) => Err(e.into()),
+        },
+        "read block at height",
+        new_backoff_unlimited(),
+        cancel_token.clone(),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn test_follower_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
@@ -177,9 +219,21 @@ async fn test_follower_reactor_fetching() -> Result<()> {
 
     let blocks = new_block_chain(5, 123);
     let conn = &writer.connection();
-    assert!(insert_block(conn, block_row(1, &blocks[0])).await.is_ok());
-    assert!(insert_block(conn, block_row(2, &blocks[1])).await.is_ok());
-    assert!(insert_block(conn, block_row(3, &blocks[2])).await.is_ok());
+    assert!(
+        queries::insert_block(conn, block_row(1, &blocks[0]))
+            .await
+            .is_ok()
+    );
+    assert!(
+        queries::insert_block(conn, block_row(2, &blocks[1]))
+            .await
+            .is_ok()
+    );
+    assert!(
+        queries::insert_block(conn, block_row(3, &blocks[2]))
+            .await
+            .is_ok()
+    );
 
     let client = MockClient::new(blocks.clone());
 
@@ -200,7 +254,6 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         bitcoin_follower::run(
             None, // no ZMQ connection
             cancel_token.clone(),
-            reader.clone(),
             client,
             f,
             ctrl_rx,
@@ -242,17 +295,17 @@ async fn test_follower_reactor_rollback_during_seek() -> Result<()> {
     let mut blocks = new_block_chain(3, 123);
     let conn = &writer.connection();
     assert!(
-        insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
             .await
             .is_ok()
     );
     assert!(
-        insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
             .await
             .is_ok()
     );
     assert!(
-        insert_block(conn, block_row(3, &blocks[3 - 1]))
+        queries::insert_block(conn, block_row(3, &blocks[3 - 1]))
             .await
             .is_ok()
     );
@@ -284,7 +337,6 @@ async fn test_follower_reactor_rollback_during_seek() -> Result<()> {
         bitcoin_follower::run(
             None, // no ZMQ connection
             cancel_token.clone(),
-            reader.clone(),
             client,
             f,
             ctrl_rx,
@@ -354,7 +406,6 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
         bitcoin_follower::run(
             None, // no ZMQ connection
             cancel_token.clone(),
-            reader.clone(),
             client,
             f,
             ctrl_rx,
@@ -400,7 +451,6 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
 #[tokio::test]
 async fn test_follower_handle_control_signal() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, _writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
     let blocks = new_block_chain(5, 123);
     let client = MockClient::new(blocks.clone());
@@ -409,11 +459,16 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         Some(MockTransaction::new(123))
     }
 
+    let info = MockInfo::new(blocks.clone());
+
     // start-up at block height 3
-    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let (rpc_tx, rpc_rx) = mpsc::channel(1);
+    let fetcher = Fetcher::new(client.clone(), f, rpc_tx);
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let mut rec = Reconciler::new(cancel_token.clone(), info.clone(), fetcher, rpc_rx, zmq_rx);
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
-        .handle_seek(SeekMessage{
+        .handle_seek(SeekMessage {
             start_height: 3,
             last_hash: None,
             event_tx,
@@ -421,16 +476,19 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         .await
         .unwrap();
     assert_eq!(res, vec![]);
-    assert_eq!(rec.state.rpc_latest_block_height, Some(2));
+    assert_eq!(rec.state.latest_block_height, Some(2));
     assert_eq!(rec.state.target_block_height, Some(5));
     assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
     assert_eq!(rec.fetcher.running(), true);
 
     // start-up at block height 3 with mismatching hash for last block at 2
-    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let (rpc_tx, rpc_rx) = mpsc::channel(1);
+    let fetcher = Fetcher::new(client.clone(), f, rpc_tx);
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let mut rec = Reconciler::new(cancel_token.clone(), info.clone(), fetcher, rpc_rx, zmq_rx);
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
-        .handle_seek(SeekMessage{
+        .handle_seek(SeekMessage {
             start_height: 3,
             last_hash: Some(BlockHash::from_byte_array([0x00; 32])), // not matching
             event_tx,
@@ -441,10 +499,13 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     assert_eq!(rec.fetcher.running(), false);
 
     // start-up at block height 3 with matching hash for last block at 2
-    let mut rec = Reconciler::new(cancel_token.clone(), reader.clone(), client.clone(), f);
+    let (rpc_tx, rpc_rx) = mpsc::channel(1);
+    let fetcher = Fetcher::new(client.clone(), f, rpc_tx);
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let mut rec = Reconciler::new(cancel_token.clone(), info.clone(), fetcher, rpc_rx, zmq_rx);
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
-        .handle_seek(SeekMessage{
+        .handle_seek(SeekMessage {
             start_height: 3,
             last_hash: Some(blocks[2 - 1].block_hash()),
             event_tx,
@@ -452,7 +513,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         .await
         .unwrap();
     assert_eq!(res, vec![]);
-    assert_eq!(rec.state.rpc_latest_block_height, Some(2));
+    assert_eq!(rec.state.latest_block_height, Some(2));
     assert_eq!(rec.state.target_block_height, Some(5));
     assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
     assert_eq!(rec.fetcher.running(), true);
