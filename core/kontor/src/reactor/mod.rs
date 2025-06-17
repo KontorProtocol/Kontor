@@ -164,7 +164,7 @@ impl<T: Tx> Reactor<T> {
             .unwrap();
     }
 
-    pub async fn run_event_handler(&mut self) {
+    pub async fn run(&mut self) {
         let rx = self
             .ctrl
             .clone()
@@ -239,7 +239,7 @@ pub fn run<T: Tx + 'static>(
             .await
             .expect("Failed to create Reactor, exiting");
 
-            reactor.run_event_handler().await;
+            reactor.run().await;
 
             info!("Exited");
         }
