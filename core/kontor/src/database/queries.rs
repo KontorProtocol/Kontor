@@ -3,8 +3,7 @@ use libsql::{Connection, de::from_row, params};
 use thiserror::Error as ThisError;
 
 use crate::database::types::{
-    PaginationMeta, TransactionCursor, TransactionRow,
-    TransactionRowWithPagination,
+    PaginationMeta, TransactionCursor, TransactionRow, TransactionRowWithPagination,
 };
 
 use super::types::{BlockRow, ContractStateRow};
@@ -41,6 +40,19 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
         .query(
             "SELECT height, hash FROM blocks ORDER BY height DESC LIMIT 1",
             params![],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn select_block_by_height_or_hash(
+    conn: &Connection,
+    identifier: &str,
+) -> Result<Option<BlockRow>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT height, hash FROM blocks WHERE height = ? OR hash = ?",
+            params![identifier, identifier],
         )
         .await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
@@ -201,7 +213,7 @@ pub async fn get_transactions_paginated(
     // Build cursor filter
     if let Some(c) = cursor.clone() {
         let cursor = TransactionCursor::decode(&c).map_err(|_| Error::InvalidCursor)?;
-        where_clauses.push("(t.height, t.tx_index) < (?, ?)");
+        where_clauses.push("(t.height, t.tx_index) <= (?, ?)");
         params.push(libsql::Value::Integer(cursor.height as i64));
         params.push(libsql::Value::Integer(cursor.tx_index as i64));
     }
@@ -250,24 +262,25 @@ pub async fn get_transactions_paginated(
     while let Some(row) = rows.next().await? {
         transaction_rows_with_pagination.push(from_row(&row)?);
     }
-
     let mut transactions: Vec<TransactionRow> = transaction_rows_with_pagination
         .iter()
         .map(TransactionRow::from_transaction_row_with_pagination)
         .collect();
+
     let has_more = transactions.len() > limit as usize;
+
+    // Capture the cursor BEFORE popping - this is the first transaction of the next page
+    let next_cursor = if offset.is_none() && has_more {
+        transaction_rows_with_pagination
+            .get(limit as usize)
+            .map(|r| TransactionCursor::from_transaction_row_with_pagination(r).encode())
+    } else {
+        None
+    };
+
     if has_more {
-        // remove the last transaction over limit size (from using limit + 1)
         transactions.pop();
     }
-
-    let next_cursor = (offset.is_none() && has_more)
-        .then(|| {
-            transaction_rows_with_pagination
-                .last()
-                .map(|r| TransactionCursor::from_transaction_row_with_pagination(r).encode())
-        })
-        .flatten();
 
     let next_offset = (cursor.is_none() && has_more)
         .then(|| offset.map_or(limit as u64, |current| current + limit as u64));

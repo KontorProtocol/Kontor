@@ -112,7 +112,7 @@ pub struct PaginationMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionListResponse {
-    pub results: Vec<TransactionRow>,
+    pub transactions: Vec<TransactionRow>,
     pub pagination: PaginationMeta,
 }
 

@@ -91,7 +91,7 @@ pub fn new(context: Env) -> Router {
         .nest(
             "/api",
             Router::new()
-                .route("/blocks/{height}", get(get_block)) // handle height|hash
+                .route("/blocks/{height|hash}", get(get_block))
                 .route("/blocks/latest", get(get_block_latest))
                 .route("/blocks/{height}/transactions", get(get_transactions))
                 .route("/transactions", get(get_transactions))

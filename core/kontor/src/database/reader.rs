@@ -5,7 +5,7 @@ use crate::config::Config;
 
 use super::pool::{Manager, new_pool};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Reader {
     pool: Pool<Manager>,
 }

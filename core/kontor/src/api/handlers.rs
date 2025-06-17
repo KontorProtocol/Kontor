@@ -4,7 +4,7 @@ use crate::{
     bitcoin_client::types::TestMempoolAcceptResult,
     database::{
         queries::{
-            get_transaction_by_txid, get_transactions_paginated, select_block_at_height,
+            get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
             select_block_latest,
         },
         types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
@@ -28,10 +28,10 @@ pub struct TxsQuery {
     txs: String,
 }
 
-pub async fn get_block(State(env): State<Env>, Path(height): Path<u64>) -> Result<BlockRow> {
-    match select_block_at_height(&*env.reader.connection().await?, height).await? {
+pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {
+    match select_block_by_height_or_hash(&*env.reader.connection().await?, &identifier).await? {
         Some(block_row) => Ok(block_row.into()),
-        None => Err(HttpError::NotFound(format!("block at height: {}", height)).into()),
+        None => Err(HttpError::NotFound(format!("block at height or hash: {}", identifier)).into()),
     }
 }
 
@@ -119,7 +119,7 @@ pub async fn get_transactions(
     .await?;
 
     Ok(TransactionListResponse {
-        results: transactions,
+        transactions,
         pagination,
     }
     .into())

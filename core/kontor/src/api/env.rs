@@ -2,7 +2,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{bitcoin_client::Client, config::Config, database, reactor::events::EventSubscriber};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Env {
     pub config: Config,
     pub cancel_token: CancellationToken,
