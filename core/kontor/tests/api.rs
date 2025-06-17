@@ -40,7 +40,6 @@ async fn create_test_app() -> Result<Router> {
     let (reader, writer, _temp_dir) = new_test_db(&config).await?;
     let bitcoin_client = Client::new_from_config(&config)?;
 
-    // Insert test data using writer connection (no .await needed)
     let conn = writer.connection();
 
     // Insert blocks
@@ -61,7 +60,6 @@ async fn create_test_app() -> Result<Router> {
     insert_block(&conn, block2).await?;
     insert_block(&conn, block3).await?;
 
-    // Also check with reader connection
     let reader_conn = reader.connection().await?;
     let mut reader_verify_rows = reader_conn
         .query("SELECT COUNT(*) FROM blocks", params![])

@@ -26,7 +26,6 @@ struct TransactionListResponseWrapper {
     result: TransactionListResponse,
 }
 
-// Add this helper function to create more comprehensive test data
 async fn create_test_app() -> Result<Router> {
     let config = Config::try_parse()?;
     let (reader, writer, _temp_dir) = new_test_db(&config).await?;
@@ -43,7 +42,6 @@ async fn create_test_app() -> Result<Router> {
         insert_block(&conn, block).await?;
     }
 
-    // Also check with reader connection
     let reader_conn = reader.connection().await?;
     let mut reader_verify_rows = reader_conn
         .query("SELECT COUNT(*) FROM blocks", params![])
@@ -53,7 +51,6 @@ async fn create_test_app() -> Result<Router> {
         assert_eq!(count, 6);
     }
 
-    // Insert comprehensive transaction data
     // Height 800000: 5 transactions (indices 0-4)
     for tx_index in 0..5 {
         let tx = TransactionRow::builder()
@@ -129,7 +126,6 @@ async fn create_test_app() -> Result<Router> {
         .with_state(env))
 }
 
-// Helper function to collect all transactions using cursor pagination
 async fn collect_all_transactions_with_cursor(
     server: &TestServer,
     endpoint: &str,
@@ -173,7 +169,6 @@ async fn collect_all_transactions_with_cursor(
     Ok(all_transactions)
 }
 
-// Helper function to collect all transactions using offset pagination
 async fn collect_all_transactions_with_offset(
     server: &TestServer,
     endpoint: &str,
