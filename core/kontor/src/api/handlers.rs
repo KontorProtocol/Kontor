@@ -109,14 +109,15 @@ pub async fn get_transactions(
     // Extract height from optional path
     let height = path.map(|Path(h)| h);
 
-    let (transactions, pagination) = get_transactions_paginated(
-        &*env.reader.connection().await?,
-        height,
-        query.cursor,
-        query.offset,
-        limit,
-    )
-    .await?;
+    // Start a transaction
+    let conn = env.reader.connection().await?;
+    let tx = conn.transaction().await?;
+
+    let (transactions, pagination) =
+        get_transactions_paginated(&tx, height, query.cursor, query.offset, limit).await?;
+
+    // Commit the transaction
+    tx.commit().await?;
 
     Ok(TransactionListResponse {
         transactions,

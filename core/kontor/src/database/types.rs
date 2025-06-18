@@ -39,30 +39,6 @@ pub struct TransactionRow {
     pub tx_index: i32,
 }
 
-impl TransactionRow {
-    pub fn from_transaction_row_with_pagination(row: &TransactionRowWithPagination) -> Self {
-        Self {
-            id: row.id,
-            txid: row.txid.clone(),
-            height: row.height,
-            tx_index: row.tx_index,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionRowWithPagination {
-    pub id: Option<i64>,
-    pub txid: String,
-    pub height: u64,
-    pub tx_index: i32,
-    pub total_count: u64,
-    #[serde(skip)]
-    pub next_height: Option<u64>,
-    #[serde(skip)]
-    pub next_tx_index: Option<i32>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionCursor {
     pub height: u64,
@@ -92,13 +68,6 @@ impl TransactionCursor {
         let tx_index = parts[1].parse::<i32>().map_err(|_| Error::InvalidCursor)?;
 
         Ok(TransactionCursor { height, tx_index })
-    }
-
-    pub fn from_transaction_row_with_pagination(row: &TransactionRowWithPagination) -> Self {
-        Self {
-            height: row.height,
-            tx_index: row.tx_index,
-        }
     }
 }
 

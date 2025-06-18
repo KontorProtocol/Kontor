@@ -278,8 +278,8 @@ async fn test_get_transactions_with_cursor() -> Result<()> {
 
     let decoded_cursor = TransactionCursor::decode(&cursor)?;
 
-    assert_eq!(decoded_cursor.height, 800000);
-    assert_eq!(decoded_cursor.tx_index, 1);
+    assert_eq!(decoded_cursor.height, 800001);
+    assert_eq!(decoded_cursor.tx_index, 0);
 
     // Use cursor for next page
     let response: TestResponse = server
