@@ -17,8 +17,8 @@ const LIB_FILE_EXT: &str = "dylib";
 #[cfg(target_os = "linux")]
 const LIB_FILE_EXT: &str = "so";
 
-pub const CREATE_SCHEMA: &str = include_str!("schema.sql");
-pub const CREATE_CONTRACT_STATE_TRIGGER: &str = include_str!("checkpoint_trigger.sql");
+pub const CREATE_SCHEMA: &str = include_str!("sql/schema.sql");
+pub const CREATE_CONTRACT_STATE_TRIGGER: &str = include_str!("sql/checkpoint_trigger.sql");
 
 pub async fn initialize_database(config: &Config, conn: &libsql::Connection) -> Result<(), Error> {
     conn.query("PRAGMA foreign_keys = ON;", ()).await?;
