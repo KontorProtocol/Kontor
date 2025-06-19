@@ -252,7 +252,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
     let (ctrl, ctrl_rx) = SeekChannel::create();
     handles.push(
         bitcoin_follower::run(
-            None, // no ZMQ connection
+            "tcp://dummy".to_string(),
             cancel_token.clone(),
             client,
             f,
@@ -335,7 +335,7 @@ async fn test_follower_reactor_rollback_during_seek() -> Result<()> {
     let (ctrl, ctrl_rx) = SeekChannel::create();
     handles.push(
         bitcoin_follower::run(
-            None, // no ZMQ connection
+            "tcp://dummy".to_string(),
             cancel_token.clone(),
             client,
             f,
@@ -404,7 +404,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
     let (ctrl, ctrl_rx) = SeekChannel::create();
     handles.push(
         bitcoin_follower::run(
-            None, // no ZMQ connection
+            "tcp://dummy".to_string(),
             cancel_token.clone(),
             client,
             f,

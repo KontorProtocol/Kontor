@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
 
     handles.push(
         bitcoin_follower::run(
-            Some(config.zmq_address),
+            config.zmq_address,
             cancel_token.clone(),
             bitcoin,
             Some,
