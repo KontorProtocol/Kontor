@@ -146,7 +146,8 @@ impl<T: Tx + 'static> Reactor<T> {
 
             self.rollback(height - 1).await?;
             return Ok(());
-        } else if height > self.last_height + 1 {
+        }
+        if height > self.last_height + 1 {
             bail!(
                 "Order exception, received block at height {}, expected height {}",
                 height,

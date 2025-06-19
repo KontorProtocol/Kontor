@@ -5,7 +5,6 @@ edition = "2024"
 
 [lints.clippy]
 new_without_default = "allow"
-comparison_chain = "allow"
 
 [dependencies]
 kontor-macro = { path = "../macro" }

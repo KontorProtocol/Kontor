@@ -479,7 +479,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     assert_eq!(rec.state.latest_block_height, Some(2));
     assert_eq!(rec.state.target_block_height, Some(5));
     assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
-    assert_eq!(rec.fetcher.running(), true);
+    assert!(rec.fetcher.running());
 
     // start-up at block height 3 with mismatching hash for last block at 2
     let (rpc_tx, rpc_rx) = mpsc::channel(1);
@@ -496,7 +496,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         .await
         .unwrap();
     assert_eq!(res, vec![Event::Rollback(BlockId::Height(1))]);
-    assert_eq!(rec.fetcher.running(), false);
+    assert!(!rec.fetcher.running());
 
     // start-up at block height 3 with matching hash for last block at 2
     let (rpc_tx, rpc_rx) = mpsc::channel(1);
@@ -516,7 +516,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     assert_eq!(rec.state.latest_block_height, Some(2));
     assert_eq!(rec.state.target_block_height, Some(5));
     assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
-    assert_eq!(rec.fetcher.running(), true);
+    assert!(rec.fetcher.running());
 
     Ok(())
 }
