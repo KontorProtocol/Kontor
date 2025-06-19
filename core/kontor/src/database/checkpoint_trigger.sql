@@ -47,7 +47,7 @@ VALUES
       WITH
         row_hash AS (
           SELECT
-            hex (
+            hex(
               crypto_sha256 (
                 concat (NEW.contract_id, NEW.path, NEW.value, NEW.deleted)
               )
@@ -60,7 +60,7 @@ VALUES
               1
             FROM
               checkpoints
-          ) THEN hex (
+          ) THEN hex(
             crypto_sha256 (
               concat (
                 (
@@ -93,8 +93,8 @@ VALUES
           )
         END
     )
-  ) ON CONFLICT (id) DO
-UPDATE
+  )
+ON CONFLICT (id) DO UPDATE
 SET
   height = NEW.height,
   hash = excluded.hash;
