@@ -2081,6 +2081,7 @@ dependencies = [
  "lru",
  "macro",
  "proptest",
+ "rand 0.9.1",
  "rayon",
  "reqwest",
  "rustls 0.23.28",

@@ -5,6 +5,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use super::events::Event;
 use crate::block::Tx;
 
+#[derive(Debug)]
 pub struct StartMessage<T: Tx> {
     pub start_height: u64,
     pub last_hash: Option<BlockHash>,
