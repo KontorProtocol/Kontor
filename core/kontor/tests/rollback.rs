@@ -32,12 +32,17 @@ fn gen_block<T: Tx>(height: u64, hash: &BlockHash, prev_hash: &BlockHash) -> Blo
     }
 }
 
-fn gen_blocks<T: Tx>(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block<T>> {
+fn gen_hashed_blocks<T: Tx>(
+    start: u64,
+    end: u64,
+    prev_hash: BlockHash,
+    hash_base: u8,
+) -> Vec<Block<T>> {
     let mut blocks = vec![];
     let mut prev = prev_hash;
 
     for _i in start..end {
-        let hash = BlockHash::from_byte_array([(_i + 1) as u8; 32]);
+        let hash = BlockHash::from_byte_array([hash_base + (_i + 1) as u8; 32]);
         let block = gen_block(_i + 1, &hash, &prev);
         blocks.push(block.clone());
 
@@ -47,19 +52,12 @@ fn gen_blocks<T: Tx>(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block<T>
     blocks
 }
 
+fn gen_blocks<T: Tx>(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block<T>> {
+    gen_hashed_blocks(start, end, prev_hash, 0)
+}
+
 fn gen_fork<T: Tx>(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block<T>> {
-    let mut blocks = vec![];
-    let mut prev = prev_hash;
-
-    for _i in start..end {
-        let hash = BlockHash::from_byte_array([0x10 + (_i + 1) as u8; 32]);
-        let block = gen_block(_i + 1, &hash, &prev);
-        blocks.push(block.clone());
-
-        prev = hash;
-    }
-
-    blocks
+    gen_hashed_blocks(start, end, prev_hash, 0x10)
 }
 
 fn new_block_chain<T: Tx>(n: u64) -> Vec<Block<T>> {
@@ -182,13 +180,6 @@ async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
     }
 }
 
-fn block_row<T: Tx>(height: u64, b: &Block<T>) -> BlockRow {
-    BlockRow {
-        height,
-        hash: b.hash,
-    }
-}
-
 #[tokio::test]
 async fn test_follower_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
@@ -197,17 +188,17 @@ async fn test_follower_reactor_fetching() -> Result<()> {
     let blocks = new_block_chain(5);
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[0]))
+        queries::insert_block(conn, (&blocks[0]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[1]))
+        queries::insert_block(conn, (&blocks[1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(3, &blocks[2]))
+        queries::insert_block(conn, (&blocks[2]).into())
             .await
             .is_ok()
     );
@@ -290,17 +281,17 @@ async fn test_follower_reactor_rollback_during_seek() -> Result<()> {
     let mut blocks = new_block_chain(3);
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, (&blocks[2 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(3, &blocks[3 - 1]))
+        queries::insert_block(conn, (&blocks[3 - 1]).into())
             .await
             .is_ok()
     );
@@ -409,12 +400,12 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
 
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, (&blocks[2 - 1]).into())
             .await
             .is_ok()
     );
@@ -624,12 +615,12 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
 
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, (&blocks[2 - 1]).into())
             .await
             .is_ok()
     );
@@ -744,12 +735,12 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
 
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, (&blocks[2 - 1]).into())
             .await
             .is_ok()
     );
