@@ -17,7 +17,7 @@ pub struct ForeignHostRep {
 }
 
 impl ForeignHostRep {
-    pub async fn new(address: String) -> Result<Self> {
+    pub async fn new(engine: &Engine, address: String) -> Result<Self> {
         let path = Path::new(&address);        
         // Check if the file exists
         if !path.exists() {
@@ -33,14 +33,12 @@ impl ForeignHostRep {
             .validate(true)
             .encode()?;
 
-        let mut config = wasmtime::Config::new();
-        config.async_support(true);
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
-
-        let component = Component::from_binary(&engine, &component_bytes)?;
+        let component = Component::from_binary(engine, &component_bytes)?;
         
-        Ok(Self { engine, component })
+        Ok(Self { 
+            engine: engine.clone(),
+            component 
+        })
     }
 
     pub async fn call(&self, name: &str, args: &str) -> Result<String> {

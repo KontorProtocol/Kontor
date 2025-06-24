@@ -15,12 +15,14 @@ use wit_component::ComponentEncoder;
 
 struct HostCtx {
     table: ResourceTable,
+    engine: Engine,
 }
 
 impl HostCtx {
-    fn new() -> Self {
+    fn new(engine: &Engine) -> Self {
         Self {
             table: ResourceTable::new(),
+            engine: engine.clone(),
         }
     }
 }
@@ -33,7 +35,7 @@ impl stdlib::Host for HostCtx {
 
 impl stdlib::HostForeign for HostCtx {
     async fn new(&mut self, address: String) -> Result<Resource<ForeignHostRep>> {
-        let rep = ForeignHostRep::new(address).await?;
+        let rep = ForeignHostRep::new(&self.engine, address).await?;
         Ok(self.table.push(rep)?)
     }
 
@@ -96,7 +98,7 @@ impl SumService {
     }
     
     async fn call_sum(&self, x: u64, y: u64) -> Result<u64> {
-        let host_ctx = HostCtx::new();
+        let host_ctx = HostCtx::new(&self.engine);
         let mut store = Store::new(&self.engine, host_ctx);
         let mut linker = Linker::<HostCtx>::new(&self.engine);
         Contract::add_to_linker(&mut linker, |s| s)?;
@@ -131,7 +133,7 @@ struct FibCtx {
 
 impl FibCtx {
     async fn new(engine: &Engine) -> Result<Self> {
-        let host_ctx = HostCtx::new();
+        let host_ctx = HostCtx::new(engine);
         let sum_service = SumService::new(engine).await?;
         Ok(Self {
             host_ctx,
