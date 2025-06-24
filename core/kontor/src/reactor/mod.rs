@@ -96,6 +96,7 @@ impl<T: Tx + 'static> Reactor<T> {
             self.option_last_hash = Some(block.hash);
             info!("Rollback to height {} ({})", height, block.hash);
         } else {
+            self.option_last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
         }
 

@@ -52,6 +52,7 @@ proptest = "1.6"
 wasmtime = { workspace = true }
 wit-component = "0.232"
 wit-parser = "0.232"
+rand = "0.9.1"
 
 [dev-dependencies]
 sha2 = "0.10.9"
