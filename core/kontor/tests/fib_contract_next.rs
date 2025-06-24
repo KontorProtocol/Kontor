@@ -7,7 +7,7 @@ use tokio::fs::read;
 use wasmtime::{
     Engine, Store,
     component::{
-        Component, Linker, Resource, ResourceTable, Type, Val,
+        Component, Linker, Resource, ResourceTable, Val,
         wasm_wave::parser::Parser as WaveParser,
     },
 };
