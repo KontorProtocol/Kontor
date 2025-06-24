@@ -183,7 +183,7 @@ impl<T: Tx + 'static> Reactor<T> {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    async fn run_event_loop(&mut self) -> Result<()> {
         let rx = match self
             .ctrl
             .clone()
@@ -245,12 +245,18 @@ impl<T: Tx + 'static> Reactor<T> {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        let res = self.run_event_loop().await;
 
         if let Some(rx) = self.event_rx.as_mut() {
             rx.close();
             while rx.recv().await.is_some() {}
         }
-        Ok(())
+
+        res
     }
 }
 
