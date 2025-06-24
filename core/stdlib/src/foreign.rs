@@ -9,7 +9,6 @@ use wasmtime::{
     },
 };
 use wit_component::ComponentEncoder;
-use anyhow::Context;
 
 type CallOperationFn = Box<dyn Fn(String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>> + Send + Sync>;
 
@@ -30,10 +29,9 @@ impl ForeignService {
             ));
         }
                 
-        let module_bytes = read(path).await.with_context(|| format!("failed first"))?;
+        let module_bytes = read(path).await?;
         let component_bytes = ComponentEncoder::default()
-            .module(&module_bytes)
-            .with_context(|| format!("failed context"))?
+            .module(&module_bytes)?
             .validate(true)
             .encode()?;
 
