@@ -20,7 +20,7 @@ struct ForeignService {
 
 impl ForeignService {
     async fn new(address: &str) -> Result<Self> {
-        let path = Path::new("/Users/spora/opt/Kontor/contracts/target/wasm32-unknown-unknown/debug/sum.wasm");        
+        let path = Path::new(address);        
         // Check if the file exists
         if !path.exists() {
             return Err(anyhow!(
