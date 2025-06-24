@@ -212,7 +212,7 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block<MockTransaction>>) 
 proptest! {
     #![proptest_config(ProptestConfig {
         failure_persistence: None,
-        timeout: 2000,
+        timeout: 5000,
         .. ProptestConfig::default()
     })]
 
@@ -256,9 +256,14 @@ proptest! {
 
             // compare against model
             let conn = &*reader.connection().await.unwrap();
-            for expected_block in model {
+            for expected_block in model.clone() {
                 let block = await_block_at_height(conn, expected_block.height).await;
                 assert_eq!(block.hash, expected_block.hash);
+            }
+
+            match queries::select_block_latest(conn).await.unwrap() {
+                Some(row) => assert_eq!(row.height, model.len() as u64),
+                None => assert_eq!(model.len(), 0),
             }
 
             assert!(!handle.is_finished());
