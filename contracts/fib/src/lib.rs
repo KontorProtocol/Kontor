@@ -7,20 +7,25 @@ use kontor::contract::stdlib::*;
 
 struct Contract;
 
-impl Guest for Contract {
-    fn fib(n: u64) -> u64 {
+impl Contract {
+    fn fib_inner(foreign: &Foreign, n: u64) -> u64 {
         match n {
             0 | 1 => n,
             _ => {
-                // let m = Monoid::new(0);
-                let foreign = Foreign::new("/Users/spora/opt/Kontor/contracts/target/wasm32-unknown-unknown/debug/sum.wasm");
-                let args = format!("{}, {}", Self::fib(n - 1), Self::fib(n - 2));
+                let args = format!("{}, {}", Self::fib_inner(foreign, n - 1), Self::fib_inner(foreign, n - 2));
                 let result = foreign.call("sum", args.as_str());
                 result.parse::<u64>().unwrap_or(0)
             }
         }
     }
+}
 
+impl Guest for Contract {
+    fn fib(n: u64) -> u64 {
+        let foreign = Foreign::new("/Users/spora/opt/Kontor/contracts/target/wasm32-unknown-unknown/debug/sum.wasm");
+        Contract::fib_inner(&foreign, n)
+    }
+    
     fn api_twice(address: u64, n: u64) -> u64 {
         let m = Monoid::new(address);
         Self::twice(m, n)
