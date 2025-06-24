@@ -14,3 +14,4 @@ mod foreign;
 pub use kontor::contract::stdlib::*;
 pub use monoid::MyMonoidHostRep;
 pub use foreign::ForeignHostRep;
+pub use foreign::default_val_for_type;

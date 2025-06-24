@@ -107,7 +107,7 @@ impl ForeignHostRep {
     }
 }
 
-fn default_val_for_type(ty: &Type) -> Val {
+pub fn default_val_for_type(ty: &Type) -> Val {
   match ty {
       Type::Bool => Val::Bool(false),
       Type::S8 => Val::S8(0),
