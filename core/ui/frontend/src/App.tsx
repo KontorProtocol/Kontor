@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
-import type { AddressEntry, GetAddressesResult } from '@stacks/connect/dist/types/methods'
 import {
+  AddressPurpose,
+  getProviders,
   request as satsConnectRequest,
+  RpcErrorCode,
 } from "sats-connect";
-
-import { request as connectRequest } from '@stacks/connect'
 
 import * as bitcoin from 'bitcoinjs-lib'
 
@@ -14,9 +14,18 @@ import './App.css'
 import * as ecc from 'tiny-secp256k1';
 import { ECPairFactory } from 'ecpair';
 
-interface ExtendedAddressEntry extends AddressEntry {
-  purpose: string
+interface Provider {
+  id: string;
+  name: string;
+  icon: string;
+}
+
+interface ExtendedAddressEntry {
+  address: string
+  publicKey: string
+  purpose: AddressPurpose
   addressType: string
+  type: string
 }
 
 interface Utxo {
@@ -94,6 +103,7 @@ const convertKebabToSnake = (obj: Record<string, any>): Record<string, any> => {
 async function signPsbt(
   psbtHex: string,
   sourceAddress: string,
+  provider: string,
   scriptLeafData?: TapLeafScript
 ): Promise<string> {
   const psbt = bitcoin.Psbt.fromHex(psbtHex);
@@ -112,12 +122,15 @@ async function signPsbt(
     )
   }
 
-  const res = await satsConnectRequest('signPsbt', {
-    psbt: psbt.toBase64(),
-    broadcast: false,
-    signInputs: { [sourceAddress]: Array.from({ length: psbt.txInputs.length }, (_, i) => i) },
-
-  });
+  const res = await satsConnectRequest(
+    'signPsbt',
+    {
+      psbt: psbt.toBase64(),
+      broadcast: false,
+      signInputs: { [sourceAddress]: Array.from({ length: psbt.txInputs.length }, (_, i) => i) },
+    },
+    provider
+  );
 
   if (res.status === 'error') {
     throw new Error(`Signing failed: ${res.error || 'Unknown error'}`);
@@ -139,29 +152,90 @@ function WalletComponent() {
   const [signedTx, setSignedTx] = useState<string>('');
   const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>([])
   const [inputData, setInputData] = useState<string>('')
+  const [provider, setProvider] = useState<string>('')
+  const [availableProviders, setAvailableProviders] = useState<Provider[]>([]);
 
+  useEffect(() => {
+    const providers = getProviders();
+    console.log('providers>>>>>', providers)
+    if (providers && providers.length > 0) {
+      setAvailableProviders(providers);
+      if (!provider) {
+        setProvider(providers[0].id);
+      }
+    }
+  }, [provider]);
 
   const handleGetAddresses = async () => {
     try {
-      const response: GetAddressesResult = await connectRequest('getAddresses')
-      const paymentAddress = (response.addresses as ExtendedAddressEntry[]).find(
-        addr => addr.addressType === 'p2tr'
-      )
-      setAddress(paymentAddress)
+      console.log('provider', provider)
+      let response = await satsConnectRequest(
+        'getAddresses',
+        {
+          purposes: [AddressPurpose.Payment, AddressPurpose.Ordinals, AddressPurpose.Stacks],
+        },
+        provider
+      );
+      console.log('get addresses response', response)
+      if (response.status === 'error' && response.error.code === RpcErrorCode.INTERNAL_ERROR) {
+        throw new Error('Please sign in to your wallet to continue.');
+      }
 
-      if (paymentAddress) {
-        const electrsUrl = import.meta.env.VITE_ELECTRS_URL
-        const utxoResponse = await fetch(`${electrsUrl}/address/${paymentAddress.address}/utxo`)
-        if (!utxoResponse.ok) {
-          throw new Error('Failed to fetch UTXOs')
+      if (response.status === 'error' && response.error.code === RpcErrorCode.ACCESS_DENIED) {
+        const permResponse = await satsConnectRequest('wallet_requestPermissions', undefined, provider);
+        if (permResponse.status === 'error') {
+          throw new Error('User declined connection.');
         }
-        const utxoData = await utxoResponse.json()
-        setUtxos(utxoData)
+
+        response = await satsConnectRequest(
+          'getAddresses',
+          {
+            purposes: [AddressPurpose.Payment, AddressPurpose.Ordinals, AddressPurpose.Stacks],
+          },
+          provider
+        );
+      }
+
+      console.log('response!!!!!!!!!!!', response)
+
+      if (response.status === 'success') {
+        const paymentAddress = (response.result.addresses as unknown as ExtendedAddressEntry[]).find(
+          addr => {
+            switch (provider) {
+              case 'XverseProviders.BitcoinProvider':
+                return addr.addressType === 'p2tr'
+              case 'LeatherProvider':
+                return addr.type === 'p2tr'
+              default:
+                return addr.purpose === AddressPurpose.Payment
+            }
+          }
+        );
+        if (paymentAddress) {
+          setAddress(paymentAddress)
+          fetchUtxos(paymentAddress);
+        } else {
+          setError('Could not find a payment address.')
+        }
+      } else {
+        setError(response.error.message);
       }
     } catch (err) {
-      setError('Failed to get addresses or UTXOs')
+      console.error('Failed to get addresses:', err);
+      setError('Failed to get addresses or UTXOs');
     }
   }
+
+  const fetchUtxos = async (paymentAddress: ExtendedAddressEntry) => {
+    const electrsUrl = import.meta.env.VITE_ELECTRS_URL
+    const utxoResponse = await fetch(`${electrsUrl}/address/${paymentAddress.address}/utxo`)
+    if (!utxoResponse.ok) {
+      throw new Error('Failed to fetch UTXOs')
+    }
+    const utxoData = await utxoResponse.json()
+    setUtxos(utxoData)
+  };
+
 
   const handleCompose = async (address: ExtendedAddressEntry, utxos: Utxo[]) => {
     if (utxos.length > 0) {
@@ -186,13 +260,15 @@ function WalletComponent() {
 
       ECPairFactory(ecc);
 
-      const commit_sign_result = await signPsbt(composeResult.commit_psbt_hex, address.address);
-      const reveal_sign_result = await signPsbt(composeResult.reveal_psbt_hex, address.address, composeResult.tap_leaf_script);
+      const commit_sign_result = await signPsbt(composeResult.commit_psbt_hex, address.address, provider);
+      const reveal_sign_result = await signPsbt(composeResult.reveal_psbt_hex, address.address, provider, composeResult.tap_leaf_script);
 
       setSignedTx([commit_sign_result, reveal_sign_result].join(','));
     } catch (err) {
+      console.error('Failed to sign transaction:', err);
       setError('Failed to sign transaction');
     }
+
   };
 
   const handleBroadcastTransaction = async (signedTx: string) => {
@@ -209,6 +285,16 @@ function WalletComponent() {
   return (
     <div className="wallet-container">
       <h1>COMPOSE</h1>
+      {availableProviders.length > 0 && (
+        <div>
+          <label htmlFor="provider-select">Choose a wallet provider: </label>
+          <select id="provider-select" value={provider} onChange={(e) => setProvider(e.target.value)}>
+            {availableProviders.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <button onClick={handleGetAddresses}>Get Wallet Addresses</button>
       {address && (
         <div className="addresses">

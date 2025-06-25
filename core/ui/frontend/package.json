@@ -10,8 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@stacks/connect": "^8.1.9",
-    "@xverse/core": "^2.3.23",
     "bitcoinjs-lib": "^6.1.7",
     "buffer": "^6.0.3",
     "ecpair": "^3.0.0",
