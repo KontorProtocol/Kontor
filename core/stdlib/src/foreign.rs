@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::path::Path;
+use std::collections::HashMap;
 use tokio::fs::read;
 use wasmtime::{
     Engine, Store,
@@ -17,23 +18,30 @@ pub struct ForeignHostRep {
 }
 
 impl ForeignHostRep {
-    pub async fn new(engine: &Engine, address: String) -> Result<Self> {
-        let path = Path::new(&address);        
-        // Check if the file exists
-        if !path.exists() {
-            return Err(anyhow!(
-                "Invalid address: {} provided to foreign constructor. WASM file not found at {}",
-                address, path.display()
-            ));
-        }
-                
-        let module_bytes = read(path).await?;
-        let component_bytes = ComponentEncoder::default()
-            .module(&module_bytes)?
-            .validate(true)
-            .encode()?;
+    pub async fn new(engine: &Engine, component_cache: &mut HashMap<String, Component>, address: String) -> Result<Self> {
+        let component = if let Some(cached_component) = component_cache.get(&address) {
+            cached_component.clone()
+        } else {
+            let path = Path::new(&address);        
+            // Check if the file exists
+            if !path.exists() {
+                return Err(anyhow!(
+                    "Invalid address: {} provided to foreign constructor. WASM file not found at {}",
+                    address, path.display()
+                ));
+            }
+                    
+            let module_bytes = read(path).await?;
+            let component_bytes = ComponentEncoder::default()
+                .module(&module_bytes)?
+                .validate(true)
+                .encode()?;
 
-        let component = Component::from_binary(engine, &component_bytes)?;
+            let component = Component::from_binary(engine, &component_bytes)?;
+            
+            component_cache.insert(address.clone(), component.clone());
+            component
+        };
         
         Ok(Self { 
             engine: engine.clone(),

@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use anyhow::Result;
 use stdlib::{Contract, MyMonoidHostRep, ForeignHostRep, default_val_for_type};
@@ -16,6 +17,7 @@ use wit_component::ComponentEncoder;
 struct HostCtx {
     table: ResourceTable,
     engine: Engine,
+    component_cache: HashMap<String, Component>,
 }
 
 impl HostCtx {
@@ -23,6 +25,7 @@ impl HostCtx {
         Self {
             table: ResourceTable::new(),
             engine: engine,
+            component_cache: HashMap::new(),
         }
     }
 }
@@ -35,7 +38,7 @@ impl stdlib::Host for HostCtx {
 
 impl stdlib::HostForeign for HostCtx {
     async fn new(&mut self, address: String) -> Result<Resource<ForeignHostRep>> {
-        let rep = ForeignHostRep::new(&self.engine, address).await?;
+        let rep = ForeignHostRep::new(&self.engine, &mut self.component_cache, address).await?;
         Ok(self.table.push(rep)?)
     }
 
