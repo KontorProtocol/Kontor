@@ -138,7 +138,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x20; 32]));
 
-    assert!(tx.send(Event::BlockRemove(BlockId::Height(91))).await.is_ok());
+    assert!(
+        tx.send(Event::BlockRemove(BlockId::Height(91)))
+            .await
+            .is_ok()
+    );
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 92);

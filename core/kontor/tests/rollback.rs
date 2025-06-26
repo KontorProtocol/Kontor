@@ -11,10 +11,10 @@ use bitcoin::{self, BlockHash, hashes::Hash};
 
 use kontor::{
     bitcoin_follower::{
+        ctrl::{CtrlChannel, StartMessage},
         events::Event,
         events::{BlockId, ZmqEvent},
         info, reconciler, rpc,
-        ctrl::{CtrlChannel, StartMessage},
     },
     block::{Block, Tx},
     config::Config,

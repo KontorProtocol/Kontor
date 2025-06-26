@@ -18,7 +18,7 @@ impl Guest for Contract {
             }
         }
     }
-    
+
     fn api_twice(address: u64, n: u64) -> u64 {
         let m = Monoid::new(address);
         Self::twice(m, n)

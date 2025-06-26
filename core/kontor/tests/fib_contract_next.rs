@@ -1,15 +1,14 @@
-use std::path::Path;
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use std::path::Path;
 
 use anyhow::Result;
-use stdlib::{Contract, MyMonoidHostRep, ForeignHostRep, default_val_for_type};
+use stdlib::{Contract, ForeignHostRep, MyMonoidHostRep, default_val_for_type};
 use tokio::fs::read;
 use wasmtime::{
     Engine, Store,
     component::{
-        Component, Linker, Resource, ResourceTable, Val,
-        wasm_wave::parser::Parser as WaveParser,
+        Component, Linker, Resource, ResourceTable, Val, wasm_wave::parser::Parser as WaveParser,
     },
 };
 use wit_component::ComponentEncoder;
@@ -26,7 +25,7 @@ impl HostCtx {
     fn new(engine: Engine) -> Self {
         Self {
             table: ResourceTable::new(),
-            engine: engine,
+            engine,
             component_cache: LruCache::new(NonZeroUsize::new(COMPONENT_CACHE_CAPACITY).unwrap()),
         }
     }
@@ -41,13 +40,20 @@ impl stdlib::Host for HostCtx {
 impl stdlib::HostForeign for HostCtx {
     async fn new(&mut self, address: String) -> Result<Resource<ForeignHostRep>> {
         let component_dir = "../../contracts/target/wasm32-unknown-unknown/debug/";
-        let rep = ForeignHostRep::new(&self.engine, &mut self.component_cache, component_dir.to_string(), address).await?;
+        let rep = ForeignHostRep::new(
+            &self.engine,
+            &mut self.component_cache,
+            component_dir.to_string(),
+            address,
+        )
+        .await?;
         Ok(self.table.push(rep)?)
     }
 
     async fn call(&mut self, handle: Resource<ForeignHostRep>, expr: String) -> Result<String> {
         let rep = self.table.get(&handle)?;
-        rep.call(&expr).await
+        rep.call(&expr)
+            .await
             .map_err(|e| anyhow::anyhow!("Foreign call failed: {}", e))
     }
 

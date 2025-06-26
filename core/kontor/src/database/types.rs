@@ -4,8 +4,8 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::queries::Error,
     block::{Block, Tx},
+    database::queries::Error,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

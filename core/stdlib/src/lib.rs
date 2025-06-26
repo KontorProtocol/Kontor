@@ -8,10 +8,10 @@ wasmtime::component::bindgen!({
     trappable_imports: true,
 });
 
-mod monoid;
 mod foreign;
+mod monoid;
 
-pub use kontor::contract::stdlib::*;
-pub use monoid::MyMonoidHostRep;
 pub use foreign::ForeignHostRep;
 pub use foreign::default_val_for_type;
+pub use kontor::contract::stdlib::*;
+pub use monoid::MyMonoidHostRep;
