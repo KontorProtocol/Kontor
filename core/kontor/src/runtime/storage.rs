@@ -9,10 +9,10 @@ use crate::database::{
 
 #[derive(Builder)]
 pub struct Storage {
-    conn: Connection,
-    contract_id: String,
-    tx_id: i64,
-    height: i64,
+    pub conn: Connection,
+    pub contract_id: String,
+    pub tx_id: i64,
+    pub height: i64,
 }
 
 impl Storage {

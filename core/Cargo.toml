@@ -1,5 +1,5 @@
 [workspace]
-members = ["stdlib", "kontor", "macro", "ui"]
+members = ["kontor", "macro", "ui"]
 resolver = "2"
 
 [workspace.lints.clippy]

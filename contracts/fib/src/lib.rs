@@ -1,8 +1,10 @@
 wit_bindgen::generate!({
-    path: "wit/world.wit",
+    world: "contract",
+    path: "wit",
+    generate_all,
 });
 
-use kontor::contract::stdlib::*;
+use kontor::built_in::foreign::*;
 
 struct Contract;
 
@@ -17,15 +19,6 @@ impl Guest for Contract {
                 result.parse::<u64>().unwrap_or(0)
             }
         }
-    }
-
-    fn api_twice(address: u64, n: u64) -> u64 {
-        let m = Monoid::new(address);
-        Self::twice(m, n)
-    }
-
-    fn twice(m: Monoid, n: u64) -> u64 {
-        m.mappend(n, n)
     }
 }
 

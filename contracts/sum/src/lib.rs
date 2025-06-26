@@ -1,5 +1,7 @@
 wit_bindgen::generate!({
-  path: "wit/world.wit",
+    world: "contract",
+    path: "wit",
+    generate_all,
 });
 
 struct Contract;

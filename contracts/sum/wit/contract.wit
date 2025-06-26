@@ -1,5 +1,7 @@
 package kontor:contract;
 
 world contract {
+    include kontor:built-in/built-in;
+
     export sum: func(x: u64, y: u64) -> u64;
 }

@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 kontor-macro = { path = "../macro" }
-stdlib = { path = "../stdlib" }
 
 anyhow = { workspace = true }
 backon = { version = "1.4", features = ["tokio-sleep"] }
