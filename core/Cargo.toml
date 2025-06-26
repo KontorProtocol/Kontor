@@ -22,4 +22,4 @@ tower = "0.5"
 tracing = "0.1"
 wasmtime = { version = "33.0.0", features = ["wave"] }
 wit-component = "0.235"
-lru = "0.14.0"
+lru = "0.14"
