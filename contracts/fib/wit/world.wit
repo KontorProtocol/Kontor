@@ -9,7 +9,7 @@ interface stdlib {
 
     resource foreign {
         constructor(address: string);
-        call: func(name: string, args: string) -> string;
+        call: func(expr: string) -> string;
     }
 }
 

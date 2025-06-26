@@ -45,9 +45,9 @@ impl stdlib::HostForeign for HostCtx {
         Ok(self.table.push(rep)?)
     }
 
-    async fn call(&mut self, handle: Resource<ForeignHostRep>, name: String, args: String) -> Result<String> {
+    async fn call(&mut self, handle: Resource<ForeignHostRep>, expr: String) -> Result<String> {
         let rep = self.table.get(&handle)?;
-        rep.call(&name, &args).await
+        rep.call(&expr).await
             .map_err(|e| anyhow::anyhow!("Foreign call failed: {}", e))
     }
 

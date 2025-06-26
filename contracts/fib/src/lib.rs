@@ -13,8 +13,8 @@ impl Guest for Contract {
         match n {
             0 | 1 => n,
             _ => {
-                let args = format!("{}, {}", Self::fib(n - 1), Self::fib(n - 2));
-                let result = foreign.call("sum", args.as_str());
+                let expr = format!("sum({}, {})", Self::fib(n - 1), Self::fib(n - 2));
+                let result = foreign.call(expr.as_str());
                 result.parse::<u64>().unwrap_or(0)
             }
         }

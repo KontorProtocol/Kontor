@@ -49,18 +49,17 @@ impl ForeignHostRep {
         })
     }
 
-    pub async fn call(&self, name: &str, args: &str) -> Result<String> {
+    pub async fn call(&self, expr: &str) -> Result<String> {
         let mut store = Store::new(&self.engine, ());
         let linker = Linker::new(&self.engine);
         
-        let s = format!("{}({})", name, args);
-        let call = WaveParser::new(&s).parse_raw_func_call()?;
+        let call = WaveParser::new(expr).parse_raw_func_call()?;
         
         let instance = linker.instantiate_async(&mut store, &self.component).await?;
         
         let func = instance
             .get_func(&mut store, call.name())
-            .ok_or_else(|| anyhow::anyhow!("{} function not found in instance", name))?;
+            .ok_or_else(|| anyhow::anyhow!("{} function not found in instance", call.name()))?;
         let params = call.to_wasm_params(func.params(&store).iter().map(|(_, t)| t))?;
         let mut results = func
             .results(&store)
