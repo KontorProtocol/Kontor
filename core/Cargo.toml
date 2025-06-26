@@ -18,4 +18,4 @@ tower-http = { version = "0.6", features = [
 tower = "0.5"
 tracing = "0.1"
 wasmtime = { version = "33.0.0", features = ["wave"] }
-wit-component = "0.232"
+wit-component = "0.235"
