@@ -19,10 +19,10 @@ struct HostCtx {
 }
 
 impl HostCtx {
-    fn new(engine: &Engine) -> Self {
+    fn new(engine: Engine) -> Self {
         Self {
             table: ResourceTable::new(),
-            engine: engine.clone(),
+            engine: engine,
         }
     }
 }
@@ -98,7 +98,7 @@ impl SumService {
     }
     
     async fn call_sum(&self, x: u64, y: u64) -> Result<u64> {
-        let host_ctx = HostCtx::new(&self.engine);
+        let host_ctx = HostCtx::new(self.engine.clone());
         let mut store = Store::new(&self.engine, host_ctx);
         let mut linker = Linker::<HostCtx>::new(&self.engine);
         Contract::add_to_linker(&mut linker, |s| s)?;
@@ -133,7 +133,7 @@ struct FibCtx {
 
 impl FibCtx {
     async fn new(engine: &Engine) -> Result<Self> {
-        let host_ctx = HostCtx::new(engine);
+        let host_ctx = HostCtx::new(engine.clone());
         let sum_service = SumService::new(engine).await?;
         Ok(Self {
             host_ctx,
