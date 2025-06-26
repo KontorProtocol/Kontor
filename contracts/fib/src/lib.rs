@@ -2,7 +2,6 @@ wit_bindgen::generate!({
     path: "wit/world.wit",
 });
 
-// use crate::kontor::contract::stdlib::Foreign;
 use kontor::contract::stdlib::*;
 
 struct Contract;
