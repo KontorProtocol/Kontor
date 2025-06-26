@@ -9,8 +9,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::{
-        events::{BlockId, Event},
         ctrl::CtrlChannel,
+        events::{BlockId, Event},
     },
     block::{Block, Tx},
     database::{

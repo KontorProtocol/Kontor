@@ -10,3 +10,6 @@ workspace = true
 anyhow = { workspace = true }
 tracing = { workspace = true }
 wasmtime = { workspace = true }
+tokio = { workspace = true }
+wit-component = { workspace = true }
+lru = { workspace = true }

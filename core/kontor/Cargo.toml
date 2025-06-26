@@ -50,8 +50,8 @@ axum-test = "17.3"
 urlencoding = "2.1"
 proptest = "1.6"
 wasmtime = { workspace = true }
-wit-component = "0.232"
-wit-parser = "0.232"
+wit-component = { workspace = true }
+lru = { workspace = true }
 
 [dev-dependencies]
 sha2 = "0.10.9"
