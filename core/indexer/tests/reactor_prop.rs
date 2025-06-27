@@ -10,7 +10,7 @@ use bitcoin::{BlockHash, hashes::Hash};
 
 use proptest::prelude::*;
 
-use kontor::{
+use indexer::{
     bitcoin_follower::{
         ctrl::CtrlChannel,
         events::{BlockId, Event},
