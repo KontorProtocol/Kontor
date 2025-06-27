@@ -5,6 +5,7 @@ mod storage;
 mod types;
 mod wit;
 
+pub use component_cache::ComponentCache;
 pub use dot_path_buf::DotPathBuf;
 pub use storage::Storage;
 pub use types::default_val_for_type;
@@ -12,10 +13,7 @@ pub use wit::Contract;
 
 use std::{fs::read, path::Path};
 
-use crate::runtime::{
-    component_cache::ComponentCache,
-    wit::{ContractImports, Foreign},
-};
+use crate::runtime::wit::{ContractImports, Foreign};
 use wit::kontor::*;
 
 use anyhow::{Context as AnyhowContext, Result, anyhow};
@@ -49,7 +47,11 @@ impl Clone for Runtime {
 }
 
 impl Runtime {
-    pub fn new(storage: Storage, contract_id: String) -> Result<Self> {
+    pub fn new(
+        storage: Storage,
+        component_cache: ComponentCache,
+        contract_id: String,
+    ) -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
@@ -57,7 +59,7 @@ impl Runtime {
         let context = Self {
             engine,
             table: ResourceTable::new(),
-            component_cache: ComponentCache::new(),
+            component_cache,
             storage,
             contract_id,
         };
