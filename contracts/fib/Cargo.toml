@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 wit-bindgen = { workspace = true }
 macro = { workspace = true }
+wasm-wave = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]
