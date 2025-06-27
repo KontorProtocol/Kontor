@@ -61,8 +61,11 @@ jobs:
       - name: Build core
         run: cargo build --workspace
         working-directory: ./core
-      - name: Test core
-        run: cargo test --workspace -- --test-threads=1
+      - name: Test core library
+        run: cargo test --workspace --lib -- --test-threads=1
+        working-directory: ./core
+      - name: Test core integration tests
+        run: cargo test --workspace --tests
         working-directory: ./core
 
   audit:
@@ -70,9 +73,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rust-secure-code/cargo-audit-action@v2
-        with:
-          path: "./contracts"
-      - uses: rust-secure-code/cargo-audit-action@v2
-        with:
-          path: "./core"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Audit contracts
+        run: cargo audit
+        working-directory: ./contracts
+      - name: Audit core
+        run: cargo audit
+        working-directory: ./core
