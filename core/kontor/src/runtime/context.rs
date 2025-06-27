@@ -1,25 +1,23 @@
-use std::num::NonZeroUsize;
-
-use crate::runtime::wit::{ContractImports, Foreign};
+use crate::runtime::{
+    component_cache::ComponentCache,
+    wit::{ContractImports, Foreign},
+};
 
 use super::{
     storage::Storage,
     wit::kontor::built_in::{foreign, storage},
 };
 use anyhow::{Context as AnyhowContext, Result};
-use lru::LruCache;
 use wasmtime::{
     Engine,
-    component::{Component, Resource, ResourceTable},
+    component::{Resource, ResourceTable},
 };
 
-const COMPONENT_CACHE_CAPACITY: usize = 64;
-
 pub struct Context {
-    engine: Engine,
-    table: ResourceTable,
-    component_cache: LruCache<String, Component>,
-    storage: Storage,
+    pub engine: Engine,
+    pub table: ResourceTable,
+    pub component_cache: ComponentCache,
+    pub storage: Storage,
 }
 
 impl Clone for Context {
@@ -38,7 +36,7 @@ impl Context {
         Self {
             engine,
             table: ResourceTable::new(),
-            component_cache: LruCache::new(NonZeroUsize::new(COMPONENT_CACHE_CAPACITY).unwrap()),
+            component_cache: ComponentCache::new(),
             storage,
         }
     }
@@ -70,8 +68,8 @@ impl foreign::HostForeign for Context {
     async fn new(&mut self, address: String) -> Result<Resource<Foreign>> {
         let component_dir = "../../contracts/target/wasm32-unknown-unknown/debug/";
         let rep = Foreign::new(
-            &self.engine,
-            &mut self.component_cache,
+            self.engine.clone(),
+            self.component_cache.clone(),
             component_dir.to_string(),
             address,
         )

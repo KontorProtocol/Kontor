@@ -1,3 +1,4 @@
+mod component_cache;
 mod context;
 mod dot_path_buf;
 mod foreign;

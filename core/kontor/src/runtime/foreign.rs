@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use lru::LruCache;
 use std::path::Path;
 use tokio::fs::read;
 use wasmtime::{
@@ -8,7 +7,9 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::{Context, Contract, types::default_val_for_type};
+use crate::runtime::{
+    Context, Contract, component_cache::ComponentCache, types::default_val_for_type,
+};
 
 #[derive(Clone)]
 pub struct Foreign {
@@ -19,8 +20,8 @@ pub struct Foreign {
 
 impl Foreign {
     pub async fn new(
-        engine: &Engine,
-        component_cache: &mut LruCache<String, Component>,
+        engine: Engine,
+        component_cache: ComponentCache,
         component_dir: String,
         address: String,
     ) -> Result<Self> {
@@ -44,7 +45,7 @@ impl Foreign {
                 .validate(true)
                 .encode()?;
 
-            let component = Component::from_binary(engine, &component_bytes)?;
+            let component = Component::from_binary(&engine, &component_bytes)?;
 
             component_cache.put(address.clone(), component.clone());
             component
@@ -52,7 +53,7 @@ impl Foreign {
 
         Ok(Self {
             address,
-            engine: engine.clone(),
+            engine,
             component,
         })
     }
