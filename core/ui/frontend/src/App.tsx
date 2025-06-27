@@ -422,27 +422,6 @@ async function signPsbtWithPhantom(
 
     const signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
 
-    // Check signatures for all inputs
-    for (let i = 0; i < signedPsbt.inputCount; i++) {
-      const input = signedPsbt.data.inputs[i];
-
-      if (!scriptLeafData) {
-        // Key path spend - check for tapKeySig
-        if (!input.tapKeySig) {
-          throw new Error(
-            `Phantom signing failed: no tapKeySig found for key-path spend on input ${i}`
-          );
-        }
-      } else {
-        // Script path spend - check for tapScriptSig
-        if (!input.tapScriptSig?.length) {
-          throw new Error(
-            `Phantom signing failed: no tapScriptSig found for script-path spend on input ${i}`
-          );
-        }
-      }
-    }
-
     signedPsbt.finalizeAllInputs();
     const tx = signedPsbt.extractTransaction();
     return tx.toHex();
