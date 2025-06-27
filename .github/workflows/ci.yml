@@ -1,0 +1,78 @@
+name: Rust CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-format:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Check formatting for contracts
+        run: cargo fmt --all -- --check
+        working-directory: ./contracts
+      - name: Check formatting for core
+        run: cargo fmt --all -- --check
+        working-directory: ./core
+
+  clippy:
+    name: Clippy Linter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Run clippy for contracts
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: ./contracts
+      - name: Run clippy for core
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: ./core
+
+  test:
+    name: Build & Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build contracts
+        run: cargo build --workspace
+        working-directory: ./contracts
+      - name: Build core
+        run: cargo build --workspace
+        working-directory: ./core
+      - name: Test core
+        run: cargo test --workspace -- --test-threads=1
+        working-directory: ./core
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rust-secure-code/cargo-audit-action@v2
+        with:
+          path: "./contracts"
+      - uses: rust-secure-code/cargo-audit-action@v2
+        with:
+          path: "./core"
