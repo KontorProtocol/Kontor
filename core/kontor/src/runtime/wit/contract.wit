@@ -2,4 +2,6 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
+
+    import test: func();
 }

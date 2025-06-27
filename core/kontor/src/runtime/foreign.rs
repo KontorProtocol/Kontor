@@ -4,14 +4,15 @@ use std::path::Path;
 use tokio::fs::read;
 use wasmtime::{
     Engine, Store,
-    component::{Component, Linker, wasm_wave::parser::Parser as WaveParser},
+    component::{Component, HasSelf, Linker, wasm_wave::parser::Parser as WaveParser},
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::types::default_val_for_type;
+use crate::runtime::{Context, Contract, types::default_val_for_type};
 
 #[derive(Clone)]
 pub struct Foreign {
+    pub address: String,
     engine: Engine,
     component: Component,
 }
@@ -50,16 +51,19 @@ impl Foreign {
         };
 
         Ok(Self {
+            address,
             engine: engine.clone(),
             component,
         })
     }
 
-    pub async fn call(&self, expr: &str) -> Result<String> {
-        let mut store = Store::new(&self.engine, ());
-        let linker = Linker::new(&self.engine);
+    pub async fn call(&self, context: Context, expr: &str) -> Result<String> {
+        let mut store = Store::new(&self.engine, context);
+        let mut linker = Linker::new(&self.engine);
 
         let call = WaveParser::new(expr).parse_raw_func_call()?;
+
+        Contract::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
         let instance = linker
             .instantiate_async(&mut store, &self.component)

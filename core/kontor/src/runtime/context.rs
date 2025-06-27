@@ -1,12 +1,12 @@
 use std::num::NonZeroUsize;
 
-use crate::runtime::wit::Foreign;
+use crate::runtime::wit::{ContractImports, Foreign};
 
 use super::{
     storage::Storage,
     wit::kontor::built_in::{foreign, storage},
 };
-use anyhow::Result;
+use anyhow::{Context as AnyhowContext, Result};
 use lru::LruCache;
 use wasmtime::{
     Engine,
@@ -22,6 +22,17 @@ pub struct Context {
     storage: Storage,
 }
 
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        Self {
+            engine: self.engine.clone(),
+            table: ResourceTable::new(),
+            component_cache: self.component_cache.clone(),
+            storage: self.storage.clone(),
+        }
+    }
+}
+
 impl Context {
     pub fn new(engine: Engine, storage: Storage) -> Self {
         Self {
@@ -30,6 +41,12 @@ impl Context {
             component_cache: LruCache::new(NonZeroUsize::new(COMPONENT_CACHE_CAPACITY).unwrap()),
             storage,
         }
+    }
+}
+
+impl ContractImports for Context {
+    async fn test(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -64,9 +81,11 @@ impl foreign::HostForeign for Context {
 
     async fn call(&mut self, handle: Resource<Foreign>, expr: String) -> Result<String> {
         let rep = self.table.get(&handle)?;
-        rep.call(&expr)
+        let mut context = self.clone();
+        context.storage.contract_id = rep.address.clone();
+        rep.call(context, &expr)
             .await
-            .map_err(|e| anyhow::anyhow!("Foreign call failed: {}", e))
+            .context("Foreign call failed")
     }
 
     async fn drop(&mut self, handle: Resource<Foreign>) -> Result<()> {

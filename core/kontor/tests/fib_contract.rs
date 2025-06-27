@@ -30,7 +30,7 @@ async fn test_fib_contract() -> Result<()> {
     };
     let host_ctx = Context::new(engine.clone(), storage);
     let mut store = Store::new(&engine, host_ctx);
-    let mut linker = Linker::<Context>::new(&engine);
+    let mut linker = Linker::new(&engine);
     Contract::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
     let n = 8;

@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.lints.clippy]
 new_without_default = "allow"
+uninlined_format_args = "allow"
 
 [workspace.dependencies]
 anyhow = "1"

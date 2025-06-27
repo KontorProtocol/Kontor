@@ -7,7 +7,7 @@ use crate::database::{
     types::ContractStateRow,
 };
 
-#[derive(Builder)]
+#[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
     pub contract_id: String,
