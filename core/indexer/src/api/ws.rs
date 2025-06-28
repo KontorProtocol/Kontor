@@ -15,14 +15,16 @@ use tokio::{select, sync::broadcast, time::timeout};
 use tower_http::request_id::RequestId;
 use tracing::{Instrument, error, info, info_span, warn};
 
-use crate::{
-    reactor::events::{Event, EventFilter},
-    utils::ControlFlow,
-};
+use crate::reactor::events::{Event, EventFilter};
 
 use super::Env;
 
 const MAX_SEND_MILLIS: u64 = 1000;
+
+pub enum ControlFlow {
+    Continue,
+    Break,
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]

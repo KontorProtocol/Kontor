@@ -13,7 +13,7 @@ use indexer::{
         types::{BlockRow, ContractStateRow, TransactionRow},
     },
     logging,
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use libsql::params;
 

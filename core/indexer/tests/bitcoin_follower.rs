@@ -11,7 +11,7 @@ use indexer::{
     bitcoin_follower::rpc::{run_fetcher, run_orderer, run_processor, run_producer},
     bitcoin_follower::zmq::process_data_message,
     block::{Block, HasTxid},
-    utils::MockTransaction,
+    test_utils::MockTransaction,
 };
 
 #[derive(Clone)]

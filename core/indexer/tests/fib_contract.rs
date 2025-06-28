@@ -3,7 +3,7 @@ use clap::Parser;
 use indexer::{
     config::Config,
     runtime::{ComponentCache, Runtime, Storage},
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 

@@ -14,7 +14,7 @@ use indexer::{
         types::{BlockRow, TransactionCursor, TransactionListResponse, TransactionRow},
     },
     reactor::events::EventSubscriber,
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use libsql::params;
 use serde::{Deserialize, Serialize};

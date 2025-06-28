@@ -7,7 +7,7 @@ use indexer::{
         queries::{get_transactions_paginated, insert_block, insert_transaction},
         types::{BlockRow, TransactionCursor, TransactionRow},
     },
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {

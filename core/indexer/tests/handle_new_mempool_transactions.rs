@@ -2,7 +2,7 @@ use bitcoin::Txid;
 use indexer::{
     bitcoin_follower::{events::Event, reconciler::handle_new_mempool_transactions},
     block::HasTxid,
-    utils::MockTransaction,
+    test_utils::MockTransaction,
 };
 use indexmap::IndexMap;
 

@@ -13,5 +13,4 @@ pub mod retry;
 pub mod runtime;
 pub mod stopper;
 pub mod test_utils;
-pub mod utils;
 pub mod witness_data;

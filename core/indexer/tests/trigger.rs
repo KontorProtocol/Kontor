@@ -7,7 +7,7 @@ use indexer::{
         queries::{insert_block, insert_contract_state},
         types::{BlockRow, CheckpointRow, ContractStateRow},
     },
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use libsql::params;
 use sha2::{Digest, Sha256};

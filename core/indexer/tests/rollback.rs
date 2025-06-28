@@ -20,7 +20,7 @@ use indexer::{
     config::Config,
     database::{queries, types::BlockRow},
     reactor,
-    utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, new_test_db},
 };
 
 fn gen_block<T: Tx>(height: u64, hash: &BlockHash, prev_hash: &BlockHash) -> Block<T> {

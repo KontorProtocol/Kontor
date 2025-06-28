@@ -15,7 +15,7 @@ use indexer::{
         rpc,
     },
     block::{Block, Tx},
-    utils::MockTransaction,
+    test_utils::MockTransaction,
 };
 
 fn gen_block<T: Tx>(height: u64, hash: &BlockHash, prev_hash: &BlockHash) -> Block<T> {
