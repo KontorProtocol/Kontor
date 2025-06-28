@@ -308,7 +308,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
                         Some(Ok((sequence_number, data_message))) => {
                             if let Some(sn) = sequence_number {
                                 if let Some(n) = last_sequence_number {
-                                    if sequence_number.unwrap() != n.wrapping_add(1) {
+                                    if sn != n.wrapping_add(1) {
                                         return Err(anyhow!(
                                             "Received out of sequence messages: {} {}",
                                             n, sn

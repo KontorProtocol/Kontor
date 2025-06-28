@@ -159,7 +159,8 @@ pub async fn handle_socket_message(
             let error = Response::Error {
                 error: "Only text messages supported".to_string(),
             };
-            let error_json = serde_json::to_string(&error).unwrap();
+            let error_json = serde_json::to_string(&error)
+                .expect("Should not fail to serialize error defined above");
             if timeout(
                 Duration::from_millis(MAX_SEND_MILLIS),
                 socket.send(ws::Message::Text(error_json.into())),
@@ -266,7 +267,11 @@ pub async fn handler(
             socket,
             env,
             addr,
-            request_id.into_header_value().to_str().unwrap().into(),
+            request_id
+                .into_header_value()
+                .to_str()
+                .expect("Should not fail to convert application defined request ID to string")
+                .into(),
         )
     })
 }

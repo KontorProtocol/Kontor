@@ -167,7 +167,7 @@ impl DataMessage {
         } else {
             return Err(anyhow!(
                 "Received multipart message for unknown topic {:?})",
-                String::from_utf8(multipart[0].clone()).unwrap()
+                String::from_utf8(multipart[0].clone()).unwrap_or("Non-UTF8 string".to_string())
             ));
         }
     }

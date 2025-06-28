@@ -17,7 +17,7 @@ impl ComponentCache {
     pub fn new() -> Self {
         Self {
             cache: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(COMPONENT_CACHE_CAPACITY).unwrap(),
+                NonZeroUsize::new(COMPONENT_CACHE_CAPACITY).expect("capacity must be non-zero"),
             ))),
         }
     }

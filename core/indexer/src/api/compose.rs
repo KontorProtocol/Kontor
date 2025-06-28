@@ -403,7 +403,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
 
     let commit_transaction_hex = hex::encode(serialize_tx(&commit_transaction));
 
-    let mut commit_psbt = Psbt::from_unsigned_tx(commit_transaction.clone()).unwrap();
+    let mut commit_psbt = Psbt::from_unsigned_tx(commit_transaction.clone())?;
     commit_psbt
         .inputs
         .iter_mut()
@@ -423,7 +423,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             control_block: ScriptBuf::from_bytes(
                 taproot_spend_info
                     .control_block(&(tap_script, LeafVersion::TapScript))
-                    .unwrap()
+                    .expect("Should not fail to generate control block because script is included")
                     .serialize(),
             ),
         })
@@ -593,10 +593,14 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         };
     }
     let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
-    let mut psbt = Psbt::from_unsigned_tx(reveal_transaction.clone()).unwrap();
+    let mut psbt = Psbt::from_unsigned_tx(reveal_transaction.clone())?;
     psbt.inputs[0].witness_utxo = Some(commit_output.1.clone());
     psbt.inputs[0].tap_internal_key = Some(params.x_only_public_key);
-    psbt.inputs[0].tap_merkle_root = Some(taproot_spend_info.merkle_root().unwrap());
+    psbt.inputs[0].tap_merkle_root = Some(
+        taproot_spend_info
+            .merkle_root()
+            .expect("Should contain merkle root as script was provided above"),
+    );
 
     if let Some(funding_utxos) = params.funding_utxos {
         psbt.inputs
@@ -706,7 +710,10 @@ where
     let output_sum: u64 = dummy_tx.output.iter().map(|o| o.value.to_sat()).sum();
 
     let vsize = dummy_tx.vsize() as u64;
-    let fee = fee_rate.fee_vb(vsize).unwrap().to_sat();
+    let fee = fee_rate
+        .fee_vb(vsize)
+        .expect("Fee calculation should not overflow")
+        .to_sat();
 
     input_sum.checked_sub(output_sum + fee)
 }
