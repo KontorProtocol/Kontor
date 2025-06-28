@@ -3,6 +3,8 @@ members = ["fib", "sum"]
 resolver = "2"
 
 [workspace.dependencies]
+# IMPORTANT
 wit-bindgen = "0.43.0"
 wasm-wave = "0.235.0"
+
 macro = { path = "../core/macro" }
