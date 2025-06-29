@@ -12,7 +12,6 @@ pub use wit::Contract;
 
 use std::{fs::read, path::Path};
 
-use crate::runtime::wit::ContractImports;
 use wit::kontor::*;
 
 use anyhow::{Result, anyhow};
@@ -137,12 +136,6 @@ impl Runtime {
         Err(anyhow!(
             "Functions with multiple return values are not supported"
         ))
-    }
-}
-
-impl ContractImports for Runtime {
-    async fn test(&mut self) -> Result<()> {
-        Ok(())
     }
 }
 
