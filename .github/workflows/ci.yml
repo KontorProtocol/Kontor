@@ -68,6 +68,7 @@ jobs:
           ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
           API_PORT: ${{ vars.API_PORT }}
           DATA_DIR: ${{ vars.DATA_DIR }}
+          NETWORK: bitcoin
           TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
           SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
           SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
