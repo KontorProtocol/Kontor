@@ -45,6 +45,7 @@ jobs:
   test:
     name: Build & Test
     runs-on: ${{ matrix.os }}
+    environment: mainnet
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -66,7 +67,7 @@ jobs:
           BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
           ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
           API_PORT: ${{ vars.API_PORT }}
-          DATA_DIR: ./test-data
+          DATA_DIR: ${{ vars.DATA_DIR }}
           TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
           SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
           SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
@@ -74,7 +75,7 @@ jobs:
           SEGWIT_SELLER_KEY_PATH: ./keys/seller_key.txt
           SEGWIT_BUYER_KEY_PATH: ./keys/buyer_key.txt
         run: |
-          mkdir -p ./keys
+          mkdir -p $DATA_DIR
           echo "$TAPROOT_KEY_CONTENT" > "$TAPROOT_KEY_PATH"
           echo "$SEGWIT_SELLER_KEY_CONTENT" > "$SEGWIT_SELLER_KEY_PATH"
           echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
