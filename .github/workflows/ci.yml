@@ -98,6 +98,7 @@ jobs:
           echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
           cargo test --workspace --tests
         working-directory: ./core
+        shell: bash
 
   audit:
     name: Security Audit
