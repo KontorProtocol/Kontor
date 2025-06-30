@@ -12,12 +12,16 @@ struct ContractConfig {
     path: Option<String>,
 }
 
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
+fn to_pascal_case(name: &str) -> String {
+    name.split('-')
+        .map(|s| {
+            let mut c = s.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect()
 }
 
 #[proc_macro]
@@ -27,7 +31,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
     let world = config.world.unwrap_or("contract".to_string());
     let path = config.path.unwrap_or("wit".to_string());
-    let name = Ident::from_string(&capitalize(&config.name)).unwrap();
+    let name = Ident::from_string(&to_pascal_case(&config.name)).unwrap();
     let boilerplate = quote! {
         wit_bindgen::generate!({
             world: #world,
@@ -36,7 +40,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
         });
 
         use kontor::built_in::*;
-        use wasm_wave::{to_string as to_wave, value::Value as WaveValue};
 
         struct #name;
     };
