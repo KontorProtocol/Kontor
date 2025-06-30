@@ -58,5 +58,5 @@ lru = { workspace = true }
 
 [dev-dependencies]
 sha2 = "0.10"
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls-pemfile = "2.1"

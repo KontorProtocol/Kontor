@@ -2085,6 +2085,7 @@ dependencies = [
  "reqwest",
  "rustls 0.23.28",
  "rustls-native-certs 0.8.1",
+ "rustls-pemfile",
  "scopeguard",
  "serde",
  "serde_json",
@@ -3994,11 +3995,11 @@ dependencies = [
  "futures-util",
  "log",
  "rustls 0.23.28",
- "rustls-native-certs 0.8.1",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
  "tungstenite",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
