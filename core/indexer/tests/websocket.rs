@@ -44,16 +44,40 @@ async fn test_websocket_server() -> Result<()> {
 
     // Connect to the WebSocket server
     let url = format!("wss://localhost:{}/ws", config.api_port);
-    let certs = rustls_native_certs::load_native_certs().unwrap();
-    let mut root_store = rustls::RootCertStore::empty();
-    for cert in certs {
-        root_store.add(cert)?;
-    }
-    let connector = Connector::Rustls(Arc::new(
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    ));
+
+    #[cfg(not(windows))]
+    let connector = {
+        let certs = rustls_native_certs::load_native_certs().unwrap();
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in certs {
+            root_store.add(cert)?;
+        }
+        Connector::Rustls(Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        ))
+    };
+
+    #[cfg(windows)]
+    let connector = {
+        use std::env;
+        use std::fs;
+        use std::io::BufReader;
+
+        let cert_file_path = env::var("CERT_FILE").expect("CERT_FILE env var not set on Windows");
+        let cert_file = fs::File::open(cert_file_path)?;
+        let mut reader = BufReader::new(cert_file);
+        let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.add_parsable_certificates(certs);
+        Connector::Rustls(Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        ))
+    };
+
     let (mut ws_stream, _) =
         connect_async_tls_with_config(url, None, false, Some(connector)).await?;
 
