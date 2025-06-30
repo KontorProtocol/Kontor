@@ -91,6 +91,7 @@ jobs:
         run: |
           mkdir -p "$DATA_DIR"
           mkcert -key-file "$DATA_DIR/key.pem" -cert-file "$DATA_DIR/cert.pem" localhost 127.0.0.1 ::1
+          mkcert -install
           mkdir -p "$(dirname "$TAPROOT_KEY_PATH")"
           echo "$TAPROOT_KEY_CONTENT" > "$TAPROOT_KEY_PATH"
           echo "$SEGWIT_SELLER_KEY_CONTENT" > "$SEGWIT_SELLER_KEY_PATH"
