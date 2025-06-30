@@ -11,6 +11,7 @@ const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-x86/crypto.d
 const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-x86/crypto.so");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-arm64/crypto.so");
+// windows x64??
 
 #[cfg(target_os = "macos")]
 const LIB_FILE_EXT: &str = "dylib";
