@@ -73,7 +73,7 @@ jobs:
             brew install mkcert
           fi
         shell: bash
-      - name: Run core integration tests
+      - name: Prepare test environment
         env:
           BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
           BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
@@ -100,7 +100,24 @@ jobs:
           echo "$TAPROOT_KEY_CONTENT" > "$TAPROOT_KEY_PATH"
           echo "$SEGWIT_SELLER_KEY_CONTENT" > "$SEGWIT_SELLER_KEY_PATH"
           echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
-          cargo test --workspace --tests
+        working-directory: ./core
+        shell: bash
+      - name: Run core integration tests
+        env:
+          BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
+          BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
+          BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
+          ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
+          API_PORT: ${{ vars.API_PORT }}
+          DATA_DIR: ${{ github.workspace }}/core/test-data
+          NETWORK: bitcoin
+          TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
+          SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
+          SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
+          TAPROOT_KEY_PATH: ${{ github.workspace }}/core/keys/taproot_key.txt
+          SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
+          SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
+        run: cargo test --workspace --tests
         working-directory: ./core
         shell: bash
 
