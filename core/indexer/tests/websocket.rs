@@ -65,7 +65,8 @@ async fn test_websocket_server() -> Result<()> {
         use std::fs;
         use std::io::BufReader;
 
-        let cert_file_path = env::var("CERT_FILE").expect("CERT_FILE env var not set on Windows");
+        let cert_file_path =
+            env::var("ROOT_CA_FILE").expect("ROOT_CA_FILE env var not set on Windows");
         let cert_file = fs::File::open(cert_file_path)?;
         let mut reader = BufReader::new(cert_file);
         let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
