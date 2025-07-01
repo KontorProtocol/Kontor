@@ -93,7 +93,18 @@ jobs:
         run: cargo build --workspace
         working-directory: ./core
       - name: Install mkcert
-        uses: jakejarvis/mkcert-action@v1
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y libnss3-tools
+            curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+            chmod +x mkcert-v*-linux-amd64
+            sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            choco install mkcert -y
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install mkcert
+          fi
+        shell: bash
       - name: Prepare test environment
         run: |
           mkdir -p "$DATA_DIR"
