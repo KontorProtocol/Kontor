@@ -61,20 +61,19 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-      - name: Install contract build dependencies
-        run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y binaryen brotli
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            pacman -S --noconfirm mingw-w64-x86_64-brotli mingw-w64-x86_64-binaryen
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            brew install binaryen brotli
-          fi
-        shell: bash
+      - name: Install contract build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y binaryen brotli
+      - name: Install contract build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install binaryen brotli
+      - name: Install contract build dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: pacman -S --noconfirm mingw-w64-x86_64-brotli mingw-w64-x86_64-binaryen
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
-        shell: bash
       - name: Build core
         run: cargo build --workspace
         working-directory: ./core
