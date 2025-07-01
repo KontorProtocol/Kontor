@@ -1,5 +1,5 @@
 [package]
-name = "macro"
+name = "macros"
 version = "0.1.0"
 edition = "2024"
 
@@ -13,3 +13,4 @@ proc-macro = true
 syn = "2.0"
 quote = "1.0"
 proc-macro2 = "1.0"
+darling = "0.20"

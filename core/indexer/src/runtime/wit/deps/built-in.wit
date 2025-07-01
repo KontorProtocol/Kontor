@@ -7,10 +7,7 @@ interface storage {
 }
 
 interface foreign {
-    resource foreign {
-        constructor(address: string);
-        call: func(expr: string) -> string;
-    }
+    call: func(contract-id: string, expr: string) -> string;
 }
 
 world built-in {

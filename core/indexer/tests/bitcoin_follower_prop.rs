@@ -3,7 +3,7 @@ use tokio_util::sync::CancellationToken;
 
 use bitcoin::{self, BlockHash, hashes::Hash};
 
-use indexer::{bitcoin_follower::rpc::run_orderer, block::Block, utils::MockTransaction};
+use indexer::{bitcoin_follower::rpc::run_orderer, block::Block, test_utils::MockTransaction};
 
 use proptest::prelude::*;
 

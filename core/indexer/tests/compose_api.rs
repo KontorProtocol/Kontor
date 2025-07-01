@@ -24,7 +24,7 @@ use indexer::{
     bitcoin_client::Client,
     config::{Config, TestConfig},
     test_utils,
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use serde::{Deserialize, Serialize};
 

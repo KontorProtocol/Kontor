@@ -13,8 +13,8 @@ use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
-    KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut, Witness,
-    XOnlyPublicKey, secp256k1,
+    BlockHash, KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut,
+    Txid, Witness, XOnlyPublicKey, secp256k1,
 };
 use bitcoin::{
     PrivateKey,
@@ -24,8 +24,12 @@ use bitcoin::{
 use serde::Serialize;
 use std::fs;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::TempDir;
 
-use crate::config::TestConfig;
+use crate::block::HasTxid;
+use crate::config::{Config, TestConfig};
+use crate::database::{Reader, Writer};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -274,4 +278,48 @@ pub fn base64_serialize<T: ?Sized + Serialize>(data: &T) -> String {
     ciborium::into_writer(&data, &mut serialized).unwrap();
 
     base64.encode(serialized)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MockTransaction {
+    txid: Txid,
+}
+
+impl MockTransaction {
+    pub fn new(txid_num: u32) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[0..4].copy_from_slice(&txid_num.to_le_bytes()); // Use the 4 bytes of txid_num
+        MockTransaction {
+            txid: Txid::from_slice(&bytes).unwrap(),
+        }
+    }
+}
+
+impl HasTxid for MockTransaction {
+    fn txid(&self) -> Txid {
+        self.txid
+    }
+}
+
+pub async fn new_test_db(config: &Config) -> Result<(Reader, Writer, TempDir)> {
+    let temp_dir = TempDir::new()?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_nanos()
+        .to_string();
+    let db_name = format!("test_db_{}.db", timestamp);
+    let mut tmp_config = config.clone();
+    tmp_config.data_dir = temp_dir.path().to_owned();
+    let writer = Writer::new(&tmp_config, &db_name).await?;
+    let reader = Reader::new(tmp_config, &db_name).await?; // Assuming Reader::new exists
+    Ok((reader, writer, temp_dir))
+}
+
+pub fn new_mock_block_hash(i: u32) -> BlockHash {
+    let mut bytes = [0u8; 32];
+    let i_bytes = i.to_le_bytes();
+    for chunk in bytes.chunks_mut(4) {
+        chunk.copy_from_slice(&i_bytes[..chunk.len()]);
+    }
+    BlockHash::from_slice(&bytes).unwrap()
 }

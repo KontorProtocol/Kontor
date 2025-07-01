@@ -16,7 +16,7 @@ use indexer::{
     database::{queries, types::BlockRow},
     reactor,
     retry::{new_backoff_unlimited, retry},
-    utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, new_test_db},
 };
 
 fn gen_block<T: Tx>(height: u64, hash: &BlockHash, prev_hash: &BlockHash) -> Block<T> {

@@ -9,7 +9,7 @@ use indexer::{
     config::Config,
     logging,
     reactor::events::{Event, EventSubscriber},
-    utils::new_test_db,
+    test_utils::new_test_db,
 };
 use serde_json::json;
 use tokio::sync::mpsc;

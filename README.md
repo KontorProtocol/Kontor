@@ -6,6 +6,12 @@ The `core` workspace contains the application and its tests, while `contracts` c
 
 ## Getting Started
 
+Install build dependencies:
+```bash
+brew install binaryen
+brew install brotli
+```
+
 Add wasm compile target:
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -14,7 +20,7 @@ rustup target add wasm32-unknown-unknown
 Build native contracts:
 ```bash
 cd contracts
-cargo build
+./build.sh
 cd ..
 ```
 This will generate the native contracts in the `contracts/target/wasm32-unknown-unknown/debug` directory.

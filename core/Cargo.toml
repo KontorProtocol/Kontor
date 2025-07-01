@@ -1,5 +1,5 @@
 [workspace]
-members = ["indexer", "macro", "ui"]
+members = ["indexer", "macros", "ui"]
 resolver = "2"
 
 [workspace.lints.clippy]
@@ -7,6 +7,10 @@ new_without_default = "allow"
 uninlined_format_args = "allow"
 
 [workspace.dependencies]
+# IMPORTANT
+wasmtime = { version = "34.0.1", features = ["wave"] }
+wit-component = "0.235.0"
+
 anyhow = "1"
 axum = { version = "0.8", features = ["http2", "ws"] }
 tokio = { version = "1", features = ["full"] }
@@ -21,6 +25,3 @@ tower-http = { version = "0.6", features = [
 ] }
 tower = "0.5"
 tracing = "0.1"
-wasmtime = { version = "34.0.1", features = ["wave"] }
-wit-component = "0.235"
-lru = "0.14"

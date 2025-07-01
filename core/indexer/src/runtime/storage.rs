@@ -10,7 +10,9 @@ use crate::database::{
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
+    #[builder(default = 0)]
     pub tx_id: i64,
+    #[builder(default = 1)]
     pub height: i64,
 }
 
