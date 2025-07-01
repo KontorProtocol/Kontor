@@ -73,7 +73,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
         }
     }
 
-    async fn handle_zmq_event(&mut self, zmq_event: ZmqEvent<T>) -> Result<Vec<Event<T>>> {
+    pub async fn handle_zmq_event(&mut self, zmq_event: ZmqEvent<T>) -> Result<Vec<Event<T>>> {
         let events = match zmq_event {
             ZmqEvent::Connected => {
                 info!("ZMQ connected");
@@ -177,7 +177,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher> Reconciler<T, I, F> {
         }
     }
 
-    async fn handle_rpc_event(
+    pub async fn handle_rpc_event(
         &mut self,
         (target_height, block): (u64, Block<T>),
     ) -> Result<Vec<Event<T>>> {
