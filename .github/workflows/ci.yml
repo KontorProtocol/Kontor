@@ -1,0 +1,137 @@
+name: Rust CI
+
+on:
+  push:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-format:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Check formatting for contracts
+        run: cargo fmt --all -- --check
+        working-directory: ./contracts
+      - name: Check formatting for core
+        run: cargo fmt --all -- --check
+        working-directory: ./core
+
+  clippy:
+    name: Clippy Linter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Run clippy for contracts
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: ./contracts
+      - name: Run clippy for core
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: ./core
+
+  test:
+    name: Build & Test
+    runs-on: ${{ matrix.os }}
+    environment: mainnet
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build contracts
+        run: cargo build --workspace
+        working-directory: ./contracts
+      - name: Build core
+        run: cargo build --workspace
+        working-directory: ./core
+      - name: Install mkcert
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y libnss3-tools
+            curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+            chmod +x mkcert-v*-linux-amd64
+            sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            choco install mkcert -y
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install mkcert
+          fi
+        shell: bash
+      - name: Prepare test environment
+        env:
+          BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
+          BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
+          BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
+          ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
+          API_PORT: ${{ vars.API_PORT }}
+          DATA_DIR: ${{ github.workspace }}/core/test-data
+          NETWORK: bitcoin
+          TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
+          SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
+          SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
+          TAPROOT_KEY_PATH: ${{ github.workspace }}/core/keys/taproot_key.txt
+          SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
+          SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
+        run: |
+          mkdir -p "$DATA_DIR"
+          mkcert -key-file "$DATA_DIR/key.pem" -cert-file "$DATA_DIR/cert.pem" localhost 127.0.0.1 ::1
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            echo "ROOT_CA_FILE=$(mkcert -CAROOT)/rootCA.pem" >> $GITHUB_ENV
+          elif [ "$RUNNER_OS" != "Windows" ]; then
+            mkcert -install
+          fi
+          mkdir -p "$(dirname "$TAPROOT_KEY_PATH")"
+          echo "$TAPROOT_KEY_CONTENT" > "$TAPROOT_KEY_PATH"
+          echo "$SEGWIT_SELLER_KEY_CONTENT" > "$SEGWIT_SELLER_KEY_PATH"
+          echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
+        working-directory: ./core
+        shell: bash
+      - name: Run core integration tests
+        env:
+          BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
+          BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
+          BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
+          ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
+          API_PORT: ${{ vars.API_PORT }}
+          DATA_DIR: ${{ github.workspace }}/core/test-data
+          NETWORK: bitcoin
+          TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
+          SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
+          SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
+          TAPROOT_KEY_PATH: ${{ github.workspace }}/core/keys/taproot_key.txt
+          SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
+          SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
+        run: cargo test --workspace
+        working-directory: ./core
+        shell: bash
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Audit contracts
+        run: cargo audit
+        working-directory: ./contracts
+      - name: Audit core
+        run: cargo audit
+        working-directory: ./core

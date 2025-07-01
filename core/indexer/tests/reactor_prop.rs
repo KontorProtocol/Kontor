@@ -20,7 +20,7 @@ use indexer::{
     config::Config,
     database::{self, queries, types::BlockRow},
     reactor,
-    utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, new_test_db},
 };
 
 #[derive(Debug)]

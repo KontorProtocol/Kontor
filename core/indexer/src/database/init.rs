@@ -11,11 +11,15 @@ const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-x86/crypto.d
 const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-x86/crypto.so");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-arm64/crypto.so");
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/windows-x64/crypto.dll");
 
 #[cfg(target_os = "macos")]
 const LIB_FILE_EXT: &str = "dylib";
 #[cfg(target_os = "linux")]
 const LIB_FILE_EXT: &str = "so";
+#[cfg(target_os = "windows")]
+const LIB_FILE_EXT: &str = "dll";
 
 pub const CREATE_SCHEMA: &str = include_str!("sql/schema.sql");
 pub const CREATE_CONTRACT_STATE_TRIGGER: &str = include_str!("sql/checkpoint_trigger.sql");

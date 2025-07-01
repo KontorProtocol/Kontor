@@ -53,11 +53,10 @@ proptest = "1.6"
 lru = "0.15"
 wasmtime = { workspace = true }
 wit-component = { workspace = true }
-lru = { workspace = true }
 rand = "0.9.1"
 brotli = "8"
 
-
 [dev-dependencies]
 sha2 = "0.10"
-tokio-tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+rustls-pemfile = "2.1"
