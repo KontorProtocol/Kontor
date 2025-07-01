@@ -35,7 +35,7 @@ for WASM_FILE in $WASM_FILES; do
     fi
 
     echo "Running wasm-opt -Oz on $WASM_FILE to $OPT_WASM_FILE"
-    wasm-opt -Oz --enable-bulk-memory-opt "$WASM_FILE" -o "$OPT_WASM_FILE"
+    wasm-opt -Oz --enable-bulk-memory "$WASM_FILE" -o "$OPT_WASM_FILE"
     if [ $? -ne 0 ]; then
         echo "Error: wasm-opt failed for $WASM_FILE"
         exit 1
