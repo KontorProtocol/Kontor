@@ -1,5 +1,6 @@
 use anyhow::Result;
 use libsql::Connection;
+use proptest::test_runner::FileFailurePersistence;
 use rand::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -187,7 +188,10 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block<MockTransaction>>) 
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        failure_persistence: None,
+        failure_persistence: Some(Box::new(
+            FileFailurePersistence::WithSource("regressions"),
+        )),
+        cases: 10,
         timeout: 5000,
         .. ProptestConfig::default()
     })]
@@ -216,7 +220,7 @@ proptest! {
        ignored.
 
     */
-    #[test] #[ignore] // ignored on regular runs due to long run-time
+    #[test]
     fn test_reactor_rollbacks(vec in gen_segment_vec()) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
