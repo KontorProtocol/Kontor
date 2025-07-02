@@ -15,7 +15,7 @@ use indexer::{
         info, reconciler, rpc,
     },
     block::Block,
-    utils::MockTransaction,
+    test_utils::MockTransaction,
 };
 
 #[derive(Debug)]
