@@ -223,3 +223,80 @@ async fn test_build_tap_script_and_script_address_large_chunking() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_build_tap_script_progressive_size_limit() -> Result<()> {
+    let key = generate_test_key();
+
+    // Start with a larger size and use bigger increments
+    let mut current_size = 500_000; // Start with 500KB (where previous test left off)
+    let increment = 100_000; // Increase by 100KB each iteration
+    let max_attempts = 50; // Test up to ~5.5MB
+
+    let mut last_successful_size = 0;
+    let mut attempts = 0;
+
+    println!("Testing progressive data size limits...");
+
+    while attempts < max_attempts {
+        let data = vec![0xFF; current_size];
+
+        match build_tap_script_and_script_address(key, data.clone()) {
+            Ok((script, _, _)) => {
+                last_successful_size = current_size;
+                let script_size = script.len();
+                let num_chunks = (current_size + 519) / 520; // Round up division
+
+                println!(
+                    "✓ Success: {} bytes data ({} KB) -> {} bytes script, {} chunks",
+                    current_size,
+                    current_size / 1024,
+                    script_size,
+                    num_chunks
+                );
+
+                // Verify the script can be parsed
+                let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
+                assert!(instructions.len() > 6, "Script should have basic structure");
+
+                current_size += increment;
+                attempts += 1;
+            }
+            Err(e) => {
+                println!(
+                    "✗ Failed at {} bytes ({} KB): {}",
+                    current_size,
+                    current_size / 1024,
+                    e
+                );
+                break;
+            }
+        }
+    }
+
+    if attempts >= max_attempts {
+        println!(
+            "⚠ Reached maximum attempts ({}) without failure",
+            max_attempts
+        );
+        println!(
+            "Last tested size: {} bytes ({} KB)",
+            current_size - increment,
+            (current_size - increment) / 1024
+        );
+    }
+
+    println!(
+        "Maximum successful data size: {} bytes ({} KB)",
+        last_successful_size,
+        last_successful_size / 1024
+    );
+
+    // Ensure we successfully tested at least some sizes
+    assert!(
+        last_successful_size > 0,
+        "Should have at least one successful size"
+    );
+
+    Ok(())
+}

@@ -130,7 +130,13 @@ pub fn sign_key_spend(
 ) -> Result<()> {
     let sighash_type = TapSighashType::Default;
 
-    let mut sighasher = SighashCache::new(key_spend_tx.clone());
+    // Create a clean transaction copy for sighash calculation (no witness data)
+    let mut clean_tx = key_spend_tx.clone();
+    for input in &mut clean_tx.input {
+        input.witness.clear();
+    }
+
+    let mut sighasher = SighashCache::new(clean_tx);
     let sighash = sighasher
         .taproot_key_spend_signature_hash(input_index, &Prevouts::All(prevouts), sighash_type)
         .expect("Failed to construct sighash");
@@ -185,6 +191,51 @@ pub fn sign_script_spend(
     witness.push(tap_script.as_bytes());
     witness.push(control_block.serialize());
     script_spend_tx.input[input_index].witness = witness;
+    Ok(())
+}
+
+pub fn sign_multiple_key_spend(
+    secp: &Secp256k1<All>,
+    key_spend_tx: &mut Transaction,
+    prevouts: &[TxOut],
+    keypair: &Keypair,
+) -> Result<()> {
+    let sighash_type = TapSighashType::Default;
+    let tweaked_sender = keypair.tap_tweak(secp, None);
+
+    // Clear all witnesses first
+    for input in &mut key_spend_tx.input {
+        input.witness.clear();
+    }
+
+    // Create a single sighasher instance
+    let mut sighasher = SighashCache::new(key_spend_tx.clone());
+
+    // Collect all signatures first
+    let mut signatures = Vec::new();
+    for input_index in 0..key_spend_tx.input.len() {
+        let sighash = sighasher
+            .taproot_key_spend_signature_hash(input_index, &Prevouts::All(prevouts), sighash_type)
+            .expect("Failed to construct sighash");
+
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_keypair());
+
+        let signature = bitcoin::taproot::Signature {
+            signature,
+            sighash_type,
+        };
+
+        signatures.push(signature);
+    }
+
+    // Apply all signatures to the transaction
+    for (input_index, signature) in signatures.into_iter().enumerate() {
+        key_spend_tx.input[input_index]
+            .witness
+            .push(signature.to_vec());
+    }
+
     Ok(())
 }
 
