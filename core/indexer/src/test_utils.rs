@@ -188,6 +188,46 @@ pub fn sign_script_spend(
     Ok(())
 }
 
+pub fn sign_multiple_key_spend(
+    secp: &Secp256k1<All>,
+    key_spend_tx: &mut Transaction,
+    prevouts: &[TxOut],
+    keypair: &Keypair,
+) -> Result<()> {
+    let sighash_type = TapSighashType::Default;
+    let tweaked_sender = keypair.tap_tweak(secp, None);
+
+    // Create a single sighasher instance
+    let mut sighasher = SighashCache::new(key_spend_tx.clone());
+
+    // Collect all signatures first
+    let mut signatures = Vec::new();
+    for input_index in 0..key_spend_tx.input.len() {
+        let sighash = sighasher
+            .taproot_key_spend_signature_hash(input_index, &Prevouts::All(prevouts), sighash_type)
+            .expect("Failed to construct sighash");
+
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_keypair());
+
+        let signature = bitcoin::taproot::Signature {
+            signature,
+            sighash_type,
+        };
+
+        signatures.push(signature);
+    }
+
+    // Apply all signatures to the transaction
+    for (input_index, signature) in signatures.into_iter().enumerate() {
+        key_spend_tx.input[input_index]
+            .witness
+            .push(signature.to_vec());
+    }
+
+    Ok(())
+}
+
 pub fn sign_seller_side_psbt(
     secp: &Secp256k1<All>,
     seller_psbt: &mut Psbt,
