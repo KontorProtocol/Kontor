@@ -1,7 +1,7 @@
 use utoipa::OpenApi;
 
 use crate::{
-    api::{compose, handlers},
+    api::{compose, handlers, json_types},
     bitcoin_client, database,
 };
 
@@ -34,6 +34,10 @@ use crate::{
             compose::RevealOutputs,
             compose::TapLeafScript,
             handlers::TxsQuery,
+            json_types::JsonTransaction,
+            json_types::JsonTxIn,
+            json_types::JsonTxOut,
+            json_types::JsonOutPoint,
         )
     ),
     tags(

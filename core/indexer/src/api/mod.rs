@@ -3,6 +3,7 @@ pub mod doc;
 pub mod env;
 pub mod error;
 pub mod handlers;
+pub mod json_types;
 pub mod result;
 pub mod router;
 pub mod ws;

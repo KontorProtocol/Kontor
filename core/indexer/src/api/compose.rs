@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow};
+use base64::engine::general_purpose::STANDARD as base64;
 use base64::prelude::*;
 use bitcoin::{
-    Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
+    Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Txid,
+    Witness,
     absolute::LockTime,
     consensus::encode::serialize as serialize_tx,
     opcodes::{
@@ -13,20 +15,24 @@ use bitcoin::{
     taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo},
     transaction::{Transaction, TxIn, Version},
 };
-use futures_util::future::OptionFuture;
-
 use bon::Builder;
-
-use base64::engine::general_purpose::STANDARD as base64;
-use bitcoin::Txid;
+use futures_util::future::OptionFuture;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use utoipa::{IntoParams, ToSchema};
 
+use super::json_types::JsonTransaction;
 use crate::bitcoin_client::Client;
 
+fn transaction_to_json<S>(tx: &Transaction, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let json_tx = JsonTransaction::from(tx);
+    json_tx.serialize(serializer)
+}
+
 #[derive(Serialize, Deserialize, ToSchema, IntoParams)]
-#[serde(rename_all = "camelCase")]
 pub struct ComposeQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -90,7 +96,6 @@ impl ComposeInputs {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct TapLeafScript {
     #[serde(rename = "leafVersion")]
     #[schema(value_type = u8)]
@@ -102,14 +107,15 @@ pub struct TapLeafScript {
     pub control_block: ScriptBuf,
 }
 
-#[derive(Debug, Builder, ToSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Builder, ToSchema, Serialize, Deserialize)]
 pub struct ComposeOutputs {
-    #[serde(skip)]
+    #[serde(serialize_with = "transaction_to_json")]
+    #[schema(value_type = JsonTransaction)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
-    #[serde(skip)]
+    #[serde(serialize_with = "transaction_to_json")]
+    #[schema(value_type = JsonTransaction)]
     pub reveal_transaction: Transaction,
     pub reveal_transaction_hex: String,
     pub reveal_psbt_hex: String,
@@ -147,9 +153,9 @@ impl From<ComposeInputs> for CommitInputs {
 }
 
 #[derive(Builder, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct CommitOutputs {
-    #[serde(skip)]
+    #[serde(serialize_with = "transaction_to_json")]
+    #[schema(value_type = JsonTransaction)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
@@ -159,7 +165,6 @@ pub struct CommitOutputs {
 }
 
 #[derive(Serialize, Deserialize, ToSchema, IntoParams)]
-#[serde(rename_all = "camelCase")]
 pub struct RevealQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -259,9 +264,9 @@ impl RevealInputs {
 }
 
 #[derive(Builder, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct RevealOutputs {
-    #[serde(skip)]
+    #[serde(serialize_with = "transaction_to_json")]
+    #[schema(value_type = JsonTransaction)]
     pub transaction: Transaction,
     pub transaction_hex: String,
     #[serde(skip)]

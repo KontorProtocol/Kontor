@@ -12,3 +12,8 @@
 **/*.so
 !/core/indexer/sqlean*/**/*.so
 !/core/indexer/sqlean*/**/*.dylib
+
+# Generated files
+/core/indexer/openapi.json
+typescript-client
+/core/indexer/openapitools.json

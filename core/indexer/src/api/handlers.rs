@@ -1,28 +1,15 @@
-use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
-};
-use std::sync::Arc;
-use utoipa_rapidoc::RapiDoc;
-use utoipa_redoc::{Redoc, Servable};
-use utoipa_swagger_ui::Config;
+use axum::extract::{Path, Query, State};
 
 use crate::{
-    api::doc::ApiDoc,
     bitcoin_client::types::TestMempoolAcceptResult,
     database::{
         queries::{
             get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
             select_block_latest,
         },
-        types::{
-            BlockRow, TransactionListResponse, TransactionPaginationQuery, TransactionQuery,
-            TransactionRow,
-        },
+        types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
     },
 };
-use axum::{Json, response::Html};
 
 use super::{
     Env,
@@ -35,10 +22,9 @@ use super::{
 };
 
 use serde::Deserialize;
-use utoipa::{IntoParams, OpenApi, ToSchema};
+use utoipa::{IntoParams, ToSchema};
 
 #[derive(Deserialize, ToSchema, IntoParams)]
-#[serde(rename_all = "camelCase")]
 pub struct TxsQuery {
     txs: String,
 }
@@ -169,6 +155,36 @@ pub async fn get_compose_reveal(
     Ok(outputs.into())
 }
 
+// Shared implementation for transaction queries
+pub async fn get_transactions(
+    Query(query): Query<TransactionQuery>,
+    State(env): State<Env>,
+    path: Option<Path<i64>>,
+) -> Result<TransactionListResponse> {
+    let limit = query.limit.map_or(20, |l| l.clamp(1, 1000));
+    if query.cursor.is_some() && query.offset.is_some() {
+        return Err(HttpError::BadRequest(
+            "Cannot specify both cursor and offset parameters".to_string(),
+        )
+        .into());
+    }
+    // Extract height from optional path
+    let height = path.map(|Path(h)| h);
+    // Start a transaction
+    let conn = env.reader.connection().await?;
+    let tx = conn.transaction().await?;
+    let (transactions, pagination) =
+        get_transactions_paginated(&tx, height, query.cursor, query.offset, limit).await?;
+    // Commit the transaction
+    tx.commit().await?;
+    Ok(TransactionListResponse {
+        transactions,
+        pagination,
+    }
+    .into())
+}
+
+// Wrapper functions for OpenAPI documentation
 #[utoipa::path(
     get,
     path = "/api/transactions",
@@ -184,7 +200,7 @@ pub async fn get_transactions_root(
     query: Query<TransactionQuery>,
     state: State<Env>,
 ) -> Result<TransactionListResponse> {
-    get_transactions_logic(query, state, None).await
+    get_transactions(query, state, None).await
 }
 
 #[utoipa::path(
@@ -192,10 +208,10 @@ pub async fn get_transactions_root(
     path = "/api/blocks/{height}/transactions",
     params(
         ("height" = i64, Path, description = "Block height"),
-        TransactionPaginationQuery
+        TransactionQuery
     ),
     responses(
-        (status = 200, description = "List of transactions for a block", body = TransactionListResponse),
+        (status = 200, description = "List of transactions for block", body = TransactionListResponse),
         (status = 400, description = "Bad request")
     )
 )]
@@ -204,41 +220,7 @@ pub async fn get_transactions_for_block(
     query: Query<TransactionQuery>,
     state: State<Env>,
 ) -> Result<TransactionListResponse> {
-    get_transactions_logic(query, state, Some(path)).await
-}
-
-async fn get_transactions_logic(
-    Query(query): Query<TransactionQuery>,
-    State(env): State<Env>,
-    path: Option<Path<i64>>,
-) -> Result<TransactionListResponse> {
-    let limit = query.limit.map_or(20, |l| l.clamp(1, 1000));
-
-    if query.cursor.is_some() && query.offset.is_some() {
-        return Err(HttpError::BadRequest(
-            "Cannot specify both cursor and offset parameters".to_string(),
-        )
-        .into());
-    }
-
-    // Extract height from optional path
-    let height = path.map(|Path(h)| h);
-
-    // Start a transaction
-    let conn = env.reader.connection().await?;
-    let tx = conn.transaction().await?;
-
-    let (transactions, pagination) =
-        get_transactions_paginated(&tx, height, query.cursor, query.offset, limit).await?;
-
-    // Commit the transaction
-    tx.commit().await?;
-
-    Ok(TransactionListResponse {
-        transactions,
-        pagination,
-    }
-    .into())
+    get_transactions(query, state, Some(path)).await
 }
 
 #[utoipa::path(

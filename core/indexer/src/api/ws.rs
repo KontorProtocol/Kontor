@@ -8,7 +8,7 @@ use axum::{
     },
     response::IntoResponse,
 };
-use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{select, sync::broadcast, time::timeout};
@@ -109,7 +109,7 @@ pub async fn handle_socket_message(
                         .expect("Failed to serialize response despite being created internally");
                     if timeout(
                         Duration::from_millis(MAX_SEND_MILLIS),
-                        socket.send(ws::Message::Text(response_json.into())),
+                        socket.send(ws::Message::Text(response_json)),
                     )
                     .await
                     .is_err()
@@ -128,7 +128,7 @@ pub async fn handle_socket_message(
                     .expect("Failed to serialize error despite being created internally");
                 if timeout(
                     Duration::from_millis(MAX_SEND_MILLIS),
-                    socket.send(ws::Message::Text(error_json.into())),
+                    socket.send(ws::Message::Text(error_json)),
                 )
                 .await
                 .is_err()
@@ -163,7 +163,7 @@ pub async fn handle_socket_message(
                 .expect("Should not fail to serialize error defined above");
             if timeout(
                 Duration::from_millis(MAX_SEND_MILLIS),
-                socket.send(ws::Message::Text(error_json.into())),
+                socket.send(ws::Message::Text(error_json)),
             )
             .await
             .is_err()
@@ -208,7 +208,7 @@ pub async fn handle_socket(
                             let json = serde_json::to_string(&msg).expect("Failed to serialize event");
                             if timeout(
                                 Duration::from_millis(MAX_SEND_MILLIS),
-                                socket.send(ws::Message::Text(json.into())),
+                                socket.send(ws::Message::Text(json)),
                             )
                             .await
                             .is_err()

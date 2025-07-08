@@ -173,3 +173,46 @@ To build the frontend for release, before merging, in the frontend dir
 cd ui/frontend
 npm run build
 ```
+
+## API Documentation & Client Generation
+
+The Kontor API uses OpenAPI 3.0 specification with automatic documentation generation.
+
+### Generate OpenAPI Specification
+
+To generate the `openapi.json` file:
+
+```bash
+cargo run --bin generate-spec
+```
+
+This creates an `openapi.json` file in the project root.
+
+### Generate TypeScript Client
+
+First, install the OpenAPI Generator CLI and Java (required dependency):
+
+```bash
+npm install -g @openapitools/openapi-generator-cli
+brew install openjdk@17
+```
+
+Then generate the TypeScript client:
+
+```bash
+openapi-generator-cli generate -i openapi.json -g typescript-axios -o typescript-client
+```
+
+This creates a `typescript-client/` directory with:
+
+- Generated TypeScript interfaces for all API types
+- Axios-based client with type-safe methods
+- Full TypeScript definitions for requests and responses
+
+### View API Documentation
+
+When running the application, API documentation is available at:
+
+- Swagger UI: `https://localhost:8443/swagger-ui`
+- ReDoc: `https://localhost:8443/redoc`
+- RapiDoc: `https://localhost:8443/rapidoc`

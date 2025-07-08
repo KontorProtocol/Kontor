@@ -112,7 +112,6 @@ pub struct PaginationQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, IntoParams)]
-#[serde(rename_all = "camelCase")]
 pub struct TransactionQuery {
     pub cursor: Option<String>,
     pub offset: Option<i64>,
