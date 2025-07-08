@@ -31,7 +31,7 @@ pub struct TxsQuery {
 
 #[utoipa::path(
     get,
-    path = "/api/blocks/{identifier}",
+    path = "/api/blocks/:identifier",
     params(
         ("identifier" = String, Path, description = "Block height or hash")
     ),
@@ -205,7 +205,7 @@ pub async fn get_transactions_root(
 
 #[utoipa::path(
     get,
-    path = "/api/blocks/{height}/transactions",
+    path = "/api/blocks/:height/transactions",
     params(
         ("height" = i64, Path, description = "Block height"),
         TransactionQuery
@@ -225,7 +225,7 @@ pub async fn get_transactions_for_block(
 
 #[utoipa::path(
     get,
-    path = "/api/transactions/{txid}",
+    path = "/api/transactions/:txid",
     params(
         ("txid" = String, Path, description = "Transaction ID")
     ),

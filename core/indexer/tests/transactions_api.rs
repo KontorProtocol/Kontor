@@ -1,12 +1,9 @@
 use anyhow::Result;
-use axum::{Router, http::StatusCode, routing::get};
+use axum::{Router, http::StatusCode};
 use axum_test::{TestResponse, TestServer};
 use clap::Parser;
 use indexer::{
-    api::{
-        Env,
-        handlers::{get_block, get_block_latest, get_transaction, get_transactions},
-    },
+    api::{Env, router},
     bitcoin_client::Client,
     config::Config,
     database::{
@@ -107,16 +104,9 @@ async fn create_test_app() -> Result<Router> {
         event_subscriber: EventSubscriber::new(),
     };
 
-    Ok(Router::new()
-        .route("/api/blocks/{identifier}", get(get_block))
-        .route("/api/blocks/latest", get(get_block_latest))
-        .route("/api/blocks/{height}/transactions", get(get_transactions))
-        .route("/api/transactions", get(get_transactions))
-        .route("/api/transactions/{txid}", get(get_transaction))
-        .with_state(env))
+    Ok(router::new(env))
 }
 
-// Block API Tests
 #[tokio::test]
 async fn test_get_block_by_height() -> Result<()> {
     let app = create_test_app().await?;

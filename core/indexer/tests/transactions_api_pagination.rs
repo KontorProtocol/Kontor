@@ -1,12 +1,9 @@
 use anyhow::Result;
-use axum::{Router, routing::get};
+use axum::Router;
 use axum_test::{TestResponse, TestServer};
 use clap::Parser;
 use indexer::{
-    api::{
-        Env,
-        handlers::{get_block, get_block_latest, get_transaction, get_transactions},
-    },
+    api::{Env, router},
     bitcoin_client::Client,
     config::Config,
     database::{
@@ -117,13 +114,7 @@ async fn create_test_app() -> Result<Router> {
         event_subscriber: EventSubscriber::new(),
     };
 
-    Ok(Router::new()
-        .route("/api/blocks/{identifier}", get(get_block))
-        .route("/api/blocks/latest", get(get_block_latest))
-        .route("/api/blocks/{height}/transactions", get(get_transactions))
-        .route("/api/transactions", get(get_transactions))
-        .route("/api/transactions/{txid}", get(get_transaction))
-        .with_state(env))
+    Ok(router::new(env))
 }
 
 async fn collect_all_transactions_with_cursor(

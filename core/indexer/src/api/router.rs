@@ -2,11 +2,10 @@ use std::time::Duration;
 
 use axum::{
     Json, Router,
-    http::{HeaderName, Request, Response},
+    http::{HeaderName, Request, Response, StatusCode},
     response::IntoResponse,
     routing::{any, get},
 };
-use reqwest::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -101,14 +100,14 @@ pub fn new(context: Env) -> Router {
         .nest(
             "/api",
             Router::new()
-                .route("/blocks/{height|hash}", get(get_block))
                 .route("/blocks/latest", get(get_block_latest))
+                .route("/blocks/:identifier", get(get_block))
                 .route(
-                    "/blocks/{height}/transactions",
+                    "/blocks/:height/transactions",
                     get(get_transactions_for_block),
                 )
                 .route("/transactions", get(get_transactions_root))
-                .route("/transactions/{txid}", get(get_transaction))
+                .route("/transactions/:txid", get(get_transaction))
                 .route("/test_mempool_accept", get(test_mempool_accept)),
         )
         .nest(

@@ -21,16 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use utoipa::{IntoParams, ToSchema};
 
-use super::json_types::JsonTransaction;
 use crate::bitcoin_client::Client;
-
-fn transaction_to_json<S>(tx: &Transaction, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let json_tx = JsonTransaction::from(tx);
-    json_tx.serialize(serializer)
-}
 
 #[derive(Serialize, Deserialize, ToSchema, IntoParams)]
 pub struct ComposeQuery {
@@ -109,12 +100,10 @@ pub struct TapLeafScript {
 
 #[derive(Debug, Builder, ToSchema, Serialize, Deserialize)]
 pub struct ComposeOutputs {
-    #[serde(serialize_with = "transaction_to_json")]
     #[schema(value_type = JsonTransaction)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
-    #[serde(serialize_with = "transaction_to_json")]
     #[schema(value_type = JsonTransaction)]
     pub reveal_transaction: Transaction,
     pub reveal_transaction_hex: String,
@@ -154,7 +143,6 @@ impl From<ComposeInputs> for CommitInputs {
 
 #[derive(Builder, Serialize, ToSchema)]
 pub struct CommitOutputs {
-    #[serde(serialize_with = "transaction_to_json")]
     #[schema(value_type = JsonTransaction)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
@@ -265,7 +253,6 @@ impl RevealInputs {
 
 #[derive(Builder, Serialize, ToSchema)]
 pub struct RevealOutputs {
-    #[serde(serialize_with = "transaction_to_json")]
     #[schema(value_type = JsonTransaction)]
     pub transaction: Transaction,
     pub transaction_hex: String,

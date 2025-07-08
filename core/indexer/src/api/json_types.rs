@@ -3,10 +3,10 @@ use bitcoin::{
     absolute::LockTime,
     transaction::{Transaction, TxIn, Version},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonTxOut {
     #[schema(value_type = u64)]
     pub value: Amount,
@@ -23,7 +23,7 @@ impl From<&TxOut> for JsonTxOut {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonOutPoint {
     #[schema(value_type = String)]
     pub txid: Txid,
@@ -39,7 +39,7 @@ impl From<&OutPoint> for JsonOutPoint {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonTxIn {
     pub previous_output: JsonOutPoint,
     #[schema(value_type = String)]
@@ -61,7 +61,7 @@ impl From<&TxIn> for JsonTxIn {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonTransaction {
     #[schema(value_type = i32)]
     pub version: Version,
