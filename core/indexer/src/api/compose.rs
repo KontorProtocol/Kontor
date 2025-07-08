@@ -21,10 +21,12 @@ use base64::engine::general_purpose::STANDARD as base64;
 use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::bitcoin_client::Client;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema, IntoParams)]
+#[serde(rename_all = "camelCase")]
 pub struct ComposeQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -87,25 +89,34 @@ impl ComposeInputs {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TapLeafScript {
     #[serde(rename = "leafVersion")]
+    #[schema(value_type = u8)]
     pub leaf_version: LeafVersion,
+    #[schema(value_type = String)]
     pub script: ScriptBuf,
     #[serde(rename = "controlBlock")]
+    #[schema(value_type = String)]
     pub control_block: ScriptBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize, Builder)]
+#[derive(Debug, Builder, ToSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComposeOutputs {
+    #[serde(skip)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
+    #[serde(skip)]
     pub reveal_transaction: Transaction,
     pub reveal_transaction_hex: String,
     pub reveal_psbt_hex: String,
     pub tap_leaf_script: TapLeafScript,
+    #[schema(value_type = String)]
     pub tap_script: ScriptBuf,
+    #[schema(value_type = String)]
     pub chained_tap_script: Option<ScriptBuf>,
     pub chained_tap_leaf_script: Option<TapLeafScript>,
 }
@@ -135,16 +146,20 @@ impl From<ComposeInputs> for CommitInputs {
     }
 }
 
-#[derive(Builder, Serialize, Deserialize)]
+#[derive(Builder, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitOutputs {
+    #[serde(skip)]
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
     pub tap_leaf_script: TapLeafScript,
+    #[schema(value_type = String)]
     pub tap_script: ScriptBuf,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema, IntoParams)]
+#[serde(rename_all = "camelCase")]
 pub struct RevealQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -243,12 +258,16 @@ impl RevealInputs {
     }
 }
 
-#[derive(Builder, Serialize, Deserialize)]
+#[derive(Builder, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RevealOutputs {
+    #[serde(skip)]
     pub transaction: Transaction,
     pub transaction_hex: String,
+    #[serde(skip)]
     pub psbt: Psbt,
     pub psbt_hex: String,
+    #[schema(value_type = String)]
     pub chained_tap_script: Option<ScriptBuf>,
     pub chained_tap_leaf_script: Option<TapLeafScript>,
 }

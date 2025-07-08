@@ -3,6 +3,7 @@ use std::fmt;
 use bitcoin::{Amount, Network, Txid};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 
 #[derive(Serialize, Debug)]
 pub struct Request {
@@ -79,9 +80,11 @@ pub struct GetBlockchainInfoResult {
     pub prune_target_size: Option<u64>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TestMempoolAcceptResult {
+    #[schema(value_type = String)]
     pub txid: Txid,
+    #[schema(value_type = String)]
     pub wtxid: Txid,
     #[serde(default)]
     pub allowed: bool,
@@ -91,9 +94,10 @@ pub struct TestMempoolAcceptResult {
     pub fees: Option<TestMempoolAcceptResultFees>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TestMempoolAcceptResultFees {
     #[serde(with = "bitcoin::amount::serde::as_btc")]
+    #[schema(value_type = u64)]
     pub base: Amount,
 }
 

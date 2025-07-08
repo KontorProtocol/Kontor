@@ -1,4 +1,5 @@
 pub mod compose;
+pub mod doc;
 pub mod env;
 pub mod error;
 pub mod handlers;
@@ -31,6 +32,7 @@ pub async fn run(env: Env) -> Result<JoinHandle<()>> {
         }
     });
     info!("Server running @ https://{}", addr);
+    info!("Swagger UI available at https://{}/swagger-ui/", addr);
     Ok(tokio::spawn(async move {
         if axum_server::bind_rustls(addr, config)
             .handle(handle)

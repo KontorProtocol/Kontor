@@ -1,15 +1,28 @@
-use axum::extract::{Path, Query, State};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use std::sync::Arc;
+use utoipa_rapidoc::RapiDoc;
+use utoipa_redoc::{Redoc, Servable};
+use utoipa_swagger_ui::Config;
 
 use crate::{
+    api::doc::ApiDoc,
     bitcoin_client::types::TestMempoolAcceptResult,
     database::{
         queries::{
             get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
             select_block_latest,
         },
-        types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
+        types::{
+            BlockRow, TransactionListResponse, TransactionPaginationQuery, TransactionQuery,
+            TransactionRow,
+        },
     },
 };
+use axum::{Json, response::Html};
 
 use super::{
     Env,
@@ -22,12 +35,25 @@ use super::{
 };
 
 use serde::Deserialize;
+use utoipa::{IntoParams, OpenApi, ToSchema};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema, IntoParams)]
+#[serde(rename_all = "camelCase")]
 pub struct TxsQuery {
     txs: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/blocks/{identifier}",
+    params(
+        ("identifier" = String, Path, description = "Block height or hash")
+    ),
+    responses(
+        (status = 200, description = "Block found", body = BlockRow),
+        (status = 404, description = "Block not found")
+    )
+)]
 pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {
     match select_block_by_height_or_hash(&*env.reader.connection().await?, &identifier).await? {
         Some(block_row) => Ok(block_row.into()),
@@ -35,6 +61,14 @@ pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/blocks/latest",
+    responses(
+        (status = 200, description = "Latest block found", body = BlockRow),
+        (status = 404, description = "No blocks written")
+    )
+)]
 pub async fn get_block_latest(State(env): State<Env>) -> Result<BlockRow> {
     match select_block_latest(&*env.reader.connection().await?).await? {
         Some(block_row) => Ok(block_row.into()),
@@ -42,6 +76,16 @@ pub async fn get_block_latest(State(env): State<Env>) -> Result<BlockRow> {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/test_mempool_accept",
+    params(
+        TxsQuery
+    ),
+    responses(
+        (status = 200, description = "Transactions tested", body = Vec<TestMempoolAcceptResult>)
+    )
+)]
 pub async fn test_mempool_accept(
     Query(query): Query<TxsQuery>,
     State(env): State<Env>,
@@ -52,6 +96,17 @@ pub async fn test_mempool_accept(
     Ok(results.into())
 }
 
+#[utoipa::path(
+    get,
+    path = "/compose",
+    params(
+        ComposeQuery
+    ),
+    responses(
+        (status = 200, description = "Composed transaction", body = ComposeOutputs),
+        (status = 400, description = "Bad request")
+    )
+)]
 pub async fn get_compose(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>,
@@ -65,6 +120,17 @@ pub async fn get_compose(
     Ok(outputs.into())
 }
 
+#[utoipa::path(
+    get,
+    path = "/compose/commit",
+    params(
+        ComposeQuery
+    ),
+    responses(
+        (status = 200, description = "Composed commit transaction", body = CommitOutputs),
+        (status = 400, description = "Bad request")
+    )
+)]
 pub async fn get_compose_commit(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>, // TODO
@@ -80,6 +146,17 @@ pub async fn get_compose_commit(
     Ok(outputs.into())
 }
 
+#[utoipa::path(
+    get,
+    path = "/compose/reveal",
+    params(
+        RevealQuery
+    ),
+    responses(
+        (status = 200, description = "Composed reveal transaction", body = RevealOutputs),
+        (status = 400, description = "Bad request")
+    )
+)]
 pub async fn get_compose_reveal(
     Query(query): Query<RevealQuery>,
     State(env): State<Env>,
@@ -92,7 +169,45 @@ pub async fn get_compose_reveal(
     Ok(outputs.into())
 }
 
-pub async fn get_transactions(
+#[utoipa::path(
+    get,
+    path = "/api/transactions",
+    params(
+        TransactionQuery
+    ),
+    responses(
+        (status = 200, description = "List of transactions", body = TransactionListResponse),
+        (status = 400, description = "Bad request")
+    )
+)]
+pub async fn get_transactions_root(
+    query: Query<TransactionQuery>,
+    state: State<Env>,
+) -> Result<TransactionListResponse> {
+    get_transactions_logic(query, state, None).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/blocks/{height}/transactions",
+    params(
+        ("height" = i64, Path, description = "Block height"),
+        TransactionPaginationQuery
+    ),
+    responses(
+        (status = 200, description = "List of transactions for a block", body = TransactionListResponse),
+        (status = 400, description = "Bad request")
+    )
+)]
+pub async fn get_transactions_for_block(
+    path: Path<i64>,
+    query: Query<TransactionQuery>,
+    state: State<Env>,
+) -> Result<TransactionListResponse> {
+    get_transactions_logic(query, state, Some(path)).await
+}
+
+async fn get_transactions_logic(
     Query(query): Query<TransactionQuery>,
     State(env): State<Env>,
     path: Option<Path<i64>>,
@@ -126,6 +241,17 @@ pub async fn get_transactions(
     .into())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/transactions/{txid}",
+    params(
+        ("txid" = String, Path, description = "Transaction ID")
+    ),
+    responses(
+        (status = 200, description = "Transaction found", body = TransactionRow),
+        (status = 404, description = "Transaction not found")
+    )
+)]
 pub async fn get_transaction(
     Path(txid): Path<String>,
     State(env): State<Env>,

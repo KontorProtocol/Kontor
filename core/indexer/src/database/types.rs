@@ -2,15 +2,18 @@ use base64::{Engine, engine::general_purpose};
 use bitcoin::BlockHash;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use utoipa::IntoParams;
+use utoipa::ToSchema;
 
 use crate::{
     block::{Block, Tx},
     database::queries::Error,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BlockRow {
     pub height: u64,
+    #[schema(value_type = String)]
     pub hash: BlockHash,
 }
 
@@ -30,20 +33,21 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, ToSchema)]
 pub struct ContractStateRow {
     pub id: Option<i64>,
     pub contract_id: String,
     pub tx_id: i64,
     pub height: i64,
     pub path: String,
+    #[schema(value_type = String, example = "9g==")] // cbor serialized null
     #[builder(default = vec![246])] // cbor serialized null
     pub value: Vec<u8>,
     #[builder(default = false)]
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, ToSchema)]
 pub struct TransactionRow {
     #[serde(skip_serializing)]
     pub id: Option<i64>,
@@ -52,7 +56,7 @@ pub struct TransactionRow {
     pub tx_index: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TransactionCursor {
     pub height: i64,
     pub tx_index: i64,
@@ -84,7 +88,7 @@ impl TransactionCursor {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PaginationMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -94,7 +98,7 @@ pub struct PaginationMeta {
     pub total_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TransactionListResponse {
     pub transactions: Vec<TransactionRow>,
     pub pagination: PaginationMeta,
@@ -107,7 +111,8 @@ pub struct PaginationQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, IntoParams)]
+#[serde(rename_all = "camelCase")]
 pub struct TransactionQuery {
     pub cursor: Option<String>,
     pub offset: Option<i64>,
@@ -115,7 +120,7 @@ pub struct TransactionQuery {
     pub height: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, IntoParams)]
 pub struct TransactionPaginationQuery {
     pub cursor: Option<String>,
     pub offset: Option<i64>,

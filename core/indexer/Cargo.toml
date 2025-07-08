@@ -55,6 +55,10 @@ wasmtime = { workspace = true }
 wit-component = { workspace = true }
 rand = "0.9.1"
 brotli = "8"
+utoipa = { version = "4.2.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7.0.0", features = ["axum"] }
+utoipa-redoc = { version = "4.0.0", features = ["axum"] }
+utoipa-rapidoc = { version = "4.0.0", features = ["axum"] }
 
 [dev-dependencies]
 sha2 = "0.10"

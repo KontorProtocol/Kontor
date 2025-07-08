@@ -16,8 +16,15 @@ use tower_http::{
     trace::{MakeSpan, OnFailure, OnResponse, TraceLayer},
 };
 use tracing::{Level, Span, error, field, info, span};
+use utoipa::OpenApi;
+use utoipa_rapidoc::RapiDoc;
+use utoipa_redoc::{Redoc, Servable};
+use utoipa_swagger_ui::SwaggerUi;
 
-use crate::api::handlers::{get_transaction, get_transactions};
+use crate::api::{
+    doc::ApiDoc,
+    handlers::{get_transaction, get_transactions_for_block, get_transactions_root},
+};
 
 use super::{
     Env,
@@ -88,13 +95,19 @@ pub fn new(context: Env) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
     Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(Redoc::with_url("/redoc", ApiDoc::openapi()))
+        .merge(RapiDoc::new("/api-docs/openapi.json").path("/rapidoc"))
         .nest(
             "/api",
             Router::new()
                 .route("/blocks/{height|hash}", get(get_block))
                 .route("/blocks/latest", get(get_block_latest))
-                .route("/blocks/{height}/transactions", get(get_transactions))
-                .route("/transactions", get(get_transactions))
+                .route(
+                    "/blocks/{height}/transactions",
+                    get(get_transactions_for_block),
+                )
+                .route("/transactions", get(get_transactions_root))
                 .route("/transactions/{txid}", get(get_transaction))
                 .route("/test_mempool_accept", get(test_mempool_accept)),
         )
