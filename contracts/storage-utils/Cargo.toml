@@ -1,5 +1,5 @@
 [package]
-name = "fib"
+name = "storage-utils"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,7 +8,6 @@ wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
 macros = { workspace = true }
 wee_alloc = { workspace = true }
-storage-utils = { path = "../storage-utils" }
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["lib"]

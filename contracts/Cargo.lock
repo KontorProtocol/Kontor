@@ -72,6 +72,7 @@ name = "fib"
 version = "0.1.0"
 dependencies = [
  "macros",
+ "storage-utils",
  "wasm-wave",
  "wee_alloc",
  "wit-bindgen",
@@ -402,6 +403,16 @@ name = "slab"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04dc19736151f35336d325007ac991178d504a119863a2fcb3758cdb5e52c50d"
+
+[[package]]
+name = "storage-utils"
+version = "0.1.0"
+dependencies = [
+ "macros",
+ "wasm-wave",
+ "wee_alloc",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "strsim"

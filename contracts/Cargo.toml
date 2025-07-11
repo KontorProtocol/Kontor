@@ -1,5 +1,5 @@
 [workspace]
-members = ["fib", "sum"]
+members = ["fib", "sum", "storage-utils"]
 resolver = "2"
 
 [profile.release]
