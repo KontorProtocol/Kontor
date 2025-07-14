@@ -1,9 +1,33 @@
 package kontor:built-in;
 
 interface storage {
-    set: func(key: string, value: list<u8>);
-    get: func(key: string) -> option<list<u8>>;
-    delete: func(key: string) -> bool;
+    resource view-storage {
+        get-str: func(path: string) -> option<string>;
+
+        get-u64: func(path: string) -> option<u64>;
+    }
+
+    resource proc-storage {
+        get-str: func(path: string) -> option<string>;
+        set-str: func(path: string, value: string);
+
+        get-u64: func(path: string) -> option<u64>;
+        set-u64: func(path: string, value: u64);
+    }
+}
+
+interface context {
+    use storage.{view-storage, proc-storage};
+
+    resource view-context {
+        storage: func() -> view-storage;
+    }
+
+    resource proc-context {
+        storage: func() -> proc-storage;
+        signer: func() -> string;
+        view-context: func() -> view-context;
+    }
 }
 
 interface foreign {
@@ -12,5 +36,6 @@ interface foreign {
 
 world built-in {
     import storage;
+    import context;
     import foreign;
 }

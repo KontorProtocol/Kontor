@@ -110,13 +110,13 @@ mod sum {
 }
 
 impl Guest for Fib {
-    fn fib(n: u64) -> u64 {
+    fn fib(_ctx: &ProcContext, n: u64) -> u64 {
         match n {
             0 | 1 => n,
             _ => {
                 sum::sum(sum::SumArgs {
-                    x: Self::fib(n - 1),
-                    y: Self::fib(n - 2),
+                    x: Self::fib(_ctx, n - 1),
+                    y: Self::fib(_ctx, n - 2),
                 })
                 .value
             }

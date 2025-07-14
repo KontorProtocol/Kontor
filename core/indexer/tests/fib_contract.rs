@@ -11,8 +11,10 @@ use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 async fn test_fib_contract() -> Result<()> {
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let storage = Storage::builder().conn(writer.connection()).build();
+    let signer = "test_signer".to_string();
+    let contract_id = "fib".to_string();
     let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(storage, component_cache, "fib".to_string())?;
+    let runtime = Runtime::new(storage, component_cache, signer, contract_id)?;
 
     let n = 8;
     let expr = format!("fib({})", to_wave(&Value::from(n))?);
