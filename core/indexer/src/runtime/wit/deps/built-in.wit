@@ -31,7 +31,10 @@ interface context {
 }
 
 interface foreign {
-    call: func(contract-id: string, expr: string) -> string;
+    use context.{view-context, proc-context};
+
+    call-view: func(contract-id: string, ctx: borrow<view-context>, expr: string) -> string;
+    call-proc: func(contract-id: string, ctx: borrow<proc-context>, expr: string) -> string;
 }
 
 world built-in {

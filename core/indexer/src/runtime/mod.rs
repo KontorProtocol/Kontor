@@ -31,6 +31,12 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::wit::{ProcContext, ProcStorage, ViewContext, ViewStorage};
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Context {
+    View,
+    Proc,
+}
+
 pub struct Runtime {
     pub engine: Engine,
     pub table: ResourceTable,
@@ -64,7 +70,7 @@ impl Runtime {
         config.async_support(true);
         config.wasm_component_model(true);
         let engine = Engine::new(&config)?;
-        let context = Self {
+        let runtime = Self {
             engine,
             table: ResourceTable::new(),
             component_cache,
@@ -72,15 +78,15 @@ impl Runtime {
             signer,
             contract_id,
         };
-        context.load_component()?;
-        Ok(context)
+        runtime.load_component()?;
+        Ok(runtime)
     }
 
     pub fn with_contract_id(&self, contract_id: String) -> Result<Self> {
-        let mut context = self.clone();
-        context.contract_id = contract_id;
-        context.load_component()?;
-        Ok(context)
+        let mut runtime = self.clone();
+        runtime.contract_id = contract_id;
+        runtime.load_component()?;
+        Ok(runtime)
     }
 
     pub fn make_store(&self) -> Store<Self> {
@@ -120,7 +126,7 @@ impl Runtime {
         })
     }
 
-    pub async fn execute(mut self, expr: &str) -> Result<String> {
+    pub async fn execute(mut self, ctx: Option<Context>, expr: &str) -> Result<String> {
         let component = self.load_component()?;
         let linker = self.make_linker()?;
         let mut store = self.make_store();
@@ -141,14 +147,20 @@ impl Runtime {
         }?;
         let mut params = call.to_wasm_params(func_param_types.to_vec())?;
         let context_param = match resource_type {
-            t if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) => self
-                .table
-                .push(ProcContext {})?
-                .try_into_resource_any(&mut store),
-            t if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => self
-                .table
-                .push(ViewContext {})?
-                .try_into_resource_any(&mut store),
+            t if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>())
+                && ctx.is_none_or(|c| c == Context::Proc) =>
+            {
+                self.table
+                    .push(ProcContext {})?
+                    .try_into_resource_any(&mut store)
+            }
+            t if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>())
+                && ctx.is_none_or(|c| c == Context::View) =>
+            {
+                self.table
+                    .push(ViewContext {})?
+                    .try_into_resource_any(&mut store)
+            }
             _ => Err(anyhow!("Unsupported context type")),
         }?;
         params.insert(0, wasmtime::component::Val::Resource(context_param));
@@ -174,9 +186,24 @@ impl Runtime {
 }
 
 impl built_in::foreign::Host for Runtime {
-    async fn call(&mut self, contract_id: String, expr: String) -> Result<String> {
-        let context = self.with_contract_id(contract_id)?;
-        context.execute(&expr).await
+    async fn call_view(
+        &mut self,
+        contract_id: String,
+        _: Resource<ViewContext>,
+        expr: String,
+    ) -> Result<String> {
+        let runtime = self.with_contract_id(contract_id)?;
+        runtime.execute(Some(Context::View), &expr).await
+    }
+
+    async fn call_proc(
+        &mut self,
+        contract_id: String,
+        _: Resource<ProcContext>,
+        expr: String,
+    ) -> Result<String> {
+        let runtime = self.with_contract_id(contract_id)?;
+        runtime.execute(Some(Context::Proc), &expr).await
     }
 }
 

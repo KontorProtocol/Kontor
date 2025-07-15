@@ -4,6 +4,7 @@ macros::contract!(name = "fib");
 mod sum {
     use wasm_wave::wasm::WasmValue as _;
 
+    use super::context;
     use super::foreign;
 
     const CONTRACT_ID: &str = "sum";
@@ -95,14 +96,14 @@ mod sum {
         }
     }
 
-    pub fn sum(args: SumArgs) -> SumReturn {
+    pub fn sum(ctx: &context::ProcContext, args: SumArgs) -> SumReturn {
         let expr = [
             "sum(",
             &wasm_wave::to_string(&wasm_wave::value::Value::from(args)).unwrap(),
             ")",
         ]
         .join("");
-        let ret = foreign::call(CONTRACT_ID, expr.as_str());
+        let ret = foreign::call_proc(CONTRACT_ID, ctx, expr.as_str());
         wasm_wave::from_str::<wasm_wave::value::Value>(&SumReturn::wave_type(), &ret)
             .unwrap()
             .into()
@@ -110,14 +111,17 @@ mod sum {
 }
 
 impl Guest for Fib {
-    fn fib(_ctx: &ProcContext, n: u64) -> u64 {
+    fn fib(ctx: &ProcContext, n: u64) -> u64 {
         match n {
             0 | 1 => n,
             _ => {
-                sum::sum(sum::SumArgs {
-                    x: Self::fib(_ctx, n - 1),
-                    y: Self::fib(_ctx, n - 2),
-                })
+                sum::sum(
+                    ctx,
+                    sum::SumArgs {
+                        x: Self::fib(ctx, n - 1),
+                        y: Self::fib(ctx, n - 2),
+                    },
+                )
                 .value
             }
         }

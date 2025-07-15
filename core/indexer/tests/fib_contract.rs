@@ -18,7 +18,7 @@ async fn test_fib_contract() -> Result<()> {
 
     let n = 8;
     let expr = format!("fib({})", to_wave(&Value::from(n))?);
-    let result = runtime.execute(&expr).await?;
+    let result = runtime.execute(None, &expr).await?;
     assert_eq!(result, "21");
     Ok(())
 }
