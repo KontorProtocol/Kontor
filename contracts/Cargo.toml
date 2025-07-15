@@ -15,4 +15,3 @@ wit-bindgen = "0.43.0"
 wasm-wave = "0.235.0"
 
 macros = { path = "../core/macros" }
-wee_alloc = "0.4.5"
