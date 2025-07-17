@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use base64::engine::general_purpose::STANDARD as base64;
 use base64::prelude::*;
 use bip39::Mnemonic;
@@ -21,15 +21,23 @@ use bitcoin::{
     bip32::{DerivationPath, Xpriv},
     key::{CompressedPublicKey, Secp256k1},
 };
+use libsql::Connection;
+use rand::prelude::*;
 use serde::Serialize;
 use std::fs;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+use tokio::time::{Duration, sleep};
 
-use crate::block::HasTxid;
+use crate::{
+    bitcoin_follower::{info, rpc},
+    block::{Block, HasTxid},
+};
+
 use crate::config::{Config, TestConfig};
-use crate::database::{Reader, Writer};
+use crate::database::{Reader, Writer, queries, types::BlockRow};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -362,4 +370,195 @@ pub fn new_mock_block_hash(i: u32) -> BlockHash {
         chunk.copy_from_slice(&i_bytes[..chunk.len()]);
     }
     BlockHash::from_slice(&bytes).unwrap()
+}
+
+pub fn gen_numbered_block(height: u64, prev_hash: &BlockHash) -> Block<MockTransaction> {
+    let hash = BlockHash::from_byte_array([height as u8; 32]);
+
+    Block {
+        height,
+        hash,
+        prev_hash: *prev_hash,
+        transactions: vec![],
+    }
+}
+
+pub fn gen_numbered_blocks(
+    start: u64,
+    end: u64,
+    prev_hash: BlockHash,
+) -> Vec<Block<MockTransaction>> {
+    let mut blocks = vec![];
+    let mut prev = prev_hash;
+
+    for _i in start..end {
+        let block = gen_numbered_block(_i + 1, &prev);
+        prev = block.hash;
+        blocks.push(block.clone());
+    }
+
+    blocks
+}
+
+pub fn new_numbered_blockchain(n: u64) -> Vec<Block<MockTransaction>> {
+    gen_numbered_blocks(0, n, BlockHash::from_byte_array([0x00; 32]))
+}
+
+pub fn gen_random_block(height: u64, prev_hash: Option<BlockHash>) -> Block<MockTransaction> {
+    let mut hash = [0u8; 32];
+    rand::rng().fill_bytes(&mut hash);
+
+    let prev = match prev_hash {
+        Some(h) => h,
+        None => BlockHash::from_byte_array([0x00; 32]),
+    };
+
+    Block {
+        height,
+        hash: BlockHash::from_byte_array(hash),
+        prev_hash: prev,
+        transactions: vec![],
+    }
+}
+
+pub fn gen_random_blocks(
+    start: u64,
+    end: u64,
+    prev_hash: Option<BlockHash>,
+) -> Vec<Block<MockTransaction>> {
+    let mut blocks = vec![];
+    let mut prev = prev_hash;
+
+    for _i in start..end {
+        let block = gen_random_block(_i + 1, prev);
+        prev = Some(block.hash);
+        blocks.push(block.clone());
+    }
+
+    blocks
+}
+
+pub fn new_random_blockchain(n: u64) -> Vec<Block<MockTransaction>> {
+    gen_random_blocks(0, n, None)
+}
+
+#[derive(Clone, Debug)]
+struct State {
+    start_height: u64,
+    running: bool,
+    blocks: Vec<Block<MockTransaction>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MockBlockchain {
+    state: Arc<Mutex<State>>,
+}
+
+impl MockBlockchain {
+    pub fn new(blocks: Vec<Block<MockTransaction>>) -> Self {
+        Self {
+            state: Mutex::new(State {
+                start_height: 0,
+                running: false,
+                blocks,
+            })
+            .into(),
+        }
+    }
+
+    pub fn append_blocks(&mut self, more_blocks: Vec<Block<MockTransaction>>) {
+        let mut state = self.state.lock().unwrap();
+        state.blocks.extend(more_blocks.iter().cloned());
+    }
+
+    pub fn replace_blocks(&mut self, blocks: Vec<Block<MockTransaction>>) {
+        let mut state = self.state.lock().unwrap();
+        state.blocks = blocks;
+    }
+
+    pub fn blocks(&self) -> Vec<Block<MockTransaction>> {
+        let state = self.state.lock().unwrap();
+        state.blocks.clone()
+    }
+
+    pub async fn get_blockchain_height(&self) -> Result<u64, Error> {
+        let state = self.state.lock().unwrap();
+        Ok(state.blocks.len() as u64)
+    }
+
+    pub fn start_height(&self) -> u64 {
+        self.state.lock().unwrap().start_height
+    }
+
+    pub fn running(&self) -> bool {
+        self.state.lock().unwrap().running
+    }
+
+    pub async fn await_running(&self) {
+        loop {
+            if self.state.lock().unwrap().running {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    pub async fn await_stopped(&self) {
+        loop {
+            if !self.state.lock().unwrap().running {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    pub async fn await_start_height(&self, height: u64) {
+        loop {
+            if self.state.lock().unwrap().start_height == height {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+impl rpc::BlockFetcher for MockBlockchain {
+    fn running(&self) -> bool {
+        self.running()
+    }
+
+    fn start(&mut self, start_height: u64) {
+        let mut state = self.state.lock().unwrap();
+
+        state.running = true;
+        state.start_height = start_height;
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.running = false;
+        Ok(())
+    }
+}
+
+impl info::BlockchainInfo for MockBlockchain {
+    async fn get_blockchain_height(&self) -> Result<u64, Error> {
+        self.get_blockchain_height().await
+    }
+
+    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
+        let state = self.state.lock().unwrap();
+        Ok(state.blocks[height as usize - 1].hash)
+    }
+}
+
+pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
+    loop {
+        match queries::select_block_at_height(conn, height).await {
+            Ok(Some(row)) => return row,
+            Ok(None) => {}
+            Err(e) => panic!("error: {:?}", e),
+        };
+        sleep(Duration::from_millis(10)).await;
+    }
 }

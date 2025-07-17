@@ -1,13 +1,12 @@
 use anyhow::Result;
 use libsql::Connection;
 use proptest::test_runner::FileFailurePersistence;
-use rand::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::BlockHash;
 
 use proptest::prelude::*;
 
@@ -20,7 +19,7 @@ use indexer::{
     config::Config,
     database::{self, queries, types::BlockRow},
     reactor,
-    test_utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, gen_random_block, new_test_db},
 };
 
 #[derive(Debug)]
@@ -41,23 +40,6 @@ struct StartMsg {
 struct Step {
     event: Event<MockTransaction>,
     expect_start: Option<StartMsg>,
-}
-
-fn gen_block(height: u64, prev_hash: Option<BlockHash>) -> Block<MockTransaction> {
-    let mut hash = [0u8; 32];
-    rand::rng().fill_bytes(&mut hash);
-
-    let prev = match prev_hash {
-        Some(h) => h,
-        None => BlockHash::from_byte_array([0x00; 32]),
-    };
-
-    Block {
-        height,
-        hash: BlockHash::from_byte_array(hash),
-        prev_hash: prev,
-        transactions: vec![],
-    }
 }
 
 async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
@@ -110,7 +92,7 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block<MockTransaction>>) 
             Segment::Series(n) => {
                 for _i in 0..*n {
                     height += 1;
-                    let b = gen_block(height, prev_hash);
+                    let b = gen_random_block(height, prev_hash);
 
                     if implicit_rollback {
                         // model updates on the first block after implicit rollback
