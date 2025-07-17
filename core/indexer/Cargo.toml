@@ -60,3 +60,5 @@ brotli = "8"
 sha2 = "0.10"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls-pemfile = "2.1"
+lazy_static = "1.5.0"
+async_once = "0.2.6"

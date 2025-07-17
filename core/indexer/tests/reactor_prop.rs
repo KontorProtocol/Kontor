@@ -4,7 +4,11 @@ use proptest::test_runner::FileFailurePersistence;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep, timeout};
+use lazy_static::lazy_static;
+use async_once::AsyncOnce;
+
 use tokio_util::sync::CancellationToken;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::BlockHash;
 
@@ -40,6 +44,25 @@ struct StartMsg {
 struct Step {
     event: Event<MockTransaction>,
     expect_start: Option<StartMsg>,
+}
+
+struct Database {
+    reader: database::Reader,
+    writer: database::Writer,
+    _temp_dir: TempDir,
+}
+
+// setup shared database used across all test runs; the mutex will force tests to run
+// in sequence, which is still faster than creating a new database for each run.
+lazy_static! {
+   static ref SHARED_DATABASE : AsyncOnce<Arc<Mutex<Database>>> = AsyncOnce::new(async {
+       Mutex::new(new_db_wrapper().await).into()
+   });
+}
+
+async fn new_db_wrapper() -> Database {
+    let (reader, writer, _temp_dir) = new_db().await.unwrap();
+    Database{ reader, writer, _temp_dir }
 }
 
 async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
@@ -173,7 +196,7 @@ proptest! {
         failure_persistence: Some(Box::new(
             FileFailurePersistence::WithSource("regressions"),
         )),
-        cases: 10,
+        cases: 100,
         timeout: 5000,
         .. ProptestConfig::default()
     })]
@@ -205,16 +228,26 @@ proptest! {
     #[test]
     fn test_reactor_rollbacks(vec in gen_segment_vec()) {
         let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // we need to allow the lock for the shared database to be held throughout a
+        // test run to force sequential execution of the test runs.
+        #[allow(clippy::await_holding_lock)]
         rt.block_on(async {
-            let (reader, writer, _temp_dir) = new_db().await.unwrap();
+            let db = SHARED_DATABASE.get().await.lock().unwrap();
+
+            // wipe blocks from earlier runs
+            let conn = &db.writer.connection();
+            queries::rollback_to_height(conn, 0).await.unwrap();
+            assert!(queries::select_block_latest(conn).await.unwrap().is_none());
+
             let cancel_token = CancellationToken::new();
             let (ctrl, mut ctrl_rx) = CtrlChannel::create();
 
             let handle = reactor::run::<MockTransaction>(
                 1,
                 cancel_token.clone(),
-                reader.clone(),
-                writer.clone(),
+                db.reader.clone(),
+                db.writer.clone(),
                 ctrl,
             );
 
@@ -241,7 +274,7 @@ proptest! {
             }
 
             // compare against model
-            let conn = &*reader.connection().await.unwrap();
+            let conn = &*db.reader.connection().await.unwrap();
             for expected_block in model.clone() {
                 let block = await_block_at_height(conn, expected_block.height).await;
                 assert_eq!(block.hash, expected_block.hash);
