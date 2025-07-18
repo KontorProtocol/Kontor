@@ -129,7 +129,7 @@ impl Fib {
 impl Guest for Fib {
     fn fib(n: u64) -> u64 {
         let storage = memory_storage::MemoryStorage::new();
-        store_and_return_int(&storage, Self::raw_fib(n))
+        store_and_return_int(&storage, "fib".to_string(), Self::raw_fib(n))
     }
 }
 
