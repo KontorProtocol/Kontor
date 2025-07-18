@@ -1,6 +1,6 @@
 macros::contract!(name = "fib");
 
-use ::storage_utils::{storage_utils, memory_storage, runtime};
+use stdlib::{storage_utils, memory_storage};
 
 // macros::import!(name = "sum", path = "../sum/wit/contract.wit");
 mod sum {
@@ -111,16 +111,6 @@ mod sum {
     }
 }
 
-impl runtime::Storage for kontor::contract::stor::Storage {
-    fn get_int(&self) -> u64 {
-        self.get_int()
-    }
-
-    fn set_int(&self, value: u64) {
-        self.set_int(value)
-    }
-}
-
 impl Fib {
     fn raw_fib(n: u64) -> u64 {
         match n {
@@ -138,8 +128,7 @@ impl Fib {
 
 impl Guest for Fib {
     fn fib(n: u64) -> u64 {
-        let _storage = memory_storage::MemoryStorage::new();
-        let storage = kontor::contract::stor::Storage::new();
+        let storage = memory_storage::MemoryStorage::new();
         storage_utils::store_and_return_int(&storage, Self::raw_fib(n))
     }
 }

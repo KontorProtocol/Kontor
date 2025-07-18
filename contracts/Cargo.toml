@@ -1,5 +1,5 @@
 [workspace]
-members = ["fib", "sum", "storage-utils"]
+members = ["fib", "sum"]
 resolver = "2"
 
 [profile.release]
@@ -15,4 +15,5 @@ wit-bindgen = "0.43.0"
 wasm-wave = "0.235.0"
 
 macros = { path = "../core/macros" }
+stdlib = { path = "../core/stdlib" }
 wee_alloc = "0.4.5"

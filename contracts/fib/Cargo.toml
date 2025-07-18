@@ -7,8 +7,8 @@ edition = "2024"
 wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
 macros = { workspace = true }
+stdlib = { workspace = true }
 wee_alloc = { workspace = true }
-storage-utils = { path = "../storage-utils" }
 
 [lib]
 crate-type = ["cdylib"]

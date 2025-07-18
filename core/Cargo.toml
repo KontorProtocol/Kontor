@@ -1,5 +1,5 @@
 [workspace]
-members = ["indexer", "macros", "ui"]
+members = ["indexer", "macros", "stdlib", "ui"]
 resolver = "2"
 
 [workspace.lints.clippy]

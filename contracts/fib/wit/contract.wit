@@ -1,16 +1,7 @@
 package kontor:contract;
 
-interface stor {
-    resource storage {
-        constructor ();
-        get-int: func() -> u64;
-        set-int: func(value: u64);
-    }
-}
-
 world contract {
     include kontor:built-in/built-in;
-    import stor;
 
     export fib: func(n: u64) -> u64;
 }
