@@ -5,10 +5,10 @@ use indexer::{
     config::Config,
     database::{
         queries::{
-            delete_contract_state, get_latest_contract_state, get_latest_contract_state_value,
-            get_transaction_by_id, get_transaction_by_txid, get_transactions_at_height,
-            insert_block, insert_contract_state, insert_transaction, select_block_at_height,
-            select_block_by_height_or_hash, select_block_latest,
+            delete_contract_state, exists_contract_state, get_latest_contract_state,
+            get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
+            get_transactions_at_height, insert_block, insert_contract_state, insert_transaction,
+            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
         },
         types::{BlockRow, ContractStateRow, TransactionRow},
     },
@@ -111,6 +111,9 @@ async fn test_contract_state_operations() -> Result<()> {
     // Insert contract state
     let id = insert_contract_state(&conn, contract_state).await?;
     assert!(id > 0, "Contract state insertion should return a valid ID");
+
+    // check existence
+    assert!(exists_contract_state(&conn, contract_id, "test/").await?);
 
     // Get latest contract state
     let retrieved_state = get_latest_contract_state(&conn, contract_id, path).await?;

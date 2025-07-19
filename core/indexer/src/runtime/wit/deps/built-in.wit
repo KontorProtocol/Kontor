@@ -5,6 +5,8 @@ interface storage {
         get-str: func(path: string) -> option<string>;
 
         get-u64: func(path: string) -> option<u64>;
+
+        exists: func(path: string) -> bool;
     }
 
     resource proc-storage {
@@ -13,6 +15,8 @@ interface storage {
 
         get-u64: func(path: string) -> option<u64>;
         set-u64: func(path: string, value: u64);
+
+        exists: func(path: string) -> bool;
     }
 }
 

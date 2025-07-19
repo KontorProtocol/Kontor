@@ -3,7 +3,10 @@ use bon::Builder;
 use libsql::Connection;
 
 use crate::database::{
-    queries::{delete_contract_state, get_latest_contract_state_value, insert_contract_state},
+    queries::{
+        delete_contract_state, exists_contract_state, get_latest_contract_state_value,
+        insert_contract_state,
+    },
     types::ContractStateRow,
 };
 
@@ -38,5 +41,9 @@ impl Storage {
 
     pub async fn delete(&self, contract_id: &str, path: &str) -> Result<bool> {
         Ok(delete_contract_state(&self.conn, self.height, self.tx_id, contract_id, path).await?)
+    }
+
+    pub async fn exists(&self, contract_id: &str, path: &str) -> Result<bool> {
+        Ok(exists_contract_state(&self.conn, contract_id, path).await?)
     }
 }
