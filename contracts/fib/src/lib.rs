@@ -136,19 +136,20 @@ mod sum {
 }
 
 // provided by stdlib
-trait GetStorage {
+trait ReadStorage {
     fn get_str(&self, path: &str) -> Option<String>;
     fn get_u64(&self, path: &str) -> Option<u64>;
+    fn exists(&self, path: &str) -> bool;
 }
 
-trait SetStorage {
+trait WriteStorage {
     fn set_str(&self, path: &str, value: &str);
     fn set_u64(&self, path: &str, value: u64);
 }
 
-trait Storage: GetStorage + SetStorage {}
+trait ReadWriteStorage: ReadStorage + WriteStorage {}
 
-impl GetStorage for context::ViewStorage {
+impl ReadStorage for context::ViewStorage {
     fn get_str(&self, path: &str) -> Option<String> {
         self.get_str(path)
     }
@@ -156,9 +157,13 @@ impl GetStorage for context::ViewStorage {
     fn get_u64(&self, path: &str) -> Option<u64> {
         self.get_u64(path)
     }
+
+    fn exists(&self, path: &str) -> bool {
+        self.exists(path)
+    }
 }
 
-impl GetStorage for context::ProcStorage {
+impl ReadStorage for context::ProcStorage {
     fn get_str(&self, path: &str) -> Option<String> {
         self.get_str(path)
     }
@@ -166,9 +171,13 @@ impl GetStorage for context::ProcStorage {
     fn get_u64(&self, path: &str) -> Option<u64> {
         self.get_u64(path)
     }
+
+    fn exists(&self, path: &str) -> bool {
+        self.exists(path)
+    }
 }
 
-impl SetStorage for context::ProcStorage {
+impl WriteStorage for context::ProcStorage {
     fn set_str(&self, path: &str, value: &str) {
         self.set_str(path, value)
     }
@@ -178,10 +187,40 @@ impl SetStorage for context::ProcStorage {
     }
 }
 
-impl Storage for context::ProcStorage {}
+impl ReadWriteStorage for context::ProcStorage {}
+
+trait ReadContext {
+    fn read_storage(&self) -> impl ReadStorage;
+}
+
+trait WriteContext {
+    fn write_storage(&self) -> impl WriteStorage;
+}
+
+trait ReadWriteContext: ReadContext + WriteContext {}
+
+impl ReadContext for &context::ViewContext {
+    fn read_storage(&self) -> impl ReadStorage {
+        self.storage()
+    }
+}
+
+impl ReadContext for &context::ProcContext {
+    fn read_storage(&self) -> impl ReadStorage {
+        self.storage()
+    }
+}
+
+impl WriteContext for &context::ProcContext {
+    fn write_storage(&self) -> impl WriteStorage {
+        self.storage()
+    }
+}
+
+impl ReadWriteContext for &context::ProcContext {}
 
 trait Store {
-    fn __set(&self, storage: impl SetStorage, path: &str);
+    fn __set(&self, storage: impl WriteStorage, path: &str);
 }
 
 struct Map<K: ToString, V: Store> {
@@ -196,7 +235,7 @@ struct FibValue {
 
 // generated
 impl Store for FibValue {
-    fn __set(&self, storage: impl SetStorage, path: &str) {
+    fn __set(&self, storage: impl WriteStorage, path: &str) {
         storage.set_u64(&[path, "value"].join("."), self.value);
     }
 }
@@ -207,12 +246,15 @@ struct FibValueWrapper {
 }
 
 impl FibValueWrapper {
-    pub fn value(&self, storage: impl GetStorage) -> Option<u64> {
-        storage.get_u64(&[&self.prefix, "value"].join("."))
+    pub fn value(&self, ctx: impl ReadContext) -> u64 {
+        ctx.read_storage()
+            .get_u64(&[&self.prefix, "value"].join("."))
+            .unwrap()
     }
 
-    pub fn set_value(&self, storage: impl SetStorage, value: u64) {
-        storage.set_u64(&[&self.prefix, "value"].join("."), value)
+    pub fn set_value(&self, ctx: impl WriteContext, value: u64) {
+        ctx.write_storage()
+            .set_u64(&[&self.prefix, "value"].join("."), value)
     }
 }
 
@@ -226,24 +268,26 @@ struct FibStorageCacheWrapper {
 }
 
 impl FibStorageCacheWrapper {
-    pub fn get<K: ToString>(&self, key: K) -> FibValueWrapper {
-        FibValueWrapper {
-            prefix: [&self.prefix, "cache", &key.to_string()].join("."),
-        }
+    pub fn get<K: ToString>(&self, ctx: impl ReadContext, key: K) -> Option<FibValueWrapper> {
+        ctx.read_storage()
+            .exists(&format!("{}.cache.{}.", &self.prefix, key.to_string()))
+            .then_some(FibValueWrapper {
+                prefix: [&self.prefix, "cache", &key.to_string()].join("."),
+            })
     }
 
-    pub fn set<K: ToString>(&self, storage: impl SetStorage, key: K, value: FibValue) {
+    pub fn set<K: ToString>(&self, ctx: impl WriteContext, key: K, value: FibValue) {
         value.__set(
-            storage,
+            ctx.write_storage(),
             &[&self.prefix, "cache", &key.to_string()].join("."),
         )
     }
 }
 
 // generated
-struct RootStorage;
+struct Storage;
 
-impl RootStorage {
+impl Storage {
     pub fn cache() -> FibStorageCacheWrapper {
         FibStorageCacheWrapper {
             prefix: "fib".to_string(),
@@ -253,7 +297,7 @@ impl RootStorage {
 
 impl Fib {
     fn raw_fib(ctx: &ProcContext, n: u64) -> u64 {
-        let cache = RootStorage::cache();
+        let cache = Storage::cache();
         if let Some(v) = cache.get(n).value(ctx.storage()) {
             return v;
         }
@@ -271,7 +315,7 @@ impl Fib {
                 .value
             }
         };
-        cache.set(ctx.storage(), n, FibValue { value });
+        cache.set(ctx, n, FibValue { value });
         value
     }
 }
