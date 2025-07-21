@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, LazyLock};
-use anyhow::Result;
 use super::storage_interface::Storage;
 
-static STORAGE: LazyLock<Mutex<HashMap<String, Vec<u8>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static STRING_STORAGE: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static U64_STORAGE: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct MemoryStorage;
 
@@ -14,19 +14,29 @@ impl MemoryStorage {
 }
 
 impl Storage for MemoryStorage {
-    fn get(&self, key: String) -> Result<Option<Vec<u8>>> {
-        let storage = STORAGE.lock().unwrap();
-        Ok(storage.get(&key).cloned())
+    fn get_str(&self, path: String) -> Option<String> {
+        let storage = STRING_STORAGE.lock().unwrap();
+        storage.get(&path).cloned()
     }
 
-    fn set(&self, key: String, value: Vec<u8>) -> Result<()> {
-        let mut storage = STORAGE.lock().unwrap();
-        storage.insert(key, value);
-        Ok(())
+    fn set_str(&self, path: String, value: String) {
+        let mut storage = STRING_STORAGE.lock().unwrap();
+        storage.insert(path, value);
     }
 
-    fn delete(&self, key: String) -> Result<bool> {
-        let mut storage = STORAGE.lock().unwrap();
-        Ok(storage.remove(&key).is_some())
+    fn get_u64(&self, path: String) -> Option<u64> {
+        let storage = U64_STORAGE.lock().unwrap();
+        storage.get(&path).copied()
+    }
+
+    fn set_u64(&self, path: String, value: u64) {
+        let mut storage = U64_STORAGE.lock().unwrap();
+        storage.insert(path, value);
+    }
+
+    fn exists(&self, path: String) -> bool {
+        let string_storage = STRING_STORAGE.lock().unwrap();
+        let u64_storage = U64_STORAGE.lock().unwrap();
+        string_storage.contains_key(&path) || u64_storage.contains_key(&path)
     }
 } 

@@ -1,6 +1,29 @@
 macros::contract!(name = "fib");
 
-use stdlib::{store_and_return_int, memory_storage};
+use stdlib::{store_and_return_int, memory_storage, storage_interface::Storage};
+
+// Implement Storage trait directly on the generated proc-storage resource
+impl Storage for storage::ProcStorage {
+    fn get_str(&self, path: String) -> Option<String> {
+        self.get_str(&path)
+    }
+
+    fn set_str(&self, path: String, value: String) {
+        self.set_str(&path, &value);
+    }
+
+    fn get_u64(&self, path: String) -> Option<u64> {
+        self.get_u64(&path)
+    }
+
+    fn set_u64(&self, path: String, value: u64) {
+        self.set_u64(&path, value);
+    }
+
+    fn exists(&self, path: String) -> bool {
+        self.exists(&path)
+    }
+}
 
 // macros::import!(name = "sum", path = "../sum/wit/contract.wit");
 mod sum {
@@ -112,16 +135,16 @@ mod sum {
     }
 }
 
-impl Guest for Fib {
-    fn fib(ctx: &ProcContext, n: u64) -> u64 {
+impl Fib {
+    fn raw_fib(ctx: &ProcContext, n: u64) -> u64 {
         match n {
             0 | 1 => n,
             _ => {
                 sum::sum(
                     ctx,
                     sum::SumArgs {
-                        x: Self::fib(ctx, n - 1),
-                        y: Self::fib(ctx, n - 2),
+                        x: Self::raw_fib(ctx, n - 1),
+                        y: Self::raw_fib(ctx, n - 2),
                     },
                 )
                 .value
@@ -130,11 +153,12 @@ impl Guest for Fib {
     }
 }
 
-// impl Guest for Fib {
-//     fn fib(n: u64) -> u64 {
-//         let storage = memory_storage::MemoryStorage::new();
-//         store_and_return_int(&storage, "fib".to_string(), Self::raw_fib(n))
-//     }
-// }
+impl Guest for Fib {
+    fn fib(ctx: &ProcContext, n: u64) -> u64 {
+        let storage = memory_storage::MemoryStorage::new();
+        let _storage = ctx.storage();
+        store_and_return_int(&storage, "fib".to_string(), Self::raw_fib(ctx, n))
+    }
+}
 
 export!(Fib);
