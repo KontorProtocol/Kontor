@@ -251,7 +251,7 @@ async fn test_build_tap_script_progressive_size_limit() -> Result<()> {
         );
 
         // Verify chunking worked correctly
-        let expected_chunks = (current_size + 519) / 520; // Ceiling division: how many 520-byte chunks needed
+        let expected_chunks = current_size.div_ceil(520); // Ceiling division: how many 520-byte chunks needed
         let actual_chunks = instructions.len() - 7; // Total instructions minus fixed structure
         info!(
             "expected_chunks: {}, actual_chunks: {}",

@@ -181,6 +181,29 @@ pub async fn delete_contract_state(
     )
 }
 
+const BASE_EXISTS_CONTRACT_STATE_QUERY: &str =
+    include_str!("sql/base_exists_contract_state_query.sql");
+
+pub async fn exists_contract_state(
+    conn: &Connection,
+    contract_id: &str,
+    path: &str,
+) -> Result<bool, Error> {
+    let mut rows = conn
+        .query(
+            &format!(
+                r#"
+                SELECT value
+                {}
+                "#,
+                BASE_EXISTS_CONTRACT_STATE_QUERY
+            ),
+            ((":contract_id", contract_id), (":path", path)),
+        )
+        .await?;
+    Ok(rows.next().await?.is_some())
+}
+
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid, tx_index) VALUES (?, ?, ?)",

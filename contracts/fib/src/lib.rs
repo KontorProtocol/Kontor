@@ -6,6 +6,7 @@ use stdlib::{store_and_return_int, memory_storage};
 mod sum {
     use wasm_wave::wasm::WasmValue as _;
 
+    use super::context;
     use super::foreign;
 
     const CONTRACT_ID: &str = "sum";
@@ -97,40 +98,43 @@ mod sum {
         }
     }
 
-    pub fn sum(args: SumArgs) -> SumReturn {
+    pub fn sum(ctx: &context::ProcContext, args: SumArgs) -> SumReturn {
         let expr = [
             "sum(",
             &wasm_wave::to_string(&wasm_wave::value::Value::from(args)).unwrap(),
             ")",
         ]
         .join("");
-        let ret = foreign::call(CONTRACT_ID, expr.as_str());
+        let ret = foreign::call_proc(CONTRACT_ID, ctx, expr.as_str());
         wasm_wave::from_str::<wasm_wave::value::Value>(&SumReturn::wave_type(), &ret)
             .unwrap()
             .into()
     }
 }
 
-impl Fib {
-    fn raw_fib(n: u64) -> u64 {
+impl Guest for Fib {
+    fn fib(ctx: &ProcContext, n: u64) -> u64 {
         match n {
             0 | 1 => n,
             _ => {
-                sum::sum(sum::SumArgs {
-                    x: Self::raw_fib(n - 1),
-                    y: Self::raw_fib(n - 2),
-                })
+                sum::sum(
+                    ctx,
+                    sum::SumArgs {
+                        x: Self::fib(ctx, n - 1),
+                        y: Self::fib(ctx, n - 2),
+                    },
+                )
                 .value
             }
         }
     }
 }
 
-impl Guest for Fib {
-    fn fib(n: u64) -> u64 {
-        let storage = memory_storage::MemoryStorage::new();
-        store_and_return_int(&storage, "fib".to_string(), Self::raw_fib(n))
-    }
-}
+// impl Guest for Fib {
+//     fn fib(n: u64) -> u64 {
+//         let storage = memory_storage::MemoryStorage::new();
+//         store_and_return_int(&storage, "fib".to_string(), Self::raw_fib(n))
+//     }
+// }
 
 export!(Fib);

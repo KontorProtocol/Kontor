@@ -2,6 +2,7 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context};
 
     record sum-args {
         x: u64,
@@ -12,5 +13,5 @@ world contract {
         value: u64,
     }
 
-    export sum: func(args: sum-args) -> sum-return;
+    export sum: func(ctx: borrow<proc-context>, args: sum-args) -> sum-return;
 }

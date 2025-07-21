@@ -2,6 +2,7 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context};
 
-    export fib: func(n: u64) -> u64;
+    export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
 }

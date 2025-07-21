@@ -33,11 +33,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&to_pascal_case(&config.name)).unwrap();
     let boilerplate = quote! {
-        extern crate wee_alloc;
-
-        #[global_allocator]
-        static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
         wit_bindgen::generate!({
             world: #world,
             path: #path,

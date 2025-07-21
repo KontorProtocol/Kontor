@@ -16,4 +16,3 @@ wasm-wave = "0.235.0"
 
 macros = { path = "../core/macros" }
 stdlib = { path = "../core/stdlib" }
-wee_alloc = "0.4.5"
