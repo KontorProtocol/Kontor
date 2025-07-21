@@ -1,6 +1,6 @@
 use anyhow::Result;
-use once_cell::sync::Lazy;
 use libsql::Connection;
+use once_cell::sync::Lazy;
 use proptest::test_runner::FileFailurePersistence;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -74,9 +74,8 @@ impl DatabaseFactory {
 
 // setup shared database used across all test runs; the mutex will force tests to run
 // in sequence, which is still faster than creating a new database for each run.
-static SHARED_DATABASE: Lazy<Arc<Mutex<DatabaseFactory>>> = Lazy::new(|| {
-    Mutex::new(DatabaseFactory::new()).into()
-});
+static SHARED_DATABASE: Lazy<Arc<Mutex<DatabaseFactory>>> =
+    Lazy::new(|| Mutex::new(DatabaseFactory::new()).into());
 
 async fn new_db_wrapper() -> Database {
     let (reader, writer, _temp_dir) = new_db().await.unwrap();
