@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use stdlib::DotPathBuf;
 
 macros::contract!(name = "fib");
