@@ -23,6 +23,6 @@ pub trait WriteContext {
 
 pub trait ReadWriteContext: ReadContext + WriteContext {}
 
-pub trait Store {
-    fn __set(&self, storage: impl WriteStorage, base_path: DotPathBuf);
+pub trait Store: Clone {
+    fn __set(&self, storage: &impl WriteStorage, base_path: DotPathBuf);
 }

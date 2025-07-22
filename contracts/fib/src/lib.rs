@@ -115,13 +115,14 @@ mod sum {
 }
 
 // #[storage]
+#[derive(Clone)]
 struct FibValue {
     value: u64,
 }
 
 // generated
 impl Store for FibValue {
-    fn __set(&self, storage: impl WriteStorage, base_path: DotPathBuf) {
+    fn __set(&self, storage: &impl WriteStorage, base_path: DotPathBuf) {
         storage.set_u64(&base_path.push("value").to_string(), self.value);
     }
 }
@@ -145,8 +146,23 @@ impl FibValueWrapper {
 }
 
 // #[root_storage]
+#[derive(Clone)]
 struct FibStorage {
-    cache: Map<String, FibValue>,
+    pub cache: Map<u64, FibValue>,
+}
+
+// generated
+impl Store for FibStorage {
+    fn __set(&self, storage: &impl WriteStorage, base_path: DotPathBuf) {
+        self.cache.__set(storage, base_path.push("cache"))
+    }
+}
+
+// generated
+impl FibStorage {
+    pub fn init(&self, ctx: impl WriteContext) {
+        self.__set(&ctx.write_storage(), DotPathBuf::new())
+    }
 }
 
 struct FibStorageCacheWrapper {
@@ -154,15 +170,15 @@ struct FibStorageCacheWrapper {
 }
 
 impl FibStorageCacheWrapper {
-    pub fn get<K: ToString>(&self, ctx: impl ReadContext, key: K) -> Option<FibValueWrapper> {
+    pub fn get(&self, ctx: impl ReadContext, key: u64) -> Option<FibValueWrapper> {
         let base_path = self.base_path.push(key.to_string());
         ctx.read_storage()
             .exists(&base_path.to_string())
             .then_some(FibValueWrapper { base_path })
     }
 
-    pub fn set<K: ToString>(&self, ctx: impl WriteContext, key: K, value: FibValue) {
-        value.__set(ctx.write_storage(), self.base_path.push(key.to_string()))
+    pub fn set(&self, ctx: impl WriteContext, key: u64, value: FibValue) {
+        value.__set(&ctx.write_storage(), self.base_path.push(key.to_string()))
     }
 }
 
@@ -203,6 +219,13 @@ impl Fib {
 }
 
 impl Guest for Fib {
+    fn init(ctx: &ProcContext) {
+        FibStorage {
+            cache: Map::new(&[]),
+        }
+        .init(ctx);
+    }
+
     fn fib(ctx: &ProcContext, n: u64) -> u64 {
         Self::raw_fib(ctx, n)
     }

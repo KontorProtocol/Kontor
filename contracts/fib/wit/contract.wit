@@ -4,5 +4,7 @@ world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context};
 
+    export init: func(ctx: borrow<proc-context>);
+
     export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
 }
