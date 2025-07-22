@@ -221,7 +221,7 @@ impl Fib {
 impl Guest for Fib {
     fn init(ctx: &ProcContext) {
         FibStorage {
-            cache: Map::new(&[]),
+            cache: Map::new(&[(0, FibValue { value: 0 })]),
         }
         .init(ctx);
     }
