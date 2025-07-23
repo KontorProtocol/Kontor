@@ -2080,6 +2080,7 @@ dependencies = [
  "indexmap 2.10.0",
  "libsql",
  "lru",
+ "once_cell",
  "proptest",
  "rand 0.9.1",
  "rayon",

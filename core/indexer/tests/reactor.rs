@@ -1,7 +1,5 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use clap::Parser;
-use libsql::Connection;
-use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, hashes::Hash};
@@ -11,66 +9,12 @@ use indexer::{
         ctrl::CtrlChannel,
         events::{BlockId, Event},
     },
-    block::{Block, Tx},
+    block::Block,
     config::Config,
-    database::{queries, types::BlockRow},
+    database::queries,
     reactor,
-    retry::{new_backoff_unlimited, retry},
-    test_utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, await_block_at_height, new_numbered_blockchain, new_test_db},
 };
-
-fn gen_block<T: Tx>(height: u64, hash: &BlockHash, prev_hash: &BlockHash) -> Block<T> {
-    Block {
-        height,
-        hash: *hash,
-        prev_hash: *prev_hash,
-        transactions: vec![],
-    }
-}
-
-fn gen_blocks<T: Tx>(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block<T>> {
-    let mut blocks = vec![];
-    let mut prev = prev_hash;
-
-    for _i in start..end {
-        let hash = BlockHash::from_byte_array([(_i + 1) as u8; 32]);
-        let block = gen_block(_i + 1, &hash, &prev);
-        blocks.push(block.clone());
-
-        prev = hash;
-    }
-
-    blocks
-}
-
-fn new_block_chain<T: Tx>(n: u64) -> Vec<Block<T>> {
-    gen_blocks(0, n, BlockHash::from_byte_array([0x00; 32]))
-}
-
-fn block_row<T: Tx>(height: u64, b: &Block<T>) -> BlockRow {
-    BlockRow {
-        height,
-        hash: b.hash,
-    }
-}
-
-async fn select_block_at_height(
-    conn: &Connection,
-    height: u64,
-    cancel_token: CancellationToken,
-) -> Result<BlockRow> {
-    retry(
-        async || match queries::select_block_at_height(conn, height).await {
-            Ok(Some(row)) => Ok(row),
-            Ok(None) => Err(anyhow!("Block at height not found: {}", height)),
-            Err(e) => Err(e.into()),
-        },
-        "read block at height",
-        new_backoff_unlimited(),
-        cancel_token.clone(),
-    )
-    .await
-}
 
 #[tokio::test]
 async fn test_reactor_rollback_event() -> Result<()> {
@@ -132,9 +76,8 @@ async fn test_reactor_rollback_event() -> Result<()> {
         .is_ok()
     );
 
-    sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
     let conn = &*reader.connection().await?;
-    let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x20; 32]));
 
@@ -180,13 +123,11 @@ async fn test_reactor_rollback_event() -> Result<()> {
         .is_ok()
     );
 
-    sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
-
-    let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x21; 32]));
 
-    let block = select_block_at_height(conn, 93, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 93).await;
     assert_eq!(block.height, 93);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x31; 32]));
 
@@ -284,10 +225,8 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
         .is_ok()
     );
 
-    sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
-
     let conn = &*reader.connection().await?;
-    let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x02; 32]));
 
@@ -328,8 +267,7 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
         .is_ok()
     );
 
-    sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
-    let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x12; 32]));
 
@@ -442,8 +380,7 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
     );
 
     let conn = &*reader.connection().await?;
-    sleep(Duration::from_millis(10)).await; // short delay to hopefully avoid a read retry
-    let block = select_block_at_height(conn, 92, cancel_token.clone()).await?;
+    let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x12; 32]));
 
@@ -461,20 +398,20 @@ async fn test_reactor_rollback_hash_event() -> Result<()> {
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
-    let blocks = new_block_chain::<MockTransaction>(5);
+    let blocks = new_numbered_blockchain(5);
     let conn = &writer.connection();
     assert!(
-        queries::insert_block(conn, block_row(1, &blocks[1 - 1]))
+        queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(2, &blocks[2 - 1]))
+        queries::insert_block(conn, (&blocks[2 - 1]).into())
             .await
             .is_ok()
     );
     assert!(
-        queries::insert_block(conn, block_row(3, &blocks[3 - 1]))
+        queries::insert_block(conn, (&blocks[3 - 1]).into())
             .await
             .is_ok()
     );

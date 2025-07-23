@@ -1,13 +1,15 @@
 use anyhow::Result;
 use libsql::Connection;
+use once_cell::sync::Lazy;
 use proptest::test_runner::FileFailurePersistence;
-use rand::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep, timeout};
+
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::BlockHash;
 
 use proptest::prelude::*;
 
@@ -20,7 +22,7 @@ use indexer::{
     config::Config,
     database::{self, queries, types::BlockRow},
     reactor,
-    test_utils::{MockTransaction, new_test_db},
+    test_utils::{MockTransaction, gen_random_block, new_test_db},
 };
 
 #[derive(Debug)]
@@ -43,20 +45,44 @@ struct Step {
     expect_start: Option<StartMsg>,
 }
 
-fn gen_block(height: u64, prev_hash: Option<BlockHash>) -> Block<MockTransaction> {
-    let mut hash = [0u8; 32];
-    rand::rng().fill_bytes(&mut hash);
+struct Database {
+    reader: database::Reader,
+    writer: database::Writer,
+    _temp_dir: TempDir,
+}
 
-    let prev = match prev_hash {
-        Some(h) => h,
-        None => BlockHash::from_byte_array([0x00; 32]),
-    };
+struct DatabaseFactory {
+    database: Arc<Mutex<Option<Database>>>,
+}
 
-    Block {
-        height,
-        hash: BlockHash::from_byte_array(hash),
-        prev_hash: prev,
-        transactions: vec![],
+impl DatabaseFactory {
+    pub fn new() -> Self {
+        Self {
+            database: Mutex::new(None).into(),
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    pub async fn get_database(&mut self) -> Arc<Mutex<Option<Database>>> {
+        let mut db = self.database.lock().unwrap();
+        if db.is_none() {
+            *db = Some(new_db_wrapper().await);
+        }
+        self.database.clone()
+    }
+}
+
+// setup shared database used across all test runs; the mutex will force tests to run
+// in sequence, which is still faster than creating a new database for each run.
+static SHARED_DATABASE: Lazy<Arc<Mutex<DatabaseFactory>>> =
+    Lazy::new(|| Mutex::new(DatabaseFactory::new()).into());
+
+async fn new_db_wrapper() -> Database {
+    let (reader, writer, _temp_dir) = new_db().await.unwrap();
+    Database {
+        reader,
+        writer,
+        _temp_dir,
     }
 }
 
@@ -76,7 +102,7 @@ async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
 }
 
 async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
-    for _i in 0..10 {
+    for _i in 0..100 {
         match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,
             Ok(None) => {}
@@ -110,7 +136,7 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block<MockTransaction>>) 
             Segment::Series(n) => {
                 for _i in 0..*n {
                     height += 1;
-                    let b = gen_block(height, prev_hash);
+                    let b = gen_random_block(height, prev_hash);
 
                     if implicit_rollback {
                         // model updates on the first block after implicit rollback
@@ -191,7 +217,7 @@ proptest! {
         failure_persistence: Some(Box::new(
             FileFailurePersistence::WithSource("regressions"),
         )),
-        cases: 10,
+        cases: 100,
         timeout: 5000,
         .. ProptestConfig::default()
     })]
@@ -223,16 +249,28 @@ proptest! {
     #[test]
     fn test_reactor_rollbacks(vec in gen_segment_vec()) {
         let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // we need to allow the lock for the shared database to be held throughout a
+        // test run to force sequential execution of the test runs.
+        #[allow(clippy::await_holding_lock)]
         rt.block_on(async {
-            let (reader, writer, _temp_dir) = new_db().await.unwrap();
+            let db_mutex = (*SHARED_DATABASE).lock().unwrap().get_database().await;
+            let mut db_binding = db_mutex.lock().unwrap();
+            let db = db_binding.as_mut().unwrap();
+
+            // wipe blocks from earlier runs
+            let conn = &db.writer.connection();
+            queries::rollback_to_height(conn, 0).await.unwrap();
+            assert!(queries::select_block_latest(conn).await.unwrap().is_none());
+
             let cancel_token = CancellationToken::new();
             let (ctrl, mut ctrl_rx) = CtrlChannel::create();
 
             let handle = reactor::run::<MockTransaction>(
                 1,
                 cancel_token.clone(),
-                reader.clone(),
-                writer.clone(),
+                db.reader.clone(),
+                db.writer.clone(),
                 ctrl,
             );
 
@@ -259,7 +297,7 @@ proptest! {
             }
 
             // compare against model
-            let conn = &*reader.connection().await.unwrap();
+            let conn = &*db.reader.connection().await.unwrap();
             for expected_block in model.clone() {
                 let block = await_block_at_height(conn, expected_block.height).await;
                 assert_eq!(block.hash, expected_block.hash);

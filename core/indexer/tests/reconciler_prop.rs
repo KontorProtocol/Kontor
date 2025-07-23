@@ -1,21 +1,17 @@
-use anyhow::{Error, Result, anyhow};
+use anyhow::anyhow;
 use proptest::test_runner::FileFailurePersistence;
-use rand::prelude::*;
-use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-use bitcoin::{BlockHash, hashes::Hash};
 
 use proptest::prelude::*;
 
 use indexer::{
     bitcoin_follower::{
         events::{Event, ZmqEvent},
-        info, reconciler, rpc,
+        reconciler,
     },
     block::Block,
-    test_utils::MockTransaction,
+    test_utils::{MockBlockchain, MockTransaction, gen_random_blocks, new_random_blockchain},
 };
 
 #[derive(Debug)]
@@ -24,40 +20,6 @@ enum Segment {
     AppendBlocks(usize),
     ZmqConnection(bool),
     ZmqSeries((usize, usize)), // (series length, rewind/overlap at start)
-}
-
-fn gen_block(height: u64, prev_hash: Option<BlockHash>) -> Block<MockTransaction> {
-    let mut hash = [0u8; 32];
-    rand::rng().fill_bytes(&mut hash);
-
-    let prev = match prev_hash {
-        Some(h) => h,
-        None => BlockHash::from_byte_array([0x00; 32]),
-    };
-
-    Block {
-        height,
-        hash: BlockHash::from_byte_array(hash),
-        prev_hash: prev,
-        transactions: vec![],
-    }
-}
-
-fn gen_blocks(start: u64, end: u64, prev_hash: Option<BlockHash>) -> Vec<Block<MockTransaction>> {
-    let mut blocks = vec![];
-    let mut prev = prev_hash;
-
-    for _i in start..end {
-        let block = gen_block(_i + 1, prev);
-        prev = Some(block.hash);
-        blocks.push(block.clone());
-    }
-
-    blocks
-}
-
-fn new_block_chain(n: u64) -> Vec<Block<MockTransaction>> {
-    gen_blocks(0, n, None)
 }
 
 fn gen_segment() -> impl Strategy<Value = Segment> {
@@ -81,7 +43,7 @@ enum Step {
 }
 
 fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain) {
-    let initial_blocks = new_block_chain(5);
+    let initial_blocks = new_random_blockchain(5);
     let mut blocks = initial_blocks.clone();
     let mut stream = vec![];
     let mut height = 0;
@@ -121,7 +83,7 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain) {
             Segment::AppendBlocks(n) => {
                 let cnt = blocks.len();
                 let more_blocks =
-                    gen_blocks(cnt as u64, (cnt + n) as u64, Some(blocks[cnt - 1].hash));
+                    gen_random_blocks(cnt as u64, (cnt + n) as u64, Some(blocks[cnt - 1].hash));
                 blocks.extend(more_blocks.iter().cloned());
                 stream.push(Step::AppendBlocks(more_blocks));
             }
@@ -138,72 +100,6 @@ fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain) {
         }
     }
     (stream, MockBlockchain::new(initial_blocks))
-}
-
-#[derive(Clone, Debug)]
-struct State {
-    start_height: u64,
-    running: bool,
-    blocks: Vec<Block<MockTransaction>>,
-}
-
-#[derive(Clone, Debug)]
-struct MockBlockchain {
-    state: Arc<Mutex<State>>,
-}
-
-impl MockBlockchain {
-    fn new(blocks: Vec<Block<MockTransaction>>) -> Self {
-        Self {
-            state: Mutex::new(State {
-                start_height: 0,
-                running: false,
-                blocks,
-            })
-            .into(),
-        }
-    }
-
-    fn append_blocks(&mut self, more_blocks: Vec<Block<MockTransaction>>) {
-        let mut state = self.state.lock().unwrap();
-        state.blocks.extend(more_blocks.iter().cloned());
-    }
-
-    fn blocks(self) -> Vec<Block<MockTransaction>> {
-        let state = self.state.lock().unwrap();
-        state.blocks.clone()
-    }
-}
-
-impl rpc::BlockFetcher for MockBlockchain {
-    fn running(&self) -> bool {
-        self.state.lock().unwrap().running
-    }
-
-    fn start(&mut self, start_height: u64) {
-        let mut state = self.state.lock().unwrap();
-
-        state.running = true;
-        state.start_height = start_height;
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        state.running = false;
-        Ok(())
-    }
-}
-
-impl info::BlockchainInfo for MockBlockchain {
-    async fn get_blockchain_height(&self) -> Result<u64, Error> {
-        let state = self.state.lock().unwrap();
-        Ok(state.blocks.len() as u64)
-    }
-
-    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
-        let state = self.state.lock().unwrap();
-        Ok(state.blocks[height as usize - 1].hash)
-    }
 }
 
 proptest! {
