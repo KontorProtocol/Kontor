@@ -32,15 +32,26 @@ impl DotPathBuf {
         }
     }
 
-    pub fn push(&mut self, segment: impl Into<String>) {
+    pub fn push(&self, segment: impl Into<String>) -> Self {
         let segment = segment.into();
+        let mut new_segments = self.segments.clone();
         if !segment.is_empty() {
-            self.segments.push(segment);
+            new_segments.push(segment);
+        }
+        DotPathBuf {
+            segments: new_segments,
         }
     }
 
-    pub fn pop(&mut self) -> Option<String> {
-        self.segments.pop()
+    pub fn pop(&self) -> (Self, Option<String>) {
+        let mut new_segments = self.segments.clone();
+        let popped = new_segments.pop();
+        (
+            DotPathBuf {
+                segments: new_segments,
+            },
+            popped,
+        )
     }
 
     pub fn segments(&self) -> impl Iterator<Item = &str> + '_ {

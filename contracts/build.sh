@@ -13,7 +13,7 @@ if [ ! -d "$TARGET_DIR" ]; then
 fi
 
 # Find all .wasm files, excluding *_opt.wasm
-WASM_FILES=$(find "$TARGET_DIR" -type f -name "*.wasm" ! -name "*_opt.wasm" ! -name "*.br" -maxdepth 1)
+WASM_FILES=$(find "$TARGET_DIR" -maxdepth 1 -type f -name "*.wasm" ! -name "*_opt.wasm" ! -name "*.br")
 
 # Check if any .wasm files were found
 if [ -z "$WASM_FILES" ]; then

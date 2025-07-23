@@ -15,3 +15,4 @@ wit-bindgen = "0.43.0"
 wasm-wave = "0.235.0"
 
 macros = { path = "../core/macros" }
+stdlib = { path = "../core/stdlib" }

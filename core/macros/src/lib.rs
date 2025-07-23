@@ -41,6 +41,68 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         use kontor::built_in::*;
 
+        use stdlib::*;
+
+        impl ReadStorage for context::ViewStorage {
+            fn get_str(&self, path: &str) -> Option<String> {
+                self.get_str(path)
+            }
+
+            fn get_u64(&self, path: &str) -> Option<u64> {
+                self.get_u64(path)
+            }
+
+            fn exists(&self, path: &str) -> bool {
+                self.exists(path)
+            }
+        }
+
+        impl ReadStorage for context::ProcStorage {
+            fn get_str(&self, path: &str) -> Option<String> {
+                self.get_str(path)
+            }
+
+            fn get_u64(&self, path: &str) -> Option<u64> {
+                self.get_u64(path)
+            }
+
+            fn exists(&self, path: &str) -> bool {
+                self.exists(path)
+            }
+        }
+
+        impl WriteStorage for context::ProcStorage {
+            fn set_str(&self, path: &str, value: &str) {
+                self.set_str(path, value)
+            }
+
+            fn set_u64(&self, path: &str, value: u64) {
+                self.set_u64(path, value)
+            }
+        }
+
+        impl ReadWriteStorage for context::ProcStorage {}
+
+        impl ReadContext for &context::ViewContext {
+            fn read_storage(&self) -> impl ReadStorage {
+                self.storage()
+            }
+        }
+
+        impl ReadContext for &context::ProcContext {
+            fn read_storage(&self) -> impl ReadStorage {
+                self.storage()
+            }
+        }
+
+        impl WriteContext for &context::ProcContext {
+            fn write_storage(&self) -> impl WriteStorage {
+                self.storage()
+            }
+        }
+
+        impl ReadWriteContext for &context::ProcContext {}
+
         struct #name;
     };
 

@@ -1,11 +1,9 @@
 mod component_cache;
-mod dot_path_buf;
 mod storage;
 mod types;
 mod wit;
 
 pub use component_cache::ComponentCache;
-pub use dot_path_buf::DotPathBuf;
 use serde::{Deserialize, Serialize};
 pub use storage::Storage;
 pub use types::default_val_for_type;
@@ -238,6 +236,10 @@ impl built_in::storage::HostViewStorage for Runtime {
         deserialize_cbor(&bs)
     }
 
+    async fn exists(&mut self, _: Resource<ViewStorage>, path: String) -> Result<bool> {
+        self.storage.exists(&self.contract_id, &path).await
+    }
+
     async fn drop(&mut self, rep: Resource<ViewStorage>) -> Result<()> {
         let _res = self.table.delete(rep)?;
         Ok(())
@@ -276,6 +278,10 @@ impl built_in::storage::HostProcStorage for Runtime {
     async fn set_u64(&mut self, _: Resource<ProcStorage>, path: String, value: u64) -> Result<()> {
         let bs = serialize_cbor(&value)?;
         self.storage.set(&self.contract_id, &path, &bs).await
+    }
+
+    async fn exists(&mut self, _: Resource<ProcStorage>, path: String) -> Result<bool> {
+        self.storage.exists(&self.contract_id, &path).await
     }
 
     async fn drop(&mut self, rep: Resource<ProcStorage>) -> Result<()> {

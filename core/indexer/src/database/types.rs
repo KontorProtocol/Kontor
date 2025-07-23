@@ -8,7 +8,7 @@ use crate::{
     database::queries::Error,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct BlockRow {
     pub height: u64,
     pub hash: BlockHash,

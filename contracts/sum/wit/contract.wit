@@ -13,5 +13,7 @@ world contract {
         value: u64,
     }
 
+    export init: func(ctx: borrow<proc-context>);
+
     export sum: func(ctx: borrow<proc-context>, args: sum-args) -> sum-return;
 }
