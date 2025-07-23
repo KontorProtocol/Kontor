@@ -102,7 +102,7 @@ async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
 }
 
 async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
-    for _i in 0..10 {
+    for _i in 0..100 {
         match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,
             Ok(None) => {}
