@@ -371,7 +371,7 @@ pub async fn new_memory_db() -> Result<Writer> {
         bitcoin_rpc_password: "".to_string(),
         zmq_address: "".to_string(),
         api_port: 0,
-        data_dir: PathBuf::from("/tmp"),
+        data_dir: PathBuf::from("./"),
         starting_block_height: 0,
     };
     let writer = Writer::new_in_memory(&mock_config).await?;
