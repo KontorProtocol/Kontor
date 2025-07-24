@@ -8,7 +8,6 @@ use indexer::{
         events::{BlockId, Event, ZmqEvent},
         reconciler::{self},
     },
-    block::HasTxid,
     test_utils::{MockBlockchain, MockTransaction, gen_numbered_blocks, new_numbered_blockchain},
 };
 
@@ -56,8 +55,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((3, blocks[2 - 1].clone())));
 
     assert!(
@@ -71,8 +68,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((3, blocks[3 - 1].clone())));
     mock.await_stopped().await; // switched to ZMQ
 
@@ -83,7 +78,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     assert_eq!(e, Event::MempoolSet(initial_mempool));
 
     let tx1 = blocks[4 - 1].transactions[0].clone();
-    let tx1_id = tx1.txid();
     assert!(
         zmq_tx
             .send(ZmqEvent::MempoolTransactionAdded(tx1.clone()))
@@ -91,7 +85,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let tx2 = blocks[5 - 1].transactions[0].clone();
-    let tx2_id = tx2.txid();
     assert!(
         zmq_tx
             .send(ZmqEvent::MempoolTransactionAdded(tx2.clone()))
@@ -110,8 +103,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolRemove(vec![tx1_id]));
-    let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((4, blocks[4 - 1].clone())));
 
     assert!(
@@ -120,8 +111,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
             .is_ok()
     );
 
-    let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolRemove(vec![tx2_id]));
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((5, blocks[5 - 1].clone())));
 
@@ -178,14 +167,8 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
             .is_ok()
     );
 
-    // TODO this is racy, decide how to handle arrival of the block before the mempool txs
-
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::MempoolSet(initial_mempool));
-    let e = event_rx.recv().await.unwrap();
-    let tx = blocks[4 - 1].transactions[0].clone();
-    let tx_id = tx.txid();
-    assert_eq!(e, Event::MempoolRemove(vec![tx_id]));
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((4, blocks[4 - 1].clone())));
 

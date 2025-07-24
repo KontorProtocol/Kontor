@@ -219,12 +219,15 @@ impl<T: Tx + 'static> Reactor<T> {
                                 Event::BlockInsert((target_height, block)) => {
                                     info!("Block {}/{} {}", block.height,
                                           target_height, block.hash);
+                                    debug!("(implicit) MempoolRemove {}", block.transactions.len());
                                     self.handle_block(block).await?;
                                 },
                                 Event::BlockRemove(BlockId::Height(height)) => {
+                                    info!("(implicit) MempoolClear");
                                     self.rollback(height).await?;
                                 },
                                 Event::BlockRemove(BlockId::Hash(block_hash)) => {
+                                    info!("(implicit) MempoolClear");
                                     self.rollback_hash(block_hash).await?;
                                 },
                                 Event::MempoolRemove(removed) => {

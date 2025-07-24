@@ -130,7 +130,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
                     };
                     if block.height == last_height + 1 {
                         self.state.latest_block_height = Some(block.height);
-                        handle_block(block.height, block)
+                        vec![Event::BlockInsert((block.height, block))]
                     } else {
                         warn!(
                             "ZMQ BlockConnected at unexpected height {}, last height was {}",
@@ -177,8 +177,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
             }
         }
 
-        let mut events = handle_block(target_height, block);
-        events[0] = Event::MempoolSet(vec![]);
+        let mut events = vec![Event::BlockInsert((target_height, block))];
 
         if self.state.zmq_connected && target_height == height {
             let blockchain_height = self.info.get_blockchain_height().await?;
@@ -204,7 +203,6 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         self.state.mode = Mode::Zmq;
 
         let txs = self.mempool.get_mempool().await?;
-        //    let _ = handle_new_mempool_transactions(&mut self.state.mempool_cache, txs);
         Ok(Event::MempoolSet(txs))
     }
 
@@ -327,45 +325,3 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         self.stop_fetcher().await;
     }
 }
-
-fn handle_block<T: Tx>(target_height: u64, block: Block<T>) -> Vec<Event<T>> {
-    vec![
-        Event::MempoolRemove(block.transactions.iter().map(|tx| tx.txid()).collect()),
-        Event::BlockInsert((target_height, block)),
-    ]
-}
-
-/*
-pub fn handle_new_mempool_transactions<T: Tx>(
-    mempool_cache: &mut IndexMap<Txid, T>,
-    txs: Vec<T>,
-) -> Vec<Event<T>> {
-    let new_mempool_cache: IndexMap<Txid, T> = txs.into_iter().map(|t| (t.txid(), t)).collect();
-    let new_mempool_cache_txids: IndexSet<Txid> = new_mempool_cache.keys().cloned().collect();
-    let mempool_cache_txids: IndexSet<Txid> = mempool_cache.keys().cloned().collect();
-    let removed: Vec<Txid> = mempool_cache_txids
-        .difference(&new_mempool_cache_txids)
-        .cloned()
-        .collect();
-    let added: Vec<T> = new_mempool_cache_txids
-        .difference(&mempool_cache_txids)
-        .map(|txid| {
-            new_mempool_cache
-                .get(txid)
-                .expect("Txid should exist")
-                .clone()
-        })
-        .collect();
-
-    *mempool_cache = new_mempool_cache;
-
-    let mut events = vec![];
-    if !removed.is_empty() {
-        events.push(Event::MempoolRemove(removed));
-    }
-    if !added.is_empty() {
-        events.push(Event::MempoolInsert(added));
-    }
-    events
-}
-*/

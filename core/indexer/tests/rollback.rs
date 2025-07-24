@@ -57,6 +57,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         cancel_token.clone(),
         mock.clone(),
         mock.clone(),
+        mock.clone(),
         rpc_rx,
         zmq_rx,
     );
@@ -155,6 +156,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -258,6 +260,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -381,6 +384,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         cancel_token.clone(),
         mock.clone(),
         mock.clone(),
+        mock.clone(),
         rpc_rx,
         zmq_rx,
     );
@@ -407,6 +411,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         cancel_token.clone(),
         mock.clone(),
         mock.clone(),
+        mock.clone(),
         rpc_rx,
         zmq_rx,
     );
@@ -428,6 +433,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<MockTransaction>>();
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -482,6 +488,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -603,6 +610,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
