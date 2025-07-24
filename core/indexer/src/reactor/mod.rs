@@ -24,8 +24,7 @@ use crate::{
 };
 
 struct Reactor<T: Tx + 'static> {
-    reader: database::Reader,
-    writer: database::Writer,
+    db: database::Writer,
     cancel_token: CancellationToken, // currently not used due to relaxed error handling
     ctrl: CtrlChannel<T>,
     event_rx: Option<Receiver<Event<T>>>,
@@ -37,12 +36,11 @@ struct Reactor<T: Tx + 'static> {
 impl<T: Tx + 'static> Reactor<T> {
     pub async fn new(
         starting_block_height: u64,
-        reader: database::Reader,
-        writer: database::Writer,
+        db: database::Writer,
         ctrl: CtrlChannel<T>,
         cancel_token: CancellationToken,
     ) -> Result<Self> {
-        let conn = &*reader.connection().await?;
+        let conn = &db.connection();
         match select_block_latest(conn).await? {
             Some(block) => {
                 if block.height < starting_block_height - 1 {
@@ -59,8 +57,7 @@ impl<T: Tx + 'static> Reactor<T> {
                 );
 
                 Ok(Self {
-                    reader,
-                    writer,
+                    db,
                     cancel_token,
                     ctrl,
                     event_rx: None,
@@ -75,8 +72,7 @@ impl<T: Tx + 'static> Reactor<T> {
                 );
 
                 Ok(Self {
-                    reader,
-                    writer,
+                    db,
                     cancel_token,
                     ctrl,
                     event_rx: None,
@@ -88,10 +84,10 @@ impl<T: Tx + 'static> Reactor<T> {
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
-        rollback_to_height(&self.writer.connection(), height).await?;
+        rollback_to_height(&self.db.connection(), height).await?;
         self.last_height = height;
 
-        let conn = &self.reader.connection().await?;
+        let conn = &self.db.connection();
         if let Some(block) = select_block_at_height(conn, height).await? {
             self.option_last_hash = Some(block.hash);
             info!("Rollback to height {} ({})", height, block.hash);
@@ -123,7 +119,7 @@ impl<T: Tx + 'static> Reactor<T> {
     }
 
     async fn rollback_hash(&mut self, hash: BlockHash) -> Result<()> {
-        let conn = &self.writer.connection();
+        let conn = &self.db.connection();
         let block_row = select_block_with_hash(conn, &hash).await?;
         if let Some(row) = block_row {
             self.rollback(row.height - 1).await
@@ -179,7 +175,7 @@ impl<T: Tx + 'static> Reactor<T> {
         self.last_height = height;
         self.option_last_hash = Some(hash);
 
-        insert_block(&self.writer.connection(), BlockRow { height, hash }).await?;
+        insert_block(&self.db.connection(), BlockRow { height, hash }).await?;
 
         Ok(())
     }
@@ -264,16 +260,14 @@ impl<T: Tx + 'static> Reactor<T> {
 pub fn run<T: Tx + 'static>(
     starting_block_height: u64,
     cancel_token: CancellationToken,
-    reader: database::Reader,
-    writer: database::Writer,
+    db: database::Writer,
     ctrl: CtrlChannel<T>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
             let mut reactor = match Reactor::new(
                 starting_block_height,
-                reader,
-                writer,
+                db,
                 ctrl.clone(),
                 cancel_token.clone(),
             )

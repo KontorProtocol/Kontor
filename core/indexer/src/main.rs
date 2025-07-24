@@ -50,7 +50,6 @@ async fn main() -> Result<()> {
     handles.push(reactor::run(
         config.starting_block_height,
         cancel_token,
-        reader,
         writer,
         ctrl,
     ));

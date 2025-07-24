@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -12,22 +11,21 @@ use indexer::{
         events::{BlockId, ZmqEvent},
         reconciler,
     },
-    config::Config,
     database::queries,
     reactor,
     test_utils::{
-        MockBlockchain, MockTransaction, await_block_at_height, gen_random_blocks,
-        new_random_blockchain, new_test_db,
+        MockBlockchain, MockTransaction, await_block_at_height, gen_random_blocks, new_memory_db,
+        new_random_blockchain,
     },
 };
 
 #[tokio::test]
 async fn test_follower_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let blocks = new_random_blockchain(5);
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[0]).into())
             .await
@@ -69,8 +67,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
+        db.clone(),
         ctrl,
     ));
 
@@ -116,10 +113,10 @@ async fn test_follower_reactor_fetching() -> Result<()> {
 #[tokio::test]
 async fn test_follower_reactor_rollback_during_start() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let mut blocks = new_random_blockchain(3);
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
@@ -169,8 +166,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
+        db.clone(),
         ctrl,
     ));
 
@@ -233,11 +229,11 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
 #[tokio::test]
 async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let mut blocks = new_random_blockchain(5);
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
@@ -272,8 +268,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
+        db.clone(),
         ctrl,
     ));
 
@@ -299,7 +294,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
             .is_ok()
     );
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 4).await;
     assert_eq!(block.height, 4);
     assert_eq!(block.hash, blocks[4 - 1].hash);
@@ -457,11 +452,11 @@ async fn test_follower_handle_control_signal() -> Result<()> {
 // down to it and start fetching new blocks from that height.
 async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let mut blocks = new_random_blockchain(2);
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
@@ -496,8 +491,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
+        db.clone(),
         ctrl,
     ));
 
@@ -527,7 +521,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
             .is_ok()
     );
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 4).await;
     assert_eq!(block.height, 4);
     assert_eq!(block.hash, blocks[4 - 1].hash);
@@ -578,11 +572,11 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
 // removed.
 async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let mut blocks = new_random_blockchain(2);
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
@@ -617,8 +611,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
     handles.push(reactor::run::<MockTransaction>(
         start_height,
         cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
+        db.clone(),
         ctrl,
     ));
 
@@ -642,7 +635,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
             .is_ok()
     );
 
-    let conn = &writer.connection();
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 3).await;
     assert_eq!(block.height, 3);
     assert_eq!(block.hash, blocks[3 - 1].hash);

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, hashes::Hash};
@@ -10,25 +9,18 @@ use indexer::{
         events::{BlockId, Event},
     },
     block::Block,
-    config::Config,
     database::queries,
     reactor,
-    test_utils::{MockTransaction, await_block_at_height, new_numbered_blockchain, new_test_db},
+    test_utils::{MockTransaction, await_block_at_height, new_memory_db, new_numbered_blockchain},
 };
 
 #[tokio::test]
 async fn test_reactor_rollback_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
-    let handle = reactor::run::<MockTransaction>(
-        91,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-    );
+    let handle = reactor::run::<MockTransaction>(91, cancel_token.clone(), db.clone(), ctrl);
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 91);
@@ -76,7 +68,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
         .is_ok()
     );
 
-    let conn = &*reader.connection().await?;
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x20; 32]));
@@ -143,15 +135,9 @@ async fn test_reactor_rollback_event() -> Result<()> {
 async fn test_reactor_unexpected_block() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
-    let handle = reactor::run::<MockTransaction>(
-        81,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-    );
+    let handle = reactor::run::<MockTransaction>(81, cancel_token.clone(), db.clone(), ctrl);
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 81);
@@ -183,15 +169,9 @@ async fn test_reactor_unexpected_block() -> Result<()> {
 async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
-    let handle = reactor::run::<MockTransaction>(
-        91,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-    );
+    let handle = reactor::run::<MockTransaction>(91, cancel_token.clone(), db.clone(), ctrl);
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 91);
@@ -225,7 +205,7 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
         .is_ok()
     );
 
-    let conn = &*reader.connection().await?;
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x02; 32]));
@@ -283,15 +263,9 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
 async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
-    let handle = reactor::run::<MockTransaction>(
-        91,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-    );
+    let handle = reactor::run::<MockTransaction>(91, cancel_token.clone(), db.clone(), ctrl);
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 91);
@@ -379,7 +353,7 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
         .is_ok()
     );
 
-    let conn = &*reader.connection().await?;
+    let conn = &db.connection();
     let block = await_block_at_height(conn, 92).await;
     assert_eq!(block.height, 92);
     assert_eq!(block.hash, BlockHash::from_byte_array([0x12; 32]));
@@ -396,10 +370,10 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
 async fn test_reactor_rollback_hash_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let db = new_memory_db().await?;
 
     let blocks = new_numbered_blockchain(5);
-    let conn = &writer.connection();
+    let conn = &db.connection();
     assert!(
         queries::insert_block(conn, (&blocks[1 - 1]).into())
             .await
@@ -416,13 +390,7 @@ async fn test_reactor_rollback_hash_event() -> Result<()> {
             .is_ok()
     );
 
-    let handle = reactor::run::<MockTransaction>(
-        4,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-    );
+    let handle = reactor::run::<MockTransaction>(4, cancel_token.clone(), db.clone(), ctrl);
 
     let start = ctrl_rx.recv().await.unwrap();
     assert_eq!(start.start_height, 4);
