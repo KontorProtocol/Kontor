@@ -3,7 +3,7 @@ use libsql::Connection;
 
 use crate::config::Config;
 
-use super::{connection::new_connection, init::initialize_database_wo_crypto };
+use super::{connection::new_connection, init::initialize_database_wo_crypto};
 
 #[derive(Clone)]
 pub struct Writer {
