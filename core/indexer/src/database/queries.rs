@@ -2,7 +2,9 @@ use bitcoin::BlockHash;
 use libsql::{Connection, de::from_row, named_params, params};
 use thiserror::Error as ThisError;
 
-use crate::database::types::{PaginationMeta, TransactionCursor, TransactionRow};
+use crate::database::types::{
+    ContractId, ContractRow, PaginationMeta, TransactionCursor, TransactionRow,
+};
 
 use super::types::{BlockRow, ContractStateRow};
 use libsql::Transaction;
@@ -213,6 +215,36 @@ pub async fn exists_contract_state(
         )
         .await?;
     Ok(rows.next().await?.is_some())
+}
+
+pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",
+        params![row.name, row.height, row.tx_index, row.bytes],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn get_contract_bytes(
+    conn: &Connection,
+    id: ContractId,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            r#"
+        SELECT bytes FROM contracts
+        WHERE name = :name
+        AND height = :height
+        AND tx_index = :tx_index"#,
+            (
+                (":name", id.name),
+                (":height", id.height),
+                (":tx_index", id.tx_index),
+            ),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {

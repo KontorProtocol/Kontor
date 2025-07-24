@@ -52,6 +52,21 @@ pub struct TransactionRow {
     pub tx_index: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct ContractRow {
+    pub name: String,
+    pub height: i64,
+    pub tx_index: i64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct ContractId {
+    pub name: String,
+    pub height: i64,
+    pub tx_index: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionCursor {
     pub height: i64,
