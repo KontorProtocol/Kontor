@@ -25,7 +25,6 @@ use libsql::Connection;
 use rand::prelude::*;
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -365,16 +364,7 @@ pub async fn new_test_db(config: &Config) -> Result<(Reader, Writer, TempDir)> {
 }
 
 pub async fn new_memory_db() -> Result<Writer> {
-    let mock_config = Config {
-        bitcoin_rpc_url: "".to_string(),
-        bitcoin_rpc_user: "".to_string(),
-        bitcoin_rpc_password: "".to_string(),
-        zmq_address: "".to_string(),
-        api_port: 0,
-        data_dir: PathBuf::from("./"),
-        starting_block_height: 0,
-    };
-    let writer = Writer::new_in_memory(&mock_config).await?;
+    let writer = Writer::new_in_memory().await?;
     Ok(writer)
 }
 

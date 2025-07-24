@@ -3,7 +3,7 @@ use libsql::Connection;
 
 use crate::config::Config;
 
-use super::{connection::new_connection, init::initialize_database};
+use super::{connection::new_connection, init::initialize_database_wo_crypto };
 
 #[derive(Clone)]
 pub struct Writer {
@@ -16,13 +16,13 @@ impl Writer {
         Ok(Self { conn })
     }
 
-    pub async fn new_in_memory(config: &Config) -> Result<Self> {
+    pub async fn new_in_memory() -> Result<Self> {
         let db = libsql::Builder::new_local(":memory:")
             .build()
             .await
             .unwrap();
         let conn = db.connect()?;
-        initialize_database(config, &conn).await?;
+        initialize_database_wo_crypto(&conn).await?;
         Ok(Self { conn })
     }
 

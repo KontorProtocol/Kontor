@@ -43,3 +43,13 @@ pub async fn initialize_database(config: &Config, conn: &libsql::Connection) -> 
     conn.load_extension(p, None)?;
     Ok(())
 }
+
+pub async fn initialize_database_wo_crypto(conn: &libsql::Connection) -> Result<(), Error> {
+    conn.query("PRAGMA foreign_keys = ON;", ()).await?;
+    conn.execute_batch(CREATE_SCHEMA).await?;
+    conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
+    conn.query("PRAGMA journal_mode = WAL;", ()).await?;
+    conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
+    conn.load_extension_enable()?;
+    Ok(())
+}
