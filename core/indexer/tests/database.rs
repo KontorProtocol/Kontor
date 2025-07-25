@@ -12,9 +12,10 @@ use indexer::{
             insert_transaction, select_block_at_height, select_block_by_height_or_hash,
             select_block_latest,
         },
-        types::{BlockRow, ContractAddress, ContractRow, ContractStateRow, TransactionRow},
+        types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
     },
     logging,
+    runtime::ContractAddress,
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::params;
@@ -423,11 +424,11 @@ async fn test_contracts() -> Result<()> {
         .name("test".to_string())
         .build();
     insert_contract(&conn, row.clone()).await?;
-    let address = ContractAddress::builder()
-        .height(0)
-        .tx_index(1)
-        .name("test".to_string())
-        .build();
+    let address = ContractAddress {
+        height: 0,
+        tx_index: 1,
+        name: "test".to_string(),
+    };
     let bytes = get_contract_bytes_by_address(&conn, &address)
         .await?
         .unwrap();

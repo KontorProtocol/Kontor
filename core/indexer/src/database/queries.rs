@@ -2,8 +2,9 @@ use bitcoin::BlockHash;
 use libsql::{Connection, de::from_row, named_params, params};
 use thiserror::Error as ThisError;
 
-use crate::database::types::{
-    ContractAddress, ContractRow, PaginationMeta, TransactionCursor, TransactionRow,
+use crate::{
+    database::types::{ContractRow, PaginationMeta, TransactionCursor, TransactionRow},
+    runtime::ContractAddress,
 };
 
 use super::types::{BlockRow, ContractStateRow};

@@ -11,7 +11,7 @@ mod sum {
     use super::context;
     use super::foreign;
 
-    const CONTRACT_ID: &str = "sum";
+    const CONTRACT_NAME: &str = "sum";
 
     #[derive(Clone)]
     pub struct SumArgs {
@@ -107,7 +107,15 @@ mod sum {
             ")",
         ]
         .join("");
-        let ret = foreign::call_proc(CONTRACT_ID, ctx, expr.as_str());
+        let ret = foreign::call_proc(
+            &foreign::ContractAddress {
+                name: CONTRACT_NAME.to_string(),
+                height: 0,
+                tx_index: 0,
+            },
+            ctx,
+            expr.as_str(),
+        );
         wasm_wave::from_str::<wasm_wave::value::Value>(&SumReturn::wave_type(), &ret)
             .unwrap()
             .into()

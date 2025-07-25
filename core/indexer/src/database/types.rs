@@ -62,13 +62,6 @@ pub struct ContractRow {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, Hash, PartialEq, Eq)]
-pub struct ContractAddress {
-    pub name: String,
-    pub height: i64,
-    pub tx_index: i64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionCursor {
     pub height: i64,

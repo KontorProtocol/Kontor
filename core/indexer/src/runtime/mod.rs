@@ -16,6 +16,8 @@ use std::{
 
 use wit::kontor::*;
 
+pub use wit::kontor::built_in::foreign::ContractAddress;
+
 use anyhow::{Result, anyhow};
 use wasmtime::{
     Engine, Store,
@@ -26,10 +28,7 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::{
-    database::types::ContractAddress,
-    runtime::wit::{ProcContext, ProcStorage, ViewContext, ViewStorage},
-};
+use crate::runtime::wit::{ProcContext, ProcStorage, ViewContext, ViewStorage};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Context {
@@ -203,33 +202,21 @@ impl Runtime {
 impl built_in::foreign::Host for Runtime {
     async fn call_view(
         &mut self,
-        contract_id: String,
+        contract_address: ContractAddress,
         _: Resource<ViewContext>,
         expr: String,
     ) -> Result<String> {
-        let runtime = self
-            .with_contract_address(ContractAddress {
-                name: contract_id,
-                height: 0,
-                tx_index: 0,
-            })
-            .await?;
+        let runtime = self.with_contract_address(contract_address).await?;
         runtime.execute(Some(Context::View), &expr).await
     }
 
     async fn call_proc(
         &mut self,
-        contract_id: String,
+        contract_address: ContractAddress,
         _: Resource<ProcContext>,
         expr: String,
     ) -> Result<String> {
-        let runtime = self
-            .with_contract_address(ContractAddress {
-                name: contract_id,
-                height: 0,
-                tx_index: 0,
-            })
-            .await?;
+        let runtime = self.with_contract_address(contract_address).await?;
         runtime.execute(Some(Context::Proc), &expr).await
     }
 }

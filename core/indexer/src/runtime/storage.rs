@@ -2,12 +2,15 @@ use anyhow::Result;
 use bon::Builder;
 use libsql::Connection;
 
-use crate::database::{
-    queries::{
-        delete_contract_state, exists_contract_state, get_contract_bytes_by_id,
-        get_contract_id_from_address, get_latest_contract_state_value, insert_contract_state,
+use crate::{
+    database::{
+        queries::{
+            delete_contract_state, exists_contract_state, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_latest_contract_state_value, insert_contract_state,
+        },
+        types::ContractStateRow,
     },
-    types::{ContractAddress, ContractStateRow},
+    runtime::ContractAddress,
 };
 
 #[derive(Builder, Clone)]

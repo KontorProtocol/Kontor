@@ -8,9 +8,9 @@ use indexer::{
             get_contract_id_from_address, get_latest_contract_state_value, insert_block,
             insert_transaction,
         },
-        types::{BlockRow, ContractAddress, TransactionRow},
+        types::{BlockRow, TransactionRow},
     },
-    runtime::{ComponentCache, Runtime, Storage, deserialize_cbor},
+    runtime::{ComponentCache, ContractAddress, Runtime, Storage, deserialize_cbor},
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
