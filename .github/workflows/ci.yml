@@ -27,6 +27,9 @@ jobs:
       - name: Run clippy (contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./contracts
+      - name: Build native contracts
+        run: ./build.sh
+        working-directory: ./contracts
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
