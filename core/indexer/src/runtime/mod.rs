@@ -10,12 +10,13 @@ pub use types::default_val_for_type;
 pub use wit::Contract;
 
 use std::{
-    fs::read,
     io::{Cursor, Read},
-    path::Path,
+    sync::{Arc, Mutex},
 };
 
 use wit::kontor::*;
+
+pub use wit::kontor::built_in::foreign::ContractAddress;
 
 use anyhow::{Result, anyhow};
 use wasmtime::{
@@ -37,53 +38,65 @@ pub enum Context {
 
 pub struct Runtime {
     pub engine: Engine,
-    pub table: ResourceTable,
+    pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
     pub signer: String,
-    pub contract_id: String,
+    pub contract_address: ContractAddress,
+    pub contract_id: i64,
 }
 
 impl Clone for Runtime {
     fn clone(&self) -> Self {
         Self {
             engine: self.engine.clone(),
-            table: ResourceTable::new(),
+            table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache: self.component_cache.clone(),
             storage: self.storage.clone(),
             signer: self.signer.clone(),
-            contract_id: self.contract_id.clone(),
+            contract_address: self.contract_address.clone(),
+            contract_id: self.contract_id,
         }
     }
 }
 
 impl Runtime {
-    pub fn new(
+    pub async fn new(
         storage: Storage,
         component_cache: ComponentCache,
         signer: String,
-        contract_id: String,
+        contract_address: ContractAddress,
     ) -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
         let engine = Engine::new(&config)?;
+        let contract_id = storage
+            .contract_id(&contract_address)
+            .await?
+            .ok_or(anyhow!("Contract not found"))?;
         let runtime = Self {
             engine,
-            table: ResourceTable::new(),
+            table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
             signer,
+            contract_address,
             contract_id,
         };
-        runtime.load_component()?;
+        runtime.load_component().await?;
         Ok(runtime)
     }
 
-    pub fn with_contract_id(&self, contract_id: String) -> Result<Self> {
+    pub async fn with_contract_address(&self, contract_address: ContractAddress) -> Result<Self> {
         let mut runtime = self.clone();
-        runtime.contract_id = contract_id;
-        runtime.load_component()?;
+        runtime.contract_id = self
+            .storage
+            .contract_id(&contract_address)
+            .await?
+            .ok_or(anyhow!("Contract not found"))?;
+        runtime.contract_address = contract_address;
+        runtime.load_component().await?;
         Ok(runtime)
     }
 
@@ -97,16 +110,15 @@ impl Runtime {
         Ok(linker)
     }
 
-    pub fn load_component(&self) -> Result<Component> {
+    pub async fn load_component(&self) -> Result<Component> {
         Ok(match self.component_cache.get(&self.contract_id) {
             Some(component) => component,
             None => {
-                let path = Path::new(&format!(
-                    "../../contracts/target/wasm32-unknown-unknown/release/{}.wasm.br",
-                    self.contract_id,
-                ))
-                .canonicalize()?;
-                let compressed_bytes = read(path)?;
+                let compressed_bytes = self
+                    .storage
+                    .contract_bytes(self.contract_id)
+                    .await?
+                    .ok_or(anyhow!("Contract not found"))?;
                 let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
                 let mut module_bytes = Vec::new();
                 decompressor.read_to_end(&mut module_bytes)?;
@@ -118,14 +130,14 @@ impl Runtime {
 
                 let component = Component::from_binary(&self.engine, &component_bytes)?;
                 self.component_cache
-                    .put(self.contract_id.clone(), component.clone());
+                    .put(self.contract_id, component.clone());
                 component
             }
         })
     }
 
-    pub async fn execute(mut self, ctx: Option<Context>, expr: &str) -> Result<String> {
-        let component = self.load_component()?;
+    pub async fn execute(self, ctx: Option<Context>, expr: &str) -> Result<String> {
+        let component = self.load_component().await?;
         let linker = self.make_linker()?;
         let mut store = self.make_store();
         let instance = linker.instantiate_async(&mut store, &component).await?;
@@ -149,6 +161,8 @@ impl Runtime {
                 && ctx.is_none_or(|c| c == Context::Proc) =>
             {
                 self.table
+                    .lock()
+                    .unwrap()
                     .push(ProcContext {})?
                     .try_into_resource_any(&mut store)
             }
@@ -156,6 +170,8 @@ impl Runtime {
                 && ctx.is_none_or(|c| c == Context::View) =>
             {
                 self.table
+                    .lock()
+                    .unwrap()
                     .push(ViewContext {})?
                     .try_into_resource_any(&mut store)
             }
@@ -186,21 +202,21 @@ impl Runtime {
 impl built_in::foreign::Host for Runtime {
     async fn call_view(
         &mut self,
-        contract_id: String,
+        contract_address: ContractAddress,
         _: Resource<ViewContext>,
         expr: String,
     ) -> Result<String> {
-        let runtime = self.with_contract_id(contract_id)?;
+        let runtime = self.with_contract_address(contract_address).await?;
         runtime.execute(Some(Context::View), &expr).await
     }
 
     async fn call_proc(
         &mut self,
-        contract_id: String,
+        contract_address: ContractAddress,
         _: Resource<ProcContext>,
         expr: String,
     ) -> Result<String> {
-        let runtime = self.with_contract_id(contract_id)?;
+        let runtime = self.with_contract_address(contract_address).await?;
         runtime.execute(Some(Context::Proc), &expr).await
     }
 }
@@ -221,7 +237,7 @@ impl built_in::storage::HostViewStorage for Runtime {
     async fn get_str(&mut self, _: Resource<ViewStorage>, path: String) -> Result<Option<String>> {
         let bs = self
             .storage
-            .get(&self.contract_id, &path)
+            .get(self.contract_id, &path)
             .await?
             .ok_or(anyhow!("Key not found"))?;
         deserialize_cbor(&bs)
@@ -230,18 +246,18 @@ impl built_in::storage::HostViewStorage for Runtime {
     async fn get_u64(&mut self, _: Resource<ViewStorage>, path: String) -> Result<Option<u64>> {
         let bs = self
             .storage
-            .get(&self.contract_id, &path)
+            .get(self.contract_id, &path)
             .await?
             .ok_or(anyhow!("Key not found"))?;
         deserialize_cbor(&bs)
     }
 
     async fn exists(&mut self, _: Resource<ViewStorage>, path: String) -> Result<bool> {
-        self.storage.exists(&self.contract_id, &path).await
+        self.storage.exists(self.contract_id, &path).await
     }
 
     async fn drop(&mut self, rep: Resource<ViewStorage>) -> Result<()> {
-        let _res = self.table.delete(rep)?;
+        let _res = self.table.lock().unwrap().delete(rep)?;
         Ok(())
     }
 }
@@ -250,7 +266,7 @@ impl built_in::storage::HostProcStorage for Runtime {
     async fn get_str(&mut self, _: Resource<ProcStorage>, path: String) -> Result<Option<String>> {
         let bs = self
             .storage
-            .get(&self.contract_id, &path)
+            .get(self.contract_id, &path)
             .await?
             .ok_or(anyhow!("Key not found"))?;
         deserialize_cbor(&bs)
@@ -263,13 +279,13 @@ impl built_in::storage::HostProcStorage for Runtime {
         value: String,
     ) -> Result<()> {
         let bs = serialize_cbor(&value)?;
-        self.storage.set(&self.contract_id, &path, &bs).await
+        self.storage.set(self.contract_id, &path, &bs).await
     }
 
     async fn get_u64(&mut self, _: Resource<ProcStorage>, path: String) -> Result<Option<u64>> {
         let bs = self
             .storage
-            .get(&self.contract_id, &path)
+            .get(self.contract_id, &path)
             .await?
             .ok_or(anyhow!("Key not found"))?;
         deserialize_cbor(&bs)
@@ -277,15 +293,15 @@ impl built_in::storage::HostProcStorage for Runtime {
 
     async fn set_u64(&mut self, _: Resource<ProcStorage>, path: String, value: u64) -> Result<()> {
         let bs = serialize_cbor(&value)?;
-        self.storage.set(&self.contract_id, &path, &bs).await
+        self.storage.set(self.contract_id, &path, &bs).await
     }
 
     async fn exists(&mut self, _: Resource<ProcStorage>, path: String) -> Result<bool> {
-        self.storage.exists(&self.contract_id, &path).await
+        self.storage.exists(self.contract_id, &path).await
     }
 
     async fn drop(&mut self, rep: Resource<ProcStorage>) -> Result<()> {
-        let _res = self.table.delete(rep)?;
+        let _res = self.table.lock().unwrap().delete(rep)?;
         Ok(())
     }
 }
@@ -294,18 +310,18 @@ impl built_in::context::Host for Runtime {}
 
 impl built_in::context::HostViewContext for Runtime {
     async fn storage(&mut self, _: Resource<ViewContext>) -> Result<Resource<ViewStorage>> {
-        Ok(self.table.push(ViewStorage {})?)
+        Ok(self.table.lock().unwrap().push(ViewStorage {})?)
     }
 
     async fn drop(&mut self, rep: Resource<ViewContext>) -> Result<()> {
-        let _res = self.table.delete(rep)?;
+        let _res = self.table.lock().unwrap().delete(rep)?;
         Ok(())
     }
 }
 
 impl built_in::context::HostProcContext for Runtime {
     async fn storage(&mut self, _: Resource<ProcContext>) -> Result<Resource<ProcStorage>> {
-        Ok(self.table.push(ProcStorage {})?)
+        Ok(self.table.lock().unwrap().push(ProcStorage {})?)
     }
 
     async fn signer(&mut self, _: Resource<ProcContext>) -> Result<String> {
@@ -313,11 +329,11 @@ impl built_in::context::HostProcContext for Runtime {
     }
 
     async fn view_context(&mut self, _: Resource<ProcContext>) -> Result<Resource<ViewContext>> {
-        Ok(self.table.push(ViewContext {})?)
+        Ok(self.table.lock().unwrap().push(ViewContext {})?)
     }
 
     async fn drop(&mut self, rep: Resource<ProcContext>) -> Result<()> {
-        let _res = self.table.delete(rep)?;
+        let _res = self.table.lock().unwrap().delete(rep)?;
         Ok(())
     }
 }

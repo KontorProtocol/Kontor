@@ -5,15 +5,18 @@ use indexer::{
     config::Config,
     database::{
         queries::{
-            delete_contract_state, exists_contract_state, get_latest_contract_state,
+            delete_contract_state, exists_contract_state, get_contract_bytes_by_address,
+            get_contract_bytes_by_id, get_contract_id_from_address, get_latest_contract_state,
             get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
-            get_transactions_at_height, insert_block, insert_contract_state, insert_transaction,
-            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
+            get_transactions_at_height, insert_block, insert_contract, insert_contract_state,
+            insert_transaction, select_block_at_height, select_block_by_height_or_hash,
+            select_block_latest,
         },
-        types::{BlockRow, ContractStateRow, TransactionRow},
+        types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
     },
     logging,
-    test_utils::new_test_db,
+    runtime::ContractAddress,
+    test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::params;
 
@@ -96,12 +99,12 @@ async fn test_contract_state_operations() -> Result<()> {
     let tx_id = insert_transaction(&conn, tx).await?;
 
     // Test contract state insertion and retrieval
-    let contract_id = "test_contract_123";
+    let contract_id = 123;
     let path = "test/path";
     let value = vec![1, 2, 3, 4];
 
     let contract_state = ContractStateRow::builder()
-        .contract_id(contract_id.to_string())
+        .contract_id(contract_id)
         .tx_id(tx_id)
         .height(height as i64)
         .path(path.to_string())
@@ -157,7 +160,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let updated_value = vec![5, 6, 7, 8];
     let updated_contract_state = ContractStateRow::builder()
-        .contract_id(contract_id.to_string())
+        .contract_id(contract_id)
         .tx_id(tx_id2)
         .height(height2 as i64)
         .path(path.to_string())
@@ -185,8 +188,8 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let count = conn
         .query(
-            "SELECT COUNT(*) FROM contract_state WHERE contract_id = ? AND path = ?",
-            vec![contract_id, path],
+            "SELECT COUNT(*) FROM contract_state WHERE contract_id = :contract_id AND path = :path",
+            ((":contract_id", contract_id), (":path", path)),
         )
         .await?
         .next()
@@ -398,5 +401,42 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     let result = select_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
     assert!(result.is_none());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_contracts() -> Result<()> {
+    let config = Config::try_parse()?;
+    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .hash(new_mock_block_hash(0))
+            .height(0)
+            .build(),
+    )
+    .await?;
+    let row = ContractRow::builder()
+        .bytes("value".as_bytes().to_vec())
+        .height(0)
+        .tx_index(1)
+        .name("test".to_string())
+        .build();
+    insert_contract(&conn, row.clone()).await?;
+    let address = ContractAddress {
+        height: 0,
+        tx_index: 1,
+        name: "test".to_string(),
+    };
+    let bytes = get_contract_bytes_by_address(&conn, &address)
+        .await?
+        .unwrap();
+    assert_eq!(bytes, row.bytes);
+    let id = get_contract_id_from_address(&conn, &address)
+        .await?
+        .unwrap();
+    let bytes = get_contract_bytes_by_id(&conn, id).await?.unwrap();
+    assert_eq!(bytes, row.bytes);
     Ok(())
 }

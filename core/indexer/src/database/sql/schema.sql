@@ -23,9 +23,21 @@ CREATE INDEX IF NOT EXISTS idx_transactions_height_tx_index ON transactions (hei
 
 CREATE INDEX IF NOT EXISTS idx_transactions_txid ON transactions (txid);
 
+CREATE TABLE IF NOT EXISTS contracts (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  height INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
+  bytes BLOB NOT NULL,
+  UNIQUE (name, height, tx_index),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_lookup ON contracts (name, height, tx_index);
+
 CREATE TABLE IF NOT EXISTS contract_state (
   id INTEGER PRIMARY KEY,
-  contract_id TEXT NOT NULL,
+  contract_id INTEGER NOT NULL,
   tx_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
   path TEXT NOT NULL,

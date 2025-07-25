@@ -2,7 +2,7 @@ FROM
   contract_state t1
 WHERE
   contract_id = :contract_id
-  AND path = :path
+  AND path {{path_operator}} {{path_prefix}} :path {{path_suffix}}
   AND deleted = false
   AND (height, tx_id) = (
     SELECT

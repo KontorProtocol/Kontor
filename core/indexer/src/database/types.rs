@@ -33,7 +33,7 @@ pub struct CheckpointRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
     pub id: Option<i64>,
-    pub contract_id: String,
+    pub contract_id: i64,
     pub tx_id: i64,
     pub height: i64,
     pub path: String,
@@ -50,6 +50,16 @@ pub struct TransactionRow {
     pub txid: String,
     pub height: i64,
     pub tx_index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct ContractRow {
+    #[builder(default = 0)]
+    pub id: i64,
+    pub name: String,
+    pub height: i64,
+    pub tx_index: i64,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

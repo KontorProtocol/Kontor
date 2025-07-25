@@ -3,10 +3,14 @@ use clap::Parser;
 use indexer::{
     config::Config,
     database::{
-        queries::{get_latest_contract_state_value, insert_block, insert_transaction},
+        load_native_contracts,
+        queries::{
+            get_contract_id_from_address, get_latest_contract_state_value, insert_block,
+            insert_transaction,
+        },
         types::{BlockRow, TransactionRow},
     },
-    runtime::{ComponentCache, Runtime, Storage, deserialize_cbor},
+    runtime::{ComponentCache, ContractAddress, Runtime, Storage, deserialize_cbor},
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
@@ -15,6 +19,7 @@ use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 async fn test_fib_contract() -> Result<()> {
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let conn = writer.connection();
+    load_native_contracts(&conn).await?;
     insert_block(
         &conn,
         BlockRow::builder()
@@ -34,9 +39,16 @@ async fn test_fib_contract() -> Result<()> {
     .await?;
     let storage = Storage::builder().conn(writer.connection()).build();
     let signer = "test_signer".to_string();
-    let contract_id = "fib";
+    let contract_address = ContractAddress {
+        name: "fib".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    let contract_id = get_contract_id_from_address(&conn, &contract_address)
+        .await?
+        .unwrap();
     let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(storage, component_cache, signer, contract_id.to_string())?;
+    let runtime = Runtime::new(storage, component_cache, signer, contract_address).await?;
 
     runtime.clone().execute(None, "init()").await?;
     assert_eq!(

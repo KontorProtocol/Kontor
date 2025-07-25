@@ -18,6 +18,8 @@ jobs:
           components: rustfmt, clippy
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
+      - name: Install contract build dependencies (Linux)
+        run: sudo apt-get update && sudo apt-get install -y binaryen brotli
       - name: Check formatting (contracts)
         run: cargo fmt --all -- --check
         working-directory: ./contracts
@@ -26,6 +28,9 @@ jobs:
         working-directory: ./core
       - name: Run clippy (contracts)
         run: cargo clippy --workspace --tests -- -D warnings
+        working-directory: ./contracts
+      - name: Build native contracts
+        run: ./build.sh
         working-directory: ./contracts
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
