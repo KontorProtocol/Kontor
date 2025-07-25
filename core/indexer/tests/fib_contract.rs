@@ -39,18 +39,35 @@ async fn test_fib_contract() -> Result<()> {
     .await?;
     let storage = Storage::builder().conn(writer.connection()).build();
     let signer = "test_signer".to_string();
-    let contract_address = ContractAddress {
+    let eval_contract_address = ContractAddress {
+        name: "eval".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    let component_cache = ComponentCache::new();
+    let runtime = Runtime::new(
+        storage,
+        component_cache,
+        signer,
+        eval_contract_address.clone(),
+    )
+    .await?;
+    runtime.execute(None, "init()").await?;
+
+    let result = runtime.execute(None, "last-op()").await?;
+    assert_eq!(result, "some(id)");
+
+    let fib_contract_address = ContractAddress {
         name: "fib".to_string(),
         height: 0,
         tx_index: 0,
     };
-    let contract_id = get_contract_id_from_address(&conn, &contract_address)
+    let contract_id = get_contract_id_from_address(&conn, &fib_contract_address)
         .await?
         .unwrap();
-    let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(storage, component_cache, signer, contract_address).await?;
+    let runtime = runtime.with_contract_address(fib_contract_address).await?;
 
-    runtime.clone().execute(None, "init()").await?;
+    runtime.execute(None, "init()").await?;
     assert_eq!(
         deserialize_cbor::<u64>(
             &get_latest_contract_state_value(&writer.connection(), contract_id, "cache.0.value")
@@ -73,5 +90,10 @@ async fn test_fib_contract() -> Result<()> {
         .unwrap(),
         21
     );
+
+    let runtime = runtime.with_contract_address(eval_contract_address).await?;
+    let result = runtime.execute(None, "last-op()").await?;
+    assert_eq!(result, "some(sum({y: 8}))");
+
     Ok(())
 }

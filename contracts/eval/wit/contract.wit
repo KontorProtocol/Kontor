@@ -1,0 +1,27 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context};
+
+    record operand {
+        y: u64,
+    }
+
+    variant op {
+        id,
+        sum(operand),
+        mul(operand),
+        div(operand),
+    }
+
+    record eval-return {
+        value: u64
+    }
+
+    export init: func(ctx: borrow<proc-context>);
+
+    export eval: func(ctx: borrow<proc-context>, x: u64, op: op) -> eval-return;
+
+    export last-op: func(ctx: borrow<view-context>) -> option<op>;
+}

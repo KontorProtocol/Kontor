@@ -47,4 +47,4 @@ CREATE TABLE IF NOT EXISTS contract_state (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, height, path);
+CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC, tx_id DESC);

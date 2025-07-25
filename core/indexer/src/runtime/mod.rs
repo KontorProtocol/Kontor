@@ -136,7 +136,7 @@ impl Runtime {
         })
     }
 
-    pub async fn execute(self, ctx: Option<Context>, expr: &str) -> Result<String> {
+    pub async fn execute(&self, ctx: Option<Context>, expr: &str) -> Result<String> {
         let component = self.load_component().await?;
         let linker = self.make_linker()?;
         let mut store = self.make_store();
@@ -252,8 +252,27 @@ impl built_in::storage::HostViewStorage for Runtime {
         deserialize_cbor(&bs)
     }
 
+    async fn is_void(&mut self, _: Resource<ViewStorage>, path: String) -> Result<bool> {
+        let bs = self.storage.get(self.contract_id, &path).await?;
+        Ok(if let Some(bs) = bs {
+            bs.is_empty()
+        } else if self.storage.exists(self.contract_id, &path).await? {
+            false
+        } else {
+            panic!("Key not found in is_void check")
+        })
+    }
+
     async fn exists(&mut self, _: Resource<ViewStorage>, path: String) -> Result<bool> {
         self.storage.exists(self.contract_id, &path).await
+    }
+
+    async fn matching_path(
+        &mut self,
+        _: Resource<ViewStorage>,
+        regexp: String,
+    ) -> Result<Option<String>> {
+        self.storage.matching_path(self.contract_id, &regexp).await
     }
 
     async fn drop(&mut self, rep: Resource<ViewStorage>) -> Result<()> {
@@ -296,8 +315,31 @@ impl built_in::storage::HostProcStorage for Runtime {
         self.storage.set(self.contract_id, &path, &bs).await
     }
 
+    async fn set_void(&mut self, _: Resource<ProcStorage>, path: String) -> Result<()> {
+        self.storage.set(self.contract_id, &path, &[]).await
+    }
+
+    async fn is_void(&mut self, _: Resource<ProcStorage>, path: String) -> Result<bool> {
+        let bs = self.storage.get(self.contract_id, &path).await?;
+        Ok(if let Some(bs) = bs {
+            bs.is_empty()
+        } else if self.storage.exists(self.contract_id, &path).await? {
+            false
+        } else {
+            panic!("Key not found in is_void check")
+        })
+    }
+
     async fn exists(&mut self, _: Resource<ProcStorage>, path: String) -> Result<bool> {
         self.storage.exists(self.contract_id, &path).await
+    }
+
+    async fn matching_path(
+        &mut self,
+        _: Resource<ProcStorage>,
+        regexp: String,
+    ) -> Result<Option<String>> {
+        self.storage.matching_path(self.contract_id, &regexp).await
     }
 
     async fn drop(&mut self, rep: Resource<ProcStorage>) -> Result<()> {

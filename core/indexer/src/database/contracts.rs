@@ -12,8 +12,8 @@ use crate::{
 const FIB: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
 
-const SUM: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/sum.wasm.br");
+const EVAL: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/eval.wasm.br");
 
 pub async fn load_native_contracts(conn: &Connection) -> Result<()> {
     let height = 0;
@@ -26,26 +26,18 @@ pub async fn load_native_contracts(conn: &Connection) -> Result<()> {
         },
     )
     .await?;
-    insert_contract(
-        conn,
-        ContractRow::builder()
-            .height(height)
-            .tx_index(tx_index)
-            .name("fib".to_string())
-            .bytes(FIB.to_vec())
-            .build(),
-    )
-    .await?;
-    insert_contract(
-        conn,
-        ContractRow::builder()
-            .height(height)
-            .tx_index(tx_index)
-            .name("sum".to_string())
-            .bytes(SUM.to_vec())
-            .build(),
-    )
-    .await?;
+    for (name, bytes) in [("eval", EVAL), ("fib", FIB)] {
+        insert_contract(
+            conn,
+            ContractRow::builder()
+                .height(height)
+                .tx_index(tx_index)
+                .name(name.to_string())
+                .bytes(bytes.to_vec())
+                .build(),
+        )
+        .await?;
+    }
 
     Ok(())
 }

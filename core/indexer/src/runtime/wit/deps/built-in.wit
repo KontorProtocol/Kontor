@@ -6,7 +6,11 @@ interface storage {
 
         get-u64: func(path: string) -> option<u64>;
 
+        is-void: func(path: string) -> bool;
+
         exists: func(path: string) -> bool;
+
+        matching-path: func(regexp: string) -> option<string>;
     }
 
     resource proc-storage {
@@ -16,7 +20,12 @@ interface storage {
         get-u64: func(path: string) -> option<u64>;
         set-u64: func(path: string, value: u64);
 
+        set-void: func(path: string);
+        is-void: func(path: string) -> bool;
+
         exists: func(path: string) -> bool;
+        
+        matching-path: func(regexp: string) -> option<string>;
     }
 }
 

@@ -9,8 +9,8 @@ use indexer::{
             get_contract_bytes_by_id, get_contract_id_from_address, get_latest_contract_state,
             get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
             get_transactions_at_height, insert_block, insert_contract, insert_contract_state,
-            insert_transaction, select_block_at_height, select_block_by_height_or_hash,
-            select_block_latest,
+            insert_transaction, matching_path, select_block_at_height,
+            select_block_by_height_or_hash, select_block_latest,
         },
         types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
     },
@@ -100,7 +100,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Test contract state insertion and retrieval
     let contract_id = 123;
-    let path = "test/path";
+    let path = "test.path";
     let value = vec![1, 2, 3, 4];
 
     let contract_state = ContractStateRow::builder()
@@ -116,7 +116,14 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(id > 0, "Contract state insertion should return a valid ID");
 
     // check existence
-    assert!(exists_contract_state(&conn, contract_id, "test/").await?);
+    assert!(exists_contract_state(&conn, contract_id, "test.").await?);
+
+    assert_eq!(
+        matching_path(&conn, contract_id, r"^test.(path|foo|bar)(\..*|$)")
+            .await?
+            .unwrap(),
+        path
+    );
 
     // Get latest contract state
     let retrieved_state = get_latest_contract_state(&conn, contract_id, path).await?;
@@ -180,11 +187,8 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    delete_contract_state(&conn, height2 as i64, tx_id, contract_id, path).await?;
-
-    // Verify the contract state is deleted
-    let latest_state = get_latest_contract_state(&conn, contract_id, path).await?;
-    assert!(latest_state.is_none());
+    let deleted = delete_contract_state(&conn, height2 as i64, tx_id, contract_id, path).await?;
+    assert!(deleted);
 
     let count = conn
         .query(
@@ -198,6 +202,10 @@ async fn test_contract_state_operations() -> Result<()> {
         .get::<u64>(0)
         .unwrap();
     assert_eq!(count, 2);
+
+    // Verify the contract state is deleted
+    let latest_state = get_latest_contract_state(&conn, contract_id, path).await?;
+    assert!(latest_state.is_none());
 
     Ok(())
 }

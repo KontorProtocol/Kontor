@@ -218,6 +218,33 @@ pub async fn exists_contract_state(
     Ok(rows.next().await?.is_some())
 }
 
+fn base_matching_path_contract_state_query() -> String {
+    BASE_CONTRACT_STATE_QUERY
+        .replace("{{path_operator}}", "REGEXP")
+        .replace("{{path_prefix}}", "")
+        .replace("{{path_suffix}}", "")
+}
+
+pub async fn matching_path(
+    conn: &Connection,
+    contract_id: i64,
+    regexp: &str,
+) -> Result<Option<String>, Error> {
+    let mut rows = conn
+        .query(
+            &format!(
+                r#"
+                SELECT path
+                {}
+                "#,
+                base_matching_path_contract_state_query()
+            ),
+            ((":contract_id", contract_id), (":path", regexp)),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
+
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
     conn.execute(
         "INSERT INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",

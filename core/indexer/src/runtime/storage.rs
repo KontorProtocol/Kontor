@@ -7,6 +7,7 @@ use crate::{
         queries::{
             delete_contract_state, exists_contract_state, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value, insert_contract_state,
+            matching_path,
         },
         types::ContractStateRow,
     },
@@ -48,6 +49,10 @@ impl Storage {
 
     pub async fn exists(&self, contract_id: i64, path: &str) -> Result<bool> {
         Ok(exists_contract_state(&self.conn, contract_id, path).await?)
+    }
+
+    pub async fn matching_path(&self, contract_id: i64, regexp: &str) -> Result<Option<String>> {
+        Ok(matching_path(&self.conn, contract_id, regexp).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<i64>> {
