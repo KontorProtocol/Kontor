@@ -21,7 +21,7 @@ pub async fn load_native_contracts(conn: &Connection) -> Result<()> {
     insert_block(
         conn,
         BlockRow {
-            height: height as u64,
+            height,
             hash: new_mock_block_hash(0),
         },
     )

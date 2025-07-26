@@ -62,7 +62,7 @@ pub async fn select_block_by_height_or_hash(
 
 pub async fn select_block_at_height(
     conn: &Connection,
-    height: u64,
+    height: i64,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(

@@ -4,11 +4,8 @@ use indexer::{
     config::Config,
     database::{
         load_native_contracts,
-        queries::{
-            get_contract_id_from_address, get_latest_contract_state_value, insert_block,
-            insert_transaction,
-        },
-        types::{BlockRow, TransactionRow},
+        queries::{get_contract_id_from_address, insert_block},
+        types::BlockRow,
     },
     runtime::{ComponentCache, ContractAddress, Runtime, Storage, deserialize_cbor},
     test_utils::{new_mock_block_hash, new_test_db},
@@ -19,25 +16,20 @@ use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 async fn test_fib_contract() -> Result<()> {
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let conn = writer.connection();
+    let height = 1;
     load_native_contracts(&conn).await?;
     insert_block(
         &conn,
         BlockRow::builder()
-            .height(1)
-            .hash(new_mock_block_hash(1))
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
             .build(),
     )
     .await?;
-    insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .txid("1".to_string())
-            .height(1)
-            .tx_index(1)
-            .build(),
-    )
-    .await?;
-    let storage = Storage::builder().conn(writer.connection()).build();
+    let storage = Storage::builder()
+        .height(height)
+        .conn(writer.connection())
+        .build();
     let signer = "test_signer";
     let arith_contract_address = ContractAddress {
         name: "arith".to_string(),
@@ -45,7 +37,7 @@ async fn test_fib_contract() -> Result<()> {
         tx_index: 0,
     };
     let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(storage, component_cache).await?;
+    let runtime = Runtime::new(storage.clone(), component_cache).await?;
     runtime
         .execute(Some(signer), &arith_contract_address, "init()")
         .await?;
@@ -67,12 +59,7 @@ async fn test_fib_contract() -> Result<()> {
         .execute(Some(signer), &fib_contract_address, "init()")
         .await?;
     assert_eq!(
-        deserialize_cbor::<u64>(
-            &get_latest_contract_state_value(&writer.connection(), contract_id, "cache.0.value")
-                .await?
-                .unwrap(),
-        )
-        .unwrap(),
+        deserialize_cbor::<u64>(&storage.get(contract_id, "cache.0.value").await?.unwrap())?,
         0
     );
     let n = 8;
@@ -82,12 +69,7 @@ async fn test_fib_contract() -> Result<()> {
         .await?;
     assert_eq!(result, "21");
     assert_eq!(
-        deserialize_cbor::<u64>(
-            &get_latest_contract_state_value(&writer.connection(), contract_id, "cache.8.value")
-                .await?
-                .unwrap(),
-        )
-        .unwrap(),
+        deserialize_cbor::<u64>(&storage.get(contract_id, "cache.8.value").await?.unwrap())?,
         21
     );
 

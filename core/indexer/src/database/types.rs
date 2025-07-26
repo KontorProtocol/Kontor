@@ -10,14 +10,14 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct BlockRow {
-    pub height: u64,
+    pub height: i64,
     pub hash: BlockHash,
 }
 
 impl<T: Tx> From<&Block<T>> for BlockRow {
     fn from(b: &Block<T>) -> Self {
         BlockRow {
-            height: b.height,
+            height: b.height as i64,
             hash: b.hash,
         }
     }
