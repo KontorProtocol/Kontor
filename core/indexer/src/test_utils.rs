@@ -570,7 +570,7 @@ impl<T: Tx> rpc::MempoolFetcher<T> for MockBlockchain<T> {
     }
 }
 
-pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
+pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
     loop {
         match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,

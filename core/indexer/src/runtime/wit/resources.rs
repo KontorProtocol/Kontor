@@ -1,7 +1,44 @@
-pub struct ViewStorage;
+pub trait HasContractId: 'static {
+    fn get_contract_id(&self) -> i64;
+}
 
-pub struct ProcStorage;
+pub struct ViewStorage {
+    pub contract_id: i64,
+}
 
-pub struct ViewContext;
+impl HasContractId for ViewStorage {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
 
-pub struct ProcContext;
+pub struct ProcStorage {
+    pub contract_id: i64,
+}
+
+impl HasContractId for ProcStorage {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
+
+pub struct ViewContext {
+    pub contract_id: i64,
+}
+
+impl HasContractId for ViewContext {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
+
+pub struct ProcContext {
+    pub contract_id: i64,
+    pub signer: String,
+}
+
+impl HasContractId for ProcContext {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}

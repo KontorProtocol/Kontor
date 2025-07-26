@@ -45,7 +45,7 @@ impl<T: Tx + 'static> Reactor<T> {
         let conn = &*reader.connection().await?;
         match select_block_latest(conn).await? {
             Some(block) => {
-                if block.height < starting_block_height - 1 {
+                if (block.height as u64) < starting_block_height - 1 {
                     bail!(
                         "Latest block has height {}, less than start height {}",
                         block.height,
@@ -64,7 +64,7 @@ impl<T: Tx + 'static> Reactor<T> {
                     cancel_token,
                     ctrl,
                     event_rx: None,
-                    last_height: block.height,
+                    last_height: block.height as u64,
                     option_last_hash: Some(block.hash),
                 })
             }
@@ -92,7 +92,7 @@ impl<T: Tx + 'static> Reactor<T> {
         self.last_height = height;
 
         let conn = &self.reader.connection().await?;
-        if let Some(block) = select_block_at_height(conn, height).await? {
+        if let Some(block) = select_block_at_height(conn, height as i64).await? {
             self.option_last_hash = Some(block.hash);
             info!("Rollback to height {} ({})", height, block.hash);
         } else {
@@ -126,7 +126,7 @@ impl<T: Tx + 'static> Reactor<T> {
         let conn = &self.writer.connection();
         let block_row = select_block_with_hash(conn, &hash).await?;
         if let Some(row) = block_row {
-            self.rollback(row.height - 1).await
+            self.rollback((row.height as u64) - 1).await
         } else {
             error!("attemped rollback to hash {} failed, block not found", hash);
             Ok(())
@@ -179,7 +179,14 @@ impl<T: Tx + 'static> Reactor<T> {
         self.last_height = height;
         self.option_last_hash = Some(hash);
 
-        insert_block(&self.writer.connection(), BlockRow { height, hash }).await?;
+        insert_block(
+            &self.writer.connection(),
+            BlockRow {
+                height: height as i64,
+                hash,
+            },
+        )
+        .await?;
 
         Ok(())
     }
