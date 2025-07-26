@@ -1,4 +1,4 @@
-macros::contract!(name = "eval");
+macros::contract!(name = "arith");
 
 impl Store for Operand {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
@@ -87,12 +87,12 @@ impl OpWrapper {
 }
 
 #[derive(Clone)]
-struct EvalStorage {
+struct ArithStorage {
     pub last_op: Option<Op>,
 }
 
 // generated
-impl Store for EvalStorage {
+impl Store for ArithStorage {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
         match self.last_op {
             Some(op) => op.__set(ctx, base_path.push("last_op")),
@@ -103,7 +103,7 @@ impl Store for EvalStorage {
     }
 }
 
-impl EvalStorage {
+impl ArithStorage {
     pub fn init(&self, ctx: &impl WriteContext) {
         self.__set(ctx, DotPathBuf::new())
     }
@@ -130,17 +130,17 @@ impl Storage {
     }
 }
 
-impl Guest for Eval {
+impl Guest for Arith {
     fn init(ctx: &ProcContext) {
-        EvalStorage {
+        ArithStorage {
             last_op: Some(Op::Id),
         }
         .init(&ctx)
     }
 
-    fn eval(ctx: &ProcContext, x: u64, op: Op) -> EvalReturn {
+    fn eval(ctx: &ProcContext, x: u64, op: Op) -> ArithReturn {
         Storage::set_last_op(&ctx, Some(op));
-        EvalReturn {
+        ArithReturn {
             value: match op {
                 Op::Id => x,
                 Op::Sum(operand) => x + operand.y,
@@ -155,4 +155,4 @@ impl Guest for Eval {
     }
 }
 
-export!(Eval);
+export!(Arith);

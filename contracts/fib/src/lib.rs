@@ -4,14 +4,14 @@ use stdlib::DotPathBuf;
 
 macros::contract!(name = "fib");
 
-// macros::import!(name = "eval", path = "../eval/wit/contract.wit");
-mod eval {
+// macros::import!(name = "arith", path = "../arith/wit/contract.wit");
+mod arith {
     use wasm_wave::wasm::WasmValue as _;
 
     use super::context;
     use super::foreign;
 
-    const CONTRACT_NAME: &str = "eval";
+    const CONTRACT_NAME: &str = "arith";
 
     #[derive(Clone)]
     pub struct Operand {
@@ -109,27 +109,27 @@ mod eval {
     }
 
     #[derive(Clone)]
-    pub struct EvalReturn {
+    pub struct ArithReturn {
         pub value: u64,
     }
 
-    impl EvalReturn {
+    impl ArithReturn {
         pub fn wave_type() -> wasm_wave::value::Type {
             wasm_wave::value::Type::record([("value", wasm_wave::value::Type::U64)]).unwrap()
         }
     }
 
-    impl From<EvalReturn> for wasm_wave::value::Value {
-        fn from(value: EvalReturn) -> Self {
+    impl From<ArithReturn> for wasm_wave::value::Value {
+        fn from(value: ArithReturn) -> Self {
             wasm_wave::value::Value::make_record(
-                &EvalReturn::wave_type(),
+                &ArithReturn::wave_type(),
                 [("value", wasm_wave::value::Value::from(value.value))],
             )
             .unwrap()
         }
     }
 
-    impl From<wasm_wave::value::Value> for EvalReturn {
+    impl From<wasm_wave::value::Value> for ArithReturn {
         fn from(value: wasm_wave::value::Value) -> Self {
             let fields = value.unwrap_record();
 
@@ -142,11 +142,11 @@ mod eval {
             }
             let value = value.unwrap();
 
-            EvalReturn { value }
+            ArithReturn { value }
         }
     }
 
-    pub fn eval(ctx: &context::ProcContext, x: u64, op: Op) -> EvalReturn {
+    pub fn eval(ctx: &context::ProcContext, x: u64, op: Op) -> ArithReturn {
         let expr = format!(
             "eval({}, {})",
             &wasm_wave::to_string(&wasm_wave::value::Value::from(x)).unwrap(),
@@ -161,7 +161,7 @@ mod eval {
             ctx,
             expr.as_str(),
         );
-        wasm_wave::from_str::<wasm_wave::value::Value>(&EvalReturn::wave_type(), &ret)
+        wasm_wave::from_str::<wasm_wave::value::Value>(&ArithReturn::wave_type(), &ret)
             .unwrap()
             .into()
     }
@@ -261,10 +261,10 @@ impl Fib {
         let value = match n {
             0 | 1 => n,
             _ => {
-                eval::eval(
+                arith::eval(
                     ctx,
                     Self::raw_fib(ctx, n - 1),
-                    eval::Op::Sum(eval::Operand {
+                    arith::Op::Sum(arith::Operand {
                         y: Self::raw_fib(ctx, n - 2),
                     }),
                 )

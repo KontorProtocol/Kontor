@@ -12,8 +12,8 @@ use crate::{
 const FIB: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
 
-const EVAL: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/eval.wasm.br");
+const ARITH: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/arith.wasm.br");
 
 pub async fn load_native_contracts(conn: &Connection) -> Result<()> {
     let height = 0;
@@ -26,7 +26,7 @@ pub async fn load_native_contracts(conn: &Connection) -> Result<()> {
         },
     )
     .await?;
-    for (name, bytes) in [("eval", EVAL), ("fib", FIB)] {
+    for (name, bytes) in [("arith", ARITH), ("fib", FIB)] {
         insert_contract(
             conn,
             ContractRow::builder()

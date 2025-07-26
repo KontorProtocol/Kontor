@@ -15,13 +15,13 @@ world contract {
         div(operand),
     }
 
-    record eval-return {
+    record arith-return {
         value: u64
     }
 
     export init: func(ctx: borrow<proc-context>);
 
-    export eval: func(ctx: borrow<proc-context>, x: u64, op: op) -> eval-return;
+    export eval: func(ctx: borrow<proc-context>, x: u64, op: op) -> arith-return;
 
     export last-op: func(ctx: borrow<view-context>) -> option<op>;
 }

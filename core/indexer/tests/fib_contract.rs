@@ -39,8 +39,8 @@ async fn test_fib_contract() -> Result<()> {
     .await?;
     let storage = Storage::builder().conn(writer.connection()).build();
     let signer = "test_signer".to_string();
-    let eval_contract_address = ContractAddress {
-        name: "eval".to_string(),
+    let arith_contract_address = ContractAddress {
+        name: "arith".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -49,7 +49,7 @@ async fn test_fib_contract() -> Result<()> {
         storage,
         component_cache,
         signer,
-        eval_contract_address.clone(),
+        arith_contract_address.clone(),
     )
     .await?;
     runtime.execute(None, "init()").await?;
@@ -91,7 +91,9 @@ async fn test_fib_contract() -> Result<()> {
         21
     );
 
-    let runtime = runtime.with_contract_address(eval_contract_address).await?;
+    let runtime = runtime
+        .with_contract_address(arith_contract_address)
+        .await?;
     let result = runtime.execute(None, "last-op()").await?;
     assert_eq!(result, "some(sum({y: 8}))");
 
