@@ -45,16 +45,14 @@ async fn test_fib_contract() -> Result<()> {
         tx_index: 0,
     };
     let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(
-        storage,
-        component_cache,
-        signer,
-        arith_contract_address.clone(),
-    )
-    .await?;
-    runtime.execute(None, "init()").await?;
+    let runtime = Runtime::new(storage, component_cache, signer).await?;
+    runtime
+        .execute(&arith_contract_address, "init()", None)
+        .await?;
 
-    let result = runtime.execute(None, "last-op()").await?;
+    let result = runtime
+        .execute(&arith_contract_address, "last-op()", None)
+        .await?;
     assert_eq!(result, "some(id)");
 
     let fib_contract_address = ContractAddress {
@@ -65,9 +63,9 @@ async fn test_fib_contract() -> Result<()> {
     let contract_id = get_contract_id_from_address(&conn, &fib_contract_address)
         .await?
         .unwrap();
-    let runtime = runtime.with_contract_address(fib_contract_address).await?;
-
-    runtime.execute(None, "init()").await?;
+    runtime
+        .execute(&fib_contract_address, "init()", None)
+        .await?;
     assert_eq!(
         deserialize_cbor::<u64>(
             &get_latest_contract_state_value(&writer.connection(), contract_id, "cache.0.value")
@@ -79,7 +77,7 @@ async fn test_fib_contract() -> Result<()> {
     );
     let n = 8;
     let expr = format!("fib({})", to_wave(&Value::from(n))?);
-    let result = runtime.execute(None, &expr).await?;
+    let result = runtime.execute(&fib_contract_address, &expr, None).await?;
     assert_eq!(result, "21");
     assert_eq!(
         deserialize_cbor::<u64>(
@@ -91,10 +89,9 @@ async fn test_fib_contract() -> Result<()> {
         21
     );
 
-    let runtime = runtime
-        .with_contract_address(arith_contract_address)
+    let result = runtime
+        .execute(&arith_contract_address, "last-op()", None)
         .await?;
-    let result = runtime.execute(None, "last-op()").await?;
     assert_eq!(result, "some(sum({y: 8}))");
 
     Ok(())
