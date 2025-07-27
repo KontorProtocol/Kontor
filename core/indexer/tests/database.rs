@@ -5,11 +5,11 @@ use indexer::{
     config::Config,
     database::{
         queries::{
-            delete_contract_state, exists_contract_state, get_contract_bytes_by_address,
-            get_contract_bytes_by_id, get_contract_id_from_address, get_latest_contract_state,
-            get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
-            get_transactions_at_height, insert_block, insert_contract, insert_contract_state,
-            insert_transaction, matching_path, select_block_at_height,
+            contract_has_state, delete_contract_state, exists_contract_state,
+            get_contract_bytes_by_address, get_contract_bytes_by_id, get_contract_id_from_address,
+            get_latest_contract_state, get_latest_contract_state_value, get_transaction_by_id,
+            get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
+            insert_contract_state, insert_transaction, matching_path, select_block_at_height,
             select_block_by_height_or_hash, select_block_latest,
         },
         types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
@@ -103,6 +103,8 @@ async fn test_contract_state_operations() -> Result<()> {
     let path = "test.path";
     let value = vec![1, 2, 3, 4];
 
+    assert!(!contract_has_state(&conn, contract_id).await?);
+
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
         .tx_id(tx_id)
@@ -116,6 +118,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(id > 0, "Contract state insertion should return a valid ID");
 
     // check existence
+    assert!(contract_has_state(&conn, contract_id).await?);
     assert!(exists_contract_state(&conn, contract_id, "test.").await?);
 
     assert_eq!(
