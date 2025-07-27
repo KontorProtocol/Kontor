@@ -245,13 +245,38 @@ pub async fn matching_path(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
+pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<bool, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE contract_id = ?",
+            params![contract_id],
+        )
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0))
+        .transpose()?
+        .expect("Query must return at least one row")
+        > 0)
+}
+
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",
-        params![row.name, row.height, row.tx_index, row.bytes],
+        "INSERT OR IGNORE INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",
+        params![row.name.clone(), row.height, row.tx_index, row.bytes],
     )
     .await?;
-    Ok(conn.last_insert_rowid())
+    Ok(get_contract_id_from_address(
+        conn,
+        &ContractAddress {
+            name: row.name,
+            height: row.height,
+            tx_index: row.tx_index,
+        },
+    )
+    .await?
+    .expect("Contract was just inserted"))
 }
 
 pub async fn get_contract_bytes_by_address(

@@ -1,9 +1,12 @@
 mod component_cache;
+mod native_contracts;
 mod storage;
 mod types;
 mod wit;
 
 pub use component_cache::ComponentCache;
+use libsql::Connection;
+pub use native_contracts::load_native_contracts;
 use serde::{Deserialize, Serialize};
 pub use storage::Storage;
 use tokio::sync::Mutex;
@@ -62,6 +65,10 @@ impl Runtime {
             storage,
         };
         Ok(runtime)
+    }
+
+    pub fn get_storage_conn(&self) -> Connection {
+        self.storage.conn.clone()
     }
 
     pub fn make_store(&self) -> Store<Self> {
