@@ -55,6 +55,14 @@ pub fn contract(input: TokenStream) -> TokenStream {
             fn exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
+
+            fn is_void(&self, path: &str) -> bool {
+                self.is_void(path)
+            }
+
+            fn matching_path(&self, regexp: &str) -> Option<String> {
+                self.matching_path(regexp)
+            }
         }
 
         impl ReadStorage for context::ProcStorage {
@@ -69,6 +77,14 @@ pub fn contract(input: TokenStream) -> TokenStream {
             fn exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
+
+            fn is_void(&self, path: &str) -> bool {
+                self.is_void(path)
+            }
+
+            fn matching_path(&self, regexp: &str) -> Option<String> {
+                self.matching_path(regexp)
+            }
         }
 
         impl WriteStorage for context::ProcStorage {
@@ -78,6 +94,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
             fn set_u64(&self, path: &str, value: u64) {
                 self.set_u64(path, value)
+            }
+
+            fn set_void(&self, path: &str) {
+                self.set_void(path)
             }
         }
 

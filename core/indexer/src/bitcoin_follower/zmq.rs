@@ -253,39 +253,6 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
                                 return Err(anyhow!("Received failure event from monitor socket: {:?}", event));
                             }
                             if let MonitorMessage::HandshakeSucceeded = event {
-                                let mempool_txids = retry(
-                                    || bitcoin.get_raw_mempool(),
-                                    "get raw mempool",
-                                    new_backoff_limited(),
-                                    cancel_token.clone(),
-                                )
-                                .await?;
-                                info!("Getting mempool transactions: {}", mempool_txids.len());
-                                let mut txs: Vec<Transaction> = vec![];
-                                for txids in mempool_txids.chunks(100) {
-                                    if cancel_token.is_cancelled() {
-                                        break;
-                                    }
-
-                                    let results = retry(
-                                        || bitcoin.get_raw_transactions(txids),
-                                        "get raw transactions",
-                                        new_backoff_limited(),
-                                        cancel_token.clone(),
-                                    )
-                                    .await?;
-                                    txs.extend(results.into_iter().filter_map(Result::ok));
-                                    info!(
-                                        "Got mempool transaction: {}/{}",
-                                        txs.len(),
-                                        mempool_txids.len()
-                                    );
-                                }
-
-                                let _ = tx.send(ZmqEvent::MempoolTransactions(
-                                    txs.into_par_iter().filter_map(f).collect(),
-                                ));
-
                                 if tx.send(ZmqEvent::Connected).is_err() {
                                     info!("Send channel is closed, exiting");
                                     return Ok(())

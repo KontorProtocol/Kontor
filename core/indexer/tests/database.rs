@@ -5,15 +5,18 @@ use indexer::{
     config::Config,
     database::{
         queries::{
-            delete_contract_state, exists_contract_state, get_latest_contract_state,
-            get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
-            get_transactions_at_height, insert_block, insert_contract_state, insert_transaction,
-            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
+            contract_has_state, delete_contract_state, exists_contract_state,
+            get_contract_bytes_by_address, get_contract_bytes_by_id, get_contract_id_from_address,
+            get_latest_contract_state, get_latest_contract_state_value, get_transaction_by_id,
+            get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
+            insert_contract_state, insert_transaction, matching_path, select_block_at_height,
+            select_block_by_height_or_hash, select_block_latest,
         },
-        types::{BlockRow, ContractStateRow, TransactionRow},
+        types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
     },
     logging,
-    test_utils::new_test_db,
+    runtime::ContractAddress,
+    test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::params;
 
@@ -22,7 +25,7 @@ async fn test_database() -> Result<()> {
     let config = Config::try_parse()?;
     let client = Client::new_from_config(&config)?;
     let height = 800000;
-    let hash = client.get_block_hash(height).await?;
+    let hash = client.get_block_hash(height as u64).await?;
     let block = BlockRow { height, hash };
 
     let (reader, writer, _temp_dir) = new_test_db(&config).await?;
@@ -49,7 +52,7 @@ async fn test_transaction() -> Result<()> {
     let tx = writer.connection().transaction().await?;
     let height = 800000;
     let client = Client::new_from_config(&config)?;
-    let hash = client.get_block_hash(height).await?;
+    let hash = client.get_block_hash(height as u64).await?;
     let block = BlockRow { height, hash };
     insert_block(&tx, block).await?;
     assert!(select_block_latest(&tx).await?.is_some());
@@ -89,21 +92,23 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Insert a transaction for the contract state
     let tx = TransactionRow::builder()
-        .height(height as i64)
+        .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
         .build();
     let tx_id = insert_transaction(&conn, tx).await?;
 
     // Test contract state insertion and retrieval
-    let contract_id = "test_contract_123";
-    let path = "test/path";
+    let contract_id = 123;
+    let path = "test.path";
     let value = vec![1, 2, 3, 4];
 
+    assert!(!contract_has_state(&conn, contract_id).await?);
+
     let contract_state = ContractStateRow::builder()
-        .contract_id(contract_id.to_string())
+        .contract_id(contract_id)
         .tx_id(tx_id)
-        .height(height as i64)
+        .height(height)
         .path(path.to_string())
         .value(value.clone())
         .build();
@@ -113,7 +118,15 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(id > 0, "Contract state insertion should return a valid ID");
 
     // check existence
-    assert!(exists_contract_state(&conn, contract_id, "test/").await?);
+    assert!(contract_has_state(&conn, contract_id).await?);
+    assert!(exists_contract_state(&conn, contract_id, "test.").await?);
+
+    assert_eq!(
+        matching_path(&conn, contract_id, r"^test.(path|foo|bar)(\..*|$)")
+            .await?
+            .unwrap(),
+        path
+    );
 
     // Get latest contract state
     let retrieved_state = get_latest_contract_state(&conn, contract_id, path).await?;
@@ -135,7 +148,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(retrieved_state.value, value);
     assert_eq!(retrieved_value.unwrap(), value);
     assert!(!retrieved_state.deleted);
-    assert_eq!(retrieved_state.height, height as i64);
+    assert_eq!(retrieved_state.height, height);
     assert_eq!(retrieved_state.tx_id, tx_id);
 
     // Test with a newer version of the same contract state
@@ -149,7 +162,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let txid2 = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
     let tx2 = TransactionRow::builder()
-        .height(height2 as i64)
+        .height(height2)
         .txid(txid2.to_string())
         .tx_index(2)
         .build();
@@ -157,9 +170,9 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let updated_value = vec![5, 6, 7, 8];
     let updated_contract_state = ContractStateRow::builder()
-        .contract_id(contract_id.to_string())
+        .contract_id(contract_id)
         .tx_id(tx_id2)
-        .height(height2 as i64)
+        .height(height2)
         .path(path.to_string())
         .value(updated_value.clone())
         .build();
@@ -172,21 +185,18 @@ async fn test_contract_state_operations() -> Result<()> {
     let latest_value = get_latest_contract_state_value(&conn, contract_id, path)
         .await?
         .unwrap();
-    assert_eq!(latest_state.height, height2 as i64);
+    assert_eq!(latest_state.height, height2);
     assert_eq!(latest_state.value, updated_value);
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    delete_contract_state(&conn, height2 as i64, tx_id, contract_id, path).await?;
-
-    // Verify the contract state is deleted
-    let latest_state = get_latest_contract_state(&conn, contract_id, path).await?;
-    assert!(latest_state.is_none());
+    let deleted = delete_contract_state(&conn, height2, tx_id, contract_id, path).await?;
+    assert!(deleted);
 
     let count = conn
         .query(
-            "SELECT COUNT(*) FROM contract_state WHERE contract_id = ? AND path = ?",
-            vec![contract_id, path],
+            "SELECT COUNT(*) FROM contract_state WHERE contract_id = :contract_id AND path = :path",
+            ((":contract_id", contract_id), (":path", path)),
         )
         .await?
         .next()
@@ -195,6 +205,10 @@ async fn test_contract_state_operations() -> Result<()> {
         .get::<u64>(0)
         .unwrap();
     assert_eq!(count, 2);
+
+    // Verify the contract state is deleted
+    let latest_state = get_latest_contract_state(&conn, contract_id, path).await?;
+    assert!(latest_state.is_none());
 
     Ok(())
 }
@@ -212,17 +226,17 @@ async fn test_transaction_operations() -> Result<()> {
     insert_block(&conn, block).await?;
 
     let tx1 = TransactionRow::builder()
-        .height(height as i64)
+        .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
         .build();
     let tx2 = TransactionRow::builder()
-        .height(height as i64)
+        .height(height)
         .txid("123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0".to_string())
         .tx_index(1)
         .build();
     let tx3 = TransactionRow::builder()
-        .height(height as i64)
+        .height(height)
         .txid("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string())
         .tx_index(2)
         .build();
@@ -237,7 +251,7 @@ async fn test_transaction_operations() -> Result<()> {
     let tx1 = get_transaction_by_id(&conn, tx_id1).await?.unwrap();
     assert_eq!(tx1.id, Some(tx_id1));
     assert_eq!(tx1.txid, tx1.txid);
-    assert_eq!(tx1.height, height as i64);
+    assert_eq!(tx1.height, height);
 
     // Test get_transaction_by_txid
     let tx2 = get_transaction_by_txid(&conn, tx2.txid.as_str())
@@ -245,10 +259,10 @@ async fn test_transaction_operations() -> Result<()> {
         .unwrap();
     assert_eq!(tx2.id, Some(tx_id2));
     assert_eq!(tx2.txid, tx2.txid);
-    assert_eq!(tx2.height, height as i64);
+    assert_eq!(tx2.height, height);
 
     // Test get_transactions_at_height
-    let txs_at_height = get_transactions_at_height(&conn, height as i64).await?;
+    let txs_at_height = get_transactions_at_height(&conn, height).await?;
     assert_eq!(txs_at_height.len(), 3);
 
     // Verify all transactions are included - now using TransactionRow objects
@@ -277,7 +291,7 @@ async fn test_transaction_operations() -> Result<()> {
     insert_block(&conn, block2).await?;
 
     let tx4 = TransactionRow::builder()
-        .height(height2 as i64)
+        .height(height2)
         .txid("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".to_string())
         .tx_index(0)
         .build();
@@ -285,17 +299,17 @@ async fn test_transaction_operations() -> Result<()> {
     let tx_id4 = insert_transaction(&conn, tx4).await?;
 
     // Verify get_transactions_at_height returns only transactions at the specified height
-    let txs_at_height1 = get_transactions_at_height(&conn, height as i64).await?;
+    let txs_at_height1 = get_transactions_at_height(&conn, height).await?;
     assert_eq!(txs_at_height1.len(), 3);
 
-    let txs_at_height2 = get_transactions_at_height(&conn, height2 as i64).await?;
+    let txs_at_height2 = get_transactions_at_height(&conn, height2).await?;
     assert_eq!(txs_at_height2.len(), 1);
 
     // Check the transaction details
     let tx4 = &txs_at_height2[0];
     assert_eq!(tx4.id, Some(tx_id4));
     assert_eq!(tx4.txid, tx4.txid);
-    assert_eq!(tx4.height, height2 as i64);
+    assert_eq!(tx4.height, height2);
 
     Ok(())
 }
@@ -398,5 +412,42 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     let result = select_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
     assert!(result.is_none());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_contracts() -> Result<()> {
+    let config = Config::try_parse()?;
+    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .hash(new_mock_block_hash(0))
+            .height(0)
+            .build(),
+    )
+    .await?;
+    let row = ContractRow::builder()
+        .bytes("value".as_bytes().to_vec())
+        .height(0)
+        .tx_index(1)
+        .name("test".to_string())
+        .build();
+    insert_contract(&conn, row.clone()).await?;
+    let address = ContractAddress {
+        height: 0,
+        tx_index: 1,
+        name: "test".to_string(),
+    };
+    let bytes = get_contract_bytes_by_address(&conn, &address)
+        .await?
+        .unwrap();
+    assert_eq!(bytes, row.bytes);
+    let id = get_contract_id_from_address(&conn, &address)
+        .await?
+        .unwrap();
+    let bytes = get_contract_bytes_by_id(&conn, id).await?.unwrap();
+    assert_eq!(bytes, row.bytes);
     Ok(())
 }

@@ -16,16 +16,18 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let mut blocks = new_numbered_blockchain(3);
+    let initial_mempool: Vec<MockTransaction> =
+        [1, 2, 3].iter().map(|i| MockTransaction::new(*i)).collect();
 
-    let mock = MockBlockchain::new(blocks.clone());
+    let mut mock = MockBlockchain::new(blocks.clone());
+    mock.set_mempool(initial_mempool.clone());
     let (ctrl, ctrl_rx) = CtrlChannel::<MockTransaction>::create();
-
     let (rpc_tx, rpc_rx) = mpsc::channel(10);
-
     let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -53,8 +55,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((3, blocks[2 - 1].clone())));
 
     assert!(
@@ -68,13 +68,33 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((3, blocks[3 - 1].clone())));
     mock.await_stopped().await; // switched to ZMQ
 
     let more_blocks = gen_numbered_blocks(3, 5, blocks[3 - 1].hash);
     blocks.extend(more_blocks.iter().cloned());
+
+    let e = event_rx.recv().await.unwrap();
+    assert_eq!(e, Event::MempoolSet(initial_mempool));
+
+    let tx1 = blocks[4 - 1].transactions[0].clone();
+    assert!(
+        zmq_tx
+            .send(ZmqEvent::MempoolTransactionAdded(tx1.clone()))
+            .is_ok()
+    );
+
+    let tx2 = blocks[5 - 1].transactions[0].clone();
+    assert!(
+        zmq_tx
+            .send(ZmqEvent::MempoolTransactionAdded(tx2.clone()))
+            .is_ok()
+    );
+
+    let e = event_rx.recv().await.unwrap();
+    assert_eq!(e, Event::MempoolInsert(vec![tx1]));
+    let e = event_rx.recv().await.unwrap();
+    assert_eq!(e, Event::MempoolInsert(vec![tx2]));
 
     assert!(
         zmq_tx
@@ -82,10 +102,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
             .is_ok()
     );
 
-    let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolRemove(vec![]));
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((4, blocks[4 - 1].clone())));
 
@@ -95,8 +111,6 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
             .is_ok()
     );
 
-    let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolRemove(vec![]));
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((5, blocks[5 - 1].clone())));
 
@@ -111,13 +125,18 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
 
     let mut blocks = new_numbered_blockchain(3);
 
-    let mock = MockBlockchain::new(blocks.clone());
+    let initial_mempool: Vec<MockTransaction> =
+        [1, 2, 3].iter().map(|i| MockTransaction::new(*i)).collect();
+
+    let mut mock = MockBlockchain::new(blocks.clone());
+    mock.set_mempool(initial_mempool.clone());
     let (ctrl, ctrl_rx) = CtrlChannel::<MockTransaction>::create();
     let (_rpc_tx, rpc_rx) = mpsc::channel(10);
     let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
+        mock.clone(),
         mock.clone(),
         mock.clone(),
         rpc_rx,
@@ -149,11 +168,19 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
     );
 
     let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolSet(vec![]));
-    let e = event_rx.recv().await.unwrap();
-    assert_eq!(e, Event::MempoolRemove(vec![]));
+    assert_eq!(e, Event::MempoolSet(initial_mempool));
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((4, blocks[4 - 1].clone())));
+
+    let tx1 = MockTransaction::new(123);
+    assert!(
+        zmq_tx
+            .send(ZmqEvent::MempoolTransactionAdded(tx1.clone()))
+            .is_ok()
+    );
+
+    let e = event_rx.recv().await.unwrap();
+    assert_eq!(e, Event::MempoolInsert(vec![tx1]));
 
     assert!(
         zmq_tx

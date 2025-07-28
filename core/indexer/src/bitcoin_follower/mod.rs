@@ -72,6 +72,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
 
     let (rpc_tx, rpc_rx) = mpsc::channel(10);
     let fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
+    let mempool = rpc::MempoolFetcherImpl::new(cancel_token.clone(), bitcoin.clone(), f);
 
     let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
     let runner_cancel_token = CancellationToken::new();
@@ -85,7 +86,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     .await;
 
     let mut reconciler =
-        reconciler::Reconciler::new(cancel_token.clone(), info, fetcher, rpc_rx, zmq_rx);
+        reconciler::Reconciler::new(cancel_token.clone(), info, fetcher, mempool, rpc_rx, zmq_rx);
 
     Ok(tokio::spawn(async move {
         reconciler.run(ctrl_rx).await;

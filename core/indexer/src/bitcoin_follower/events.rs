@@ -6,7 +6,6 @@ use crate::block::{Block, Tx};
 pub enum ZmqEvent<T: Tx> {
     Connected,
     Disconnected(anyhow::Error),
-    MempoolTransactions(Vec<T>),
     MempoolTransactionAdded(T),
     MempoolTransactionRemoved(Txid),
     BlockConnected(Block<T>),

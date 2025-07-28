@@ -23,7 +23,7 @@ use tracing::{error, info};
 use crate::{
     bitcoin_client::client::BitcoinRpc,
     block::{Block, Tx},
-    retry::{new_backoff_unlimited, retry},
+    retry::{new_backoff_limited, new_backoff_unlimited, retry},
 };
 
 pub fn run_producer<C: BitcoinRpc>(
@@ -346,5 +346,70 @@ impl<T: Tx + 'static, C: BitcoinRpc> BlockFetcher for Fetcher<T, C> {
 
     async fn stop(&mut self) -> Result<()> {
         self.stop().await
+    }
+}
+
+#[derive(Debug)]
+pub struct MempoolFetcherImpl<T: Tx, C: BitcoinRpc> {
+    cancel_token: CancellationToken,
+    bitcoin: C,
+    f: fn(Transaction) -> Option<T>,
+}
+
+impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
+    pub fn new(
+        cancel_token: CancellationToken,
+        bitcoin: C,
+        f: fn(Transaction) -> Option<T>,
+    ) -> Self {
+        Self {
+            cancel_token,
+            bitcoin,
+            f,
+        }
+    }
+
+    pub async fn get_mempool(&mut self) -> Result<Vec<T>> {
+        let mempool_txids = retry(
+            || self.bitcoin.get_raw_mempool(),
+            "get raw mempool",
+            new_backoff_limited(),
+            self.cancel_token.clone(),
+        )
+        .await?;
+
+        info!("Getting mempool transactions: {}", mempool_txids.len());
+        let mut txs: Vec<Transaction> = vec![];
+        for txids in mempool_txids.chunks(100) {
+            if self.cancel_token.is_cancelled() {
+                break;
+            }
+
+            let results = retry(
+                || self.bitcoin.get_raw_transactions(txids),
+                "get raw transactions",
+                new_backoff_limited(),
+                self.cancel_token.clone(),
+            )
+            .await?;
+            txs.extend(results.into_iter().filter_map(Result::ok));
+            info!(
+                "Got mempool transaction: {}/{}",
+                txs.len(),
+                mempool_txids.len()
+            );
+        }
+
+        Ok(txs.into_par_iter().filter_map(self.f).collect())
+    }
+}
+
+pub trait MempoolFetcher<T: Tx> {
+    fn get_mempool(&mut self) -> impl Future<Output = Result<Vec<T>>>;
+}
+
+impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcher<T> for MempoolFetcherImpl<T, C> {
+    async fn get_mempool(&mut self) -> Result<Vec<T>> {
+        self.get_mempool().await
     }
 }

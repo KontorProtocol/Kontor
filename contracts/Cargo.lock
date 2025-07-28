@@ -9,6 +9,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
+name = "arith"
+version = "0.1.0"
+dependencies = [
+ "macros",
+ "stdlib",
+ "wasm-wave",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "beef"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -394,16 +404,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "sum"
-version = "0.1.0"
-dependencies = [
- "macros",
- "stdlib",
- "wasm-wave",
- "wit-bindgen",
-]
 
 [[package]]
 name = "syn"

@@ -2,7 +2,10 @@ use bitcoin::BlockHash;
 use libsql::{Connection, de::from_row, named_params, params};
 use thiserror::Error as ThisError;
 
-use crate::database::types::{PaginationMeta, TransactionCursor, TransactionRow};
+use crate::{
+    database::types::{ContractRow, PaginationMeta, TransactionCursor, TransactionRow},
+    runtime::ContractAddress,
+};
 
 use super::types::{BlockRow, ContractStateRow};
 use libsql::Transaction;
@@ -59,7 +62,7 @@ pub async fn select_block_by_height_or_hash(
 
 pub async fn select_block_at_height(
     conn: &Connection,
-    height: u64,
+    height: i64,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
@@ -111,9 +114,16 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
 
 const BASE_CONTRACT_STATE_QUERY: &str = include_str!("sql/base_contract_state_query.sql");
 
+fn base_contract_state_query() -> String {
+    BASE_CONTRACT_STATE_QUERY
+        .replace("{{path_operator}}", "=")
+        .replace("{{path_prefix}}", "")
+        .replace("{{path_suffix}}", "")
+}
+
 pub async fn get_latest_contract_state(
     conn: &Connection,
-    contract_id: &str,
+    contract_id: i64,
     path: &str,
 ) -> Result<Option<ContractStateRow>, Error> {
     let mut rows = conn
@@ -130,7 +140,7 @@ pub async fn get_latest_contract_state(
                     deleted
                 {}
                 "#,
-                BASE_CONTRACT_STATE_QUERY
+                base_contract_state_query()
             ),
             ((":contract_id", contract_id), (":path", path)),
         )
@@ -141,7 +151,7 @@ pub async fn get_latest_contract_state(
 
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
-    contract_id: &str,
+    contract_id: i64,
     path: &str,
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
@@ -151,7 +161,7 @@ pub async fn get_latest_contract_state_value(
                 SELECT value
                 {}
                 "#,
-                BASE_CONTRACT_STATE_QUERY
+                base_contract_state_query()
             ),
             ((":contract_id", contract_id), (":path", path)),
         )
@@ -164,7 +174,7 @@ pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
     tx_id: i64,
-    contract_id: &str,
+    contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
     Ok(
@@ -181,12 +191,16 @@ pub async fn delete_contract_state(
     )
 }
 
-const BASE_EXISTS_CONTRACT_STATE_QUERY: &str =
-    include_str!("sql/base_exists_contract_state_query.sql");
+fn base_exists_contract_state_query() -> String {
+    BASE_CONTRACT_STATE_QUERY
+        .replace("{{path_operator}}", "LIKE")
+        .replace("{{path_prefix}}", "")
+        .replace("{{path_suffix}}", "|| '%'")
+}
 
 pub async fn exists_contract_state(
     conn: &Connection,
-    contract_id: &str,
+    contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
     let mut rows = conn
@@ -196,12 +210,127 @@ pub async fn exists_contract_state(
                 SELECT value
                 {}
                 "#,
-                BASE_EXISTS_CONTRACT_STATE_QUERY
+                base_exists_contract_state_query()
             ),
             ((":contract_id", contract_id), (":path", path)),
         )
         .await?;
     Ok(rows.next().await?.is_some())
+}
+
+fn base_matching_path_contract_state_query() -> String {
+    BASE_CONTRACT_STATE_QUERY
+        .replace("{{path_operator}}", "REGEXP")
+        .replace("{{path_prefix}}", "")
+        .replace("{{path_suffix}}", "")
+}
+
+pub async fn matching_path(
+    conn: &Connection,
+    contract_id: i64,
+    regexp: &str,
+) -> Result<Option<String>, Error> {
+    let mut rows = conn
+        .query(
+            &format!(
+                r#"
+                SELECT path
+                {}
+                "#,
+                base_matching_path_contract_state_query()
+            ),
+            ((":contract_id", contract_id), (":path", regexp)),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
+
+pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<bool, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE contract_id = ?",
+            params![contract_id],
+        )
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0))
+        .transpose()?
+        .expect("Query must return at least one row")
+        > 0)
+}
+
+pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",
+        params![row.name.clone(), row.height, row.tx_index, row.bytes],
+    )
+    .await?;
+    Ok(get_contract_id_from_address(
+        conn,
+        &ContractAddress {
+            name: row.name,
+            height: row.height,
+            tx_index: row.tx_index,
+        },
+    )
+    .await?
+    .expect("Contract was just inserted"))
+}
+
+pub async fn get_contract_bytes_by_address(
+    conn: &Connection,
+    address: &ContractAddress,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            r#"
+        SELECT bytes FROM contracts
+        WHERE name = :name
+        AND height = :height
+        AND tx_index = :tx_index
+        "#,
+            (
+                (":name", address.name.clone()),
+                (":height", address.height),
+                (":tx_index", address.tx_index),
+            ),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
+
+pub async fn get_contract_id_from_address(
+    conn: &Connection,
+    address: &ContractAddress,
+) -> Result<Option<i64>, Error> {
+    let mut rows = conn
+        .query(
+            r#"
+        SELECT id FROM contracts
+        WHERE name = :name
+        AND height = :height
+        AND tx_index = :tx_index
+        "#,
+            (
+                (":name", address.name.clone()),
+                (":height", address.height),
+                (":tx_index", address.tx_index),
+            ),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
+
+pub async fn get_contract_bytes_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query("SELECT bytes FROM contracts WHERE id = ?", params![id])
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {

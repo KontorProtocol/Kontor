@@ -10,7 +10,7 @@ const COMPONENT_CACHE_CAPACITY: usize = 64;
 
 #[derive(Clone)]
 pub struct ComponentCache {
-    cache: Arc<Mutex<LruCache<String, Component>>>,
+    cache: Arc<Mutex<LruCache<i64, Component>>>,
 }
 
 impl ComponentCache {
@@ -22,11 +22,11 @@ impl ComponentCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<Component> {
+    pub fn get(&self, key: &i64) -> Option<Component> {
         self.cache.lock().unwrap().get(key).cloned()
     }
 
-    pub fn put(&self, key: String, value: Component) {
+    pub fn put(&self, key: i64, value: Component) {
         self.cache.lock().unwrap().put(key, value);
     }
 }

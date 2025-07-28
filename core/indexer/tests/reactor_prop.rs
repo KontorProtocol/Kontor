@@ -1,6 +1,5 @@
-use libsql::Connection;
 use proptest::test_runner::FileFailurePersistence;
-use tokio::time::{Duration, sleep, timeout};
+use tokio::time::{Duration, timeout};
 
 use tokio_util::sync::CancellationToken;
 
@@ -14,9 +13,9 @@ use indexer::{
         events::{BlockId, Event},
     },
     block::Block,
-    database::{queries, types::BlockRow},
+    database::queries,
     reactor,
-    test_utils::{MockTransaction, gen_random_block, new_memory_db},
+    test_utils::{MockTransaction, await_block_at_height, gen_random_block, new_memory_db},
 };
 
 #[derive(Debug)]
@@ -37,18 +36,6 @@ struct StartMsg {
 struct Step {
     event: Event<MockTransaction>,
     expect_start: Option<StartMsg>,
-}
-
-async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
-    for _i in 0..100 {
-        match queries::select_block_at_height(conn, height).await {
-            Ok(Some(row)) => return row,
-            Ok(None) => {}
-            Err(e) => panic!("error: {:?}", e),
-        };
-        sleep(Duration::from_millis(10)).await;
-    }
-    panic!("Timed out waiting for block at height {}", height);
 }
 
 fn gen_segment() -> impl Strategy<Value = Segment> {
@@ -226,12 +213,12 @@ proptest! {
             // compare against model
             let conn = &db.connection();
             for expected_block in model.clone() {
-                let block = await_block_at_height(conn, expected_block.height).await;
+                let block = await_block_at_height(conn, expected_block.height as i64).await;
                 assert_eq!(block.hash, expected_block.hash);
             }
 
             match queries::select_block_latest(conn).await.unwrap() {
-                Some(row) => assert_eq!(row.height, model.len() as u64),
+                Some(row) => assert_eq!(row.height as usize, model.len()),
                 None => assert_eq!(model.len(), 0),
             }
 

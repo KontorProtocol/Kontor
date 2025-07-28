@@ -33,7 +33,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::{
     bitcoin_follower::{info, rpc},
-    block::{Block, HasTxid},
+    block::{Block, HasTxid, Tx},
 };
 
 use crate::config::{Config, TestConfig};
@@ -384,7 +384,7 @@ pub fn gen_numbered_block(height: u64, prev_hash: &BlockHash) -> Block<MockTrans
         height,
         hash,
         prev_hash: *prev_hash,
-        transactions: vec![],
+        transactions: vec![MockTransaction::new(height as u32)],
     }
 }
 
@@ -448,40 +448,52 @@ pub fn new_random_blockchain(n: u64) -> Vec<Block<MockTransaction>> {
 }
 
 #[derive(Clone, Debug)]
-struct State {
+struct State<T: Tx> {
     start_height: u64,
     running: bool,
-    blocks: Vec<Block<MockTransaction>>,
+    blocks: Vec<Block<T>>,
+    mempool: Vec<T>,
 }
 
 #[derive(Clone, Debug)]
-pub struct MockBlockchain {
-    state: Arc<Mutex<State>>,
+pub struct MockBlockchain<T: Tx> {
+    state: Arc<Mutex<State<T>>>,
 }
 
-impl MockBlockchain {
-    pub fn new(blocks: Vec<Block<MockTransaction>>) -> Self {
+impl<T: Tx> MockBlockchain<T> {
+    pub fn new(blocks: Vec<Block<T>>) -> Self {
         Self {
             state: Mutex::new(State {
                 start_height: 0,
                 running: false,
                 blocks,
+                mempool: vec![],
             })
             .into(),
         }
     }
 
-    pub fn append_blocks(&mut self, more_blocks: Vec<Block<MockTransaction>>) {
+    pub fn append_blocks(&mut self, more_blocks: Vec<Block<T>>) {
         let mut state = self.state.lock().unwrap();
         state.blocks.extend(more_blocks.iter().cloned());
     }
 
-    pub fn replace_blocks(&mut self, blocks: Vec<Block<MockTransaction>>) {
+    pub fn replace_blocks(&mut self, blocks: Vec<Block<T>>) {
         let mut state = self.state.lock().unwrap();
         state.blocks = blocks;
     }
 
-    pub fn blocks(&self) -> Vec<Block<MockTransaction>> {
+    pub fn set_mempool(&mut self, mempool: Vec<T>) {
+        let mut state = self.state.lock().unwrap();
+        state.mempool = mempool;
+    }
+
+    pub fn get_mempool(&mut self) -> Result<Vec<T>> {
+        let state = self.state.lock().unwrap();
+        Ok(state.mempool.clone())
+    }
+
+    pub fn blocks(&self) -> Vec<Block<T>> {
         let state = self.state.lock().unwrap();
         state.blocks.clone()
     }
@@ -527,7 +539,7 @@ impl MockBlockchain {
     }
 }
 
-impl rpc::BlockFetcher for MockBlockchain {
+impl<T: Tx> rpc::BlockFetcher for MockBlockchain<T> {
     fn running(&self) -> bool {
         self.running()
     }
@@ -546,7 +558,7 @@ impl rpc::BlockFetcher for MockBlockchain {
     }
 }
 
-impl info::BlockchainInfo for MockBlockchain {
+impl<T: Tx> info::BlockchainInfo for MockBlockchain<T> {
     async fn get_blockchain_height(&self) -> Result<u64, Error> {
         self.get_blockchain_height().await
     }
@@ -557,7 +569,13 @@ impl info::BlockchainInfo for MockBlockchain {
     }
 }
 
-pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
+impl<T: Tx> rpc::MempoolFetcher<T> for MockBlockchain<T> {
+    async fn get_mempool(&mut self) -> Result<Vec<T>> {
+        self.get_mempool()
+    }
+}
+
+pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
     loop {
         match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,

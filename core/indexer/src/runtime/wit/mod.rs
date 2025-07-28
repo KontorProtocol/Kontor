@@ -1,6 +1,6 @@
 mod resources;
 
-pub use resources::{ProcContext, ProcStorage, ViewContext, ViewStorage};
+pub use resources::{HasContractId, ProcContext, ProcStorage, ViewContext, ViewStorage};
 
 wasmtime::component::bindgen!({
     world: "contract",

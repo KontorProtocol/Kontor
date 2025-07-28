@@ -42,7 +42,7 @@ enum Step {
     ZmqEvent(ZmqEvent<MockTransaction>),
 }
 
-fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain) {
+fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain<MockTransaction>) {
     let initial_blocks = new_random_blockchain(5);
     let mut blocks = initial_blocks.clone();
     let mut stream = vec![];
@@ -143,6 +143,7 @@ proptest! {
 
             let mut rec = reconciler::Reconciler::new(
                 cancel_token.clone(),
+                mock.clone(),
                 mock.clone(),
                 mock.clone(),
                 rpc_rx,
