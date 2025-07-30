@@ -299,8 +299,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
                     if let Some(tx) = &self.event_tx {
                         for event in events {
                             if tx.send(event).await.is_err() {
-                                info!("Send channel closed, exiting");
-                                return;
+                                warn!("Dropping events due to stale event channel");
                             }
                         }
                     } else {
