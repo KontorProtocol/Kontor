@@ -52,8 +52,7 @@ interface foreign {
         tx-index: s64,
     }
 
-    call-view: func(contract-address: contract-address, ctx: borrow<view-context>, expr: string) -> string;
-    call-proc: func(contract-address: contract-address, ctx: borrow<proc-context>, expr: string) -> string;
+    call: func(contract-address: contract-address, ctx: option<string>, expr: string) -> string;
 }
 
 world built-in {

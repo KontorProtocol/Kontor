@@ -73,5 +73,10 @@ async fn test_fib_contract() -> Result<()> {
         .await?;
     assert_eq!(result, "some(sum({y: 8}))");
 
+    let result = runtime
+        .execute(Some(signer), &fib_contract_address, "not-found()")
+        .await?;
+    assert_eq!(result, r#"Some("test_signer"):not-found()"#);
+
     Ok(())
 }

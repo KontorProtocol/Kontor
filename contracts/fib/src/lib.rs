@@ -152,13 +152,13 @@ mod arith {
             &wasm_wave::to_string(&wasm_wave::value::Value::from(x)).unwrap(),
             &wasm_wave::to_string(&wasm_wave::value::Value::from(op)).unwrap()
         );
-        let ret = foreign::call_proc(
+        let ret = foreign::call(
             &foreign::ContractAddress {
                 name: CONTRACT_NAME.to_string(),
                 height: 0,
                 tx_index: 0,
             },
-            ctx,
+            Some(&ctx.signer()),
             expr.as_str(),
         );
         wasm_wave::from_str::<wasm_wave::value::Value>(&ArithReturn::wave_type(), &ret)
@@ -277,6 +277,10 @@ impl Fib {
 }
 
 impl Guest for Fib {
+    fn fallback(signer: Option<String>, expr: String) -> String {
+        format!("{signer:?}:{expr}")
+    }
+
     fn init(ctx: &ProcContext) {
         FibStorage {
             cache: Map::new(&[(0, FibValue { value: 0 })]),

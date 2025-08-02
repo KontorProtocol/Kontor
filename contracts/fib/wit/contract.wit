@@ -4,6 +4,8 @@ world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context};
 
+    export fallback: func(signer: option<string>, expr: string) -> string;
+
     export init: func(ctx: borrow<proc-context>);
 
     export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
