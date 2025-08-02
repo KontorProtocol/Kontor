@@ -32,19 +32,23 @@ interface storage {
 interface context {
     use storage.{view-storage, proc-storage};
 
+    resource signer {
+        to-string: func() -> string;
+    }
+
     resource view-context {
         storage: func() -> view-storage;
     }
 
     resource proc-context {
         storage: func() -> proc-storage;
-        signer: func() -> string;
+        signer: func() -> signer;
         view-context: func() -> view-context;
     }
 }
 
 interface foreign {
-    use context.{view-context, proc-context};
+    use context.{signer};
 
     record contract-address {
         name: string,
@@ -52,7 +56,7 @@ interface foreign {
         tx-index: s64,
     }
 
-    call: func(contract-address: contract-address, ctx: option<string>, expr: string) -> string;
+    call: func(contract-address: contract-address, ctx: option<signer>, expr: string) -> string;
 }
 
 world built-in {

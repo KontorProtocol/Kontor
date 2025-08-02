@@ -35,7 +35,9 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::wit::{HasContractId, ProcContext, ProcStorage, ViewContext, ViewStorage};
+use crate::runtime::wit::{
+    HasContractId, ProcContext, ProcStorage, Signer, ViewContext, ViewStorage,
+};
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
@@ -282,9 +284,16 @@ impl built_in::foreign::Host for Runtime {
     async fn call(
         &mut self,
         contract_address: ContractAddress,
-        signer: Option<String>,
+        signer: Option<Resource<Signer>>,
         expr: String,
     ) -> Result<String> {
+        let signer = if let Some(resource) = signer {
+            let table = self.table.lock().await;
+            let _self = table.get(&resource)?;
+            Some(_self.signer.clone())
+        } else {
+            None
+        };
         self.execute(signer.as_deref(), &contract_address, &expr)
             .await
     }
@@ -406,8 +415,19 @@ impl built_in::context::HostViewContext for Runtime {
         Ok(table.push(ViewStorage { contract_id })?)
     }
 
-    async fn drop(&mut self, rep: Resource<ViewContext>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
+    async fn drop(&mut self, resource: Resource<ViewContext>) -> Result<()> {
+        let _res = self.table.lock().await.delete(resource)?;
+        Ok(())
+    }
+}
+
+impl built_in::context::HostSigner for Runtime {
+    async fn to_string(&mut self, resource: Resource<Signer>) -> Result<String> {
+        Ok(self.table.lock().await.get(&resource)?.signer.clone())
+    }
+
+    async fn drop(&mut self, resource: Resource<Signer>) -> Result<()> {
+        let _res = self.table.lock().await.delete(resource)?;
         Ok(())
     }
 }
@@ -419,8 +439,10 @@ impl built_in::context::HostProcContext for Runtime {
         Ok(table.push(ProcStorage { contract_id })?)
     }
 
-    async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<String> {
-        Ok(self.table.lock().await.get(&resource)?.signer.clone())
+    async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {
+        let mut table = self.table.lock().await;
+        let signer = table.get(&resource)?.signer.clone();
+        Ok(table.push(Signer { signer })?)
     }
 
     async fn view_context(

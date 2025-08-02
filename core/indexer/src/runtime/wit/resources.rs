@@ -32,6 +32,10 @@ impl HasContractId for ViewContext {
     }
 }
 
+pub struct Signer {
+    pub signer: String,
+}
+
 pub struct ProcContext {
     pub contract_id: i64,
     pub signer: String,

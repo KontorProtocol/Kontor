@@ -158,7 +158,7 @@ mod arith {
                 height: 0,
                 tx_index: 0,
             },
-            Some(&ctx.signer()),
+            Some(ctx.signer()),
             expr.as_str(),
         );
         wasm_wave::from_str::<wasm_wave::value::Value>(&ArithReturn::wave_type(), &ret)
