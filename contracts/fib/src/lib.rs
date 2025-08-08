@@ -158,7 +158,7 @@ mod arith {
                 height: 0,
                 tx_index: 0,
             },
-            Some(ctx.signer()),
+            Some(&ctx.signer()),
             expr.as_str(),
         );
         wasm_wave::from_str::<wasm_wave::value::Value>(&ArithReturn::wave_type(), &ret)
@@ -277,8 +277,8 @@ impl Fib {
 }
 
 impl Guest for Fib {
-    fn fallback(signer: Option<String>, expr: String) -> String {
-        format!("{signer:?}:{expr}")
+    fn fallback(ctx: &FallContext, expr: String) -> String {
+        format!("{:?}:{}", ctx.signer().map(|s| s.to_string()), expr)
     }
 
     fn init(ctx: &ProcContext) {

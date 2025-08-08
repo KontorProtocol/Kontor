@@ -2,9 +2,9 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{proc-context};
+    use kontor:built-in/context.{fall-context, proc-context, signer};
 
-    export fallback: func(signer: option<string>, expr: string) -> string;
+    export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
 
     export init: func(ctx: borrow<proc-context>);
 

@@ -46,3 +46,14 @@ impl HasContractId for ProcContext {
         self.contract_id
     }
 }
+
+pub struct FallContext {
+    pub contract_id: i64,
+    pub signer: Option<String>,
+}
+
+impl HasContractId for FallContext {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
