@@ -6,6 +6,8 @@ interface storage {
 
         get-u64: func(path: string) -> option<u64>;
 
+        get-s64: func(path: string) -> option<s64>;
+
         is-void: func(path: string) -> bool;
 
         exists: func(path: string) -> bool;
@@ -19,6 +21,9 @@ interface storage {
 
         get-u64: func(path: string) -> option<u64>;
         set-u64: func(path: string, value: u64);
+
+        get-s64: func(path: string) -> option<s64>;
+        set-s64: func(path: string, value: s64);
 
         set-void: func(path: string);
         is-void: func(path: string) -> bool;
@@ -45,6 +50,12 @@ interface context {
         signer: func() -> signer;
         view-context: func() -> view-context;
     }
+
+    resource fall-context {
+        signer: func() -> option<signer>;
+        proc-context: func() -> option<proc-context>;
+        view-context: func() -> view-context;
+    }
 }
 
 interface foreign {
@@ -56,7 +67,7 @@ interface foreign {
         tx-index: s64,
     }
 
-    call: func(contract-address: contract-address, ctx: option<signer>, expr: string) -> string;
+    call: func(contract-address: contract-address, signer: option<borrow<signer>>, expr: string) -> string;
 }
 
 world built-in {

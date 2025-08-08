@@ -52,6 +52,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
                 self.get_u64(path)
             }
 
+            fn get_s64(&self, path: &str) -> Option<i64> {
+                self.get_s64(path)
+            }
+
             fn exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
@@ -74,6 +78,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
                 self.get_u64(path)
             }
 
+            fn get_s64(&self, path: &str) -> Option<i64> {
+                self.get_s64(path)
+            }
+
             fn exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
@@ -94,6 +102,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
             fn set_u64(&self, path: &str, value: u64) {
                 self.set_u64(path, value)
+            }
+
+            fn set_s64(&self, path: &str, value: i64) {
+                self.set_s64(path, value)
             }
 
             fn set_void(&self, path: &str) {
@@ -122,6 +134,17 @@ pub fn contract(input: TokenStream) -> TokenStream {
         }
 
         impl ReadWriteContext for &context::ProcContext {}
+
+        impl Store for foreign::ContractAddress {
+            fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
+                ctx.write_storage()
+                    .set_str(&base_path.push("name").to_string(), &self.name);
+                ctx.write_storage()
+                    .set_s64(&base_path.push("height").to_string(), self.height);
+                ctx.write_storage()
+                    .set_s64(&base_path.push("tx_index").to_string(), self.tx_index);
+            }
+        }
 
         struct #name;
     };

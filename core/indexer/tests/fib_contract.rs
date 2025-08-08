@@ -6,6 +6,7 @@ use indexer::{
         queries::{get_contract_id_from_address, insert_block},
         types::BlockRow,
     },
+    logging,
     runtime::{
         ComponentCache, ContractAddress, Runtime, Storage, deserialize_cbor, load_native_contracts,
     },
@@ -15,6 +16,7 @@ use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 
 #[tokio::test]
 async fn test_fib_contract() -> Result<()> {
+    logging::setup();
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let conn = writer.connection();
     let height = 1;
@@ -68,15 +70,45 @@ async fn test_fib_contract() -> Result<()> {
         21
     );
 
+    let last_op = "some(sum({y: 8}))";
     let result = runtime
         .execute(None, &arith_contract_address, "last-op()")
         .await?;
-    assert_eq!(result, "some(sum({y: 8}))");
+    assert_eq!(result, last_op);
 
     let result = runtime
         .execute(Some(signer), &fib_contract_address, "not-found()")
         .await?;
     assert_eq!(result, r#"Some("test_signer"):not-found()"#);
+
+    let proxy_contract_address = ContractAddress {
+        name: "proxy".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let result = runtime
+        .execute(Some(signer), &proxy_contract_address, &expr)
+        .await?;
+    assert_eq!(result, "21");
+
+    let result = runtime
+        .execute(None, &proxy_contract_address, "get-contract-address()")
+        .await?;
+    assert_eq!(result, "{name: \"fib\", height: 0, tx-index: 0}");
+
+    runtime
+        .execute(
+            Some(signer),
+            &proxy_contract_address,
+            "set-contract-address({name: \"arith\", height: 0, tx-index: 0})",
+        )
+        .await?;
+
+    let result = runtime
+        .execute(None, &proxy_contract_address, "last-op()")
+        .await?;
+    assert_eq!(result, last_op);
 
     Ok(())
 }
