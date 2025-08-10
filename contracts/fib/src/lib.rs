@@ -191,13 +191,13 @@ impl FibValueWrapper {
         Self { base_path }
     }
 
-    pub fn value(&self, ctx: impl ReadContext) -> u64 {
+    pub fn value(&self, ctx: &impl ReadContext) -> u64 {
         ctx.read_storage()
             .get_u64(&self.base_path.push("value").to_string())
             .unwrap()
     }
 
-    pub fn set_value(&self, ctx: impl WriteContext, value: u64) {
+    pub fn set_value(&self, ctx: &impl WriteContext, value: u64) {
         ctx.write_storage()
             .set_u64(&self.base_path.push("value").to_string(), value)
     }
@@ -254,7 +254,7 @@ impl Storage {
 impl Fib {
     fn raw_fib(ctx: &ProcContext, n: u64) -> u64 {
         let cache = Storage::cache();
-        if let Some(v) = cache.get(&ctx, n).map(|v| v.value(ctx)) {
+        if let Some(v) = cache.get(ctx, n).map(|v| v.value(ctx)) {
             return v;
         }
 
@@ -271,7 +271,7 @@ impl Fib {
                 .value
             }
         };
-        cache.set(&ctx, n, FibValue { value });
+        cache.set(ctx, n, FibValue { value });
         value
     }
 }
@@ -285,7 +285,7 @@ impl Guest for Fib {
         FibStorage {
             cache: Map::new(&[(0, FibValue { value: 0 })]),
         }
-        .init(&ctx);
+        .init(ctx);
     }
 
     fn fib(ctx: &ProcContext, n: u64) -> u64 {

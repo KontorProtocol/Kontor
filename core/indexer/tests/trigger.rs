@@ -175,7 +175,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
 }
 
 async fn get_checkpoint_by_id(conn: &libsql::Connection, id: i64) -> Result<CheckpointRow> {
-    let mut stmt = conn
+    let stmt = conn
         .prepare("SELECT id, height, hash FROM checkpoints WHERE id = ?")
         .await?;
     let mut rows = stmt.query(params![id]).await?;
@@ -192,7 +192,7 @@ async fn get_checkpoint_by_id(conn: &libsql::Connection, id: i64) -> Result<Chec
 }
 
 async fn count_checkpoints(conn: &libsql::Connection) -> Result<i64> {
-    let mut stmt = conn.prepare("SELECT COUNT(*) FROM checkpoints").await?;
+    let stmt = conn.prepare("SELECT COUNT(*) FROM checkpoints").await?;
     let mut rows = stmt.query(params![]).await?;
 
     if let Some(row) = rows.next().await? {

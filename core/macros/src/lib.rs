@@ -115,25 +115,25 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         impl ReadWriteStorage for context::ProcStorage {}
 
-        impl ReadContext for &context::ViewContext {
+        impl ReadContext for context::ViewContext {
             fn read_storage(&self) -> impl ReadStorage {
                 self.storage()
             }
         }
 
-        impl ReadContext for &context::ProcContext {
+        impl ReadContext for context::ProcContext {
             fn read_storage(&self) -> impl ReadStorage {
                 self.storage()
             }
         }
 
-        impl WriteContext for &context::ProcContext {
+        impl WriteContext for context::ProcContext {
             fn write_storage(&self) -> impl WriteStorage {
                 self.storage()
             }
         }
 
-        impl ReadWriteContext for &context::ProcContext {}
+        impl ReadWriteContext for context::ProcContext {}
 
         impl Store for foreign::ContractAddress {
             fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
