@@ -2,7 +2,7 @@ macros::contract!(name = "arith");
 
 impl Store for Operand {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        ctx.write_storage().set_u64(&base_path.push("y"), self.y);
+        self.y.__set(ctx, base_path.push("y"));
     }
 }
 
@@ -23,8 +23,7 @@ impl OperandWrapper {
     }
 
     pub fn set_y(&self, ctx: &impl WriteContext, value: u64) {
-        ctx.write_storage()
-            .set_u64(&self.base_path.push("y"), value)
+        value.__set(ctx, self.base_path.push("y"));
     }
 
     pub fn load(&self, ctx: &impl ReadContext) -> Operand {

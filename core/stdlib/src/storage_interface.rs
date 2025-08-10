@@ -31,3 +31,27 @@ pub trait ReadWriteContext: ReadContext + WriteContext {}
 pub trait Store: Clone {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf);
 }
+
+impl Store for u64 {
+    fn __set(&self, ctx: &impl WriteContext, path: DotPathBuf) {
+        ctx.write_storage().set_u64(&path, *self);
+    }
+}
+
+impl Store for i64 {
+    fn __set(&self, ctx: &impl WriteContext, path: DotPathBuf) {
+        ctx.write_storage().set_s64(&path, *self);
+    }
+}
+
+impl Store for &str {
+    fn __set(&self, ctx: &impl WriteContext, path: DotPathBuf) {
+        ctx.write_storage().set_str(&path, self);
+    }
+}
+
+impl Store for String {
+    fn __set(&self, ctx: &impl WriteContext, path: DotPathBuf) {
+        ctx.write_storage().set_str(&path, self);
+    }
+}

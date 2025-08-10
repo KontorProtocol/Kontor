@@ -137,12 +137,9 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         impl Store for foreign::ContractAddress {
             fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-                ctx.write_storage()
-                    .set_str(&base_path.push("name").to_string(), &self.name);
-                ctx.write_storage()
-                    .set_s64(&base_path.push("height").to_string(), self.height);
-                ctx.write_storage()
-                    .set_s64(&base_path.push("tx_index").to_string(), self.tx_index);
+                self.name.__set(ctx, base_path.push("name"));
+                self.height.__set(ctx, base_path.push("height"));
+                self.tx_index.__set(ctx, base_path.push("tx_index"));
             }
         }
 

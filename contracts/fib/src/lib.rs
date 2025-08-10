@@ -176,8 +176,7 @@ struct FibValue {
 // generated
 impl Store for FibValue {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        ctx.write_storage()
-            .set_u64(&base_path.push("value"), self.value);
+        self.value.__set(ctx, base_path.push("value"));
     }
 }
 
@@ -198,8 +197,7 @@ impl FibValueWrapper {
     }
 
     pub fn set_value(&self, ctx: &impl WriteContext, value: u64) {
-        ctx.write_storage()
-            .set_u64(&self.base_path.push("value"), value)
+        value.__set(ctx, self.base_path.push("value"));
     }
 }
 
