@@ -50,7 +50,7 @@ impl Storage {
 impl Guest for Proxy {
     fn fallback(ctx: &FallContext, expr: String) -> String {
         foreign::call(
-            &Storage::contract_address(&&ctx.view_context()),
+            &Storage::contract_address(&ctx.view_context()),
             ctx.signer().as_ref(),
             &expr,
         )
@@ -64,15 +64,15 @@ impl Guest for Proxy {
                 tx_index: 0,
             },
         }
-        .init(&ctx)
+        .init(ctx)
     }
 
     fn get_contract_address(ctx: &ViewContext) -> ContractAddress {
-        Storage::contract_address(&ctx)
+        Storage::contract_address(ctx)
     }
 
     fn set_contract_address(ctx: &ProcContext, contract_address: foreign::ContractAddress) {
-        Storage::set_contract_address(&ctx, contract_address);
+        Storage::set_contract_address(ctx, contract_address);
     }
 }
 

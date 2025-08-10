@@ -135,11 +135,11 @@ impl Guest for Arith {
         ArithStorage {
             last_op: Some(Op::Id),
         }
-        .init(&ctx)
+        .init(ctx)
     }
 
     fn eval(ctx: &ProcContext, x: u64, op: Op) -> ArithReturn {
-        Storage::set_last_op(&ctx, Some(op));
+        Storage::set_last_op(ctx, Some(op));
         ArithReturn {
             value: match op {
                 Op::Id => x,
@@ -151,7 +151,7 @@ impl Guest for Arith {
     }
 
     fn last_op(ctx: &ViewContext) -> Option<Op> {
-        Storage::last_op(&ctx).map(|op| op.load(&ctx))
+        Storage::last_op(ctx).map(|op| op.load(ctx))
     }
 }
 
