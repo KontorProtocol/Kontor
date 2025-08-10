@@ -177,7 +177,7 @@ struct FibValue {
 impl Store for FibValue {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
         ctx.write_storage()
-            .set_u64(&base_path.push("value").to_string(), self.value);
+            .set_u64(&base_path.push("value"), self.value);
     }
 }
 
@@ -193,13 +193,13 @@ impl FibValueWrapper {
 
     pub fn value(&self, ctx: &impl ReadContext) -> u64 {
         ctx.read_storage()
-            .get_u64(&self.base_path.push("value").to_string())
+            .get_u64(&self.base_path.push("value"))
             .unwrap()
     }
 
     pub fn set_value(&self, ctx: &impl WriteContext, value: u64) {
         ctx.write_storage()
-            .set_u64(&self.base_path.push("value").to_string(), value)
+            .set_u64(&self.base_path.push("value"), value)
     }
 }
 
@@ -231,7 +231,7 @@ impl FibStorageCacheWrapper {
     pub fn get(&self, ctx: &impl ReadContext, key: u64) -> Option<FibValueWrapper> {
         let base_path = self.base_path.push(key.to_string());
         ctx.read_storage()
-            .exists(&base_path.to_string())
+            .exists(&base_path)
             .then_some(FibValueWrapper::new(ctx, base_path))
     }
 

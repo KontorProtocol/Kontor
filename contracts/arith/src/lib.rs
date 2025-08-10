@@ -2,8 +2,7 @@ macros::contract!(name = "arith");
 
 impl Store for Operand {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        ctx.write_storage()
-            .set_u64(&base_path.push("y").to_string(), self.y);
+        ctx.write_storage().set_u64(&base_path.push("y"), self.y);
     }
 }
 
@@ -19,13 +18,13 @@ impl OperandWrapper {
 
     pub fn y(&self, ctx: &impl ReadContext) -> u64 {
         ctx.read_storage()
-            .get_u64(&self.base_path.push("y").to_string())
+            .get_u64(&self.base_path.push("y"))
             .unwrap()
     }
 
     pub fn set_y(&self, ctx: &impl WriteContext, value: u64) {
         ctx.write_storage()
-            .set_u64(&self.base_path.push("y").to_string(), value)
+            .set_u64(&self.base_path.push("y"), value)
     }
 
     pub fn load(&self, ctx: &impl ReadContext) -> Operand {
@@ -36,9 +35,7 @@ impl OperandWrapper {
 impl Store for Op {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
         match self {
-            Op::Id => ctx
-                .write_storage()
-                .set_void(&base_path.push("id").to_string()),
+            Op::Id => ctx.write_storage().set_void(&base_path.push("id")),
             Op::Sum(operand) => operand.__set(ctx, base_path.push("sum")),
             Op::Mul(operand) => operand.__set(ctx, base_path.push("mul")),
             Op::Div(operand) => operand.__set(ctx, base_path.push("div")),
@@ -60,14 +57,14 @@ impl OpWrapper {
             .matching_path(&format!(r"^{}.(id|sum|mul|div)(\..*|$)", base_path))
             .unwrap();
         match path {
-            p if p.starts_with(&base_path.push("id").to_string()) => OpWrapper::Id,
-            p if p.starts_with(&base_path.push("sum").to_string()) => {
+            p if p.starts_with(base_path.push("id").as_ref()) => OpWrapper::Id,
+            p if p.starts_with(base_path.push("sum").as_ref()) => {
                 OpWrapper::Sum(OperandWrapper::new(ctx, base_path.push("sum")))
             }
-            p if p.starts_with(&base_path.push("mul").to_string()) => {
+            p if p.starts_with(base_path.push("mul").as_ref()) => {
                 OpWrapper::Mul(OperandWrapper::new(ctx, base_path.push("mul")))
             }
-            p if p.starts_with(&base_path.push("div").to_string()) => {
+            p if p.starts_with(base_path.push("div").as_ref()) => {
                 OpWrapper::Div(OperandWrapper::new(ctx, base_path.push("div")))
             }
             _ => {
@@ -96,9 +93,7 @@ impl Store for ArithStorage {
     fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
         match self.last_op {
             Some(op) => op.__set(ctx, base_path.push("last_op")),
-            None => ctx
-                .write_storage()
-                .set_void(&base_path.push("last_op").to_string()),
+            None => ctx.write_storage().set_void(&base_path.push("last_op")),
         }
     }
 }
@@ -114,7 +109,7 @@ struct Storage;
 impl Storage {
     pub fn last_op(ctx: &impl ReadContext) -> Option<OpWrapper> {
         let base_path = DotPathBuf::new().push("last_op");
-        if ctx.read_storage().is_void(&base_path.to_string()) {
+        if ctx.read_storage().is_void(&base_path) {
             None
         } else {
             Some(OpWrapper::new(ctx, base_path))
@@ -125,7 +120,7 @@ impl Storage {
         let base_path = DotPathBuf::new().push("last_op");
         match value {
             Some(op) => op.__set(ctx, base_path),
-            None => ctx.write_storage().set_void(&base_path.to_string()),
+            None => ctx.write_storage().set_void(&base_path),
         }
     }
 }
