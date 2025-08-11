@@ -226,8 +226,7 @@ struct FibStorageCacheWrapper {
 impl FibStorageCacheWrapper {
     pub fn get(&self, ctx: &impl ReadContext, key: u64) -> Option<FibValueWrapper> {
         let base_path = self.base_path.push(key.to_string());
-        ctx.read_storage()
-            .exists(&base_path)
+        ctx.exists(&base_path)
             .then_some(FibValueWrapper::new(ctx, base_path))
     }
 

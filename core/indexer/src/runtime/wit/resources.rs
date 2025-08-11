@@ -2,26 +2,6 @@ pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
 
-pub struct ViewStorage {
-    pub contract_id: i64,
-}
-
-impl HasContractId for ViewStorage {
-    fn get_contract_id(&self) -> i64 {
-        self.contract_id
-    }
-}
-
-pub struct ProcStorage {
-    pub contract_id: i64,
-}
-
-impl HasContractId for ProcStorage {
-    fn get_contract_id(&self) -> i64 {
-        self.contract_id
-    }
-}
-
 pub struct ViewContext {
     pub contract_id: i64,
 }

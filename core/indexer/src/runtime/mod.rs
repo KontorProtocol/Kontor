@@ -34,9 +34,7 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::wit::{
-    FallContext, HasContractId, ProcContext, ProcStorage, Signer, ViewContext, ViewStorage,
-};
+use crate::runtime::wit::{FallContext, HasContractId, ProcContext, Signer, ViewContext};
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
@@ -328,147 +326,47 @@ impl built_in::foreign::Host for Runtime {
     }
 }
 
-impl built_in::storage::Host for Runtime {}
-
-impl built_in::storage::HostViewStorage for Runtime {
-    async fn get_str(
-        &mut self,
-        resource: Resource<ViewStorage>,
-        path: String,
-    ) -> Result<Option<String>> {
-        self._get_str(resource, path).await
-    }
-
-    async fn get_u64(
-        &mut self,
-        resource: Resource<ViewStorage>,
-        path: String,
-    ) -> Result<Option<u64>> {
-        self._get_u64(resource, path).await
-    }
-
-    async fn get_s64(
-        &mut self,
-        resource: Resource<ViewStorage>,
-        path: String,
-    ) -> Result<Option<i64>> {
-        self._get_s64(resource, path).await
-    }
-
-    async fn is_void(&mut self, resource: Resource<ViewStorage>, path: String) -> Result<bool> {
-        self._is_void(resource, path).await
-    }
-
-    async fn exists(&mut self, resource: Resource<ViewStorage>, path: String) -> Result<bool> {
-        self._exists(resource, path).await
-    }
-
-    async fn matching_path(
-        &mut self,
-        resource: Resource<ViewStorage>,
-        regexp: String,
-    ) -> Result<Option<String>> {
-        self._matching_path(resource, regexp).await
-    }
-
-    async fn drop(&mut self, rep: Resource<ViewStorage>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
-        Ok(())
-    }
-}
-
-impl built_in::storage::HostProcStorage for Runtime {
-    async fn get_str(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-    ) -> Result<Option<String>> {
-        self._get_str(resource, path).await
-    }
-
-    async fn set_str(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-        value: String,
-    ) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        let bs = serialize_cbor(&value)?;
-        self.storage.set(contract_id, &path, &bs).await
-    }
-
-    async fn get_u64(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-    ) -> Result<Option<u64>> {
-        self._get_u64(resource, path).await
-    }
-
-    async fn set_u64(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-        value: u64,
-    ) -> Result<()> {
-        let bs = serialize_cbor(&value)?;
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &bs).await
-    }
-
-    async fn get_s64(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-    ) -> Result<Option<i64>> {
-        self._get_s64(resource, path).await
-    }
-
-    async fn set_s64(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        path: String,
-        value: i64,
-    ) -> Result<()> {
-        let bs = serialize_cbor(&value)?;
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &bs).await
-    }
-
-    async fn set_void(&mut self, resource: Resource<ProcStorage>, path: String) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &[]).await
-    }
-
-    async fn is_void(&mut self, resource: Resource<ProcStorage>, path: String) -> Result<bool> {
-        self._is_void(resource, path).await
-    }
-
-    async fn exists(&mut self, resource: Resource<ProcStorage>, path: String) -> Result<bool> {
-        self._exists(resource, path).await
-    }
-
-    async fn matching_path(
-        &mut self,
-        resource: Resource<ProcStorage>,
-        regexp: String,
-    ) -> Result<Option<String>> {
-        self._matching_path(resource, regexp).await
-    }
-
-    async fn drop(&mut self, rep: Resource<ProcStorage>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
-        Ok(())
-    }
-}
-
 impl built_in::context::Host for Runtime {}
 
 impl built_in::context::HostViewContext for Runtime {
-    async fn storage(&mut self, resource: Resource<ViewContext>) -> Result<Resource<ViewStorage>> {
-        let mut table = self.table.lock().await;
-        let contract_id = table.get(&resource)?.contract_id;
-        Ok(table.push(ViewStorage { contract_id })?)
+    async fn get_str(
+        &mut self,
+        resource: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Option<String>> {
+        self._get_str(resource, path).await
+    }
+
+    async fn get_u64(
+        &mut self,
+        resource: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Option<u64>> {
+        self._get_u64(resource, path).await
+    }
+
+    async fn get_s64(
+        &mut self,
+        resource: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Option<i64>> {
+        self._get_s64(resource, path).await
+    }
+
+    async fn is_void(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
+        self._is_void(resource, path).await
+    }
+
+    async fn exists(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
+        self._exists(resource, path).await
+    }
+
+    async fn matching_path(
+        &mut self,
+        resource: Resource<ViewContext>,
+        regexp: String,
+    ) -> Result<Option<String>> {
+        self._matching_path(resource, regexp).await
     }
 
     async fn drop(&mut self, resource: Resource<ViewContext>) -> Result<()> {
@@ -489,10 +387,82 @@ impl built_in::context::HostSigner for Runtime {
 }
 
 impl built_in::context::HostProcContext for Runtime {
-    async fn storage(&mut self, resource: Resource<ProcContext>) -> Result<Resource<ProcStorage>> {
-        let mut table = self.table.lock().await;
-        let contract_id = table.get(&resource)?.contract_id;
-        Ok(table.push(ProcStorage { contract_id })?)
+    async fn get_str(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<String>> {
+        self._get_str(resource, path).await
+    }
+
+    async fn set_str(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+        value: String,
+    ) -> Result<()> {
+        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        let bs = serialize_cbor(&value)?;
+        self.storage.set(contract_id, &path, &bs).await
+    }
+
+    async fn get_u64(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<u64>> {
+        self._get_u64(resource, path).await
+    }
+
+    async fn set_u64(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+        value: u64,
+    ) -> Result<()> {
+        let bs = serialize_cbor(&value)?;
+        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        self.storage.set(contract_id, &path, &bs).await
+    }
+
+    async fn get_s64(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<i64>> {
+        self._get_s64(resource, path).await
+    }
+
+    async fn set_s64(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+        value: i64,
+    ) -> Result<()> {
+        let bs = serialize_cbor(&value)?;
+        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        self.storage.set(contract_id, &path, &bs).await
+    }
+
+    async fn set_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<()> {
+        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        self.storage.set(contract_id, &path, &[]).await
+    }
+
+    async fn is_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<bool> {
+        self._is_void(resource, path).await
+    }
+
+    async fn exists(&mut self, resource: Resource<ProcContext>, path: String) -> Result<bool> {
+        self._exists(resource, path).await
+    }
+
+    async fn matching_path(
+        &mut self,
+        resource: Resource<ProcContext>,
+        regexp: String,
+    ) -> Result<Option<String>> {
+        self._matching_path(resource, regexp).await
     }
 
     async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {

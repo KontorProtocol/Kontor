@@ -50,7 +50,6 @@ enum OpWrapper {
 impl OpWrapper {
     pub fn new(ctx: &impl ReadContext, base_path: DotPathBuf) -> Self {
         let path = ctx
-            .read_storage()
             .matching_path(&format!(r"^{}.(id|sum|mul|div)(\..*|$)", base_path))
             .unwrap();
         match path {
@@ -106,7 +105,7 @@ struct Storage;
 impl Storage {
     pub fn last_op(ctx: &impl ReadContext) -> Option<OpWrapper> {
         let base_path = DotPathBuf::new().push("last_op");
-        if ctx.read_storage().is_void(&base_path) {
+        if ctx.is_void(&base_path) {
             None
         } else {
             Some(OpWrapper::new(ctx, base_path))

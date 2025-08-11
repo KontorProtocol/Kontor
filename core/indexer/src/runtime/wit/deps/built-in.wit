@@ -1,52 +1,32 @@
 package kontor:built-in;
 
-interface storage {
-    resource view-storage {
-        get-str: func(path: string) -> option<string>;
-
-        get-u64: func(path: string) -> option<u64>;
-
-        get-s64: func(path: string) -> option<s64>;
-
-        is-void: func(path: string) -> bool;
-
-        exists: func(path: string) -> bool;
-
-        matching-path: func(regexp: string) -> option<string>;
-    }
-
-    resource proc-storage {
-        get-str: func(path: string) -> option<string>;
-        set-str: func(path: string, value: string);
-
-        get-u64: func(path: string) -> option<u64>;
-        set-u64: func(path: string, value: u64);
-
-        get-s64: func(path: string) -> option<s64>;
-        set-s64: func(path: string, value: s64);
-
-        set-void: func(path: string);
-        is-void: func(path: string) -> bool;
-
-        exists: func(path: string) -> bool;
-        
-        matching-path: func(regexp: string) -> option<string>;
-    }
-}
-
 interface context {
-    use storage.{view-storage, proc-storage};
-
     resource signer {
         to-string: func() -> string;
     }
 
     resource view-context {
-        storage: func() -> view-storage;
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        is-void: func(path: string) -> bool;
+        exists: func(path: string) -> bool;
+        matching-path: func(regexp: string) -> option<string>;
     }
 
     resource proc-context {
-        storage: func() -> proc-storage;
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        is-void: func(path: string) -> bool;
+        exists: func(path: string) -> bool;
+        matching-path: func(regexp: string) -> option<string>;
+
+        set-str: func(path: string, value: string);
+        set-u64: func(path: string, value: u64);
+        set-s64: func(path: string, value: s64);
+        set-void: func(path: string);
+
         signer: func() -> signer;
         view-context: func() -> view-context;
     }
@@ -71,7 +51,6 @@ interface foreign {
 }
 
 world built-in {
-    import storage;
     import context;
     import foreign;
 }
