@@ -175,8 +175,8 @@ struct FibValue {
 
 // generated
 impl Store for FibValue {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        self.value.__set(ctx, base_path.push("value"));
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: FibValue) {
+        ctx.__set(base_path.push("value"), value.value);
     }
 }
 
@@ -195,7 +195,7 @@ impl FibValueWrapper {
     }
 
     pub fn set_value(&self, ctx: &impl WriteContext, value: u64) {
-        value.__set(ctx, self.base_path.push("value"));
+        ctx.__set(self.base_path.push("value"), value);
     }
 }
 
@@ -207,15 +207,15 @@ struct FibStorage {
 
 // generated
 impl Store for FibStorage {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        self.cache.__set(ctx, base_path.push("cache"))
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: FibStorage) {
+        ctx.__set(base_path.push("cache"), value.cache)
     }
 }
 
 // generated
 impl FibStorage {
-    pub fn init(&self, ctx: &impl WriteContext) {
-        self.__set(ctx, DotPathBuf::new())
+    pub fn init(self, ctx: &impl WriteContext) {
+        ctx.__set(DotPathBuf::new(), self)
     }
 }
 
@@ -231,7 +231,7 @@ impl FibStorageCacheWrapper {
     }
 
     pub fn set(&self, ctx: &impl WriteContext, key: u64, value: FibValue) {
-        value.__set(ctx, self.base_path.push(key.to_string()))
+        ctx.__set(self.base_path.push(key.to_string()), value)
     }
 }
 

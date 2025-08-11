@@ -119,15 +119,19 @@ pub fn contract(input: TokenStream) -> TokenStream {
             fn set_void(&self, path: &str) {
                 self.set_void(path)
             }
+
+            fn __set<T: Store>(&self, path: DotPathBuf, value: T) {
+                T::__set(self, path, value)
+            }
         }
 
         impl ReadWriteContext for context::ProcContext {}
 
         impl Store for foreign::ContractAddress {
-            fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-                self.name.__set(ctx, base_path.push("name"));
-                self.height.__set(ctx, base_path.push("height"));
-                self.tx_index.__set(ctx, base_path.push("tx_index"));
+            fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: foreign::ContractAddress) {
+                ctx.__set(base_path.push("name"), value.name);
+                ctx.__set(base_path.push("height"), value.height);
+                ctx.__set(base_path.push("tx_index"), value.tx_index);
             }
         }
 

@@ -1,8 +1,8 @@
 macros::contract!(name = "arith");
 
 impl Store for Operand {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        self.y.__set(ctx, base_path.push("y"));
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Operand) {
+        ctx.__set(base_path.push("y"), value.y);
     }
 }
 
@@ -21,7 +21,7 @@ impl OperandWrapper {
     }
 
     pub fn set_y(&self, ctx: &impl WriteContext, value: u64) {
-        value.__set(ctx, self.base_path.push("y"));
+        ctx.__set(self.base_path.push("y"), value);
     }
 
     pub fn load(&self, ctx: &impl ReadContext) -> Operand {
@@ -30,12 +30,12 @@ impl OperandWrapper {
 }
 
 impl Store for Op {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        match self {
-            Op::Id => ().__set(ctx, base_path.push("id")),
-            Op::Sum(operand) => operand.__set(ctx, base_path.push("sum")),
-            Op::Mul(operand) => operand.__set(ctx, base_path.push("mul")),
-            Op::Div(operand) => operand.__set(ctx, base_path.push("div")),
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Op) {
+        match value {
+            Op::Id => ctx.__set(base_path.push("id"), ()),
+            Op::Sum(operand) => ctx.__set(base_path.push("sum"), operand),
+            Op::Mul(operand) => ctx.__set(base_path.push("mul"), operand),
+            Op::Div(operand) => ctx.__set(base_path.push("div"), operand),
         }
     }
 }
@@ -86,17 +86,17 @@ struct ArithStorage {
 
 // generated
 impl Store for ArithStorage {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        match self.last_op {
-            Some(op) => op.__set(ctx, base_path.push("last_op")),
-            None => ().__set(ctx, base_path.push("last_op")),
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: ArithStorage) {
+        match value.last_op {
+            Some(op) => ctx.__set(base_path.push("last_op"), op),
+            None => ctx.__set(base_path.push("last_op"), ()),
         }
     }
 }
 
 impl ArithStorage {
-    pub fn init(&self, ctx: &impl WriteContext) {
-        self.__set(ctx, DotPathBuf::new())
+    pub fn init(self, ctx: &impl WriteContext) {
+        ctx.__set(DotPathBuf::new(), self)
     }
 }
 
@@ -115,8 +115,8 @@ impl Storage {
     pub fn set_last_op(ctx: &impl WriteContext, value: Option<Op>) {
         let base_path = DotPathBuf::new().push("last_op");
         match value {
-            Some(op) => op.__set(ctx, base_path),
-            None => ().__set(ctx, base_path),
+            Some(op) => ctx.__set(base_path, op),
+            None => ctx.__set(base_path, ()),
         }
     }
 }

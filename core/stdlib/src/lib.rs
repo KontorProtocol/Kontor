@@ -18,9 +18,9 @@ impl<K: ToString + Clone, V: Store> Map<K, V> {
 }
 
 impl<K: ToString + Clone, V: Store> Store for Map<K, V> {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        for (k, v) in self.entries.iter() {
-            v.__set(ctx, base_path.push(k.to_string()))
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Map<K, V>) {
+        for (k, v) in value.entries.into_iter() {
+            ctx.__set(base_path.push(k.to_string()), v)
         }
     }
 }

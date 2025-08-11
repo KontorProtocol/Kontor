@@ -8,16 +8,15 @@ struct ProxyStorage {
 }
 
 impl Store for ProxyStorage {
-    fn __set(&self, ctx: &impl WriteContext, base_path: DotPathBuf) {
-        self.contract_address
-            .__set(ctx, base_path.push("contract_address"))
+    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: ProxyStorage) {
+        ctx.__set(base_path.push("contract_address"), value.contract_address)
     }
 }
 
 // generated
 impl ProxyStorage {
-    pub fn init(&self, ctx: &impl WriteContext) {
-        self.__set(ctx, DotPathBuf::new())
+    pub fn init(self, ctx: &impl WriteContext) {
+        ctx.__set(DotPathBuf::new(), self)
     }
 }
 
@@ -34,7 +33,7 @@ impl Storage {
     }
 
     pub fn set_contract_address(ctx: &impl WriteContext, contract_address: ContractAddress) {
-        contract_address.__set(ctx, DotPathBuf::new().push("contract_address"));
+        ctx.__set(DotPathBuf::new().push("contract_address"), contract_address);
     }
 }
 
