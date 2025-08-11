@@ -6,3 +6,9 @@ edition = "2024"
 [lints]
 workspace = true
 
+[dependencies]
+macros = { path = "../macros" }
+
+[dev-dependencies]
+macrotest = "1.2"
+trybuild = "1.0"

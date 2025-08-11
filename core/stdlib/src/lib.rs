@@ -2,6 +2,7 @@ mod dot_path_buf;
 mod storage_interface;
 
 pub use dot_path_buf::*;
+pub use macros::Store;
 pub use storage_interface::*;
 
 #[derive(Clone)]
