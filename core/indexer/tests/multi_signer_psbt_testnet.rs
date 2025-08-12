@@ -24,6 +24,26 @@ struct SignerInput {
     recipient: Address,
 }
 
+fn tx_vbytes(tx: &Transaction) -> u64 {
+    // Compute virtual size = (base_size*4 + witness_size + 3)/4
+    let mut no_wit = tx.clone();
+    for inp in &mut no_wit.input {
+        inp.witness = Witness::new();
+    }
+    let base_size = serialize_tx(&no_wit).len() as u64;
+    let total_size = serialize_tx(tx).len() as u64;
+    let witness_size = total_size.saturating_sub(base_size);
+    let weight = base_size * 4 + witness_size;
+    weight.div_ceil(4)
+}
+
+fn estimate_vbytes_unsigned(base_len_bytes: usize, input_count: usize) -> u64 {
+    // Estimate witness overhead per Taproot key-path input (~100 bytes upper bound)
+    let witness_estimate = (input_count as u64) * 100u64;
+    let weight = (base_len_bytes as u64) * 4 + witness_estimate;
+    weight.div_ceil(4)
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_multi_signer_psbt_testnet() -> Result<()> {
@@ -132,7 +152,7 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
     base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
     info!(target: "portal", "Base PSBT: inputs={}, outputs={}, size={}B",
         base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(),
-        bitcoin::consensus::encode::serialize(&base_psbt.unsigned_tx).len());
+        serialize_tx(&base_psbt.unsigned_tx).len());
 
     // STORAGE NODES: Each clones the base, appends its own input/output, signs with SINGLE|ACP, returns PSBT
     let fee_per_input: u64 = 500; // conservative flat fee per input
@@ -166,7 +186,7 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
             // Sign only this new input, binding to its paired output (same index) using SINGLE|ACP
             let mut tx_to_sign = psbt_one.unsigned_tx.clone();
             let prevouts = vec![portal_prevout_clone, s.prevout.clone()];
-            let psbt_size = bitcoin::consensus::encode::serialize(&psbt_one.unsigned_tx).len();
+            let psbt_size = serialize_tx(&psbt_one.unsigned_tx).len();
             info!(target: "node", "Node idx={} sighash=SINGLE|ACP, psbt_size={}B", idx, psbt_size);
             test_utils::sign_key_spend(
                 &secp,
@@ -223,7 +243,7 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
         for s in &signers {
             all_prevouts.push(s.prevout.clone());
         }
-        let agg_size = bitcoin::consensus::encode::serialize(&final_psbt.unsigned_tx).len();
+        let agg_size = serialize_tx(&final_psbt.unsigned_tx).len();
         info!(target: "portal", "Signing portal input; inputs={}, outputs={}, size={}B",
             final_psbt.unsigned_tx.input.len(), final_psbt.unsigned_tx.output.len(), agg_size);
         test_utils::sign_key_spend(
@@ -238,7 +258,7 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
     }
 
     let final_tx = final_psbt.extract_tx()?;
-    let final_size = bitcoin::consensus::encode::serialize(&final_tx).len();
+    let final_vbytes = tx_vbytes(&final_tx);
     // crude fee calculation
     let mut total_in = portal_prevout.value.to_sat();
     for s in &signers {
@@ -249,8 +269,8 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
         total_out += o.value.to_sat();
     }
     let fee_sat = total_in.saturating_sub(total_out);
-    info!(target: "portal", "Final tx size~{}B, inputs={}, outputs={}, fee={} sat",
-        final_size, final_tx.input.len(), final_tx.output.len(), fee_sat);
+    info!(target: "portal", "Final tx ~{} vB, inputs={}, outputs={}, fee={} sat",
+        final_vbytes, final_tx.input.len(), final_tx.output.len(), fee_sat);
     let hex = hex::encode(serialize_tx(&final_tx));
     let res = client.test_mempool_accept(&[hex]).await?;
     if res.is_empty() {
@@ -382,9 +402,10 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     let mut base_psbt = Psbt::from_unsigned_tx(base_tx.clone())?;
     base_psbt.inputs[0].witness_utxo = Some(portal_prevout.clone());
     base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
-    info!(target: "portal", "FeeTopUp PORTAL: Base PSBT: inputs={}, outputs={}, size={}B",
-        base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(),
-        bitcoin::consensus::encode::serialize(&base_psbt.unsigned_tx).len());
+    let base_len_bytes = serialize_tx(&base_psbt.unsigned_tx).len();
+    let base_est_vb = estimate_vbytes_unsigned(base_len_bytes, base_psbt.unsigned_tx.input.len());
+    info!(target: "portal", "FeeTopUp PORTAL: Base PSBT: inputs={}, outputs={}, ~{} vB",
+        base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(), base_est_vb);
 
     // Storage nodes: append input/output and sign with SINGLE|ACP, minimal fee contribution (1 sat)
     let futures = signers.iter().enumerate().map(|(idx, s)| {
@@ -415,9 +436,10 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
 
             let mut tx_to_sign = psbt_one.unsigned_tx.clone();
             let prevouts = vec![portal_prevout_clone, s.prevout.clone()];
-            let psbt_size = bitcoin::consensus::encode::serialize(&psbt_one.unsigned_tx).len();
-            info!(target: "node", "FeeTopUp: Node idx={} sighash=SINGLE|ACP, psbt_size={}B, output_to={}, value={} sat",
-                idx, psbt_size, s.recipient, node_return_value);
+            let psbt_len = serialize_tx(&psbt_one.unsigned_tx).len();
+            let psbt_est_vb = estimate_vbytes_unsigned(psbt_len, psbt_one.unsigned_tx.input.len());
+            info!(target: "node", "FeeTopUp: Node idx={} sighash=SINGLE|ACP, ~{} vB, output_to={}, value={} sat",
+                idx, psbt_est_vb, s.recipient, node_return_value);
             test_utils::sign_key_spend(
                 &secp,
                 &mut tx_to_sign,
@@ -479,9 +501,9 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     info!(target: "portal", "FeeTopUp: relay floors: mempoolminfee_btc/kvB={}, relayfee_btc/kvB={}, min_sat/vB={}", mempool_min_btc, relay_btc, min_sat_per_vb);
 
     // Rough vsize estimate: base bytes + 100B per input for taproot witness (upper bound)
-    let mut base_len = bitcoin::consensus::encode::serialize(&final_psbt.unsigned_tx).len();
-    let mut est_vbytes = base_len + final_psbt.unsigned_tx.input.len() * 100;
-    let mut required_fee = (est_vbytes as u64) * min_sat_per_vb;
+    let mut base_len = serialize_tx(&final_psbt.unsigned_tx).len();
+    let mut est_vbytes = estimate_vbytes_unsigned(base_len, final_psbt.unsigned_tx.input.len());
+    let mut required_fee = est_vbytes * min_sat_per_vb;
     // Available budget for fee and change
     let mut available_budget = sum_inputs.saturating_sub(sum_outputs);
 
@@ -510,9 +532,9 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         sum_inputs += value_sat;
 
         // Recompute estimated fee with added input
-        base_len = bitcoin::consensus::encode::serialize(&final_psbt.unsigned_tx).len();
-        est_vbytes = base_len + final_psbt.unsigned_tx.input.len() * 100;
-        required_fee = (est_vbytes as u64) * min_sat_per_vb;
+        base_len = serialize_tx(&final_psbt.unsigned_tx).len();
+        est_vbytes = estimate_vbytes_unsigned(base_len, final_psbt.unsigned_tx.input.len());
+        required_fee = est_vbytes * min_sat_per_vb;
         available_budget = sum_inputs.saturating_sub(sum_outputs);
         portal_inputs_used += 1;
         info!(target: "portal", "FeeTopUp: Added portal input {}:{} ({} sat); new budget={} sat, est_fee={} sat",
@@ -583,7 +605,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     }
 
     let final_tx = final_psbt.extract_tx()?;
-    let final_size = bitcoin::consensus::encode::serialize(&final_tx).len();
+    let final_vbytes = tx_vbytes(&final_tx);
     let mut total_in = 0u64;
     (0..portal_inputs_used).for_each(|inp| {
         total_in += portal_utxos[inp].2;
@@ -596,8 +618,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         total_out += o.value.to_sat();
     }
     let fee_sat = total_in.saturating_sub(total_out);
-    info!(target: "portal", "FeeTopUp: Final tx size~{}B, inputs={}, outputs={}, fee={} sat",
-        final_size, final_tx.input.len(), final_tx.output.len(), fee_sat);
+    info!(target: "portal", "FeeTopUp: Final tx ~{} vB, inputs={}, outputs={}, fee={} sat",
+        final_vbytes, final_tx.input.len(), final_tx.output.len(), fee_sat);
     println!("FINAL TX {:#?}", final_tx);
     let hex = hex::encode(serialize_tx(&final_tx));
     let res = client.test_mempool_accept(&[hex]).await?;
