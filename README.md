@@ -17,6 +17,11 @@ Add wasm compile target:
 rustup target add wasm32-unknown-unknown
 ```
 
+Install cargo expand
+```
+cargo install cargo-expand
+```
+
 Build native contracts:
 ```bash
 cd contracts

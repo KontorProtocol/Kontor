@@ -2,15 +2,9 @@
 
 macros::contract!(name = "proxy");
 
-#[derive(Clone)]
+#[derive(Clone, Store)]
 struct ProxyStorage {
     contract_address: foreign::ContractAddress,
-}
-
-impl Store for ProxyStorage {
-    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: ProxyStorage) {
-        ctx.__set(base_path.push("contract_address"), value.contract_address)
-    }
 }
 
 // generated

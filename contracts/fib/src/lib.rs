@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use stdlib::DotPathBuf;
-
 macros::contract!(name = "fib");
 
 // macros::import!(name = "arith", path = "../arith/wit/contract.wit");
@@ -168,16 +166,9 @@ mod arith {
 }
 
 // #[storage]
-#[derive(Clone)]
+#[derive(Clone, Store)]
 struct FibValue {
     value: u64,
-}
-
-// generated
-impl Store for FibValue {
-    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: FibValue) {
-        ctx.__set(base_path.push("value"), value.value);
-    }
 }
 
 // generated
@@ -200,16 +191,9 @@ impl FibValueWrapper {
 }
 
 // #[root_storage]
-#[derive(Clone)]
+#[derive(Clone, Store)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
-}
-
-// generated
-impl Store for FibStorage {
-    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: FibStorage) {
-        ctx.__set(base_path.push("cache"), value.cache)
-    }
 }
 
 // generated
