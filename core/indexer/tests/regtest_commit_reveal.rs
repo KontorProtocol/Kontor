@@ -1,6 +1,9 @@
 use anyhow::Result;
 use bitcoin::{
-    consensus::encode::serialize as serialize_tx, key::{Keypair, Secp256k1}, taproot::{LeafVersion, TaprootBuilder}, FeeRate, Network, TapSighashType
+    FeeRate, Network, TapSighashType,
+    consensus::encode::serialize as serialize_tx,
+    key::{Keypair, Secp256k1},
+    taproot::{LeafVersion, TaprootBuilder},
 };
 use clap::Parser;
 use indexer::{

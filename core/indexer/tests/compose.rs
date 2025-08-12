@@ -1,11 +1,11 @@
 use anyhow::Result;
-use bitcoin::{FeeRate, TapSighashType};
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
+use bitcoin::{FeeRate, TapSighashType};
 use clap::Parser;
 use indexer::api::compose::{RevealInputs, compose, compose_reveal};
 

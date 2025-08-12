@@ -6,7 +6,8 @@ use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Address, FeeRate, KnownHrp, Psbt, ScriptBuf, TapSighashType, Transaction, TxIn, Witness, XOnlyPublicKey
+    Address, FeeRate, KnownHrp, Psbt, ScriptBuf, TapSighashType, Transaction, TxIn, Witness,
+    XOnlyPublicKey,
 };
 use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,

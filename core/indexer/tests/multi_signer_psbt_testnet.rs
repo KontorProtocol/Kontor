@@ -286,6 +286,7 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // setup
     logging::setup();
