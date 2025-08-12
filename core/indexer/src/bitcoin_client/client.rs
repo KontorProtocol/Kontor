@@ -6,7 +6,9 @@ use reqwest::{Client as HttpClient, ClientBuilder, header::HeaderMap};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::bitcoin_client::types::{CreateWalletResult, TestMempoolAcceptResult};
+use crate::bitcoin_client::types::{
+    CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult, TestMempoolAcceptResult,
+};
 use crate::config::Config;
 
 use super::types::{RawTransactionInput, SignRawTransactionResult, UnspentOutput};
@@ -139,6 +141,14 @@ impl Client {
 
     pub async fn get_raw_mempool(&self) -> Result<Vec<Txid>, Error> {
         self.call("getrawmempool", vec![]).await
+    }
+
+    pub async fn get_mempool_info(&self) -> Result<GetMempoolInfoResult, Error> {
+        self.call("getmempoolinfo", vec![]).await
+    }
+
+    pub async fn get_network_info(&self) -> Result<GetNetworkInfoResult, Error> {
+        self.call("getnetworkinfo", vec![]).await
     }
 
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, Error> {

@@ -1,7 +1,8 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use bitcoin::address::Address;
 use bitcoin::amount::Amount;
 use bitcoin::key::{Keypair, Secp256k1};
+use bitcoin::secp256k1::All;
 use bitcoin::transaction::Version;
 use bitcoin::{
     Network, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, XOnlyPublicKey, absolute::LockTime,
@@ -12,7 +13,6 @@ use clap::Parser;
 use futures_util::future::join_all;
 use indexer::config::{Config, TestConfig};
 use indexer::{bitcoin_client::Client, logging, test_utils};
-use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use tracing::info;
 #[derive(Clone, Debug)]
@@ -22,6 +22,15 @@ struct SignerInput {
     internal_key: XOnlyPublicKey,
     keypair: Keypair,
     recipient: Address,
+}
+
+#[derive(Clone)]
+struct NodePart {
+    psbt: Psbt,
+    delta_vb: u64,
+    node_fee: u64,
+    prevout_value: u64,
+    return_value: u64,
 }
 
 fn tx_vbytes(tx: &Transaction) -> u64 {
@@ -44,29 +53,14 @@ fn estimate_vbytes_unsigned(base_len_bytes: usize, input_count: usize) -> u64 {
     weight.div_ceil(4)
 }
 
-#[tokio::test]
-#[ignore]
-async fn test_multi_signer_psbt_testnet() -> Result<()> {
-    // set up config
-    logging::setup();
-    let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
-    let client = Client::new_from_config(&config)?;
-
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let secp = Secp256k1::new();
-
-    // Set up inputs/outputs for the 3 concurrent signers
-    let num_signers: usize = 3;
-
+fn get_node_signer_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<Vec<SignerInput>> {
+    let num_signers = 3;
     let mut signers: Vec<SignerInput> = Vec::with_capacity(num_signers);
     for i in 0..num_signers {
         let (address, child_key, _compressed) =
-            test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, i as u32)?;
-        let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
+            test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, i as u32)?;
+        let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
         let (internal_key, _parity) = keypair.x_only_public_key();
-
         let (txid_str, vout_u32, value_sat): (&str, u32, u64) = match i {
             0 => (
                 "dac8f123136bb59926e559e9da97eccc9f46726c3e7daaf2ab3502ef3a47fa46",
@@ -97,8 +91,6 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
             value: Amount::from_sat(value_sat),
             script_pubkey: address.script_pubkey(),
         };
-
-        // BTC will be returned back to the storage nodes
         let recipient = address.clone();
 
         signers.push(SignerInput {
@@ -109,184 +101,10 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
             recipient,
         });
     }
-
-    // PORTAL: create a base PSBT (transaction template) with its own input/output pair
-    // Derive portal key/address (separate index)
-    let (portal_address, portal_child_key, _compressed) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, 4)?;
-    let portal_keypair = Keypair::from_secret_key(&secp, &portal_child_key.private_key);
-    let (portal_internal_key, _parity) = portal_keypair.x_only_public_key();
-
-    // Replace with real portal UTXO
-    let (portal_txid_str, portal_vout_u32, portal_value_sat): (&str, u32, u64) = (
-        "09c741dd08af774cb5d1c26bfdc28eaa4ae42306a6a07d7be01de194979ff8df",
-        0,
-        500_000,
-    );
-    let portal_outpoint = OutPoint {
-        txid: Txid::from_str(portal_txid_str)?,
-        vout: portal_vout_u32,
-    };
-    let portal_prevout = TxOut {
-        value: Amount::from_sat(portal_value_sat),
-        script_pubkey: portal_address.script_pubkey(),
-    };
-
-    let portal_fee: u64 = 700; // conservative base fee for portal leg
-    let base_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: portal_outpoint,
-            script_sig: bitcoin::script::ScriptBuf::new(),
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(portal_value_sat.saturating_sub(portal_fee)),
-            script_pubkey: portal_address.script_pubkey(),
-        }],
-    };
-    let mut base_psbt = Psbt::from_unsigned_tx(base_tx.clone())?;
-    base_psbt.inputs[0].witness_utxo = Some(portal_prevout.clone());
-    base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
-    info!(target: "portal", "Base PSBT: inputs={}, outputs={}, size={}B",
-        base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(),
-        serialize_tx(&base_psbt.unsigned_tx).len());
-
-    // STORAGE NODES: Each clones the base, appends its own input/output, signs with SINGLE|ACP, returns PSBT
-    let fee_per_input: u64 = 500; // conservative flat fee per input
-    let futures = signers.iter().enumerate().map(|(idx, s)| {
-        let secp = Secp256k1::new();
-        let mut psbt_one = base_psbt.clone();
-        let portal_prevout_clone = portal_prevout.clone();
-        async move {
-            // Append signer's input
-            info!(target: "node", "Node idx={} adding input: {}:{}, value={} sat",
-                idx, s.outpoint.txid, s.outpoint.vout, s.prevout.value.to_sat());
-            psbt_one.unsigned_tx.input.push(TxIn {
-                previous_output: s.outpoint,
-                script_sig: bitcoin::script::ScriptBuf::new(),
-                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-                witness: Witness::new(),
-            });
-            psbt_one.inputs.push(Default::default());
-            let new_input_index = psbt_one.unsigned_tx.input.len() - 1;
-            psbt_one.inputs[new_input_index].witness_utxo = Some(s.prevout.clone());
-            psbt_one.inputs[new_input_index].tap_internal_key = Some(s.internal_key);
-
-            // Append signer's return output at the same index as the new input (end of vectors)
-            psbt_one.unsigned_tx.output.push(TxOut {
-                value: Amount::from_sat(s.prevout.value.to_sat().saturating_sub(fee_per_input)),
-                script_pubkey: s.recipient.script_pubkey(),
-            });
-            psbt_one.outputs.push(Default::default());
-            info!(target: "node", "Node idx={} output to={}, value={} sat", idx, s.recipient, s.prevout.value.to_sat().saturating_sub(fee_per_input));
-
-            // Sign only this new input, binding to its paired output (same index) using SINGLE|ACP
-            let mut tx_to_sign = psbt_one.unsigned_tx.clone();
-            let prevouts = vec![portal_prevout_clone, s.prevout.clone()];
-            let psbt_size = serialize_tx(&psbt_one.unsigned_tx).len();
-            info!(target: "node", "Node idx={} sighash=SINGLE|ACP, psbt_size={}B", idx, psbt_size);
-            test_utils::sign_key_spend(
-                &secp,
-                &mut tx_to_sign,
-                &prevouts,
-                &s.keypair,
-                new_input_index,
-                Some(TapSighashType::SinglePlusAnyoneCanPay),
-            )?;
-            psbt_one.inputs[new_input_index].final_script_witness =
-                Some(tx_to_sign.input[new_input_index].witness.clone());
-            let sig_len = psbt_one.inputs[new_input_index]
-                .final_script_witness
-                .as_ref()
-                .map(|w| w.len())
-                .unwrap_or(0);
-            info!(target: "node", "Node idx={} signed; witness_elems={}", idx, sig_len);
-
-            Ok::<Psbt, anyhow::Error>(psbt_one)
-        }
-    });
-
-    let mut parts: Vec<Psbt> = join_all(futures)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Portal aggregates: start from base_psbt, then concatenate storage parts
-    let mut final_psbt = base_psbt.clone();
-
-    for mut p in parts.drain(..) {
-        // move only the newly added storage-node input/output (last entries)
-        let last_input_idx = p.unsigned_tx.input.len() - 1;
-        let last_output_idx = p.unsigned_tx.output.len() - 1;
-
-        final_psbt
-            .unsigned_tx
-            .input
-            .push(p.unsigned_tx.input.remove(last_input_idx));
-        final_psbt.inputs.push(p.inputs.remove(last_input_idx));
-
-        final_psbt
-            .unsigned_tx
-            .output
-            .push(p.unsigned_tx.output.remove(last_output_idx));
-        final_psbt.outputs.push(p.outputs.remove(last_output_idx));
-    }
-
-    // PORTAL signs its own input last, after aggregation, to bind all outputs
-    {
-        let mut tx_to_sign = final_psbt.unsigned_tx.clone();
-        let mut all_prevouts: Vec<TxOut> = Vec::with_capacity(1 + signers.len());
-        all_prevouts.push(portal_prevout.clone());
-        for s in &signers {
-            all_prevouts.push(s.prevout.clone());
-        }
-        let agg_size = serialize_tx(&final_psbt.unsigned_tx).len();
-        info!(target: "portal", "Signing portal input; inputs={}, outputs={}, size={}B",
-            final_psbt.unsigned_tx.input.len(), final_psbt.unsigned_tx.output.len(), agg_size);
-        test_utils::sign_key_spend(
-            &secp,
-            &mut tx_to_sign,
-            &all_prevouts,
-            &portal_keypair,
-            0,
-            None,
-        )?;
-        final_psbt.inputs[0].final_script_witness = Some(tx_to_sign.input[0].witness.clone());
-    }
-
-    let final_tx = final_psbt.extract_tx()?;
-    let final_vbytes = tx_vbytes(&final_tx);
-    // crude fee calculation
-    let mut total_in = portal_prevout.value.to_sat();
-    for s in &signers {
-        total_in += s.prevout.value.to_sat();
-    }
-    let mut total_out = 0u64;
-    for o in &final_tx.output {
-        total_out += o.value.to_sat();
-    }
-    let fee_sat = total_in.saturating_sub(total_out);
-    info!(target: "portal", "Final tx ~{} vB, inputs={}, outputs={}, fee={} sat",
-        final_vbytes, final_tx.input.len(), final_tx.output.len(), fee_sat);
-    let hex = hex::encode(serialize_tx(&final_tx));
-    let res = client.test_mempool_accept(&[hex]).await?;
-    if res.is_empty() {
-        return Err(anyhow!("Empty testmempoolaccept response"));
-    }
-    assert!(
-        res[0].allowed,
-        "Final aggregated transaction was rejected: {:?}",
-        res[0].reject_reason
-    );
-
-    Ok(())
+    Ok(signers)
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // setup
     logging::setup();
@@ -299,53 +117,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     let secp = Secp256k1::new();
 
     // Set up storage node utxos
-    let num_signers: usize = 3;
-    let mut signers: Vec<SignerInput> = Vec::with_capacity(num_signers);
-    for i in 0..num_signers {
-        let (address, child_key, _compressed) =
-            test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, i as u32)?;
-        let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
-        let (internal_key, _parity) = keypair.x_only_public_key();
-        let (txid_str, vout_u32, value_sat): (&str, u32, u64) = match i {
-            0 => (
-                "dac8f123136bb59926e559e9da97eccc9f46726c3e7daaf2ab3502ef3a47fa46",
-                0,
-                500_000,
-            ),
-            1 => (
-                "465de2192b246635df14ff81c3b6f37fb864f308ad271d4f91a29dcf476640ba",
-                0,
-                500_000,
-            ),
-            2 => (
-                "49e327c2945f88908f67586de66af3bfc2567fe35ec7c5f1769f973f9fe8e47e",
-                0,
-                500_000,
-            ),
-            _ => (
-                "b672084964187d9655a008c2af90c7d79b19fddcd66390bcf2926c0ea8e4135a",
-                0,
-                500_000,
-            ),
-        };
-        let outpoint = OutPoint {
-            txid: Txid::from_str(txid_str)?,
-            vout: vout_u32,
-        };
-        let prevout = TxOut {
-            value: Amount::from_sat(value_sat),
-            script_pubkey: address.script_pubkey(),
-        };
-        let recipient = address.clone();
-
-        signers.push(SignerInput {
-            outpoint,
-            prevout,
-            internal_key,
-            keypair,
-            recipient,
-        });
-    }
+    let signers = get_node_signer_info(&secp, &test_cfg)?;
 
     // Portal base with one input and placeholder change output
     let (portal_address, portal_child_key, _compressed) =
@@ -405,42 +177,73 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
     let base_len_bytes = serialize_tx(&base_psbt.unsigned_tx).len();
     let base_est_vb = estimate_vbytes_unsigned(base_len_bytes, base_psbt.unsigned_tx.input.len());
-    info!(target: "portal", "FeeTopUp PORTAL: Base PSBT: inputs={}, outputs={}, ~{} vB",
+    info!(target: "portal", "PortalBase PSBT: inputs={}, outputs={}, ~{} vB",
         base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(), base_est_vb);
 
-    // Storage nodes: append input/output and sign with SINGLE|ACP, minimal fee contribution (1 sat)
+    // Fetch min relay fee (sat/vB) before nodes contribute fees
+    let mp = client.get_mempool_info().await?;
+    let net = client.get_network_info().await?;
+    let min_btc_per_kvb = mp.mempool_min_fee_btc_per_kvb.max(net.relayfee);
+    let min_sat_per_vb: u64 = ((min_btc_per_kvb * 100_000_000.0) / 1000.0).ceil() as u64;
+    info!(target: "portal", "min_sat/vB={} for transaction of base size ~{} vB", min_sat_per_vb, base_est_vb);
+
+    let dust_limit_sat: u64 = 330; // approx P2TR dust
+
+    // Storage nodes: each appends input/output and signs with SINGLE|ACP, contributes fee ~ size_added * rate
     let futures = signers.iter().enumerate().map(|(idx, s)| {
         let secp = Secp256k1::new();
         let mut psbt_one = base_psbt.clone();
         let portal_prevout_clone = portal_prevout.clone();
         async move {
-            info!(target: "node", "FeeTopUp: Node idx={} adding input: {}:{}, value={} sat",
+            info!(target: "node", " Node idx={} adding input: {}:{}, value={} sat",
                 idx, s.outpoint.txid, s.outpoint.vout, s.prevout.value.to_sat());
-            psbt_one.unsigned_tx.input.push(TxIn {
+
+            // Estimate node's size contribution in vbytes: before vs after adding input+output
+            let base_len_b = serialize_tx(&psbt_one.unsigned_tx).len();
+            let base_est_vb = estimate_vbytes_unsigned(base_len_b, psbt_one.unsigned_tx.input.len());
+            info!(target: "node", "Node idx={} base size before adding input/output ~{} vB",
+                idx, base_est_vb);
+            let mut temp_unsigned = psbt_one.unsigned_tx.clone();
+            temp_unsigned.input.push(TxIn {
                 previous_output: s.outpoint,
                 script_sig: bitcoin::script::ScriptBuf::new(),
                 sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
                 witness: Witness::new(),
             });
+            temp_unsigned.output.push(TxOut {
+                value: Amount::from_sat(0), // placeholder; value doesn't affect size much
+                script_pubkey: s.recipient.script_pubkey(),
+            });
+            let after_len_b = serialize_tx(&temp_unsigned).len();
+            let after_est_vb = estimate_vbytes_unsigned(after_len_b, temp_unsigned.input.len());
+            let delta_vb = after_est_vb.saturating_sub(base_est_vb);
+            let node_fee = delta_vb.saturating_mul(min_sat_per_vb);
+            info!(target: "node", "Node idx={} size after adding input/output ~{} vB",
+                idx, after_est_vb);
+            info!(target: "node", "Node idx={} size added by node delta_vB={} fee_contrib={} sat",
+                idx, delta_vb, node_fee);
+
+            // Now actually append input+output to psbt_one with node's fee contribution
+            psbt_one.unsigned_tx = temp_unsigned; // reuse temp we already built
             psbt_one.inputs.push(Default::default());
             let new_input_index = psbt_one.unsigned_tx.input.len() - 1;
             psbt_one.inputs[new_input_index].witness_utxo = Some(s.prevout.clone());
             psbt_one.inputs[new_input_index].tap_internal_key = Some(s.internal_key);
 
-            // node returns almost all back; contribute only 1 sat to fees
-            let node_return_value = s.prevout.value.to_sat().saturating_sub(1);
-            psbt_one.unsigned_tx.output.push(TxOut {
-                value: Amount::from_sat(node_return_value),
-                script_pubkey: s.recipient.script_pubkey(),
-            });
+            // Compute return value; ensure not below dust
+            let mut node_return_value = s.prevout.value.to_sat().saturating_sub(node_fee);
+            if node_return_value < dust_limit_sat {
+                node_return_value = dust_limit_sat;
+            }
+            psbt_one.unsigned_tx.output.last_mut().unwrap().value = Amount::from_sat(node_return_value);
             psbt_one.outputs.push(Default::default());
 
             let mut tx_to_sign = psbt_one.unsigned_tx.clone();
             let prevouts = vec![portal_prevout_clone, s.prevout.clone()];
             let psbt_len = serialize_tx(&psbt_one.unsigned_tx).len();
             let psbt_est_vb = estimate_vbytes_unsigned(psbt_len, psbt_one.unsigned_tx.input.len());
-            info!(target: "node", "FeeTopUp: Node idx={} sighash=SINGLE|ACP, ~{} vB, output_to={}, value={} sat",
-                idx, psbt_est_vb, s.recipient, node_return_value);
+            info!(target: "node", "Node idx={} sighash=SINGLE|ACP, ~{} vB (delta={} vB), fee_contrib={} sat, output_to={}, change value={} sat",
+                idx, psbt_est_vb, delta_vb, node_fee, s.recipient, node_return_value);
             test_utils::sign_key_spend(
                 &secp,
                 &mut tx_to_sign,
@@ -452,33 +255,54 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
             psbt_one.inputs[new_input_index].final_script_witness =
                 Some(tx_to_sign.input[new_input_index].witness.clone());
 
-            Ok::<Psbt, anyhow::Error>(psbt_one)
+            Ok::<NodePart, anyhow::Error>(NodePart {
+                psbt: psbt_one,
+                delta_vb,
+                node_fee,
+                prevout_value: s.prevout.value.to_sat(),
+                return_value: node_return_value,
+            })
         }
     });
 
-    let mut parts: Vec<Psbt> = join_all(futures)
+    let mut parts: Vec<NodePart> = join_all(futures)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Assert each node contributed the correct fee based on size delta and rate
+    for (idx, p) in parts.iter().enumerate() {
+        let max_affordable_fee = p.prevout_value.saturating_sub(dust_limit_sat);
+        let expected_fee = p.node_fee.min(max_affordable_fee);
+        let actual_fee = p.prevout_value.saturating_sub(p.return_value);
+        assert_eq!(
+            actual_fee, expected_fee,
+            "node {} fee mismatch: expected {}, actual {} (delta_vb={}, sats/vB={})",
+            idx, expected_fee, actual_fee, p.delta_vb, min_sat_per_vb
+        );
+    }
+
     // Aggregate starting from base
     let mut final_psbt = base_psbt.clone();
     for mut p in parts.drain(..) {
-        let last_input_idx = p.unsigned_tx.input.len() - 1;
-        let last_output_idx = p.unsigned_tx.output.len() - 1;
+        let last_input_idx = p.psbt.unsigned_tx.input.len() - 1;
+        let last_output_idx = p.psbt.unsigned_tx.output.len() - 1;
         final_psbt
             .unsigned_tx
             .input
-            .push(p.unsigned_tx.input.remove(last_input_idx));
-        final_psbt.inputs.push(p.inputs.remove(last_input_idx));
+            .push(p.psbt.unsigned_tx.input.remove(last_input_idx));
+        final_psbt.inputs.push(p.psbt.inputs.remove(last_input_idx));
         final_psbt
             .unsigned_tx
             .output
-            .push(p.unsigned_tx.output.remove(last_output_idx));
-        final_psbt.outputs.push(p.outputs.remove(last_output_idx));
+            .push(p.psbt.unsigned_tx.output.remove(last_output_idx));
+        final_psbt
+            .outputs
+            .push(p.psbt.outputs.remove(last_output_idx));
     }
 
     // Compute top-up need: ensure non-negative change for portal, else add more portal inputs
+    // Compute overall budget and fee target; then portal tops up if needed
     let dust_limit_sat: u64 = 330; // approximate P2TR dust
     let mut sum_inputs: u64 = portal_prevout.value.to_sat();
     let mut sum_outputs: u64 = 0;
@@ -492,14 +316,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         }
         sum_outputs += o.value.to_sat();
     }
-    // Query node for current relay floor (sat/vB)
-    let mempool_info: JsonValue = client.call("getmempoolinfo", vec![]).await?;
-    let net_info: JsonValue = client.call("getnetworkinfo", vec![]).await?;
-    let mempool_min_btc = mempool_info["mempoolminfee"].as_f64().unwrap_or(0.0);
-    let relay_btc = net_info["relayfee"].as_f64().unwrap_or(0.0);
-    let min_btc_per_kvb = mempool_min_btc.max(relay_btc);
-    let min_sat_per_vb: u64 = ((min_btc_per_kvb * 100_000_000.0) / 1000.0).ceil() as u64;
-    info!(target: "portal", "FeeTopUp: relay floors: mempoolminfee_btc/kvB={}, relayfee_btc/kvB={}, min_sat/vB={}", mempool_min_btc, relay_btc, min_sat_per_vb);
+    // Reuse the pre-fetched min_sat_per_vb computed above
+    info!(target: "portal", "FeeTopUp: using pre-fetched min_sat/vB={}", min_sat_per_vb);
 
     // Rough vsize estimate: base bytes + 100B per input for taproot witness (upper bound)
     let mut base_len = serialize_tx(&final_psbt.unsigned_tx).len();

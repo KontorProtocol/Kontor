@@ -20,6 +20,7 @@ use std::str::FromStr;
 use tracing::info;
 
 #[tokio::test]
+#[ignore]
 async fn test_taproot_transaction() -> Result<()> {
     // Initialize regtest client
     let mut config = Config::try_parse()?;
@@ -136,6 +137,7 @@ async fn test_taproot_transaction() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
     logging::setup();
 
