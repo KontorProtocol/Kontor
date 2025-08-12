@@ -30,8 +30,8 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let expanded = quote! {
-        impl #impl_generics Store for #name #ty_generics #where_clause {
-            fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: #name #ty_generics) {
+        impl #impl_generics stdlib::Store for #name #ty_generics #where_clause {
+            fn __set(ctx: &impl stdlib::WriteContext, base_path: stdlib::DotPathBuf, value: #name #ty_generics) {
                 #body
             }
         }
@@ -151,15 +151,16 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&to_pascal_case(&config.name)).unwrap();
     let boilerplate = quote! {
+        use stdlib::*;
+
         wit_bindgen::generate!({
             world: #world,
             path: #path,
             generate_all,
+            additional_derives: [stdlib::Store],
         });
 
         use kontor::built_in::*;
-
-        use stdlib::*;
 
         impl ReadContext for context::ViewContext {
             fn __get_str(&self, path: &str) -> Option<String> {
@@ -238,20 +239,20 @@ pub fn contract(input: TokenStream) -> TokenStream {
                 self.set_void(path)
             }
 
-            fn __set<T: Store>(&self, path: DotPathBuf, value: T) {
+            fn __set<T: stdlib::Store>(&self, path: DotPathBuf, value: T) {
                 T::__set(self, path, value)
             }
         }
 
         impl ReadWriteContext for context::ProcContext {}
 
-        impl Store for foreign::ContractAddress {
-            fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: foreign::ContractAddress) {
-                ctx.__set(base_path.push("name"), value.name);
-                ctx.__set(base_path.push("height"), value.height);
-                ctx.__set(base_path.push("tx_index"), value.tx_index);
-            }
-        }
+        // impl stdlib::Store for foreign::ContractAddress {
+        //     fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: foreign::ContractAddress) {
+        //         ctx.__set(base_path.push("name"), value.name);
+        //         ctx.__set(base_path.push("height"), value.height);
+        //         ctx.__set(base_path.push("tx_index"), value.tx_index);
+        //     }
+        // }
 
         struct #name;
     };

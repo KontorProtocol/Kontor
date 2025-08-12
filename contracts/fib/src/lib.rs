@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use stdlib::DotPathBuf;
-
 macros::contract!(name = "fib");
 
 // macros::import!(name = "arith", path = "../arith/wit/contract.wit");

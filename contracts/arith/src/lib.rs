@@ -1,11 +1,5 @@
 macros::contract!(name = "arith");
 
-impl Store for Operand {
-    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Operand) {
-        ctx.__set(base_path.push("y"), value.y);
-    }
-}
-
 struct OperandWrapper {
     pub base_path: DotPathBuf,
 }
@@ -26,17 +20,6 @@ impl OperandWrapper {
 
     pub fn load(&self, ctx: &impl ReadContext) -> Operand {
         Operand { y: self.y(ctx) }
-    }
-}
-
-impl Store for Op {
-    fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Op) {
-        match value {
-            Op::Id => ctx.__set(base_path.push("id"), ()),
-            Op::Sum(operand) => ctx.__set(base_path.push("sum"), operand),
-            Op::Mul(operand) => ctx.__set(base_path.push("mul"), operand),
-            Op::Div(operand) => ctx.__set(base_path.push("div"), operand),
-        }
     }
 }
 
