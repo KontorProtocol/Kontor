@@ -166,28 +166,9 @@ mod arith {
 }
 
 // #[storage]
-#[derive(Clone, Store)]
+#[derive(Clone, Store, Wrapper)]
 struct FibValue {
-    value: u64,
-}
-
-// generated
-struct FibValueWrapper {
-    pub base_path: DotPathBuf,
-}
-
-impl FibValueWrapper {
-    pub fn new(_: &impl ReadContext, base_path: DotPathBuf) -> Self {
-        Self { base_path }
-    }
-
-    pub fn value(&self, ctx: &impl ReadContext) -> u64 {
-        ctx.__get(self.base_path.push("value")).unwrap()
-    }
-
-    pub fn set_value(&self, ctx: &impl WriteContext, value: u64) {
-        ctx.__set(self.base_path.push("value"), value);
-    }
+    pub value: u64,
 }
 
 // #[root_storage]

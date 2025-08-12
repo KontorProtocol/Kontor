@@ -142,6 +142,215 @@ fn to_pascal_case(name: &str) -> String {
         .collect()
 }
 
+#[proc_macro_derive(Wrapper)]
+pub fn derive_wrapper(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let generics = &input.generics;
+
+    let body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_struct_wrapper(data_struct, name),
+        syn::Data::Enum(data_enum) => generate_enum_wrapper(data_enum, name),
+        syn::Data::Union(_) => Err(Error::new(
+            name.span(),
+            "Wrapper derive is not supported for unions",
+        )),
+    };
+
+    let body = match body {
+        Ok(body) => body,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
+    let expanded = quote! {
+        #body
+    };
+
+    TokenStream::from(expanded)
+}
+
+fn generate_struct_wrapper(
+    data_struct: &DataStruct,
+    type_name: &Ident,
+) -> syn::Result<proc_macro2::TokenStream> {
+    match &data_struct.fields {
+        Fields::Named(fields) => {
+            let wrapper_name = Ident::new(&format!("{}Wrapper", type_name), type_name.span());
+
+            let getters = fields.named.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+                let field_name_str = field_name.to_string();
+                let field_ty = &field.ty;
+
+                quote! {
+                    pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_ty {
+                        ctx.__get(self.base_path.push(#field_name_str)).unwrap()
+                    }
+                }
+            });
+
+            let setters = fields.named.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+                let field_name_str = field_name.to_string();
+                let field_ty = &field.ty;
+                let set_field_name = Ident::new(&format!("set_{}", field_name), field_name.span());
+
+                quote! {
+                    pub fn #set_field_name(&self, ctx: &impl stdlib::WriteContext, value: #field_ty) {
+                        ctx.__set(self.base_path.push(#field_name_str), value);
+                    }
+                }
+            });
+
+            let load_fields = fields.named.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+
+                quote! {
+                    #field_name: self.#field_name(ctx)
+                }
+            });
+
+            Ok(quote! {
+                #[derive(Clone)]
+                pub struct #wrapper_name {
+                    pub base_path: stdlib::DotPathBuf,
+                }
+
+                #[allow(dead_code)]
+                impl #wrapper_name {
+                    pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
+                        Self { base_path }
+                    }
+
+                    #(#getters)*
+
+                    #(#setters)*
+
+                    pub fn load(&self, ctx: &impl stdlib::ReadContext) -> #type_name {
+                        #type_name {
+                            #(#load_fields,)*
+                        }
+                    }
+                }
+            })
+        }
+        _ => Err(Error::new(
+            type_name.span(),
+            "Wrapper derive only supports structs with named fields",
+        )),
+    }
+}
+
+fn generate_enum_wrapper(
+    data_enum: &DataEnum,
+    type_name: &Ident,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let wrapper_name = Ident::new(&format!("{}Wrapper", type_name), type_name.span());
+
+    // Generate wrapper variants and collect errors
+    let wrapper_variants: syn::Result<Vec<_>> = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            match &variant.fields {
+                Fields::Unit => Ok(quote! { #variant_ident }),
+                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                    let inner_ty = &fields.unnamed[0].ty;
+                    let inner_wrapper_ty = get_wrapper_ident(inner_ty, variant.ident.span())?;
+                    Ok(quote! { #variant_ident(#inner_wrapper_ty) })
+                }
+                _ => Err(Error::new(
+                    variant.ident.span(),
+                    "Wrapper derive only supports unit or single-field tuple variants",
+                )),
+            }
+        })
+        .collect();
+
+    let wrapper_variants = wrapper_variants?;
+
+    let variant_names = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_name = variant.ident.to_string().to_lowercase();
+            quote! { #variant_name }
+        })
+        .collect::<Vec<_>>();
+
+    let new_arms = data_enum.variants.iter().map(|variant| {
+        let variant_ident = &variant.ident;
+        let variant_name = variant_ident.to_string().to_lowercase();
+
+        Ok(match &variant.fields {
+            Fields::Unit => quote! {
+                p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident
+            },
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                let inner_wrapper_ty = get_wrapper_ident(&fields.unnamed[0].ty, variant.ident.span())?;
+                quote! {
+                    p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident(#inner_wrapper_ty::new(ctx, base_path.push(#variant_name)))
+                }
+            }
+            _ => unreachable!(),
+        })
+    }).collect::<syn::Result<Vec<_>>>()?;
+
+    let load_arms = data_enum.variants.iter().map(|variant| {
+        let variant_ident = &variant.ident;
+        match &variant.fields {
+            Fields::Unit => quote! {
+                #wrapper_name::#variant_ident => #type_name::#variant_ident
+            },
+            Fields::Unnamed(_) => quote! {
+                #wrapper_name::#variant_ident(inner_wrapper) => #type_name::#variant_ident(inner_wrapper.load(ctx))
+            },
+            _ => unreachable!(),
+        }
+    }).collect::<Vec<_>>();
+
+    Ok(quote! {
+        #[derive(Clone)]
+        pub enum #wrapper_name {
+            #(#wrapper_variants,)*
+        }
+
+        impl #wrapper_name {
+            pub fn new(ctx: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
+                ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, [#(#variant_names),*].join("|")))
+                    .map(|path| match path {
+                        #(#new_arms,)*
+                        _ => {
+                            panic!("Matching path not found")
+                        }
+                    })
+                    .unwrap()
+            }
+
+            pub fn load(&self, ctx: &impl stdlib::ReadContext) -> #type_name {
+                match self {
+                    #(#load_arms,)*
+                }
+            }
+        }
+    })
+}
+
+fn get_wrapper_ident(ty: &Type, span: proc_macro2::Span) -> syn::Result<Ident> {
+    if let Type::Path(type_path) = ty {
+        type_path
+            .path
+            .segments
+            .last()
+            .map(|segment| Ident::new(&format!("{}Wrapper", segment.ident), span))
+            .ok_or_else(|| Error::new(span, "Expected a named type for variant field"))
+    } else {
+        Err(Error::new(span, "Expected a named type for variant field"))
+    }
+}
+
 #[proc_macro]
 pub fn contract(input: TokenStream) -> TokenStream {
     let attr_args = NestedMeta::parse_meta_list(input.into()).unwrap();
@@ -157,7 +366,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             world: #world,
             path: #path,
             generate_all,
-            additional_derives: [stdlib::Store],
+            additional_derives: [stdlib::Store, stdlib::Wrapper],
         });
 
         use kontor::built_in::*;
