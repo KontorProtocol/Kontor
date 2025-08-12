@@ -1,18 +1,14 @@
 use anyhow::{Result, anyhow};
-use bitcoin::Witness;
+use bitcoin::{Txid, Witness};
 use bitcoin::address::Address;
 use bitcoin::amount::Amount;
-use bitcoin::hashes::Hash as _;
-use bitcoin::key::{Keypair, Secp256k1, TapTweak};
-use bitcoin::sighash::{Prevouts, SighashCache};
-use bitcoin::taproot::Signature as TapSig;
+use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::transaction::Version;
 use bitcoin::{
     Network, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, XOnlyPublicKey, absolute::LockTime,
 };
 use bitcoin::{TapSighashType, consensus::encode::serialize as serialize_tx};
 use clap::Parser;
-use futures_util::future::join_all;
 use indexer::config::{Config, TestConfig};
 use indexer::{bitcoin_client::Client, test_utils};
 use std::str::FromStr;
@@ -49,16 +45,30 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
         let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
         let (internal_key, _parity) = keypair.x_only_public_key();
 
-        // REPLACE these with real testnet UTXOs for each signer index i
-        // Example: ("738c9c29646f2efe149fc3abb23976f4e3c3009656bdb4349a8e04570ed2ba9a", 1, 500_000)
         let (txid_str, vout_u32, value_sat): (&str, u32, u64) = match i {
-            0 => ("dac8f123136bb59926e559e9da97eccc9f46726c3e7daaf2ab3502ef3a47fa46", 0, 500_000),
-            1 => ("465de2192b246635df14ff81c3b6f37fb864f308ad271d4f91a29dcf476640ba", 0, 500_000),
-            2 => ("49e327c2945f88908f67586de66af3bfc2567fe35ec7c5f1769f973f9fe8e47e", 0, 500_000),
-            _ => ("b672084964187d9655a008c2af90c7d79b19fddcd66390bcf2926c0ea8e4135a", 0, 500_000),
+            0 => (
+                "dac8f123136bb59926e559e9da97eccc9f46726c3e7daaf2ab3502ef3a47fa46",
+                0,
+                500_000,
+            ),
+            1 => (
+                "465de2192b246635df14ff81c3b6f37fb864f308ad271d4f91a29dcf476640ba",
+                0,
+                500_000,
+            ),
+            2 => (
+                "49e327c2945f88908f67586de66af3bfc2567fe35ec7c5f1769f973f9fe8e47e",
+                0,
+                500_000,
+            ),
+            _ => (
+                "b672084964187d9655a008c2af90c7d79b19fddcd66390bcf2926c0ea8e4135a",
+                0,
+                500_000,
+            ),
         };
         let outpoint = OutPoint {
-            txid: bitcoin::Txid::from_str(txid_str)?,
+            txid: Txid::from_str(txid_str)?,
             vout: vout_u32,
         };
         let prevout = TxOut {
@@ -110,49 +120,18 @@ async fn test_multi_signer_psbt_testnet() -> Result<()> {
     // Prepare prevouts for sighash computation
     let prevouts: Vec<TxOut> = signers.iter().map(|s| s.prevout.clone()).collect();
 
-    // Each signer signs their input concurrently with SIGHASH_NONE | ANYONECANPAY
-    let futures = signers.iter().enumerate().map(|(idx, s)| {
-        let tx = unsigned_tx.clone();
-        let prevouts = prevouts.clone();
-        let secp_ref = secp.clone();
-        let keypair = s.keypair;
-        async move {
-            let sighash_type = TapSighashType::NonePlusAnyoneCanPay;
-            let mut sighasher = SighashCache::new(tx.clone());
-            let sighash = sighasher.taproot_key_spend_signature_hash(
-                idx,
-                &Prevouts::All(&prevouts),
-                sighash_type,
-            )?;
-            let msg =
-                bitcoin::secp256k1::Message::from_digest(sighash.to_raw_hash().to_byte_array());
-            let tweaked = keypair.tap_tweak(&secp_ref, None);
-            let schnorr = secp_ref.sign_schnorr(&msg, &tweaked.to_keypair());
-            let sig = TapSig {
-                signature: schnorr,
-                sighash_type,
-            };
-            Ok::<(usize, TapSig), anyhow::Error>((idx, sig))
-        }
-    });
-
-    let signed_parts = join_all(futures)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Apply signatures and finalize witnesses
-    for (idx, sig) in signed_parts {
-        psbt.inputs[idx].tap_key_sig = Some(sig);
-        let mut w = Witness::new();
-        w.push(
-            psbt.inputs[idx]
-                .tap_key_sig
-                .as_ref()
-                .expect("sig just set")
-                .to_vec(),
-        );
-        psbt.inputs[idx].final_script_witness = Some(w);
+    // Sign each input using helper with SIGHASH_NONE | ANYONECANPAY
+    for (idx, s) in signers.iter().enumerate() {
+        let mut tx_to_sign = unsigned_tx.clone();
+        test_utils::sign_key_spend(
+            &secp,
+            &mut tx_to_sign,
+            &prevouts,
+            &s.keypair,
+            idx,
+            Some(TapSighashType::NonePlusAnyoneCanPay),
+        )?;
+        psbt.inputs[idx].final_script_witness = Some(tx_to_sign.input[idx].witness.clone());
     }
 
     let final_tx = psbt.extract_tx()?;

@@ -6,7 +6,7 @@ use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Address, FeeRate, KnownHrp, Psbt, ScriptBuf, Transaction, TxIn, Witness, XOnlyPublicKey,
+    Address, FeeRate, KnownHrp, Psbt, ScriptBuf, TapSighashType, Transaction, TxIn, Witness, XOnlyPublicKey
 };
 use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
@@ -77,6 +77,7 @@ async fn test_signature_replay_failse() -> Result<()> {
         &[utxo_for_output],
         &seller_keypair,
         0,
+        Some(TapSighashType::All),
     )?;
 
     let spend_tx_prevouts = vec![commit_tx.output[0].clone()];
@@ -239,7 +240,14 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         script_pubkey: seller_address.script_pubkey(),
     }];
 
-    test_utils::sign_key_spend(&secp, &mut attach_commit_tx, &prevouts, &keypair, 0)?;
+    test_utils::sign_key_spend(
+        &secp,
+        &mut attach_commit_tx,
+        &prevouts,
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
 
     let attach_taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, attach_tap_script.clone())

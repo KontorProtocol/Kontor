@@ -6,7 +6,7 @@ use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, Amount, KnownHrp, TxOut};
+use bitcoin::{Address, Amount, KnownHrp, TapSighashType, TxOut};
 use bitcoin::{
     consensus::encode::serialize as serialize_tx,
     key::{Keypair, Secp256k1},
@@ -159,6 +159,7 @@ async fn test_compose() -> Result<()> {
         &[commit_previous_output],
         &keypair,
         0,
+        Some(TapSighashType::All),
     )?;
 
     let reveal_previous_output = commit_transaction.output[0].clone();
@@ -335,6 +336,7 @@ async fn test_compose_all_fields() -> Result<()> {
         &[commit_previous_output],
         &keypair,
         0,
+        None,
     )?;
 
     let reveal_previous_outputs = [
@@ -358,6 +360,7 @@ async fn test_compose_all_fields() -> Result<()> {
         &reveal_previous_outputs,
         &keypair,
         1,
+        None,
     )?;
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));

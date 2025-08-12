@@ -135,8 +135,9 @@ pub fn sign_key_spend(
     prevouts: &[TxOut],
     keypair: &Keypair,
     input_index: usize,
+    sighash_type: Option<TapSighashType>,
 ) -> Result<()> {
-    let sighash_type = TapSighashType::Default;
+    let sighash_type = sighash_type.unwrap_or(TapSighashType::Default);
 
     let mut sighasher = SighashCache::new(key_spend_tx.clone());
     let sighash = sighasher

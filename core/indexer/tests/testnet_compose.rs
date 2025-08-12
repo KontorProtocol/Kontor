@@ -20,7 +20,6 @@ use std::str::FromStr;
 use tracing::info;
 
 #[tokio::test]
-#[ignore]
 async fn test_taproot_transaction() -> Result<()> {
     // Initialize regtest client
     let mut config = Config::try_parse()?;
@@ -34,6 +33,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let (seller_address, seller_child_key, _) =
         test_utils::generate_taproot_address_from_mnemonic(&secp, &test_config, 0)?;
+    println!("seller_address: {}", seller_address);
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -75,7 +75,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let tap_script = compose_outputs.tap_script;
 
     // Sign the attach transaction
-    test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
+    test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0, None)?;
 
     let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 
@@ -136,7 +136,6 @@ async fn test_taproot_transaction() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
     logging::setup();
 

@@ -4,6 +4,7 @@ use anyhow::Result;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::Sequence;
+use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
@@ -145,6 +146,7 @@ async fn test_commit_reveal_ordinals() -> Result<()> {
         }],
         &sender_keypair,
         0,
+        Some(TapSighashType::All),
     )?;
 
     // Sign the reveal transaction using script path spending

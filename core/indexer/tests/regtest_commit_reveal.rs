@@ -1,9 +1,6 @@
 use anyhow::Result;
 use bitcoin::{
-    FeeRate, Network,
-    consensus::encode::serialize as serialize_tx,
-    key::{Keypair, Secp256k1},
-    taproot::{LeafVersion, TaprootBuilder},
+    consensus::encode::serialize as serialize_tx, key::{Keypair, Secp256k1}, taproot::{LeafVersion, TaprootBuilder}, FeeRate, Network, TapSighashType
 };
 use clap::Parser;
 use indexer::{
@@ -67,7 +64,14 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let tap_script = compose_outputs.tap_script;
 
     // Sign the attach transaction
-    test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
+    test_utils::sign_key_spend(
+        &secp,
+        &mut attach_tx,
+        &[utxo_for_output],
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
 
     let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 
