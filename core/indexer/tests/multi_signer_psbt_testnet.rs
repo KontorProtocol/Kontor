@@ -14,7 +14,7 @@ use futures_util::future::join_all;
 use indexer::config::{Config, TestConfig};
 use indexer::{bitcoin_client::Client, logging, test_utils};
 use std::str::FromStr;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 #[derive(Clone, Debug)]
 struct SignerInput {
     outpoint: OutPoint,
@@ -194,6 +194,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         .mempool_min_fee_btc_per_kvb
         .max(mp.min_relay_tx_fee_btc_per_kvb);
     let min_sat_per_vb: u64 = ((min_btc_per_kvb * 100_000_000.0) / 1000.0).ceil() as u64;
+    info!(target: "portal", "min_sat_per_vb={}", min_sat_per_vb);
 
     let dust_limit_sat: u64 = 330; // approx P2TR dust
 
@@ -231,8 +232,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
             let after_vb = tx_vbytes(&temp_unsigned);
             let delta_vb = after_vb.saturating_sub(base_vb);
             let node_fee = delta_vb.saturating_mul(min_sat_per_vb);
-            info!(target: "node", "Node idx={}; base psbt size ~{} vB; psbt size after adding input/output and dummy sig ~{} vB; size added by node delta_vB={} fee_contrib={} sat",
-                idx, base_vb, after_vb, delta_vb, node_fee);
+            info!(target: "node", "size_with_dummy_sig={}vB (size_delta_dummy={}vB); node_fee={} sats (@ {} sats/vB)", after_vb, delta_vb, node_fee, min_sat_per_vb);
 
             // Now actually append input+output to psbt_one with node's fee contribution
             psbt_one.unsigned_tx = temp_unsigned; // reuse temp we already built
@@ -273,9 +273,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
             let actual_delta_vb = actual_after_vb.saturating_sub(base_vb);
             let actual_fee_needed = actual_delta_vb.saturating_mul(min_sat_per_vb);
             let fee_paid = s.prevout.value.to_sat().saturating_sub(node_return_value);
-            info!(target: "node", "Node idx={} ASSERTING fee is correct for size; size now ~{} vB (delta {} vB), fee_needed={} sat, fee_paid={} sat",
-                idx, actual_after_vb, actual_delta_vb, actual_fee_needed, fee_paid);
-                
+            info!(target: "node", "size_final={}vB (size_delta_final={}vB); node_fee: {} sats >= {} sats)", actual_after_vb, actual_delta_vb,fee_paid, actual_fee_needed);
+
             if s.prevout.value.to_sat() >= actual_fee_needed.saturating_add(dust_limit_sat) {
                 assert_eq!(fee_paid, actual_fee_needed, "Node idx={} expected actual fee {} sat based on {} vB @ {} sat/vB, got {} sat", idx, actual_fee_needed, actual_delta_vb, min_sat_per_vb, fee_paid);
             } else {
@@ -295,6 +294,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
 
     // Aggregate starting from base
+    info!(target: "portal", " **********************PORTAL AGGREGATING PSBT********************************");
+
     let mut final_psbt = base_psbt.clone();
     for mut p in parts.drain(..) {
         let last_input_idx = p.unsigned_tx.input.len() - 1;
@@ -319,28 +320,35 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     for s in &signers {
         sum_inputs += s.prevout.value.to_sat();
     }
-    // node outputs are all outputs except index 0 (portal change placeholder)
+    // Node outputs are all outputs except index 0 (portal change placeholder)
     for (i, o) in final_psbt.unsigned_tx.output.iter().enumerate() {
         if i == 0 {
             continue;
         }
         sum_outputs += o.value.to_sat();
     }
-    // Reuse the pre-fetched min_sat_per_vb computed above
-    info!(target: "portal", "FeeTopUp: using pre-fetched min_sat/vB={}", min_sat_per_vb);
 
-    // Compute vbytes approximating post-signing by using node signatures (present) and dummying portal
-    let mut est_vbytes =
-        tx_vbytes_with_psbt_witnesses_and_portal_dummy(&final_psbt, portal_internal_key, 1);
+    // Fees already contributed by nodes
+    let node_fee_sum = sum_inputs.saturating_sub(portal_prevout.value.to_sat()).saturating_sub(sum_outputs);
+
+    // Track portal inputs used, their total value, and indices in the tx
+    let mut portal_inputs_sum: u64 = portal_prevout.value.to_sat();
+    let mut portal_input_indices: Vec<usize> = vec![0usize];
+
+    // Compute vbytes approximating post-signing by using node witnesses (present) and dummying portal
+    let mut est_vbytes = tx_vbytes_with_psbt_witnesses_and_portal_dummy(
+        &final_psbt,
+        portal_internal_key,
+        portal_input_indices.len(),
+    );
     let mut required_fee = est_vbytes * min_sat_per_vb;
-    // Available budget for fee and change
-    let mut available_budget = sum_inputs.saturating_sub(sum_outputs);
+    let mut remaining_fee = required_fee.saturating_sub(node_fee_sum);
+    info!(target: "portal", "Aggregated PSBT: psbt_size_with_dummy_portal_sig={}vB, required_fee={}, node_fee_sum={}, remaining_fee for portal to cover={}", est_vbytes, required_fee, node_fee_sum, remaining_fee);
 
-    // If required_change is insufficient for a valid change output, add more portal inputs
-    let mut portal_inputs_used = 1usize;
-    // Ensure fee is covered by available inputs; only add portal inputs if budget < required_fee
-    while available_budget < required_fee && portal_inputs_used < portal_utxos.len() {
-        let (txid_s, vout_u32, value_sat) = portal_utxos[portal_inputs_used];
+    // Ensure portal covers remaining fee; add more portal inputs if necessary
+    while portal_inputs_sum < remaining_fee && portal_input_indices.len() < portal_utxos.len() {
+        let next_portal_utxo_idx = portal_input_indices.len();
+        let (txid_s, vout_u32, value_sat) = portal_utxos[next_portal_utxo_idx];
         let more_prevout = TxOut {
             value: Amount::from_sat(value_sat),
             script_pubkey: portal_address.script_pubkey(),
@@ -358,101 +366,82 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         let idx = final_psbt.inputs.len() - 1;
         final_psbt.inputs[idx].witness_utxo = Some(more_prevout.clone());
         final_psbt.inputs[idx].tap_internal_key = Some(portal_internal_key);
-        sum_inputs += value_sat;
 
-        // Recompute fee using actual node witnesses and dummying the portal inputs still unsigned
+        portal_inputs_sum = portal_inputs_sum.saturating_add(value_sat);
+        portal_input_indices.push(idx);
+
+        // Recompute size and remaining fee with current portal inputs
         est_vbytes = tx_vbytes_with_psbt_witnesses_and_portal_dummy(
             &final_psbt,
             portal_internal_key,
-            portal_inputs_used,
+            portal_input_indices.len(),
         );
         required_fee = est_vbytes * min_sat_per_vb;
-        available_budget = sum_inputs.saturating_sub(sum_outputs);
-        portal_inputs_used += 1;
-        info!(target: "portal", "FeeTopUp: Added portal input {}:{} ({} sat); new budget={} sat, est_fee={} sat",
-            txid_s, vout_u32, value_sat, available_budget, required_fee);
+        remaining_fee = required_fee.saturating_sub(node_fee_sum);
+        info!(target: "portal", "Input added to portal portal_inputs_sum={}, est_vbytes={}, required_fee={}, remaining_fee={}",
+            portal_inputs_sum, est_vbytes, required_fee, remaining_fee);
     }
 
-    // Compute change after fee is covered
-    if available_budget <= required_fee {
-        // No change; treat remainder (if any) as fee
+    // Compute portal change after fee is covered
+    let portal_change = portal_inputs_sum.saturating_sub(remaining_fee);
+    if portal_change < dust_limit_sat {
         final_psbt.unsigned_tx.output.remove(0);
         final_psbt.outputs.remove(0);
-        info!(target: "portal", "FeeTopUp: No change (budget {} <= fee {}), dropping change output", available_budget, required_fee);
+        info!(target: "portal", "Change {} < dust {}, dropped (added to fee), total_fee_paid={}", portal_change, dust_limit_sat, node_fee_sum + (portal_inputs_sum - portal_change));
     } else {
-        let change = available_budget - required_fee;
-        if change >= dust_limit_sat {
-            final_psbt.unsigned_tx.output[0].value = Amount::from_sat(change);
-            info!(target: "portal", "FeeTopUp: Portal change set to {} sat", change);
-        } else {
-            final_psbt.unsigned_tx.output.remove(0);
-            final_psbt.outputs.remove(0);
-            info!(target: "portal", "FeeTopUp: Change {} < dust {}, dropped (added to fee)", change, dust_limit_sat);
-        }
+        final_psbt.unsigned_tx.output[0].value = Amount::from_sat(portal_change);
+        info!(target: "portal", "portal_change={}; required_fee={}; total_fee_paid={}", portal_change, required_fee, node_fee_sum + (portal_inputs_sum - portal_change));
     }
 
-    // Sign all portal inputs (first N used) with DEFAULT
-    for i in 0..portal_inputs_used {
-        let mut tx_to_sign = final_psbt.unsigned_tx.clone();
-        // Build prevouts in order for all inputs
-        let mut all_prevouts: Vec<TxOut> = Vec::with_capacity(final_psbt.unsigned_tx.input.len());
-        // For simplicity, reconstruct from known pieces
-        // First portal input
-        if i == 0 {
-            all_prevouts.push(portal_prevout.clone());
-            for s in &signers {
-                all_prevouts.push(s.prevout.clone());
-            }
-            // Additional portal inputs appended after nodes
-            (1..portal_inputs_used).for_each(|j| {
-                let (_txid_s, _vout_u32, value_sat) = portal_utxos[j];
-                all_prevouts.push(TxOut {
-                    value: Amount::from_sat(value_sat),
-                    script_pubkey: portal_address.script_pubkey(),
-                });
-            });
-        } else {
-            // Still build the same full prevouts vector; index i will point to the ith portal input
-            all_prevouts.push(portal_prevout.clone());
-            for s in &signers {
-                all_prevouts.push(s.prevout.clone());
-            }
-            (1..portal_inputs_used).for_each(|j| {
-                let (_txid_s, _vout_u32, value_sat) = portal_utxos[j];
-                all_prevouts.push(TxOut {
-                    value: Amount::from_sat(value_sat),
-                    script_pubkey: portal_address.script_pubkey(),
-                });
-            });
-        }
+    // Sign only the portal inputs with portal key: build prevouts once
+    let all_prevouts: Vec<TxOut> = final_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.clone().expect("missing witness_utxo for input"))
+        .collect();
+
+    let mut tx_to_sign = final_psbt.unsigned_tx.clone();
+    for &idx in &portal_input_indices {
         test_utils::sign_key_spend(
             &secp,
             &mut tx_to_sign,
             &all_prevouts,
             &portal_keypair,
-            i,
+            idx,
             None,
         )?;
-        final_psbt.inputs[i].final_script_witness = Some(tx_to_sign.input[i].witness.clone());
     }
+    // Copy back only portal input witnesses
+    for &idx in &portal_input_indices {
+        final_psbt.inputs[idx].final_script_witness = Some(tx_to_sign.input[idx].witness.clone());
+    }
+
+    // Compute total input value directly from PSBT inputs' witness_utxo
+    let total_in: u64 = final_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.as_ref().expect("missing witness_utxo for input").value.to_sat())
+        .sum();
 
     let final_tx = final_psbt.extract_tx()?;
     let final_vbytes = tx_vbytes(&final_tx);
-    let mut total_in = 0u64;
-    (0..portal_inputs_used).for_each(|inp| {
-        total_in += portal_utxos[inp].2;
-    });
-    for s in &signers {
-        total_in += s.prevout.value.to_sat();
-    }
     let mut total_out = 0u64;
     for o in &final_tx.output {
         total_out += o.value.to_sat();
     }
     let fee_sat = total_in.saturating_sub(total_out);
-    info!(target: "portal", "FeeTopUp: Final tx ~{} vB, inputs={}, outputs={}, fee={} sat",
-        final_vbytes, final_tx.input.len(), final_tx.output.len(), fee_sat);
-    println!("FINAL TX {:#?}", final_tx);
+    let final_required_fee = final_vbytes.saturating_mul(min_sat_per_vb);
+    info!(target: "portal", "assert fee paid covers required fee");
+    info!(target: "portal", "Final size={}vB; min_sat_per_vb={}; required_fee={} sat; fee_paid={} sat", final_vbytes, min_sat_per_vb, final_required_fee, fee_sat);
+    assert!(
+        fee_sat >= final_required_fee,
+        "Final fee {} sat is less than required {} sat at {} sat/vB for {} vB",
+        fee_sat,
+        final_required_fee,
+        min_sat_per_vb,
+        final_vbytes
+    );
+
     let hex = hex::encode(serialize_tx(&final_tx));
     let res = client.test_mempool_accept(&[hex]).await?;
     assert!(!res.is_empty());
