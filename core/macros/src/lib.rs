@@ -223,6 +223,33 @@ fn generate_struct_wrapper(
                             #field_wrapper_name { base_path: self.base_path.push(#field_name_str) }
                         }
                     })
+                } else if is_option_type(field_ty) {
+                    let inner_ty = get_option_inner_type(field_ty)?;
+                    let base_path = quote! { self.base_path.push(#field_name_str) };
+                    if is_primitive_type(&inner_ty) {
+                        Ok(quote! {
+                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_ty> {
+                                let base_path = #base_path;
+                                if ctx.__is_void(&base_path) {
+                                    None
+                                } else {
+                                    ctx.__get(base_path)
+                                }
+                            }
+                        })
+                    } else {
+                        let inner_wrapper_ty = get_wrapper_ident(&inner_ty, field.span())?;
+                        Ok(quote! {
+                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_wrapper_ty> {
+                                let base_path = #base_path;
+                                if ctx.__is_void(&base_path) {
+                                    None
+                                } else {
+                                    Some(#inner_wrapper_ty::new(ctx, base_path))
+                                }
+                            }
+                        })
+                    }
                 } else if is_primitive_type(field_ty) {
                     Ok(quote! {
                         pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_ty {
@@ -246,15 +273,26 @@ fn generate_struct_wrapper(
                 let set_field_name = Ident::new(&format!("set_{}", field_name), field_name.span());
 
                 if is_map_type(field_ty) {
-                    quote! { }
+                    Ok(quote! { })
+                } else if is_option_type(field_ty) {
+                    let inner_ty = get_option_inner_type(field_ty)?;
+                    Ok(quote! {
+                        pub fn #set_field_name(&self, ctx: &impl stdlib::WriteContext, value: Option<#inner_ty>) {
+                            let base_path = self.base_path.push(#field_name_str);
+                            match value {
+                                Some(inner) => ctx.__set(base_path, inner),
+                                None => ctx.__set(base_path, ()),
+                            }
+                        }
+                    })
                 } else {
-                    quote! {
+                    Ok(quote! {
                         pub fn #set_field_name(&self, ctx: &impl stdlib::WriteContext, value: #field_ty) {
                             ctx.__set(self.base_path.push(#field_name_str), value);
                         }
-                    }
+                    })
                 }
-            }).collect::<Vec<_>>();
+            }).collect::<Result::<Vec<_>>>()?;
 
             let load_fields = fields
                 .named
@@ -269,6 +307,17 @@ fn generate_struct_wrapper(
                         Ok(quote! {
                             #field_name: self.#field_name().load(ctx)
                         })
+                    } else if is_option_type(field_ty) {
+                        let inner_ty = get_option_inner_type(field_ty)?;
+                        if is_primitive_type(&inner_ty) {
+                            Ok(quote! {
+                                #field_name: self.#field_name(ctx)
+                            })
+                        } else {
+                            Ok(quote! {
+                                #field_name: self.#field_name(ctx).map(|p| p.load(ctx))
+                            })
+                        }
                     } else if is_primitive_type(field_ty) {
                         Ok(quote! {
                             #field_name: self.#field_name(ctx)
@@ -457,6 +506,72 @@ fn get_wrapper_ident(ty: &Type, span: proc_macro2::Span) -> syn::Result<Ident> {
             .ok_or_else(|| Error::new(span, "Expected a named type for variant field"))
     } else {
         Err(Error::new(span, "Expected a named type for variant field"))
+    }
+}
+
+fn get_option_inner_type(ty: &Type) -> syn::Result<Type> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        && args.args.len() == 1
+        && let syn::GenericArgument::Type(inner_ty) = &args.args[0]
+    {
+        return Ok(inner_ty.clone());
+    }
+    Err(Error::new(ty.span(), "Expected Option<T> type"))
+}
+
+#[proc_macro_derive(Root)]
+pub fn derive_root(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let generics = &input.generics;
+
+    let body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_root_struct(data_struct, name),
+        _ => Err(Error::new(
+            name.span(),
+            "Root derive only supports structs with named fields",
+        )),
+    };
+
+    let body = match body {
+        Ok(body) => body,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
+    let expanded = quote! {
+        #body
+    };
+
+    TokenStream::from(expanded)
+}
+
+fn generate_root_struct(
+    data_struct: &DataStruct,
+    type_name: &Ident,
+) -> syn::Result<proc_macro2::TokenStream> {
+    match &data_struct.fields {
+        Fields::Named(_) => {
+            let wrapper_name = Ident::new(&format!("{}Wrapper", type_name), type_name.span());
+            Ok(quote! {
+                impl #type_name {
+                    pub fn init(self, ctx: &impl stdlib::WriteContext) {
+                        ctx.__set(stdlib::DotPathBuf::new(), self)
+                    }
+                }
+
+                pub fn storage(ctx: &impl stdlib::ReadContext) -> #wrapper_name {
+                    #wrapper_name::new(ctx, stdlib::DotPathBuf::new())
+                }
+            })
+        }
+        _ => Err(Error::new(
+            type_name.span(),
+            "Root derive only supports structs with named fields",
+        )),
     }
 }
 

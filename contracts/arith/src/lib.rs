@@ -1,35 +1,8 @@
 macros::contract!(name = "arith");
 
-#[derive(Clone, Store)]
+#[derive(Clone, Store, Wrapper, Root)]
 struct ArithStorage {
     pub last_op: Option<Op>,
-}
-
-impl ArithStorage {
-    pub fn init(self, ctx: &impl WriteContext) {
-        ctx.__set(DotPathBuf::new(), self)
-    }
-}
-
-struct Storage;
-
-impl Storage {
-    pub fn last_op(ctx: &impl ReadContext) -> Option<OpWrapper> {
-        let base_path = DotPathBuf::new().push("last_op");
-        if ctx.__is_void(&base_path) {
-            None
-        } else {
-            Some(OpWrapper::new(ctx, base_path))
-        }
-    }
-
-    pub fn set_last_op(ctx: &impl WriteContext, value: Option<Op>) {
-        let base_path = DotPathBuf::new().push("last_op");
-        match value {
-            Some(op) => ctx.__set(base_path, op),
-            None => ctx.__set(base_path, ()),
-        }
-    }
 }
 
 impl Guest for Arith {
@@ -41,7 +14,7 @@ impl Guest for Arith {
     }
 
     fn eval(ctx: &ProcContext, x: u64, op: Op) -> ArithReturn {
-        Storage::set_last_op(ctx, Some(op));
+        storage(ctx).set_last_op(ctx, Some(op));
         ArithReturn {
             value: match op {
                 Op::Id => x,
@@ -53,7 +26,7 @@ impl Guest for Arith {
     }
 
     fn last_op(ctx: &ViewContext) -> Option<Op> {
-        Storage::last_op(ctx).map(|op| op.load(ctx))
+        storage(ctx).last_op(ctx).map(|op| op.load(ctx))
     }
 }
 

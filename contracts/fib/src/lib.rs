@@ -171,22 +171,14 @@ struct FibValue {
     pub value: u64,
 }
 
-// #[root_storage]
-#[derive(Clone, Store, Wrapper)]
+#[derive(Clone, Store, Wrapper, Root)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }
 
-// generated
-impl FibStorage {
-    pub fn init(self, ctx: &impl WriteContext) {
-        ctx.__set(DotPathBuf::new(), self)
-    }
-}
-
 impl Fib {
     fn raw_fib(ctx: &ProcContext, n: u64) -> u64 {
-        let cache = FibStorageWrapper::new(ctx, DotPathBuf::new()).cache();
+        let cache = storage(ctx).cache();
         if let Some(v) = cache.get(ctx, n).map(|v| v.value(ctx)) {
             return v;
         }
