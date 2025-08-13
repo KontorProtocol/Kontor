@@ -14,7 +14,7 @@ use futures_util::future::join_all;
 use indexer::config::{Config, TestConfig};
 use indexer::{bitcoin_client::Client, logging, test_utils};
 use std::str::FromStr;
-use tracing::info;
+use tracing::{error, info, warn};
 #[derive(Clone, Debug)]
 struct SignerInput {
     outpoint: OutPoint,
@@ -22,15 +22,6 @@ struct SignerInput {
     internal_key: XOnlyPublicKey,
     keypair: Keypair,
     recipient: Address,
-}
-
-#[derive(Clone)]
-struct NodePart {
-    psbt: Psbt,
-    delta_vb: u64,
-    node_fee: u64,
-    prevout_value: u64,
-    return_value: u64,
 }
 
 fn tx_vbytes(tx: &Transaction) -> u64 {
@@ -46,13 +37,31 @@ fn tx_vbytes(tx: &Transaction) -> u64 {
     weight.div_ceil(4)
 }
 
-fn estimate_vbytes_unsigned(base_len_bytes: usize, input_count: usize) -> u64 {
-    // Estimate witness overhead per Taproot key-path input (~100 bytes upper bound)
-    let witness_estimate = (input_count as u64) * 100u64;
-    let weight = (base_len_bytes as u64) * 4 + witness_estimate;
-    weight.div_ceil(4)
+fn tx_vbytes_with_psbt_witnesses_and_portal_dummy(
+    psbt: &Psbt,
+    portal_internal_key: XOnlyPublicKey,
+    portal_inputs_to_dummy: usize,
+) -> u64 {
+    // Build a tx view: use actual witnesses for signed inputs; add dummy for portal inputs still unsigned
+    let mut tx_with_wit = psbt.unsigned_tx.clone();
+    let mut remaining_portal = portal_inputs_to_dummy;
+    for (idx, input) in tx_with_wit.input.iter_mut().enumerate() {
+        if input.witness.is_empty() {
+            if let Some(wit) = psbt.inputs[idx].final_script_witness.clone() {
+                input.witness = wit;
+            } else if psbt.inputs[idx].tap_internal_key == Some(portal_internal_key)
+                && remaining_portal > 0
+            {
+                let mut wit = Witness::new();
+                // DEFAULT sighash for portal inputs → 64B Schnorr signature
+                wit.push(vec![0u8; 64]);
+                input.witness = wit;
+                remaining_portal -= 1;
+            }
+        }
+    }
+    tx_vbytes(&tx_with_wit)
 }
-
 fn get_node_signer_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<Vec<SignerInput>> {
     let num_signers = 3;
     let mut signers: Vec<SignerInput> = Vec::with_capacity(num_signers);
@@ -175,17 +184,16 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     let mut base_psbt = Psbt::from_unsigned_tx(base_tx.clone())?;
     base_psbt.inputs[0].witness_utxo = Some(portal_prevout.clone());
     base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
-    let base_len_bytes = serialize_tx(&base_psbt.unsigned_tx).len();
-    let base_est_vb = estimate_vbytes_unsigned(base_len_bytes, base_psbt.unsigned_tx.input.len());
-    info!(target: "portal", "PortalBase PSBT: inputs={}, outputs={}, ~{} vB",
-        base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(), base_est_vb);
+    let base_actual_vb = tx_vbytes(&base_psbt.unsigned_tx);
+    info!(target: "portal", "Portal created PSBT to send to nodes: inputs={}, outputs={}, ~{} vB",
+        base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(), base_actual_vb);
 
     // Fetch min relay fee (sat/vB) before nodes contribute fees
     let mp = client.get_mempool_info().await?;
-    let net = client.get_network_info().await?;
-    let min_btc_per_kvb = mp.mempool_min_fee_btc_per_kvb.max(net.relayfee);
+    let min_btc_per_kvb = mp
+        .mempool_min_fee_btc_per_kvb
+        .max(mp.min_relay_tx_fee_btc_per_kvb);
     let min_sat_per_vb: u64 = ((min_btc_per_kvb * 100_000_000.0) / 1000.0).ceil() as u64;
-    info!(target: "portal", "min_sat/vB={} for transaction of base size ~{} vB", min_sat_per_vb, base_est_vb);
 
     let dust_limit_sat: u64 = 330; // approx P2TR dust
 
@@ -195,14 +203,9 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         let mut psbt_one = base_psbt.clone();
         let portal_prevout_clone = portal_prevout.clone();
         async move {
-            info!(target: "node", " Node idx={} adding input: {}:{}, value={} sat",
-                idx, s.outpoint.txid, s.outpoint.vout, s.prevout.value.to_sat());
-
-            // Estimate node's size contribution in vbytes: before vs after adding input+output
-            let base_len_b = serialize_tx(&psbt_one.unsigned_tx).len();
-            let base_est_vb = estimate_vbytes_unsigned(base_len_b, psbt_one.unsigned_tx.input.len());
-            info!(target: "node", "Node idx={} base size before adding input/output ~{} vB",
-                idx, base_est_vb);
+            info!(target: "node", "Node idx={} starting**********************", idx);
+   
+            // create dummy inputs/outputs in order to calculate size for fee
             let mut temp_unsigned = psbt_one.unsigned_tx.clone();
             temp_unsigned.input.push(TxIn {
                 previous_output: s.outpoint,
@@ -214,23 +217,35 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
                 value: Amount::from_sat(0), // placeholder; value doesn't affect size much
                 script_pubkey: s.recipient.script_pubkey(),
             });
-            let after_len_b = serialize_tx(&temp_unsigned).len();
-            let after_est_vb = estimate_vbytes_unsigned(after_len_b, temp_unsigned.input.len());
-            let delta_vb = after_est_vb.saturating_sub(base_est_vb);
+
+            // Estimate node's size contribution in vbytes: include dummy signature for accuracy
+            let base_vb = tx_vbytes(&psbt_one.unsigned_tx);
+
+            // dummy Schnorr sig ~65 bytes in witness to approximate signed vbytes
+            let last_idx = temp_unsigned.input.len() - 1;
+            let mut dummy_wit = Witness::new();
+            dummy_wit.push(vec![0u8; 65]);
+            temp_unsigned.input[last_idx].witness = dummy_wit;
+
+            // calculate size + fee after adding dummy input/output and dummy sig
+            let after_vb = tx_vbytes(&temp_unsigned);
+            let delta_vb = after_vb.saturating_sub(base_vb);
             let node_fee = delta_vb.saturating_mul(min_sat_per_vb);
-            info!(target: "node", "Node idx={} size after adding input/output ~{} vB",
-                idx, after_est_vb);
-            info!(target: "node", "Node idx={} size added by node delta_vB={} fee_contrib={} sat",
-                idx, delta_vb, node_fee);
+            info!(target: "node", "Node idx={}; base psbt size ~{} vB; psbt size after adding input/output and dummy sig ~{} vB; size added by node delta_vB={} fee_contrib={} sat",
+                idx, base_vb, after_vb, delta_vb, node_fee);
 
             // Now actually append input+output to psbt_one with node's fee contribution
             psbt_one.unsigned_tx = temp_unsigned; // reuse temp we already built
             psbt_one.inputs.push(Default::default());
             let new_input_index = psbt_one.unsigned_tx.input.len() - 1;
+
+            // Clear the dummy witness before real signing
+            psbt_one.unsigned_tx.input[new_input_index].witness = Witness::new();
             psbt_one.inputs[new_input_index].witness_utxo = Some(s.prevout.clone());
             psbt_one.inputs[new_input_index].tap_internal_key = Some(s.internal_key);
 
-            // Compute return value; ensure not below dust
+            // Compute return value; ensure not below dust; this is effectively "change" going back to the node
+            // Output value = input - fee
             let mut node_return_value = s.prevout.value.to_sat().saturating_sub(node_fee);
             if node_return_value < dust_limit_sat {
                 node_return_value = dust_limit_sat;
@@ -240,10 +255,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
 
             let mut tx_to_sign = psbt_one.unsigned_tx.clone();
             let prevouts = vec![portal_prevout_clone, s.prevout.clone()];
-            let psbt_len = serialize_tx(&psbt_one.unsigned_tx).len();
-            let psbt_est_vb = estimate_vbytes_unsigned(psbt_len, psbt_one.unsigned_tx.input.len());
-            info!(target: "node", "Node idx={} sighash=SINGLE|ACP, ~{} vB (delta={} vB), fee_contrib={} sat, output_to={}, change value={} sat",
-                idx, psbt_est_vb, delta_vb, node_fee, s.recipient, node_return_value);
+
+            // sign the tx
             test_utils::sign_key_spend(
                 &secp,
                 &mut tx_to_sign,
@@ -255,50 +268,47 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
             psbt_one.inputs[new_input_index].final_script_witness =
                 Some(tx_to_sign.input[new_input_index].witness.clone());
 
-            Ok::<NodePart, anyhow::Error>(NodePart {
-                psbt: psbt_one,
-                delta_vb,
-                node_fee,
-                prevout_value: s.prevout.value.to_sat(),
-                return_value: node_return_value,
-            })
+            // Re-check with ACTUAL signed size
+            let actual_after_vb = tx_vbytes(&tx_to_sign);
+            let actual_delta_vb = actual_after_vb.saturating_sub(base_vb);
+            let actual_fee_needed = actual_delta_vb.saturating_mul(min_sat_per_vb);
+            let fee_paid = s.prevout.value.to_sat().saturating_sub(node_return_value);
+            info!(target: "node", "Node idx={} ASSERTING fee is correct for size; size now ~{} vB (delta {} vB), fee_needed={} sat, fee_paid={} sat",
+                idx, actual_after_vb, actual_delta_vb, actual_fee_needed, fee_paid);
+                
+            if s.prevout.value.to_sat() >= actual_fee_needed.saturating_add(dust_limit_sat) {
+                assert_eq!(fee_paid, actual_fee_needed, "Node idx={} expected actual fee {} sat based on {} vB @ {} sat/vB, got {} sat", idx, actual_fee_needed, actual_delta_vb, min_sat_per_vb, fee_paid);
+            } else {
+                warn!(target: "node", "Node idx={} couldn't fully cover fee without violating dust; change clamped to dust", idx);
+                // don't fail bc portal will cover remaining fee
+                assert!(fee_paid <= actual_fee_needed, "Node idx={} overpaid actual fee ({} > {})", idx, fee_paid, actual_fee_needed);
+                assert_eq!(node_return_value, dust_limit_sat, "Node idx={} change not clamped to dust as expected (actual)", idx);
+            }
+
+            Ok::<Psbt, anyhow::Error>(psbt_one)
         }
     });
 
-    let mut parts: Vec<NodePart> = join_all(futures)
+    let mut parts: Vec<Psbt> = join_all(futures)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Assert each node contributed the correct fee based on size delta and rate
-    for (idx, p) in parts.iter().enumerate() {
-        let max_affordable_fee = p.prevout_value.saturating_sub(dust_limit_sat);
-        let expected_fee = p.node_fee.min(max_affordable_fee);
-        let actual_fee = p.prevout_value.saturating_sub(p.return_value);
-        assert_eq!(
-            actual_fee, expected_fee,
-            "node {} fee mismatch: expected {}, actual {} (delta_vb={}, sats/vB={})",
-            idx, expected_fee, actual_fee, p.delta_vb, min_sat_per_vb
-        );
-    }
-
     // Aggregate starting from base
     let mut final_psbt = base_psbt.clone();
     for mut p in parts.drain(..) {
-        let last_input_idx = p.psbt.unsigned_tx.input.len() - 1;
-        let last_output_idx = p.psbt.unsigned_tx.output.len() - 1;
+        let last_input_idx = p.unsigned_tx.input.len() - 1;
+        let last_output_idx = p.unsigned_tx.output.len() - 1;
         final_psbt
             .unsigned_tx
             .input
-            .push(p.psbt.unsigned_tx.input.remove(last_input_idx));
-        final_psbt.inputs.push(p.psbt.inputs.remove(last_input_idx));
+            .push(p.unsigned_tx.input.remove(last_input_idx));
+        final_psbt.inputs.push(p.inputs.remove(last_input_idx));
         final_psbt
             .unsigned_tx
             .output
-            .push(p.psbt.unsigned_tx.output.remove(last_output_idx));
-        final_psbt
-            .outputs
-            .push(p.psbt.outputs.remove(last_output_idx));
+            .push(p.unsigned_tx.output.remove(last_output_idx));
+        final_psbt.outputs.push(p.outputs.remove(last_output_idx));
     }
 
     // Compute top-up need: ensure non-negative change for portal, else add more portal inputs
@@ -319,9 +329,9 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // Reuse the pre-fetched min_sat_per_vb computed above
     info!(target: "portal", "FeeTopUp: using pre-fetched min_sat/vB={}", min_sat_per_vb);
 
-    // Rough vsize estimate: base bytes + 100B per input for taproot witness (upper bound)
-    let mut base_len = serialize_tx(&final_psbt.unsigned_tx).len();
-    let mut est_vbytes = estimate_vbytes_unsigned(base_len, final_psbt.unsigned_tx.input.len());
+    // Compute vbytes approximating post-signing by using node signatures (present) and dummying portal
+    let mut est_vbytes =
+        tx_vbytes_with_psbt_witnesses_and_portal_dummy(&final_psbt, portal_internal_key, 1);
     let mut required_fee = est_vbytes * min_sat_per_vb;
     // Available budget for fee and change
     let mut available_budget = sum_inputs.saturating_sub(sum_outputs);
@@ -350,9 +360,12 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         final_psbt.inputs[idx].tap_internal_key = Some(portal_internal_key);
         sum_inputs += value_sat;
 
-        // Recompute estimated fee with added input
-        base_len = serialize_tx(&final_psbt.unsigned_tx).len();
-        est_vbytes = estimate_vbytes_unsigned(base_len, final_psbt.unsigned_tx.input.len());
+        // Recompute fee using actual node witnesses and dummying the portal inputs still unsigned
+        est_vbytes = tx_vbytes_with_psbt_witnesses_and_portal_dummy(
+            &final_psbt,
+            portal_internal_key,
+            portal_inputs_used,
+        );
         required_fee = est_vbytes * min_sat_per_vb;
         available_budget = sum_inputs.saturating_sub(sum_outputs);
         portal_inputs_used += 1;
