@@ -37,6 +37,83 @@ fn tx_vbytes(tx: &Transaction) -> u64 {
     weight.div_ceil(4)
 }
 
+#[derive(Clone, Debug)]
+struct PortalSetup {
+    address: Address,
+    internal_key: XOnlyPublicKey,
+    keypair: Keypair,
+    first_prevout: TxOut,
+    base_psbt: Psbt,
+    utxos: Vec<(&'static str, u32, u64)>,
+}
+
+fn setup_portal(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<PortalSetup> {
+    // Generate portal address (derivation index 4)
+    let (portal_address, portal_child_key, _compressed) =
+        test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, 4)?;
+    let portal_keypair = Keypair::from_secret_key(secp, &portal_child_key.private_key);
+    let (portal_internal_key, _parity) = portal_keypair.x_only_public_key();
+
+    // Portal funding set (top-up pool)
+    let portal_utxos: Vec<(&'static str, u32, u64)> = vec![
+        (
+            "09c741dd08af774cb5d1c26bfdc28eaa4ae42306a6a07d7be01de194979ff8df",
+            0,
+            500_000,
+        ),
+        (
+            "81171f7871d64a2eeae4953bd42c66d8deb1a64e940849f36ffd098398481473",
+            0,
+            500_000,
+        ),
+        (
+            "ce8cb3d30c0152b71e7007824c06de2b6c6c7598b78196e8133ccb3ca252efa0",
+            0,
+            500_000,
+        ),
+    ];
+
+    // Use the first portal UTXO for initial base PSBT input
+    let first = portal_utxos[0];
+    let portal_outpoint = OutPoint {
+        txid: Txid::from_str(first.0)?,
+        vout: first.1,
+    };
+    let portal_prevout = TxOut {
+        value: Amount::from_sat(first.2),
+        script_pubkey: portal_address.script_pubkey(),
+    };
+
+    // Base transaction with placeholder change output
+    let base_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: portal_outpoint,
+            script_sig: bitcoin::script::ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: portal_address.script_pubkey(),
+        }],
+    };
+
+    let mut base_psbt = Psbt::from_unsigned_tx(base_tx)?;
+    base_psbt.inputs[0].witness_utxo = Some(portal_prevout.clone());
+    base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
+
+    Ok(PortalSetup {
+        address: portal_address,
+        internal_key: portal_internal_key,
+        keypair: portal_keypair,
+        first_prevout: portal_prevout,
+        base_psbt,
+        utxos: portal_utxos,
+    })
+}
+
 fn tx_vbytes_with_psbt_witnesses_and_portal_dummy(
     psbt: &Psbt,
     portal_internal_key: XOnlyPublicKey,
@@ -128,62 +205,13 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // Set up storage node utxos
     let signers = get_node_signer_info(&secp, &test_cfg)?;
 
-    // Portal base with one input and placeholder change output
-    let (portal_address, portal_child_key, _compressed) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, 4)?;
-    let portal_keypair = Keypair::from_secret_key(&secp, &portal_child_key.private_key);
-    let (portal_internal_key, _parity) = portal_keypair.x_only_public_key();
-
-    // Portal funding set (top-up pool)
-    let portal_utxos: Vec<(&str, u32, u64)> = vec![
-        (
-            "09c741dd08af774cb5d1c26bfdc28eaa4ae42306a6a07d7be01de194979ff8df",
-            0,
-            500_000,
-        ),
-        (
-            "81171f7871d64a2eeae4953bd42c66d8deb1a64e940849f36ffd098398481473",
-            0,
-            500_000,
-        ),
-        (
-            "ce8cb3d30c0152b71e7007824c06de2b6c6c7598b78196e8133ccb3ca252efa0",
-            0,
-            500_000,
-        ),
-    ];
-
-    // set up portal utxos
-    let first = portal_utxos[0];
-    let portal_outpoint = OutPoint {
-        txid: Txid::from_str(first.0)?,
-        vout: first.1,
-    };
-    let portal_prevout = TxOut {
-        value: Amount::from_sat(first.2),
-        script_pubkey: portal_address.script_pubkey(),
-    };
-
-    // portal base transaction to be sent to all nodes
-    let base_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: portal_outpoint,
-            script_sig: bitcoin::script::ScriptBuf::new(),
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-            witness: Witness::new(),
-        }],
-        // placeholder change; will be recomputed after aggregation
-        output: vec![TxOut {
-            value: Amount::from_sat(0),
-            script_pubkey: portal_address.script_pubkey(),
-        }],
-    };
-
-    let mut base_psbt = Psbt::from_unsigned_tx(base_tx.clone())?;
-    base_psbt.inputs[0].witness_utxo = Some(portal_prevout.clone());
-    base_psbt.inputs[0].tap_internal_key = Some(portal_internal_key);
+    // Portal setup
+    let portal = setup_portal(&secp, &test_cfg)?;
+    let portal_address = portal.address.clone();
+    let portal_internal_key = portal.internal_key;
+    let portal_prevout = portal.first_prevout.clone();
+    let portal_utxos = portal.utxos.clone();
+    let base_psbt = portal.base_psbt.clone();
     let base_actual_vb = tx_vbytes(&base_psbt.unsigned_tx);
     info!(target: "portal", "Portal created PSBT to send to nodes: inputs={}, outputs={}, ~{} vB",
         base_psbt.unsigned_tx.input.len(), base_psbt.unsigned_tx.output.len(), base_actual_vb);
@@ -406,7 +434,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
             &secp,
             &mut tx_to_sign,
             &all_prevouts,
-            &portal_keypair,
+            &portal.keypair,
             idx,
             None,
         )?;
