@@ -470,6 +470,8 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         final_vbytes
     );
 
+    println!("final_tx: {:#?}", final_tx);
+
     let hex = hex::encode(serialize_tx(&final_tx));
     let res = client.test_mempool_accept(&[hex]).await?;
     assert!(!res.is_empty());
@@ -478,6 +480,7 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         "Final aggregated transaction was rejected: {:?}",
         res[0].reject_reason
     );
+    
 
     Ok(())
 }
