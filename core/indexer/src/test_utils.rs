@@ -167,6 +167,29 @@ pub fn sign_script_spend(
     keypair: &Keypair,
     input_index: usize,
 ) -> Result<()> {
+    sign_script_spend_with_sighash(
+        secp,
+        taproot_spend_info,
+        tap_script,
+        script_spend_tx,
+        prevouts,
+        keypair,
+        input_index,
+        TapSighashType::Default,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sign_script_spend_with_sighash(
+    secp: &Secp256k1<All>,
+    taproot_spend_info: &TaprootSpendInfo,
+    tap_script: &ScriptBuf,
+    script_spend_tx: &mut Transaction,
+    prevouts: &[TxOut],
+    keypair: &Keypair,
+    input_index: usize,
+    sighash_type: TapSighashType,
+) -> Result<()> {
     let control_block = taproot_spend_info
         .control_block(&(tap_script.clone(), LeafVersion::TapScript))
         .expect("Failed to create control block");
@@ -177,7 +200,7 @@ pub fn sign_script_spend(
             input_index,
             &Prevouts::All(prevouts),
             TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
-            TapSighashType::Default,
+            sighash_type,
         )
         .expect("Failed to create sighash");
 
@@ -186,7 +209,7 @@ pub fn sign_script_spend(
 
     let signature = bitcoin::taproot::Signature {
         signature,
-        sighash_type: TapSighashType::Default,
+        sighash_type,
     };
 
     let mut witness = Witness::new();

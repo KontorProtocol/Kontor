@@ -191,6 +191,7 @@ fn get_node_signer_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // setup
     logging::setup();
@@ -233,7 +234,6 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         let portal_prevout_clone = portal_prevout.clone();
         async move {
             info!(target: "node", "Node idx={} starting**********************", idx);
-   
             // create dummy inputs/outputs in order to calculate size for fee
             let mut temp_unsigned = psbt_one.unsigned_tx.clone();
             temp_unsigned.input.push(TxIn {
@@ -357,7 +357,9 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     }
 
     // Fees already contributed by nodes
-    let node_fee_sum = sum_inputs.saturating_sub(portal_prevout.value.to_sat()).saturating_sub(sum_outputs);
+    let node_fee_sum = sum_inputs
+        .saturating_sub(portal_prevout.value.to_sat())
+        .saturating_sub(sum_outputs);
 
     // Track portal inputs used, their total value, and indices in the tx
     let mut portal_inputs_sum: u64 = portal_prevout.value.to_sat();
@@ -425,7 +427,11 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     let all_prevouts: Vec<TxOut> = final_psbt
         .inputs
         .iter()
-        .map(|inp| inp.witness_utxo.clone().expect("missing witness_utxo for input"))
+        .map(|inp| {
+            inp.witness_utxo
+                .clone()
+                .expect("missing witness_utxo for input")
+        })
         .collect();
 
     let mut tx_to_sign = final_psbt.unsigned_tx.clone();
@@ -448,7 +454,13 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     let total_in: u64 = final_psbt
         .inputs
         .iter()
-        .map(|inp| inp.witness_utxo.as_ref().expect("missing witness_utxo for input").value.to_sat())
+        .map(|inp| {
+            inp.witness_utxo
+                .as_ref()
+                .expect("missing witness_utxo for input")
+                .value
+                .to_sat()
+        })
         .sum();
 
     let final_tx = final_psbt.extract_tx()?;
@@ -480,7 +492,6 @@ async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
         "Final aggregated transaction was rejected: {:?}",
         res[0].reject_reason
     );
-    
 
     Ok(())
 }
