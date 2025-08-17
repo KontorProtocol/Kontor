@@ -59,6 +59,10 @@ impl Runtime {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
+        // Ensure deterministic execution
+        config.wasm_threads(false);
+        config.wasm_relaxed_simd(false);
+        config.cranelift_nan_canonicalization(true);
         let engine = Engine::new(&config)?;
         let runtime = Self {
             engine,
