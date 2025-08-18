@@ -189,7 +189,6 @@ fn estimate_single_input_single_output_reveal_vbytes(
 // (Old test removed)
 
 #[tokio::test]
-#[ignore]
 async fn test_multi_signer_commit_reveal_portal_flow() -> Result<()> {
     logging::setup();
     let mut config = Config::try_parse()?;
@@ -217,6 +216,7 @@ async fn test_multi_signer_commit_reveal_portal_flow() -> Result<()> {
         value: Amount::from_sat(portal_funding_value),
         script_pubkey: portal.address.script_pubkey(),
     };
+    
     let base_commit_tx = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -527,7 +527,7 @@ async fn test_multi_signer_commit_reveal_portal_flow() -> Result<()> {
     let node_fee_contribution_total = fee_paid_c.saturating_sub(portal_fee_contribution);
     info!(
         target: "portal",
-        "Commit actual size={} vB; commit required fee={} sat; portal input spent={} sat (fees {} sat, script {} sat); node fee total={} sat; total commit fee paid={} sat",
+        "Commit actual size={} vB; commit required fee={} sat; portal input spent={} sat (portal fee contribution {} sat, script {} sat); node fee total={} sat; total commit fee paid={} sat",
         commit_vb_actual,
         commit_req_fee_actual,
         portal_total_input_spent,
