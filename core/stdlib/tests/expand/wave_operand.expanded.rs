@@ -32,10 +32,9 @@ impl From<wasm_wave::value::Value> for Operand {
         Operand {
             y: y
                 .expect(
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(format_args!("Missing \'{0}\' field"))
+                    &::alloc::__export::must_use({
+                        ::alloc::fmt::format(format_args!("Missing \'{0}\' field", "y"))
                     }),
-                    "y",
                 ),
         }
     }

@@ -32,10 +32,11 @@ impl From<wasm_wave::value::Value> for ArithReturn {
         ArithReturn {
             value: value
                 .expect(
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(format_args!("Missing \'{0}\' field"))
+                    &::alloc::__export::must_use({
+                        ::alloc::fmt::format(
+                            format_args!("Missing \'{0}\' field", "value"),
+                        )
                     }),
-                    "value",
                 ),
         }
     }
