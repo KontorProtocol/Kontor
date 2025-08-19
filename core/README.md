@@ -79,6 +79,8 @@ cargo run
 
 ## Test
 
+Before running tests, build the contracts (`cd ../contracts && ./build.sh && cd ../core`).
+
 To run tests, **in addition to the environment variables above**, your `.envrc` should also include the following:
 ```bash
 export SEGWIT_BUYER_KEY_PATH="$DATA_DIR/segwit_buyer.key"
@@ -95,7 +97,7 @@ cargo test
 Some tests are setup to run against regtest.
 
 ```bash
-cmake -B build -DENABLE_WALLET=ON -DWITH_ZMQ=ON`
+cmake -B build -DENABLE_WALLET=ON -DWITH_ZMQ=ON
 cmake --build build
 ```
 
@@ -112,12 +114,12 @@ fallbackfee=0.0001
 
 Run:
 ```bash
-/build/bin/bitcoind -regtest -datadir="<path to your bitcoin data dir>/regtest
+build/bin/bitcoind -regtest -datadir="<path to your bitcoin data dir>/regtest"
 ```
 
 Test:
 ```bash
-cargo test --test regtest_commit_reveal`
+cargo test --test regtest_commit_reveal
 ```
 
 ## Testnet4 testing
@@ -131,12 +133,12 @@ mkdir -p "<path to your bitcoin data dir>/testnet4"
 
 Run:
 ```bash
-/build/bin/bitcoind -testnet4 -datadir="<path to your bitcoin data dir>/testnet4
+build/bin/bitcoind -testnet4 -datadir="<path to your bitcoin data dir>/testnet4"
 ```
 
 Test:
 ```bash
-cargo test --test testnet_commit_reveal
+cargo test --test testnet_compose
 ```
 
 ## UI

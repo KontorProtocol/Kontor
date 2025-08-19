@@ -171,7 +171,7 @@ struct FibValue {
     pub value: u64,
 }
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Storage)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }

@@ -40,6 +40,51 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+#[proc_macro_derive(Storage)]
+pub fn derive_storage(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let generics = &input.generics;
+
+    let store_body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_struct_body(data_struct, name),
+        syn::Data::Enum(data_enum) => generate_enum_body(data_enum, name),
+        syn::Data::Union(_) => Err(Error::new(name.span(), "Storage derive is not supported for unions")),
+    };
+
+    let wrapper_body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_struct_wrapper(data_struct, name),
+        syn::Data::Enum(data_enum) => generate_enum_wrapper(data_enum, name),
+        syn::Data::Union(_) => Err(Error::new(name.span(), "Storage derive is not supported for unions")),
+    };
+
+    // Root only makes sense for named structs
+    let root_body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_root_struct(data_struct, name),
+        _ => Err(Error::new(name.span(), "Storage derive only supports structs with named fields for Root")),
+    };
+
+    let store_body = match store_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
+    let wrapper_body = match wrapper_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
+    let root_body = match root_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
+
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let expanded = quote! {
+        impl #impl_generics stdlib::Store for #name #ty_generics #where_clause {
+            fn __set(ctx: &impl stdlib::WriteContext, base_path: stdlib::DotPathBuf, value: #name #ty_generics) {
+                #store_body
+            }
+        }
+
+        #wrapper_body
+
+        #root_body
+    };
+
+    TokenStream::from(expanded)
+}
+
 fn generate_struct_body(
     data_struct: &DataStruct,
     type_name: &Ident,

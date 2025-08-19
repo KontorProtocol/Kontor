@@ -1,6 +1,6 @@
 macros::contract!(name = "arith");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Storage)]
 struct ArithStorage {
     pub last_op: Option<Op>,
 }

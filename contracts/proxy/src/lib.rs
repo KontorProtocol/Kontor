@@ -2,7 +2,7 @@
 
 macros::contract!(name = "proxy");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Storage)]
 struct ProxyStorage {
     contract_address: ContractAddress,
 }

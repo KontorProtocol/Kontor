@@ -2,7 +2,7 @@
 
 macros::contract!(name = "token");
 
-#[derive(Clone, Store, Wrapper, Root, Default)]
+#[derive(Clone, Storage, Default)]
 struct TokenStorage {
     // TODO would prefer a larger type than u64, but wit lacks support
     //      would be very nice to not need a complex type for balances

@@ -28,7 +28,8 @@ cd contracts
 ./build.sh
 cd ..
 ```
-This will generate the native contracts in the `contracts/target/wasm32-unknown-unknown/debug` directory.
+- This produces artifacts in `contracts/target/wasm32-unknown-unknown/release` (including `*.wasm.br`).
+- Build contracts before running any core tests.
 
 Set `core` as the working directory:
 ```bash
