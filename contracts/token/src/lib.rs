@@ -13,6 +13,7 @@ impl Token {}
 
 impl Guest for Token {
     fn init(ctx: &ProcContext) {
+        // TODO nicer empty map initialization
         TokenStorage::default().init(ctx);
     }
 

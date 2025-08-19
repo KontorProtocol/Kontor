@@ -203,12 +203,12 @@ fn generate_struct_wrapper(
                         }
 
                         impl #field_wrapper_name {
-                            pub fn get(&self, ctx: &impl stdlib::ReadContext, key: #k_ty) -> #get_return {
+                            pub fn get<Q: ToString>(&self, ctx: &impl stdlib::ReadContext, key: Q) -> #get_return {
                                 let base_path = self.base_path.push(key.to_string());
                                 #get_body
                             }
 
-                            pub fn set(&self, ctx: &impl stdlib::WriteContext, key: #k_ty, value: #v_ty) {
+                            pub fn set<Q: ToString>(&self, ctx: &impl stdlib::WriteContext, key: Q, value: #v_ty) {
                                 ctx.__set(self.base_path.push(key.to_string()), value)
                             }
 
