@@ -73,16 +73,21 @@ impl ::core::clone::Clone for FibStorageCacheWrapper {
     }
 }
 impl FibStorageCacheWrapper {
-    pub fn get(
+    pub fn get<Q: ToString>(
         &self,
         ctx: &impl stdlib::ReadContext,
-        key: u64,
+        key: Q,
     ) -> Option<FibValueWrapper> {
         let base_path = self.base_path.push(key.to_string());
         ctx.__exists(&base_path.push(key.to_string()))
             .then(|| FibValueWrapper::new(ctx, base_path.push(key.to_string())))
     }
-    pub fn set(&self, ctx: &impl stdlib::WriteContext, key: u64, value: FibValue) {
+    pub fn set<Q: ToString>(
+        &self,
+        ctx: &impl stdlib::WriteContext,
+        key: Q,
+        value: FibValue,
+    ) {
         ctx.__set(self.base_path.push(key.to_string()), value)
     }
     pub fn load(&self, ctx: &impl stdlib::ReadContext) -> Map<u64, FibValue> {
