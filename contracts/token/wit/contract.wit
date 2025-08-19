@@ -1,0 +1,12 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context, signer};
+
+    export init: func(ctx: borrow<proc-context>);
+
+    export mint: func(ctx: borrow<proc-context>, n: u64);
+    export transfer: func(ctx: borrow<proc-context>, to: string, n: u64);
+    export balance: func(ctx: borrow<view-context>, acc: string) -> option<u64>;
+}
