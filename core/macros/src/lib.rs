@@ -681,6 +681,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         impl ReadWriteContext for context::ProcContext {}
 
         struct #name;
+        export!(#name);
     };
 
     boilerplate.into()

@@ -218,4 +218,4 @@ impl Guest for Fib {
     }
 }
 
-export!(Fib);
+ 

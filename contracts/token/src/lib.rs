@@ -2,7 +2,7 @@
 
 macros::contract!(name = "token");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Store, Wrapper, Root, Default)]
 struct TokenStorage {
     // TODO would prefer a larger type than u64, but wit lacks support
     //      would be very nice to not need a complex type for balances
@@ -13,8 +13,7 @@ impl Token {}
 
 impl Guest for Token {
     fn init(ctx: &ProcContext) {
-        // TODO nicer empty map initialization
-        TokenStorage { ledger: Map::new(&[]) }.init(ctx);
+        TokenStorage::default().init(ctx);
     }
 
     fn mint(ctx: &ProcContext, n: u64) {
@@ -47,4 +46,4 @@ impl Guest for Token {
     }
 }
 
-export!(Token);
+ 

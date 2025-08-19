@@ -16,6 +16,16 @@ impl<K: ToString + Clone, V: Store> Map<K, V> {
             entries: entries.to_vec(),
         }
     }
+
+    pub fn empty() -> Self {
+        Map { entries: Vec::new() }
+    }
+}
+
+impl<K: ToString + Clone, V: Store> Default for Map<K, V> {
+    fn default() -> Self {
+        Map::empty()
+    }
 }
 
 impl<K: ToString + Clone, V: Store> Store for Map<K, V> {

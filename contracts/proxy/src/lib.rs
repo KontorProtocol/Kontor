@@ -34,4 +34,4 @@ impl Guest for Proxy {
     }
 }
 
-export!(Proxy);
+ 
