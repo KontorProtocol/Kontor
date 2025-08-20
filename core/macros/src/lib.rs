@@ -40,11 +40,28 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-#[proc_macro_derive(Storage)]
+#[proc_macro_derive(Storage, attributes(storage))]
 pub fn derive_storage(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
+
+    // Parse optional #[storage(...)] attribute on the type
+    // Supported options:
+    //   - no_default: do not generate Default for named-field structs
+    let mut no_default = false;
+    for attr in &input.attrs {
+        if attr.path().is_ident("storage") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("no_default") {
+                    no_default = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("unsupported option for #[storage(...)]"))
+                }
+            });
+        }
+    }
 
     let store_body = match &input.data {
         syn::Data::Struct(data_struct) => generate_struct_body(data_struct, name),
@@ -64,9 +81,28 @@ pub fn derive_storage(input: TokenStream) -> TokenStream {
         _ => Err(Error::new(name.span(), "Storage derive only supports structs with named fields for Root")),
     };
 
+    // Auto-implement Clone for the storage type itself
+    let clone_body = match &input.data {
+        syn::Data::Struct(data_struct) => generate_struct_clone(data_struct, name, generics),
+        syn::Data::Enum(data_enum) => generate_enum_clone(data_enum, name, generics),
+        syn::Data::Union(_) => Err(Error::new(name.span(), "Storage derive is not supported for unions")),
+    };
+
+    // Auto-implement Default for named-field structs unless opted-out
+    let default_body = if no_default {
+        Ok(quote! {})
+    } else {
+        match &input.data {
+            syn::Data::Struct(data_struct) => generate_struct_default(data_struct, name, generics),
+            _ => Ok(quote! {}),
+        }
+    };
+
     let store_body = match store_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
     let wrapper_body = match wrapper_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
     let root_body = match root_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
+    let clone_body = match clone_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
+    let default_body = match default_body { Ok(b) => b, Err(err) => return err.to_compile_error().into() };
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -76,6 +112,10 @@ pub fn derive_storage(input: TokenStream) -> TokenStream {
                 #store_body
             }
         }
+
+        #clone_body
+
+        #default_body
 
         #wrapper_body
 
@@ -150,6 +190,95 @@ fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<proc_ma
             #(#arms)*
         }
     })
+}
+
+fn generate_struct_clone(
+    data_struct: &DataStruct,
+    type_name: &Ident,
+    generics: &syn::Generics,
+) -> Result<proc_macro2::TokenStream> {
+    match &data_struct.fields {
+        Fields::Named(fields) => {
+            let cloned_fields = fields.named.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+                quote! { #field_name: ::core::clone::Clone::clone(&self.#field_name) }
+            });
+
+            let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+            Ok(quote! {
+                impl #impl_generics ::core::clone::Clone for #type_name #ty_generics #where_clause {
+                    fn clone(&self) -> Self {
+                        Self { #(#cloned_fields,)* }
+                    }
+                }
+            })
+        }
+        _ => Err(Error::new(
+            type_name.span(),
+            "Storage derive only supports structs with named fields for Clone",
+        )),
+    }
+}
+
+fn generate_enum_clone(
+    data_enum: &DataEnum,
+    type_name: &Ident,
+    generics: &syn::Generics,
+) -> Result<proc_macro2::TokenStream> {
+    let arms: Result<Vec<_>> = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            match &variant.fields {
+                Fields::Unit => Ok(quote! { #type_name::#variant_ident => #type_name::#variant_ident }),
+                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => Ok(quote! {
+                    #type_name::#variant_ident(inner) => #type_name::#variant_ident(::core::clone::Clone::clone(inner))
+                }),
+                _ => Err(Error::new(
+                    variant.ident.span(),
+                    "Storage derive only supports unit or single-field tuple variants for Clone",
+                )),
+            }
+        })
+        .collect();
+
+    let arms = arms?;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics ::core::clone::Clone for #type_name #ty_generics #where_clause {
+            fn clone(&self) -> Self {
+                match self { #(#arms,)* }
+            }
+        }
+    })
+}
+
+fn generate_struct_default(
+    data_struct: &DataStruct,
+    type_name: &Ident,
+    generics: &syn::Generics,
+) -> Result<proc_macro2::TokenStream> {
+    match &data_struct.fields {
+        Fields::Named(fields) => {
+            let default_fields = fields.named.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+                quote! { #field_name: ::core::default::Default::default() }
+            });
+            let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+            Ok(quote! {
+                impl #impl_generics ::core::default::Default for #type_name #ty_generics #where_clause {
+                    fn default() -> Self {
+                        Self { #(#default_fields,)* }
+                    }
+                }
+            })
+        }
+        _ => Err(Error::new(
+            type_name.span(),
+            "Storage derive only supports structs with named fields for Default",
+        )),
+    }
 }
 
 fn is_option_type(ty: &Type) -> bool {

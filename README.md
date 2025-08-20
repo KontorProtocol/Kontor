@@ -36,3 +36,5 @@ Set `core` as the working directory:
 cd core
 ```
 Continue with `core` [README.md](core/README.md).
+
+See `CONTRACTS.md` for contract macros and storage patterns.

@@ -171,7 +171,7 @@ struct FibValue {
     pub value: u64,
 }
 
-#[derive(Clone, Storage)]
+#[derive(Storage)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }
@@ -217,5 +217,3 @@ impl Guest for Fib {
         Self::raw_fib(ctx, n)
     }
 }
-
- 
