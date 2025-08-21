@@ -20,11 +20,10 @@ use std::str::FromStr;
 use tracing::info;
 
 #[tokio::test]
-#[ignore]
-async fn test_taproot_transaction() -> Result<()> {
+async fn test_taproot_transaction_testnet() -> Result<()> {
     // Initialize regtest client
     let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
+    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
 
     let client = Client::new_from_config(&config)?;
     let mut test_config = TestConfig::try_parse()?;
@@ -137,13 +136,12 @@ async fn test_taproot_transaction() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
     logging::setup();
 
     // Initialize testnet client
     let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
+    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
     let client = Client::new_from_config(&config)?;
 
     let mut test_config = TestConfig::try_parse()?;

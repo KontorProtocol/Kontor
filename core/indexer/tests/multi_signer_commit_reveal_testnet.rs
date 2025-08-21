@@ -192,7 +192,7 @@ fn estimate_single_input_single_output_reveal_vbytes(
 async fn test_multi_signer_commit_reveal_portal_flow() -> Result<()> {
     logging::setup();
     let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
+    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332".to_string();
     let client = Client::new_from_config(&config)?;
 
     let mut test_cfg = TestConfig::try_parse()?;
@@ -216,7 +216,7 @@ async fn test_multi_signer_commit_reveal_portal_flow() -> Result<()> {
         value: Amount::from_sat(portal_funding_value),
         script_pubkey: portal.address.script_pubkey(),
     };
-    
+
     let base_commit_tx = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,

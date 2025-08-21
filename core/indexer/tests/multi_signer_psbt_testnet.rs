@@ -191,12 +191,11 @@ fn get_node_signer_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_multi_signer_psbt_fee_topup_testnet() -> Result<()> {
     // setup
     logging::setup();
     let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
+    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
     let client = Client::new_from_config(&config)?;
 
     let mut test_cfg = TestConfig::try_parse()?;
