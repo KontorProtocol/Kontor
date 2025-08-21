@@ -320,12 +320,12 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         node_script_vouts.push(script_vout);
 
         let ctx = NodeCommitLogCtx {
-            idx: idx,
+            idx,
             post_vb: tx_vbytes(&temp),
             delta_vb: full_delta_vb,
             total_paid: node_prevout.value.to_sat() - (script_value + node_change_value),
             commit_fee: fee_full_delta,
-            reveal_fee: reveal_fee,
+            reveal_fee,
             buffer: fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb),
         };
         log_node_commit(&ctx);
@@ -468,6 +468,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Phase 4: Portal sends both PSBTs to nodes; nodes sign commit input (key-spend, SIGHASH_ALL) and reveal input (script-spend, SIGHASH_ALL)
     // Each node signs asynchronously and returns only its own witnesses; portal merges them
     let commit_base_tx = commit_psbt.unsigned_tx.clone();
+    let commit_base_psbt = commit_psbt.clone();
     let reveal_base_psbt = reveal_psbt.clone();
     let all_prevouts_clone = all_prevouts_c.clone();
 
@@ -475,7 +476,8 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let secp = Secp256k1::new();
         let keypair = node_secrets[i].keypair;
         let mut commit_tx_local = commit_base_tx.clone();
-        let reveal_psbt_local = reveal_base_psbt.clone();
+        let mut commit_psbt_local = commit_base_psbt.clone();
+        let mut reveal_psbt_local = reveal_base_psbt.clone();
         let prevouts_commit = all_prevouts_clone.clone();
         let node_input_indices_async = node_input_indices.clone();
         let input_index = node_input_indices_async[i];
@@ -490,11 +492,9 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
                 Some(TapSighashType::Default),
             )?;
             let commit_witness = commit_tx_local.input[input_index].witness.clone();
-            log_node!(
-                "idx={} produced commit witness (stack_elems={})",
-                i,
-                commit_witness.len()
-            );
+            log_node_commit_witness(i, &commit_witness);
+            // Attach to local commit psbt
+            commit_psbt_local.inputs[input_index].final_script_witness = Some(commit_witness);
 
             // Reveal: sign only this node's reveal input and log sizes/fees
             let (tap_script, tap_info, _addr) =
@@ -524,25 +524,37 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             );
 
             let reveal_witness = reveal_tx_local.input[i].witness.clone();
+            // Attach to local reveal psbt
+            reveal_psbt_local.inputs[i].final_script_witness = Some(reveal_witness);
 
-            Ok::<(usize, Witness, Witness), anyhow::Error>((i, commit_witness, reveal_witness))
+            Ok::<(usize, Psbt, Psbt), anyhow::Error>((i, commit_psbt_local, reveal_psbt_local))
         }
     });
 
-    let node_witnesses: Vec<(usize, Witness, Witness)> = join_all(node_sign_futs)
+    let node_psbts: Vec<(usize, Psbt, Psbt)> = join_all(node_sign_futs)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
 
     // Merge node witnesses back into the original PSBTs
-    for (i, cw, rw) in node_witnesses {
-        commit_psbt.inputs[node_input_indices[i]].final_script_witness = Some(cw.clone());
-        reveal_psbt.inputs[i].final_script_witness = Some(rw.clone());
+    for (i, c_psbt, r_psbt) in node_psbts {
+        let idx = node_input_indices[i];
+        commit_psbt.inputs[idx].final_script_witness =
+            c_psbt.inputs[idx].final_script_witness.clone();
+        reveal_psbt.inputs[i].final_script_witness = r_psbt.inputs[i].final_script_witness.clone();
         log_portal!(
             "merged node {} commit ({} elems), reveal ({} elems)",
             i,
-            cw.len(),
-            rw.len()
+            commit_psbt.inputs[idx]
+                .final_script_witness
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0),
+            reveal_psbt.inputs[i]
+                .final_script_witness
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0)
         );
     }
 
@@ -719,6 +731,14 @@ fn log_portal_commit(ctx: &PortalCommitLogCtx) {
     );
 }
 
+fn log_node_commit_witness(idx: usize, witness: &Witness) {
+    log_node!(
+        "idx={} produced commit witness (stack_elems={})",
+        idx,
+        witness.len()
+    );
+}
+
 fn log_node_sign_size_and_fee_breakdown(
     reveal_psbt_local: &Psbt,
     i: usize,
@@ -745,21 +765,37 @@ fn log_node_sign_size_and_fee_breakdown(
         .to_sat();
     let out_val_r = reveal_psbt_local.unsigned_tx.output[i].value.to_sat();
     let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
-    let needed_fee_node = delta_vb_r.saturating_mul(min_sat_per_vb);
+    // Compute fair share of base (non-witness) bytes across inputs
+    let mut base_no_witness = reveal_psbt_local.unsigned_tx.clone();
+    for inp in &mut base_no_witness.input {
+        inp.witness = Witness::new();
+    }
+    let base_vb = tx_vbytes(&base_no_witness);
+    let num_inputs = reveal_psbt_local.unsigned_tx.input.len() as u64;
+    let base_share_vb = if num_inputs > 0 {
+        base_vb / num_inputs
+    } else {
+        0
+    };
+    let fair_needed_fee_node =
+        (base_share_vb.saturating_add(delta_vb_r)).saturating_mul(min_sat_per_vb);
+    let witness_only_needed = delta_vb_r.saturating_mul(min_sat_per_vb);
     log_node!(
-        "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
+        "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; base_share={} vB; reveal_fee_paid={} sat; witness_only_needed={} sat; fair_needed={} sat",
         i,
         after_vb_r,
         delta_vb_r,
+        base_share_vb,
         fee_paid_r_i,
-        needed_fee_node
+        witness_only_needed,
+        fair_needed_fee_node
     );
     assert!(
-        fee_paid_r_i >= needed_fee_node,
-        "node {} reveal fee insufficient: paid={} < needed={}",
+        fee_paid_r_i >= fair_needed_fee_node,
+        "node {} reveal fee insufficient: paid={} < fair_needed={}",
         i,
         fee_paid_r_i,
-        needed_fee_node
+        fair_needed_fee_node
     );
 
     let reveal_witness = reveal_tx_local.input[i].witness.clone();
