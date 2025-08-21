@@ -319,31 +319,16 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         };
         node_script_vouts.push(script_vout);
 
-        // Log current estimated size and node's fee breakdown (full-delta based)
-        let mut temp2 = commit_psbt.unsigned_tx.clone();
-        let mut dw2 = Witness::new();
-        dw2.push(vec![0u8; 65]);
-        temp2.input[node_input_index].witness = dw2;
-        let post_vb_node = tx_vbytes(&temp2);
-        let node_delta_vb = full_delta_vb;
-        let estimated_commit_fee_for_node = fee_full_delta;
-        let commit_fee_paid_by_node_actual = node_prevout
-            .value
-            .to_sat()
-            .saturating_sub(script_value + node_change_value);
-        let total_fee_paid_budgeted = commit_fee_paid_by_node_actual.saturating_add(reveal_fee);
-        let fee_buffer =
-            commit_fee_paid_by_node_actual.saturating_sub(estimated_commit_fee_for_node);
-        log_node!(
-            "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-            idx,
-            post_vb_node,
-            node_delta_vb,
-            total_fee_paid_budgeted,
-            commit_fee_paid_by_node_actual,
-            reveal_fee,
-            fee_buffer
-        );
+        let ctx = NodeCommitLogCtx {
+            idx: idx,
+            post_vb: tx_vbytes(&temp),
+            delta_vb: full_delta_vb,
+            total_paid: node_prevout.value.to_sat() - (script_value + node_change_value),
+            commit_fee: fee_full_delta,
+            reveal_fee: reveal_fee,
+            buffer: fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb),
+        };
+        log_node_commit(&ctx);
     }
 
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
@@ -405,30 +390,15 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     } else {
         portal_change_value = 0;
     }
-
-    let mut temp2_portal = commit_psbt.unsigned_tx.clone();
-    let mut dw2p = Witness::new();
-    dw2p.push(vec![0u8; 65]);
-    temp2_portal.input[portal_input_index].witness = dw2p;
-    let post_vb_portal = tx_vbytes(&temp2_portal);
-    let estimated_commit_fee_for_portal = portal_fee_full_delta;
-    let commit_fee_paid_by_portal_actual = portal_prevout
-        .value
-        .to_sat()
-        .saturating_sub(portal_script_value + portal_change_value);
-    let portal_total_fee_budgeted =
-        commit_fee_paid_by_portal_actual.saturating_add(portal_reveal_fee);
-    let portal_fee_buffer =
-        commit_fee_paid_by_portal_actual.saturating_sub(estimated_commit_fee_for_portal);
-    log_portal!(
-        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-        post_vb_portal,
-        portal_full_delta_vb,
-        portal_total_fee_budgeted,
-        commit_fee_paid_by_portal_actual,
-        portal_reveal_fee,
-        portal_fee_buffer
-    );
+    let ctx = PortalCommitLogCtx {
+        post_vb: tx_vbytes(&temp_portal),
+        delta_vb: portal_full_delta_vb,
+        total_paid: portal_prevout.value.to_sat() - (portal_script_value + portal_change_value),
+        commit_fee: portal_fee_full_delta,
+        reveal_fee: portal_reveal_fee,
+        buffer: portal_fee_full_delta - portal_full_delta_vb.saturating_mul(min_sat_per_vb),
+    };
+    log_portal_commit(&ctx);
 
     // Prepare prevouts for commit signing
     let all_prevouts_c: Vec<TxOut> = commit_psbt
@@ -546,44 +516,15 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
                 TapSighashType::Default,
             )?;
 
-            // Logging: compute delta for this node
-            let mut reveal_before = reveal_psbt_local.unsigned_tx.clone();
-            for j in 0..reveal_before.input.len() {
-                if let Some(wit) = &reveal_psbt_local.inputs[j].final_script_witness {
-                    reveal_before.input[j].witness = wit.clone();
-                }
-            }
-            let before_vb_r = tx_vbytes(&reveal_before);
-            let mut reveal_after = reveal_before.clone();
-            reveal_after.input[i].witness = reveal_tx_local.input[i].witness.clone();
-            let after_vb_r = tx_vbytes(&reveal_after);
-            let delta_vb_r = after_vb_r.saturating_sub(before_vb_r);
-            let in_val_r = reveal_psbt_local.inputs[i]
-                .witness_utxo
-                .as_ref()
-                .expect("wutxo")
-                .value
-                .to_sat();
-            let out_val_r = reveal_psbt_local.unsigned_tx.output[i].value.to_sat();
-            let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
-            let needed_fee_node = delta_vb_r.saturating_mul(min_sat_per_vb);
-            log_node!(
-                "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
+            log_node_sign_size_and_fee_breakdown(
+                &reveal_psbt_local,
                 i,
-                after_vb_r,
-                delta_vb_r,
-                fee_paid_r_i,
-                needed_fee_node
+                &mut reveal_tx_local,
+                min_sat_per_vb,
             );
-            assert!(fee_paid_r_i >= needed_fee_node,
-                "node {} reveal fee insufficient: paid={} < needed={}", i, fee_paid_r_i, needed_fee_node);
 
             let reveal_witness = reveal_tx_local.input[i].witness.clone();
-            log_node!(
-                "idx={} produced reveal witness (stack_elems={})",
-                i,
-                reveal_witness.len()
-            );
+
             Ok::<(usize, Witness, Witness), anyhow::Error>((i, commit_witness, reveal_witness))
         }
     });
@@ -706,72 +647,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         }
     }
 
-    // Final fee accounting: compute full signed sizes and required fees, and assert total paid >= total required
-    {
-        // Commit actual size and required fee
-        let mut commit_tx_f = commit_psbt.unsigned_tx.clone();
-        for i in 0..commit_psbt.inputs.len() {
-            if let Some(w) = &commit_psbt.inputs[i].final_script_witness {
-                commit_tx_f.input[i].witness = w.clone();
-            }
-        }
-        let commit_vb_actual = tx_vbytes(&commit_tx_f);
-        let commit_req_fee_actual = commit_vb_actual.saturating_mul(min_sat_per_vb);
-        let commit_in_total: u64 = commit_psbt
-            .inputs
-            .iter()
-            .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
-            .sum();
-        let commit_out_total: u64 = commit_psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .map(|o| o.value.to_sat())
-            .sum();
-        let commit_paid_total = commit_in_total.saturating_sub(commit_out_total);
-
-        // Reveal actual size and required fee
-        let mut reveal_tx_f = reveal_psbt.unsigned_tx.clone();
-        for i in 0..reveal_psbt.inputs.len() {
-            if let Some(w) = &reveal_psbt.inputs[i].final_script_witness {
-                reveal_tx_f.input[i].witness = w.clone();
-            }
-        }
-        let reveal_vb_actual = tx_vbytes(&reveal_tx_f);
-        let reveal_req_fee_actual = reveal_vb_actual.saturating_mul(min_sat_per_vb);
-        let reveal_in_total: u64 = reveal_psbt
-            .inputs
-            .iter()
-            .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
-            .sum();
-        let reveal_out_total: u64 = reveal_psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .map(|o| o.value.to_sat())
-            .sum();
-        let reveal_paid_total = reveal_in_total.saturating_sub(reveal_out_total);
-
-        let required_total = commit_req_fee_actual.saturating_add(reveal_req_fee_actual);
-        let paid_total = commit_paid_total.saturating_add(reveal_paid_total);
-        info!(
-            "final: commit_size={} vB, commit_required={} sat, commit_paid={} sat; reveal_size={} vB, reveal_required={} sat, reveal_paid={} sat; overall_required={} sat, overall_paid={} sat",
-            commit_vb_actual,
-            commit_req_fee_actual,
-            commit_paid_total,
-            reveal_vb_actual,
-            reveal_req_fee_actual,
-            reveal_paid_total,
-            required_total,
-            paid_total
-        );
-        assert!(
-            paid_total >= required_total,
-            "overall fee insufficient: paid={} < required={}",
-            paid_total,
-            required_total
-        );
-    }
+    log_total_size_and_fee_breakdown(&commit_psbt, &reveal_psbt, min_sat_per_vb);
 
     let commit_tx = commit_psbt.extract_tx()?;
     let reveal_tx = reveal_psbt.extract_tx()?;
@@ -795,4 +671,169 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct NodeCommitLogCtx {
+    idx: usize,
+    post_vb: u64,
+    delta_vb: u64,
+    total_paid: u64,
+    commit_fee: u64,
+    reveal_fee: u64,
+    buffer: u64,
+}
+
+fn log_node_commit(ctx: &NodeCommitLogCtx) {
+    log_node!(
+        "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
+        ctx.idx,
+        ctx.post_vb,
+        ctx.delta_vb,
+        ctx.total_paid,
+        ctx.commit_fee,
+        ctx.reveal_fee,
+        ctx.buffer
+    );
+}
+
+#[derive(Clone, Debug)]
+struct PortalCommitLogCtx {
+    post_vb: u64,
+    delta_vb: u64,
+    total_paid: u64,
+    commit_fee: u64,
+    reveal_fee: u64,
+    buffer: u64,
+}
+
+fn log_portal_commit(ctx: &PortalCommitLogCtx) {
+    log_portal!(
+        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
+        ctx.post_vb,
+        ctx.delta_vb,
+        ctx.total_paid,
+        ctx.commit_fee,
+        ctx.reveal_fee,
+        ctx.buffer
+    );
+}
+
+fn log_node_sign_size_and_fee_breakdown(
+    reveal_psbt_local: &Psbt,
+    i: usize,
+    reveal_tx_local: &mut Transaction,
+    min_sat_per_vb: u64,
+) {
+    // Logging: compute delta for this node
+    let mut reveal_before = reveal_psbt_local.unsigned_tx.clone();
+    for j in 0..reveal_before.input.len() {
+        if let Some(wit) = &reveal_psbt_local.inputs[j].final_script_witness {
+            reveal_before.input[j].witness = wit.clone();
+        }
+    }
+    let before_vb_r = tx_vbytes(&reveal_before);
+    let mut reveal_after = reveal_before.clone();
+    reveal_after.input[i].witness = reveal_tx_local.input[i].witness.clone();
+    let after_vb_r = tx_vbytes(&reveal_after);
+    let delta_vb_r = after_vb_r.saturating_sub(before_vb_r);
+    let in_val_r = reveal_psbt_local.inputs[i]
+        .witness_utxo
+        .as_ref()
+        .expect("wutxo")
+        .value
+        .to_sat();
+    let out_val_r = reveal_psbt_local.unsigned_tx.output[i].value.to_sat();
+    let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
+    let needed_fee_node = delta_vb_r.saturating_mul(min_sat_per_vb);
+    log_node!(
+        "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
+        i,
+        after_vb_r,
+        delta_vb_r,
+        fee_paid_r_i,
+        needed_fee_node
+    );
+    assert!(
+        fee_paid_r_i >= needed_fee_node,
+        "node {} reveal fee insufficient: paid={} < needed={}",
+        i,
+        fee_paid_r_i,
+        needed_fee_node
+    );
+
+    let reveal_witness = reveal_tx_local.input[i].witness.clone();
+    log_node!(
+        "idx={} produced reveal witness (stack_elems={})",
+        i,
+        reveal_witness.len()
+    );
+}
+
+fn log_total_size_and_fee_breakdown(commit_psbt: &Psbt, reveal_psbt: &Psbt, min_sat_per_vb: u64)
+// Final fee accounting: compute full signed sizes and required fees, and assert total paid >= total required
+{
+    // Commit actual size and required fee
+    let mut commit_tx_f = commit_psbt.unsigned_tx.clone();
+    for i in 0..commit_psbt.inputs.len() {
+        if let Some(w) = &commit_psbt.inputs[i].final_script_witness {
+            commit_tx_f.input[i].witness = w.clone();
+        }
+    }
+    let commit_vb_actual = tx_vbytes(&commit_tx_f);
+    let commit_req_fee_actual = commit_vb_actual.saturating_mul(min_sat_per_vb);
+    let commit_in_total: u64 = commit_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
+        .sum();
+    let commit_out_total: u64 = commit_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    let commit_paid_total = commit_in_total.saturating_sub(commit_out_total);
+
+    // Reveal actual size and required fee
+    let mut reveal_tx_f = reveal_psbt.unsigned_tx.clone();
+    for i in 0..reveal_psbt.inputs.len() {
+        if let Some(w) = &reveal_psbt.inputs[i].final_script_witness {
+            reveal_tx_f.input[i].witness = w.clone();
+        }
+    }
+    let reveal_vb_actual = tx_vbytes(&reveal_tx_f);
+    let reveal_req_fee_actual = reveal_vb_actual.saturating_mul(min_sat_per_vb);
+    let reveal_in_total: u64 = reveal_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
+        .sum();
+    let reveal_out_total: u64 = reveal_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    let reveal_paid_total = reveal_in_total.saturating_sub(reveal_out_total);
+
+    let required_total = commit_req_fee_actual.saturating_add(reveal_req_fee_actual);
+    let paid_total = commit_paid_total.saturating_add(reveal_paid_total);
+    info!(
+        "final: commit_size={} vB, commit_required={} sat, commit_paid={} sat; reveal_size={} vB, reveal_required={} sat, reveal_paid={} sat; overall_required={} sat, overall_paid={} sat",
+        commit_vb_actual,
+        commit_req_fee_actual,
+        commit_paid_total,
+        reveal_vb_actual,
+        reveal_req_fee_actual,
+        reveal_paid_total,
+        required_total,
+        paid_total
+    );
+    assert!(
+        paid_total >= required_total,
+        "overall fee insufficient: paid={} < required={}",
+        paid_total,
+        required_total
+    );
 }
