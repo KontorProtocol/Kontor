@@ -520,6 +520,11 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
                 Some(TapSighashType::Default),
             )?;
             let commit_witness = commit_tx_local.input[input_index].witness.clone();
+            log_node!(
+                "idx={} produced commit witness (stack_elems={})",
+                i,
+                commit_witness.len()
+            );
 
             // Reveal: sign only this node's reveal input and log sizes/fees
             let (tap_script, tap_info, _addr) =
@@ -574,6 +579,11 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
                 "node {} reveal fee insufficient: paid={} < needed={}", i, fee_paid_r_i, needed_fee_node);
 
             let reveal_witness = reveal_tx_local.input[i].witness.clone();
+            log_node!(
+                "idx={} produced reveal witness (stack_elems={})",
+                i,
+                reveal_witness.len()
+            );
             Ok::<(usize, Witness, Witness), anyhow::Error>((i, commit_witness, reveal_witness))
         }
     });
@@ -585,8 +595,14 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     // Merge node witnesses back into the original PSBTs
     for (i, cw, rw) in node_witnesses {
-        commit_psbt.inputs[node_input_indices[i]].final_script_witness = Some(cw);
-        reveal_psbt.inputs[i].final_script_witness = Some(rw);
+        commit_psbt.inputs[node_input_indices[i]].final_script_witness = Some(cw.clone());
+        reveal_psbt.inputs[i].final_script_witness = Some(rw.clone());
+        log_portal!(
+            "merged node {} commit ({} elems), reveal ({} elems)",
+            i,
+            cw.len(),
+            rw.len()
+        );
     }
 
     // Sign portal commit input
@@ -602,6 +618,10 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         )?;
         commit_psbt.inputs[portal_input_index].final_script_witness =
             Some(tx_to_sign_portal.input[portal_input_index].witness.clone());
+        log_portal!(
+            "portal added commit witness (stack_elems={})",
+            tx_to_sign_portal.input[portal_input_index].witness.len()
+        );
     }
 
     // Portal signs reveal input
@@ -659,6 +679,10 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             needed_fee_portal
         );
         reveal_psbt.inputs[nodes_n].final_script_witness = Some(txp.input[nodes_n].witness.clone());
+        log_portal!(
+            "portal added reveal witness (stack_elems={})",
+            txp.input[nodes_n].witness.len()
+        );
     }
 
     // Phase 5: Verify the x-only pubkeys are revealed in reveal witnesses
@@ -751,8 +775,6 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     let commit_tx = commit_psbt.extract_tx()?;
     let reveal_tx = reveal_psbt.extract_tx()?;
-    println!("commit_tx: {:#?}", commit_tx);
-    println!("reveal_tx: {:#?}", reveal_tx);
 
     // Phase 6: Broadcast commit then reveal together
     let commit_hex = hex::encode(serialize_tx(&commit_tx));
