@@ -79,6 +79,25 @@ pub struct GetBlockchainInfoResult {
     pub prune_target_size: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GetMempoolInfoResult {
+    /// Minimum fee rate (BTC/kvB) for mempool acceptance (dynamic floor)
+    #[serde(rename = "mempoolminfee")]
+    pub mempool_min_fee_btc_per_kvb: f64,
+    /// Node's configured relay fee (BTC/kvB) (static floor)
+    #[serde(rename = "minrelaytxfee")]
+    pub min_relay_tx_fee_btc_per_kvb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GetNetworkInfoResult {
+    /// Node's configured relay fee (BTC/kvB)
+    pub relayfee: f64,
+    /// Incremental fee (BTC/kvB) used for BnB and RBF (optional)
+    #[serde(default)]
+    pub incrementalfee: f64,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct TestMempoolAcceptResult {
     pub txid: Txid,

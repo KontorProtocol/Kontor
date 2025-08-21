@@ -5,6 +5,7 @@ use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
@@ -105,7 +106,14 @@ async fn test_psbt_inscription() -> Result<()> {
         script_pubkey: seller_address.script_pubkey(),
     }];
 
-    test_utils::sign_key_spend(&secp, &mut attach_commit_tx, &prevouts, &keypair, 0)?;
+    test_utils::sign_key_spend(
+        &secp,
+        &mut attach_commit_tx,
+        &prevouts,
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
 
     let attach_taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, attach_tap_script.clone())

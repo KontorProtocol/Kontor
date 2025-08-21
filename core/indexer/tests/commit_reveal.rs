@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bitcoin::FeeRate;
+use bitcoin::TapSighashType;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
@@ -67,7 +68,14 @@ async fn test_taproot_transaction() -> Result<()> {
     let tap_script = compose_outputs.tap_script;
 
     // Sign the attach transaction
-    test_utils::sign_key_spend(&secp, &mut attach_tx, &[utxo_for_output], &keypair, 0)?;
+    test_utils::sign_key_spend(
+        &secp,
+        &mut attach_tx,
+        &[utxo_for_output],
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
 
     let spend_tx_prevouts = vec![attach_tx.output[0].clone()];
 

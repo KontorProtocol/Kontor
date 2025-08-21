@@ -1,11 +1,11 @@
 use anyhow::Result;
-use bitcoin::FeeRate;
 use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
+use bitcoin::{FeeRate, TapSighashType};
 use clap::Parser;
 use indexer::api::compose::{RevealInputs, compose, compose_reveal};
 
@@ -92,7 +92,14 @@ async fn test_taproot_transaction() -> Result<()> {
     )?;
 
     // 1. SIGN THE ORIGINAL COMMIT
-    test_utils::sign_key_spend(&secp, &mut commit_tx, &[utxo_for_output], &keypair, 0)?;
+    test_utils::sign_key_spend(
+        &secp,
+        &mut commit_tx,
+        &[utxo_for_output],
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
 
     let spend_tx_prevouts = vec![commit_tx.output[0].clone()];
 
