@@ -11,6 +11,7 @@ use bitcoin::{
 use bitcoin::{TapSighashType, consensus::encode::serialize as serialize_tx};
 use bitcoin::{Txid, Witness};
 use clap::Parser;
+use futures_util::future::join_all;
 use indexer::api::compose::build_tap_script_and_script_address;
 use indexer::config::{Config, TestConfig};
 use indexer::{bitcoin_client::Client, logging, test_utils};
@@ -52,16 +53,10 @@ struct NodeSecrets {
 struct PortalInfo {
     address: Address,
     internal_key: XOnlyPublicKey,
-}
-
-#[derive(Clone, Debug)]
-struct PortalSecrets {
     keypair: Keypair,
 }
 
-// Portal constructs the commit/reveal, but does not contribute its own input/output in this simplified flow
-
-// NODE SETUP HELPERS
+// NODE AND PORTAL SETUP HELPERS
 fn get_node_addresses(
     secp: &Secp256k1<All>,
     test_cfg: &TestConfig,
@@ -82,21 +77,16 @@ fn get_node_addresses(
     Ok((infos, secrets))
 }
 
-fn get_portal_info(
-    secp: &Secp256k1<All>,
-    test_cfg: &TestConfig,
-) -> Result<(PortalInfo, PortalSecrets)> {
+fn get_portal_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<PortalInfo> {
     let (address, child_key, _compressed) =
         test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, 4)?;
     let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
-    Ok((
-        PortalInfo {
-            address,
-            internal_key,
-        },
-        PortalSecrets { keypair },
-    ))
+    Ok(PortalInfo {
+        address,
+        internal_key,
+        keypair,
+    })
 }
 
 fn mock_fetch_utxos_for_addresses(signups: &[NodeInfo]) -> Vec<(OutPoint, TxOut)> {
@@ -212,7 +202,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     logging::setup();
     let mut config = Config::try_parse()?;
     // Ensure we are talking to the Testnet4 node (default port 48332)
-    config.bitcoin_rpc_url = "http://127.0.0.1:48332".to_string();
+    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
     let client = Client::new_from_config(&config)?;
 
     let mut test_cfg = TestConfig::try_parse()?;
@@ -242,7 +232,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         output: vec![],
     })?;
 
-    // Append each node's input and script output; calculate node change such that each pays their own commit and reveal deltas
+    // Portal appends each node's input and script output; calculate node change such that each pays their own commit and reveal deltas
     let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
     let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
     let mut node_reveal_fees: Vec<u64> = Vec::with_capacity(signups.len());
@@ -252,7 +242,6 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let (node_outpoint, node_prevout) = node_utxos[idx].clone();
         // Snapshot size before adding this node to charge full delta (non-witness + witness + optional change)
         let base_before_vb = tx_vbytes(&commit_psbt.unsigned_tx);
-        // Use known outpoint and value; prevout script is the node's address script
         let node_input_index = commit_psbt.unsigned_tx.input.len();
         commit_psbt.unsigned_tx.input.push(TxIn {
             previous_output: node_outpoint,
@@ -359,7 +348,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
     info!("portal appending to COMMIT");
-    let (portal_info, portal_secrets) = get_portal_info(&secp, &test_cfg)?;
+    let portal_info = get_portal_info(&secp, &test_cfg)?;
     let (portal_outpoint, portal_prevout) = mock_fetch_portal_utxo(&portal_info);
     let base_before_portal_vb = tx_vbytes(&commit_psbt.unsigned_tx);
     let portal_input_index = commit_psbt.unsigned_tx.input.len();
@@ -507,79 +496,97 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     let (_, node_secrets) = get_node_addresses(&secp, &test_cfg)?;
 
     // Phase 4: Portal sends both PSBTs to nodes; nodes sign commit input (key-spend, SIGHASH_ALL) and reveal input (script-spend, SIGHASH_ALL)
-    // Merge node signatures back into original PSBTs
-    for (i, s) in signups.iter().enumerate() {
-        // Sign commit input for this node
-        let input_index = node_input_indices[i];
-        let mut tx_to_sign = commit_psbt.unsigned_tx.clone();
-        test_utils::sign_key_spend(
-            &secp,
-            &mut tx_to_sign,
-            &all_prevouts_c,
-            &node_secrets[i].keypair,
-            input_index,
-            Some(TapSighashType::Default),
-        )?;
-        commit_psbt.inputs[input_index].final_script_witness =
-            Some(tx_to_sign.input[input_index].witness.clone());
+    // Each node signs asynchronously and returns only its own witnesses; portal merges them
+    let commit_base_tx = commit_psbt.unsigned_tx.clone();
+    let reveal_base_psbt = reveal_psbt.clone();
+    let all_prevouts_clone = all_prevouts_c.clone();
 
-        // Reveal: build tapscript for node and sign script-spend
-        let (tap_script, tap_info, _addr) =
-            build_tap_script_and_script_address(s.internal_key, b"node-data".to_vec())?;
-        let prevouts: Vec<TxOut> = reveal_psbt
-            .inputs
-            .iter()
-            .map(|inp| inp.witness_utxo.clone().expect("wutxo"))
-            .collect();
-        let mut tx_to_sign_r = reveal_psbt.unsigned_tx.clone();
-        test_utils::sign_script_spend_with_sighash(
-            &secp,
-            &tap_info,
-            &tap_script,
-            &mut tx_to_sign_r,
-            &prevouts,
-            &node_secrets[i].keypair,
-            i,
-            TapSighashType::Default,
-        )?;
-        // Compute reveal size delta attributable to this node by comparing before/after setting witness i
-        let mut reveal_before = reveal_psbt.unsigned_tx.clone();
-        for j in 0..reveal_before.input.len() {
-            if let Some(wit) = &reveal_psbt.inputs[j].final_script_witness {
-                reveal_before.input[j].witness = wit.clone();
+    let node_sign_futs = signups.iter().enumerate().map(|(i, s)| {
+        let secp = Secp256k1::new();
+        let keypair = node_secrets[i].keypair;
+        let mut commit_tx_local = commit_base_tx.clone();
+        let reveal_psbt_local = reveal_base_psbt.clone();
+        let prevouts_commit = all_prevouts_clone.clone();
+        let node_input_indices_async = node_input_indices.clone();
+        let input_index = node_input_indices_async[i];
+        async move {
+            // Commit: sign only this node's input
+            test_utils::sign_key_spend(
+                &secp,
+                &mut commit_tx_local,
+                &prevouts_commit,
+                &keypair,
+                input_index,
+                Some(TapSighashType::Default),
+            )?;
+            let commit_witness = commit_tx_local.input[input_index].witness.clone();
+
+            // Reveal: sign only this node's reveal input and log sizes/fees
+            let (tap_script, tap_info, _addr) =
+                build_tap_script_and_script_address(s.internal_key, b"node-data".to_vec())?;
+            let prevouts_reveal: Vec<TxOut> = reveal_psbt_local
+                .inputs
+                .iter()
+                .map(|inp| inp.witness_utxo.clone().expect("wutxo"))
+                .collect();
+            let mut reveal_tx_local = reveal_psbt_local.unsigned_tx.clone();
+            test_utils::sign_script_spend_with_sighash(
+                &secp,
+                &tap_info,
+                &tap_script,
+                &mut reveal_tx_local,
+                &prevouts_reveal,
+                &keypair,
+                i,
+                TapSighashType::Default,
+            )?;
+
+            // Logging: compute delta for this node
+            let mut reveal_before = reveal_psbt_local.unsigned_tx.clone();
+            for j in 0..reveal_before.input.len() {
+                if let Some(wit) = &reveal_psbt_local.inputs[j].final_script_witness {
+                    reveal_before.input[j].witness = wit.clone();
+                }
             }
+            let before_vb_r = tx_vbytes(&reveal_before);
+            let mut reveal_after = reveal_before.clone();
+            reveal_after.input[i].witness = reveal_tx_local.input[i].witness.clone();
+            let after_vb_r = tx_vbytes(&reveal_after);
+            let delta_vb_r = after_vb_r.saturating_sub(before_vb_r);
+            let in_val_r = reveal_psbt_local.inputs[i]
+                .witness_utxo
+                .as_ref()
+                .expect("wutxo")
+                .value
+                .to_sat();
+            let out_val_r = reveal_psbt_local.unsigned_tx.output[i].value.to_sat();
+            let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
+            let needed_fee_node = delta_vb_r.saturating_mul(min_sat_per_vb);
+            log_node!(
+                "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
+                i,
+                after_vb_r,
+                delta_vb_r,
+                fee_paid_r_i,
+                needed_fee_node
+            );
+            assert!(fee_paid_r_i >= needed_fee_node,
+                "node {} reveal fee insufficient: paid={} < needed={}", i, fee_paid_r_i, needed_fee_node);
+
+            let reveal_witness = reveal_tx_local.input[i].witness.clone();
+            Ok::<(usize, Witness, Witness), anyhow::Error>((i, commit_witness, reveal_witness))
         }
-        let before_vb_r = tx_vbytes(&reveal_before);
-        let mut reveal_after = reveal_before.clone();
-        reveal_after.input[i].witness = tx_to_sign_r.input[i].witness.clone();
-        let after_vb_r = tx_vbytes(&reveal_after);
-        let delta_vb_r = after_vb_r.saturating_sub(before_vb_r);
-        let in_val_r = reveal_psbt.inputs[i]
-            .witness_utxo
-            .as_ref()
-            .expect("wutxo")
-            .value
-            .to_sat();
-        let out_val_r = reveal_psbt.unsigned_tx.output[i].value.to_sat();
-        let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
-        let needed_fee_node = delta_vb_r.saturating_mul(min_sat_per_vb);
-        log_node!(
-            "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat; reveal_fee_budgeted={} sat",
-            i,
-            after_vb_r,
-            delta_vb_r,
-            fee_paid_r_i,
-            needed_fee_node,
-            node_reveal_fees[i]
-        );
-        assert!(
-            fee_paid_r_i >= needed_fee_node,
-            "node {} reveal fee insufficient: paid={} < needed={}",
-            i,
-            fee_paid_r_i,
-            needed_fee_node
-        );
-        reveal_psbt.inputs[i].final_script_witness = Some(tx_to_sign_r.input[i].witness.clone());
+    });
+
+    let node_witnesses: Vec<(usize, Witness, Witness)> = join_all(node_sign_futs)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Merge node witnesses back into the original PSBTs
+    for (i, cw, rw) in node_witnesses {
+        commit_psbt.inputs[node_input_indices[i]].final_script_witness = Some(cw);
+        reveal_psbt.inputs[i].final_script_witness = Some(rw);
     }
 
     // Sign portal commit input
@@ -589,7 +596,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             &secp,
             &mut tx_to_sign_portal,
             &all_prevouts_c,
-            &portal_secrets.keypair,
+            &portal_info.keypair,
             portal_input_index,
             Some(TapSighashType::Default),
         )?;
@@ -613,7 +620,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             &tap_script,
             &mut txp,
             &prevouts,
-            &portal_secrets.keypair,
+            &portal_info.keypair,
             nodes_n,
             TapSighashType::Default,
         )?;
@@ -639,12 +646,11 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let fee_paid_r_portal = in_val_r_portal.saturating_sub(out_val_r_portal);
         let needed_fee_portal = delta_vb_r_portal.saturating_mul(min_sat_per_vb);
         log_portal!(
-            "portal reveal_vb_now={} vB; reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat; reveal_fee_budgeted={} sat",
+            "portal reveal_vb_now={} vB; reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
             after_vb_r_portal,
             delta_vb_r_portal,
             fee_paid_r_portal,
-            needed_fee_portal,
-            portal_reveal_fee
+            needed_fee_portal
         );
         assert!(
             fee_paid_r_portal >= needed_fee_portal,
@@ -743,9 +749,14 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         );
     }
 
+    let commit_tx = commit_psbt.extract_tx()?;
+    let reveal_tx = reveal_psbt.extract_tx()?;
+    println!("commit_tx: {:#?}", commit_tx);
+    println!("reveal_tx: {:#?}", reveal_tx);
+
     // Phase 6: Broadcast commit then reveal together
-    let commit_hex = hex::encode(serialize_tx(&commit_psbt.extract_tx()?));
-    let reveal_hex = hex::encode(serialize_tx(&reveal_psbt.extract_tx()?));
+    let commit_hex = hex::encode(serialize_tx(&commit_tx));
+    let reveal_hex = hex::encode(serialize_tx(&reveal_tx));
     let res = client
         .test_mempool_accept(&[commit_hex, reveal_hex])
         .await?;
