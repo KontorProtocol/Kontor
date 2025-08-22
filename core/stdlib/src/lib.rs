@@ -2,7 +2,7 @@ mod dot_path_buf;
 mod storage_interface;
 
 pub use dot_path_buf::*;
-pub use macros::{Root, Store, Wavey, Wrapper};
+pub use macros::{Root, Storage, StorageRoot, Store, Wavey, Wrapper};
 pub use storage_interface::*;
 
 #[derive(Clone)]
@@ -14,6 +14,14 @@ impl<K: ToString + Clone, V: Store> Map<K, V> {
     pub fn new(entries: &[(K, V)]) -> Self {
         Map {
             entries: entries.to_vec(),
+        }
+    }
+}
+
+impl<K: ToString + Clone, V: Store> Default for Map<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: Default::default(),
         }
     }
 }

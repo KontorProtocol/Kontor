@@ -6,7 +6,7 @@ use darling::{FromMeta, ast::NestedMeta};
 use heck::ToPascalCase;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, Ident, parse_macro_input};
+use syn::{Data, DeriveInput, Error, Ident, parse_macro_input, spanned::Spanned};
 
 use wit_parser::{Resolve, TypeDefKind, WorldItem, WorldKey};
 
@@ -39,7 +39,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             world: #world,
             path: #path,
             generate_all,
-            additional_derives: [stdlib::Store, stdlib::Wrapper],
+            additional_derives: [stdlib::Storage],
         });
 
         use kontor::built_in::*;
@@ -130,6 +130,8 @@ pub fn contract(input: TokenStream) -> TokenStream {
         impl ReadWriteContext for context::ProcContext {}
 
         struct #name;
+
+        export!(#name);
     };
 
     boilerplate.into()
@@ -140,6 +142,15 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
+
+    if !generics.params.is_empty() {
+        return Error::new(
+            generics.span(),
+            "Store derive does not support generic parameters (lifetimes or types)",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let body = match &input.data {
         Data::Struct(data_struct) => store::generate_struct_body(data_struct, name),
@@ -188,11 +199,17 @@ pub fn derive_wrapper(input: TokenStream) -> TokenStream {
     };
 
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
-    let expanded = quote! {
+    quote! {
         #body
-    };
+    }
+    .into()
+}
 
-    TokenStream::from(expanded)
+#[proc_macro_derive(Storage)]
+pub fn derive_storage(input: TokenStream) -> TokenStream {
+    let mut tokens = derive_store(input.clone());
+    tokens.extend(derive_wrapper(input));
+    tokens
 }
 
 #[proc_macro_derive(Root)]
@@ -215,11 +232,18 @@ pub fn derive_root(input: TokenStream) -> TokenStream {
     };
 
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
-    let expanded = quote! {
+    quote! {
         #body
-    };
+    }
+    .into()
+}
 
-    TokenStream::from(expanded)
+#[proc_macro_derive(StorageRoot)]
+pub fn derive_storage_root(input: TokenStream) -> TokenStream {
+    let mut tokens = derive_store(input.clone());
+    tokens.extend(derive_wrapper(input.clone()));
+    tokens.extend(derive_root(input));
+    tokens
 }
 
 #[proc_macro_derive(Wavey)]

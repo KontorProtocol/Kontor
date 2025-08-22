@@ -1,6 +1,6 @@
 macros::contract!(name = "arith");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {
     pub last_op: Option<Op>,
 }
@@ -29,5 +29,3 @@ impl Guest for Arith {
         storage(ctx).last_op(ctx).map(|op| op.load(ctx))
     }
 }
-
-export!(Arith);

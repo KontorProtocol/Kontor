@@ -2,7 +2,7 @@
 
 macros::contract!(name = "proxy");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, StorageRoot)]
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
@@ -33,5 +33,3 @@ impl Guest for Proxy {
         storage(ctx).set_contract_address(ctx, contract_address);
     }
 }
-
-export!(Proxy);
