@@ -1,0 +1,16 @@
+[package]
+name = "crypto"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+wit-bindgen = { workspace = true }
+wasm-wave = { workspace = true }
+macros = { workspace = true }
+stdlib = { workspace = true }
+
+[lib]
+crate-type = ["cdylib"]

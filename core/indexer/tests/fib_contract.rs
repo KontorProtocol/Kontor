@@ -18,6 +18,7 @@ async fn test_fib_contract() -> Result<()> {
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let conn = writer.connection();
     let height = 1;
+    let tx_id = 1;
     insert_block(
         &conn,
         BlockRow::builder()
@@ -28,6 +29,7 @@ async fn test_fib_contract() -> Result<()> {
     .await?;
     let storage = Storage::builder()
         .height(height)
+        .tx_id(tx_id)
         .conn(writer.connection())
         .build();
     let signer = "test_signer";

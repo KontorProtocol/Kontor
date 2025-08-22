@@ -1,0 +1,14 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context};
+
+    export init: func(ctx: borrow<proc-context>);
+
+    export hash: func(ctx: borrow<view-context>, input: string) -> string;
+
+    export hash-with-salt: func(ctx: borrow<view-context>, input: string, salt: string) -> string;
+
+    export generate-id: func(ctx: borrow<view-context>) -> string;
+}

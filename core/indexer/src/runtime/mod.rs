@@ -1,4 +1,5 @@
 mod component_cache;
+mod counter;
 mod native_contracts;
 mod storage;
 mod types;
@@ -8,6 +9,7 @@ pub use component_cache::ComponentCache;
 use libsql::Connection;
 pub use native_contracts::load_native_contracts;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 pub use storage::Storage;
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -34,7 +36,10 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::wit::{FallContext, HasContractId, ProcContext, Signer, ViewContext};
+use crate::runtime::{
+    counter::Counter,
+    wit::{FallContext, HasContractId, ProcContext, Signer, ViewContext},
+};
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
@@ -52,6 +57,7 @@ pub struct Runtime {
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
+    pub id_generation_counter: Counter,
 }
 
 impl Runtime {
@@ -64,13 +70,14 @@ impl Runtime {
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
         let engine = Engine::new(&config)?;
-        let runtime = Self {
+
+        Ok(Self {
             engine,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
-        };
-        Ok(runtime)
+            id_generation_counter: Counter::new(),
+        })
     }
 
     pub fn get_storage_conn(&self) -> Connection {
@@ -308,6 +315,36 @@ impl Runtime {
         self.storage
             .matching_path(_self.get_contract_id(), &regexp)
             .await
+    }
+}
+
+impl built_in::crypto::Host for Runtime {
+    async fn hash(&mut self, input: String) -> Result<(String, Vec<u8>)> {
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let bs = hasher.finalize().to_vec();
+        let s = hex::encode(&bs);
+        Ok((s, bs))
+    }
+
+    async fn hash_with_salt(&mut self, input: String, salt: String) -> Result<(String, Vec<u8>)> {
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        hasher.update(salt.as_bytes());
+        let bs = hasher.finalize().to_vec();
+        let s = hex::encode(&bs);
+        Ok((s, bs))
+    }
+
+    async fn generate_id(&mut self) -> Result<String> {
+        let s = format!(
+            "{}-{}-{}",
+            self.storage.height,
+            self.storage.tx_id,
+            self.id_generation_counter.get().await
+        );
+        self.id_generation_counter.increment().await;
+        self.hash(s).await.map(|(s, _)| s)
     }
 }
 
