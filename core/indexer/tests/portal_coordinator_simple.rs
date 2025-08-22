@@ -13,7 +13,7 @@ use bitcoin::{Txid, Witness};
 use clap::Parser;
 use futures_util::future::join_all;
 use indexer::api::compose::build_tap_script_and_script_address;
-use indexer::config::{Config, TestConfig};
+use indexer::config::TestConfig;
 use indexer::{bitcoin_client::Client, logging, test_utils};
 use std::str::FromStr;
 use tracing::info;
@@ -200,13 +200,12 @@ fn estimate_single_input_single_output_reveal_vbytes(
 async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Setup
     logging::setup();
-    let mut config = Config::try_parse()?;
-    // Ensure we are talking to the Testnet4 node (default port 48332)
-    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
-    let client = Client::new_from_config(&config)?;
-
     let mut test_cfg = TestConfig::try_parse()?;
     test_cfg.network = Network::Testnet4;
+
+    // Ensure we are talking to the Testnet4 node (default port 48332)
+    let client = Client::new_from_config(&test_cfg)?;
+
     let secp = Secp256k1::new();
 
     // Fee environment

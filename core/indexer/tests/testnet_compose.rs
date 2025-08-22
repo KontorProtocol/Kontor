@@ -22,18 +22,16 @@ use tracing::info;
 
 #[tokio::test]
 async fn test_taproot_transaction_testnet() -> Result<()> {
-    // Initialize regtest client
-    let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
+    // Initialize testnet client
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
 
-    let client = Client::new_from_config(&config)?;
-    let mut test_config = TestConfig::try_parse()?;
-    test_config.network = Network::Testnet4;
+    let client = Client::new_from_config(&test_cfg)?;
 
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_config, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, 0)?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -147,17 +145,16 @@ async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
     logging::setup();
 
     // Initialize testnet client
-    let mut config = Config::try_parse()?;
-    config.bitcoin_rpc_url = "https://testnet4.counterparty.io:48332/".to_string();
-    let client = Client::new_from_config(&config)?;
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
 
-    let mut test_config = TestConfig::try_parse()?;
-    test_config.network = Network::Testnet4;
+    let client = Client::new_from_config(&test_cfg)?;
+
     let secp = Secp256k1::new();
 
     // Generate taproot address and keys
     let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_config, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_cfg, 0)?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
