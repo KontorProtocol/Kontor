@@ -57,6 +57,9 @@ jobs:
       BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
       BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
       BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
+      TESTNET_BITCOIN_RPC_URL: ${{ vars.TESTNET_BITCOIN_RPC_URL }}
+      TESTNET_BITCOIN_RPC_USER: ${{ vars.TESTNET_BITCOIN_RPC_USER }}
+      TESTNET_BITCOIN_RPC_PASSWORD: ${{ vars.TESTNET_BITCOIN_RPC_PASSWORD }}
       ZMQ_ADDRESS: ${{ vars.ZMQ_ADDRESS }}
       API_PORT: ${{ vars.API_PORT }}
       DATA_DIR: ${{ github.workspace }}/core/test-data

@@ -16,7 +16,7 @@ use indexer::api::compose::ComposeInputs;
 use indexer::config::TestConfig;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer::{bitcoin_client::Client, config::Config, logging};
+use indexer::{bitcoin_client::Client, logging};
 use std::str::FromStr;
 use tracing::info;
 
