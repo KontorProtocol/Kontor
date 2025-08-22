@@ -66,6 +66,27 @@ pub struct Config {
 pub struct TestConfig {
     #[clap(
         long,
+        env = "TESTNET_BITCOIN_RPC_URL",
+        help = "URL of the Bitcoin RPC server (e.g., http://localhost:8332)"
+    )]
+    pub bitcoin_rpc_url: String,
+
+    #[clap(
+        long,
+        env = "TESTNET_BITCOIN_RPC_USER",
+        help = "User for Bitcoin RPC authentication"
+    )]
+    pub bitcoin_rpc_user: String,
+
+    #[clap(
+        long,
+        env = "TESTNET_BITCOIN_RPC_PASSWORD",
+        help = "Password for Bitcoin RPC authentication"
+    )]
+    pub bitcoin_rpc_password: String,
+
+    #[clap(
+        long,
         env = "SEGWIT_SELLER_KEY_PATH",
         help = "Full path to the seller's key file"
     )]
