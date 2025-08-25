@@ -2,13 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use indexer::{
     config::Config,
-    database::{
-        queries::insert_block,
-        types::BlockRow,
-    },
-    runtime::{
-        ComponentCache, ContractAddress, Runtime, Storage, load_native_contracts,
-    },
+    database::{queries::insert_block, types::BlockRow},
+    runtime::{ComponentCache, ContractAddress, Runtime, Storage, load_native_contracts},
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
@@ -43,21 +38,38 @@ async fn test_token_contract() -> Result<()> {
         tx_index: 0,
     };
 
-    let expr = format!( "mint({})", to_wave(&Value::from(1000))?);
+    let expr = format!("mint({})", to_wave(&Value::from(900))?);
     let result = runtime.execute(Some(minter), &contract, &expr).await?;
     assert_eq!(result, "()");
 
+    let expr = format!("mint({})", to_wave(&Value::from(100))?);
+    let result = runtime.execute(Some(minter), &contract, &expr).await?;
+    assert_eq!(result, "()");
+
+    let expr = format!("balance({})", to_wave(&Value::from(minter))?);
+    let result = runtime.execute(Some(minter), &contract, &expr).await?;
+    assert_eq!(result, "some(1000)");
+
     // attempt transfer from non-existent account
     // TODO provide nice error message; currently it blows up with cryptic wasm trace
-//    let expr = format!( "transfer({}, {})",
-//        to_wave(&Value::from(minter))?,
-//        to_wave(&Value::from(123))?
-//    );
-//    let _ = runtime.execute(Some(holder), &contract, &expr).await?;
+    //    let expr = format!( "transfer({}, {})",
+    //        to_wave(&Value::from(minter))?,
+    //        to_wave(&Value::from(123))?
+    //    );
+    //    let _ = runtime.execute(Some(holder), &contract, &expr).await?;
 
-    let expr = format!( "transfer({}, {})",
+    let expr = format!(
+        "transfer({}, {})",
         to_wave(&Value::from(holder))?,
-        to_wave(&Value::from(42))?
+        to_wave(&Value::from(40))?
+    );
+    let result = runtime.execute(Some(minter), &contract, &expr).await?;
+    assert_eq!(result, "()");
+
+    let expr = format!(
+        "transfer({}, {})",
+        to_wave(&Value::from(holder))?,
+        to_wave(&Value::from(2))?
     );
     let result = runtime.execute(Some(minter), &contract, &expr).await?;
     assert_eq!(result, "()");
@@ -70,9 +82,9 @@ async fn test_token_contract() -> Result<()> {
     let result = runtime.execute(Some(minter), &contract, &expr).await?;
     assert_eq!(result, "some(958)");
 
-    // TODO provide nice error message; currently it blows up with cryptic wasm trace
-    // let expr = format!("balance({})", to_wave(&Value::from("foo"))?);
-    // let _ = runtime.execute(Some(minter), &contract, &expr).await?;
+    let expr = format!("balance({})", to_wave(&Value::from("foo"))?);
+    let result = runtime.execute(Some(minter), &contract, &expr).await?;
+    assert_eq!(result, "none");
 
     Ok(())
 }
