@@ -49,5 +49,3 @@ impl Guest for Token {
         ledger.get(ctx, acc)
     }
 }
-
-export!(Token);
