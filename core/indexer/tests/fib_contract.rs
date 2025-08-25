@@ -18,6 +18,7 @@ async fn test_fib_contract() -> Result<()> {
     let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
     let conn = writer.connection();
     let height = 1;
+    let tx_id = 1;
     insert_block(
         &conn,
         BlockRow::builder()
@@ -28,6 +29,7 @@ async fn test_fib_contract() -> Result<()> {
     .await?;
     let storage = Storage::builder()
         .height(height)
+        .tx_id(tx_id)
         .conn(writer.connection())
         .build();
     let signer = "test_signer";
@@ -107,6 +109,52 @@ async fn test_fib_contract() -> Result<()> {
         .execute(None, &proxy_contract_address, "last-op()")
         .await?;
     assert_eq!(result, last_op);
+
+    // result
+    let x = "5";
+    let y = "3";
+    let expr = format!(
+        "checked-sub({}, {})",
+        to_wave(&Value::from(x))?,
+        to_wave(&Value::from(y))?
+    );
+    let result = runtime
+        .execute(None, &arith_contract_address, &expr)
+        .await?;
+    assert_eq!(result, "ok(2)");
+
+    let expr = format!(
+        "checked-sub({}, {})",
+        to_wave(&Value::from(y))?,
+        to_wave(&Value::from(x))?
+    );
+    let result = runtime
+        .execute(None, &arith_contract_address, &expr)
+        .await?;
+    assert_eq!(result, r#"err(message("less than 0"))"#);
+
+    // result through import
+    let x = "18";
+    let y = "10";
+    let expr = format!(
+        "fib-of-sub({}, {})",
+        to_wave(&Value::from(x))?,
+        to_wave(&Value::from(y))?
+    );
+    let result = runtime
+        .execute(Some(signer), &fib_contract_address, &expr)
+        .await?;
+    assert_eq!(result, "ok(21)");
+
+    let expr = format!(
+        "fib-of-sub({}, {})",
+        to_wave(&Value::from(y))?,
+        to_wave(&Value::from(x))?,
+    );
+    let result = runtime
+        .execute(Some(signer), &fib_contract_address, &expr)
+        .await?;
+    assert_eq!(result, r#"err(message("less than 0"))"#);
 
     Ok(())
 }

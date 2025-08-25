@@ -50,7 +50,23 @@ interface foreign {
     call: func(contract-address: contract-address, signer: option<borrow<signer>>, expr: string) -> string;
 }
 
+interface crypto {
+    hash: func(input: string) -> tuple<string, list<u8>>;
+    hash-with-salt: func(input: string, salt: string) -> tuple<string, list<u8>>;
+    generate-id: func() -> string;
+}
+
+interface error {
+    variant error {
+        message(string),
+    }
+
+    meta-force-generate-error: func(e: error);
+}
+
 world built-in {
     import context;
     import foreign;
+    import crypto;
+    import error;
 }

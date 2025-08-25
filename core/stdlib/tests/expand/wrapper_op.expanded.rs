@@ -63,9 +63,9 @@ impl OpWrapper {
     pub fn load(&self, ctx: &impl stdlib::ReadContext) -> Op {
         match self {
             OpWrapper::Id => Op::Id,
-            OpWrapper::Sum(inner_wrapper) => Op::Sum(inner_wrapper.load(ctx)),
-            OpWrapper::Mul(inner_wrapper) => Op::Mul(inner_wrapper.load(ctx)),
-            OpWrapper::Div(inner_wrapper) => Op::Div(inner_wrapper.load(ctx)),
+            OpWrapper::Sum(inner) => Op::Sum(inner.load(ctx)),
+            OpWrapper::Mul(inner) => Op::Mul(inner.load(ctx)),
+            OpWrapper::Div(inner) => Op::Div(inner.load(ctx)),
         }
     }
 }

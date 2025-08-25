@@ -6,7 +6,7 @@ use darling::{FromMeta, ast::NestedMeta};
 use heck::ToPascalCase;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, Ident, parse_macro_input};
+use syn::{Data, DeriveInput, Error, Ident, parse_macro_input, spanned::Spanned};
 
 use wit_parser::{Resolve, TypeDefKind, WorldItem, WorldKey};
 
@@ -39,7 +39,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             world: #world,
             path: #path,
             generate_all,
-            additional_derives: [stdlib::Store, stdlib::Wrapper],
+            additional_derives: [stdlib::Storage],
         });
 
         use kontor::built_in::*;
@@ -129,7 +129,39 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         impl ReadWriteContext for context::ProcContext {}
 
+        impl From<core::num::ParseIntError> for kontor::built_in::error::Error {
+            fn from(err: core::num::ParseIntError) -> Self {
+                kontor::built_in::error::Error::Message(format!("Parse integer error: {:?}", err))
+            }
+        }
+
+        impl From<core::num::TryFromIntError> for kontor::built_in::error::Error {
+            fn from(err: core::num::TryFromIntError) -> Self {
+                kontor::built_in::error::Error::Message(format!("Try from integer error: {:?}", err))
+            }
+        }
+
+        impl From<core::str::Utf8Error> for kontor::built_in::error::Error {
+            fn from(err: core::str::Utf8Error) -> Self {
+                kontor::built_in::error::Error::Message(format!("UTF-8 parse error: {:?}", err))
+            }
+        }
+
+        impl From<core::char::ParseCharError> for kontor::built_in::error::Error {
+            fn from(err: core::char::ParseCharError) -> Self {
+                kontor::built_in::error::Error::Message(format!("Parse char error: {:?}", err))
+            }
+        }
+
+        impl kontor::built_in::error::Error {
+            pub fn new(message: impl Into<String>) -> Self {
+                kontor::built_in::error::Error::Message(message.into())
+            }
+        }
+
         struct #name;
+
+        export!(#name);
     };
 
     boilerplate.into()
@@ -140,6 +172,15 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
+
+    if !generics.params.is_empty() {
+        return Error::new(
+            generics.span(),
+            "Store derive does not support generic parameters (lifetimes or types)",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let body = match &input.data {
         Data::Struct(data_struct) => store::generate_struct_body(data_struct, name),
@@ -188,11 +229,17 @@ pub fn derive_wrapper(input: TokenStream) -> TokenStream {
     };
 
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
-    let expanded = quote! {
+    quote! {
         #body
-    };
+    }
+    .into()
+}
 
-    TokenStream::from(expanded)
+#[proc_macro_derive(Storage)]
+pub fn derive_storage(input: TokenStream) -> TokenStream {
+    let mut tokens = derive_store(input.clone());
+    tokens.extend(derive_wrapper(input));
+    tokens
 }
 
 #[proc_macro_derive(Root)]
@@ -215,11 +262,18 @@ pub fn derive_root(input: TokenStream) -> TokenStream {
     };
 
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
-    let expanded = quote! {
+    quote! {
         #body
-    };
+    }
+    .into()
+}
 
-    TokenStream::from(expanded)
+#[proc_macro_derive(StorageRoot)]
+pub fn derive_storage_root(input: TokenStream) -> TokenStream {
+    let mut tokens = derive_store(input.clone());
+    tokens.extend(derive_wrapper(input.clone()));
+    tokens.extend(derive_root(input));
+    tokens
 }
 
 #[proc_macro_derive(Wavey)]
@@ -346,6 +400,7 @@ pub fn import(input: TokenStream) -> TokenStream {
                 "fall-context",
                 "proc-context",
                 "signer",
+                "error",
             ]
             .contains(&name)
         } else {
@@ -378,6 +433,7 @@ pub fn import(input: TokenStream) -> TokenStream {
 
             use super::context;
             use super::foreign;
+            use super::error::Error;
 
             const CONTRACT_NAME: &str = #name;
 
@@ -425,6 +481,40 @@ pub fn import(input: TokenStream) -> TokenStream {
                         name: name.expect("Missing 'name' field"),
                         height: height.expect("Missing 'height' field"),
                         tx_index: tx_index.expect("Missing 'tx_index' field"),
+                    }
+                }
+            }
+
+            impl Error {
+                pub fn wave_type() -> wasm_wave::value::Type {
+                    wasm_wave::value::Type::variant([
+                            ("message", Some(wasm_wave::value::Type::STRING)),
+                        ])
+                        .unwrap()
+                }
+            }
+            impl From<Error> for wasm_wave::value::Value {
+                fn from(value_: Error) -> Self {
+                    (match value_ {
+                        Error::Message(operand) => {
+                            wasm_wave::value::Value::make_variant(
+                                &Error::wave_type(),
+                                "message",
+                                Some(wasm_wave::value::Value::from(operand)),
+                            )
+                        }
+                    })
+                        .unwrap()
+                }
+            }
+            impl From<wasm_wave::value::Value> for Error {
+                fn from(value_: wasm_wave::value::Value) -> Self {
+                    let (key_, val_) = value_.unwrap_variant();
+                    match key_ {
+                        key_ if key_.eq("message") => {
+                            Error::Message(val_.unwrap().unwrap_string().into_owned())
+                        }
+                        key_ => panic!("Unknown tag {}", key_),
                     }
                 }
             }

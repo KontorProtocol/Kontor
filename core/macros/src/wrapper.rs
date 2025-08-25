@@ -248,8 +248,12 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
                 Fields::Unit => Ok(quote! { #variant_ident }),
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let inner_ty = &fields.unnamed[0].ty;
-                    let inner_wrapper_ty = get_wrapper_ident(inner_ty, variant.ident.span())?;
-                    Ok(quote! { #variant_ident(#inner_wrapper_ty) })
+                    if is_primitive_type(inner_ty) {
+                        Ok(quote! { #variant_ident(#inner_ty) })
+                    } else {
+                        let inner_wrapper_ty = get_wrapper_ident(inner_ty, variant.ident.span())?;
+                        Ok(quote! { #variant_ident(#inner_wrapper_ty) })
+                    }
                 }
                 _ => Err(Error::new(
                     variant.ident.span(),
@@ -274,18 +278,25 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string().to_lowercase();
 
-        Ok(match &variant.fields {
-            Fields::Unit => quote! {
+        match &variant.fields {
+            Fields::Unit => Ok(quote! {
                 p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident
-            },
+            }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                let inner_wrapper_ty = get_wrapper_ident(&fields.unnamed[0].ty, variant.ident.span())?;
-                quote! {
-                    p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident(#inner_wrapper_ty::new(ctx, base_path.push(#variant_name)))
+                let inner_ty = &fields.unnamed[0].ty;
+                if is_primitive_type(inner_ty) {
+                    Ok(quote! {
+                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident(ctx.__get(base_path.push(#variant_name)).unwrap())
+                    })
+                } else {
+                    let inner_wrapper_ty = get_wrapper_ident(inner_ty, variant.ident.span())?;
+                    Ok(quote! {
+                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident(#inner_wrapper_ty::new(ctx, base_path.push(#variant_name)))
+                    })
                 }
             }
             _ => unreachable!(),
-        })
+        }
     }).collect::<Result<Vec<_>>>()?;
 
     let load_arms = data_enum.variants.iter().map(|variant| {
@@ -294,9 +305,18 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
             Fields::Unit => quote! {
                 #wrapper_name::#variant_ident => #type_name::#variant_ident
             },
-            Fields::Unnamed(_) => quote! {
-                #wrapper_name::#variant_ident(inner_wrapper) => #type_name::#variant_ident(inner_wrapper.load(ctx))
-            },
+            Fields::Unnamed(fields) => {
+                let inner_ty = &fields.unnamed[0].ty;
+                if is_primitive_type(inner_ty) {
+                    quote! {
+                        #wrapper_name::#variant_ident(inner) => #type_name::#variant_ident(inner.clone())
+                    }
+                } else {
+                    quote! {
+                        #wrapper_name::#variant_ident(inner) => #type_name::#variant_ident(inner.load(ctx))
+                    }
+                }
+            }
             _ => unreachable!(),
         }
     }).collect::<Vec<_>>();

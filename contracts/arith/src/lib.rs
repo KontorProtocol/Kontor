@@ -1,6 +1,6 @@
 macros::contract!(name = "arith");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {
     pub last_op: Option<Op>,
 }
@@ -28,6 +28,11 @@ impl Guest for Arith {
     fn last_op(ctx: &ViewContext) -> Option<Op> {
         storage(ctx).last_op(ctx).map(|op| op.load(ctx))
     }
-}
 
-export!(Arith);
+    fn checked_sub(_: &ViewContext, x: String, y: String) -> Result<u64, Error> {
+        let x = x.parse::<u64>()?;
+        let y = y.parse::<u64>()?;
+        x.checked_sub(y)
+            .ok_or(Error::Message("less than 0".to_string()))
+    }
+}

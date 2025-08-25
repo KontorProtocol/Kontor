@@ -9,11 +9,14 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-const FIB: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
-
 const ARITH: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/arith.wasm.br");
+
+const CRYPTO: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/crypto.wasm.br");
+
+const FIB: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
 
 const PROXY: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/proxy.wasm.br");
@@ -30,7 +33,12 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
         },
     )
     .await?;
-    for (name, bytes) in [("arith", ARITH), ("fib", FIB), ("proxy", PROXY)] {
+    for (name, bytes) in [
+        ("arith", ARITH),
+        ("crypto", CRYPTO),
+        ("fib", FIB),
+        ("proxy", PROXY),
+    ] {
         let contract_id = insert_contract(
             &conn,
             ContractRow::builder()

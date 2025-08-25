@@ -4,12 +4,12 @@ macros::contract!(name = "fib");
 
 macros::import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
 
-#[derive(Clone, Store, Wrapper)]
+#[derive(Clone, Default, Storage)]
 struct FibValue {
     pub value: u64,
 }
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Default, StorageRoot)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }
@@ -54,6 +54,9 @@ impl Guest for Fib {
     fn fib(ctx: &ProcContext, n: u64) -> u64 {
         Self::raw_fib(ctx, n)
     }
-}
 
-export!(Fib);
+    fn fib_of_sub(ctx: &ProcContext, x: String, y: String) -> Result<u64, Error> {
+        let n = arith::checked_sub(&ctx.view_context(), x, y)?;
+        Ok(Fib::fib(ctx, n))
+    }
+}

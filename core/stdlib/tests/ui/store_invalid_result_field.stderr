@@ -1,0 +1,43 @@
+error: Store derive does not support Result field types
+ --> tests/ui/store_invalid_result_field.rs:4:8
+  |
+4 | struct Test {
+  |        ^^^^
+
+error: Store derive does not support Result field types
+ --> tests/ui/store_invalid_result_field.rs:9:8
+  |
+9 | struct Test1 {
+  |        ^^^^^
+
+error[E0412]: cannot find type `Error` in this scope
+  --> tests/ui/store_invalid_result_field.rs:10:22
+   |
+10 |     res: Result<u64, Error>,
+   |                      ^^^^^ not found in this scope
+   |
+help: consider importing one of these items
+   |
+1  + use std::error::Error;
+   |
+1  + use std::fmt::Error;
+   |
+1  + use std::io::Error;
+   |
+1  + use core::error::Error;
+   |
+     and 1 other candidate
+
+error[E0601]: `main` function not found in crate `$CRATE`
+  --> tests/ui/store_invalid_result_field.rs:11:2
+   |
+11 | }
+   |  ^ consider adding a `main` function to `$DIR/tests/ui/store_invalid_result_field.rs`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `anyhow`
+ --> tests/ui/store_invalid_result_field.rs:5:10
+  |
+5 |     res: anyhow::Result<u64>,
+  |          ^^^^^^ use of unresolved module or unlinked crate `anyhow`
+  |
+  = help: if you wanted to use a crate named `anyhow`, use `cargo add anyhow` to add it to your `Cargo.toml`

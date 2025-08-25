@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
@@ -12,13 +12,25 @@ fn type_name(resolve: &Resolve, ty: &Type) -> Result<TokenStream> {
         Type::String => Ok(quote! { String }),
         Type::Id(id) => {
             let ty_def = &resolve.types[*id];
-            match ty_def.kind {
+            match &ty_def.kind {
+                TypeDefKind::Type(inner) => Ok(type_name(resolve, inner)?),
                 TypeDefKind::Option(inner) => {
-                    let inner_ty = type_name(resolve, &inner)?;
+                    let inner_ty = type_name(resolve, inner)?;
                     Ok(quote! { Option<#inner_ty> })
                 }
+                TypeDefKind::Result(result) => {
+                    let ok_ty = match result.ok {
+                        Some(ty) => type_name(resolve, &ty)?,
+                        None => quote! { () },
+                    };
+                    let err_ty = match result.err {
+                        Some(ty) => type_name(resolve, &ty)?,
+                        None => quote! { () },
+                    };
+                    Ok(quote! { Result<#ok_ty, #err_ty> })
+                }
                 TypeDefKind::Handle(Handle::Borrow(resource_id)) => {
-                    let resource_def = &resolve.types[resource_id];
+                    let resource_def = &resolve.types[*resource_id];
                     let resource_name = resource_def
                         .name
                         .as_ref()
@@ -45,19 +57,38 @@ fn type_name(resolve: &Resolve, ty: &Type) -> Result<TokenStream> {
 
 fn value_type_for(resolve: &Resolve, ty: &Type) -> Result<TokenStream> {
     match ty {
-        Type::U64 => Ok(quote! { wasm_wave::value::Value::U64 }),
-        Type::S64 => Ok(quote! { wasm_wave::value::Value::S64 }),
-        Type::String => Ok(quote! { wasm_wave::value::Value::String }),
+        Type::U64 => Ok(quote! { wasm_wave::value::Type::U64 }),
+        Type::S64 => Ok(quote! { wasm_wave::value::Type::S64 }),
+        Type::String => Ok(quote! { wasm_wave::value::Type::String }),
         Type::Id(id) => {
             let ty_def = &resolve.types[*id];
 
-            match ty_def.kind {
+            match &ty_def.kind {
+                TypeDefKind::Type(inner) => Ok(value_type_for(resolve, inner)?),
                 TypeDefKind::Option(inner) => {
-                    let inner_ty = type_name(resolve, &inner)?;
+                    let inner_ty = type_name(resolve, inner)?;
                     Ok(quote! { wasm_wave::value::Type::option(<#inner_ty>::wave_type()) })
                 }
-                TypeDefKind::Handle(_) => {
-                    bail!("Resource handles cannot be used as return types");
+                TypeDefKind::Result(result) => {
+                    let ok_ty = match result.ok {
+                        Some(ty) => {
+                            let value_type_ = value_type_for(resolve, &ty)?;
+                            quote! { Some(#value_type_) }
+                        }
+                        None => {
+                            quote! { None }
+                        }
+                    };
+                    let err_ty = match result.err {
+                        Some(ty) => {
+                            let value_type_ = value_type_for(resolve, &ty)?;
+                            quote! { Some(#value_type_) }
+                        }
+                        None => {
+                            quote! { None }
+                        }
+                    };
+                    Ok(quote! { wasm_wave::value::Type::result(#ok_ty, #err_ty) })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
                     let name = ty_def
@@ -68,10 +99,49 @@ fn value_type_for(resolve: &Resolve, ty: &Type) -> Result<TokenStream> {
                     let ident = Ident::new(&name, Span::call_site());
                     Ok(quote! { <#ident>::wave_type() })
                 }
+                TypeDefKind::Handle(_) => {
+                    bail!("Resource handles cannot be used as return types");
+                }
                 _ => bail!("Unsupported return type kind: {:?}", ty_def.kind),
             }
         }
         _ => bail!("Unsupported return type: {:?}", ty),
+    }
+}
+
+fn unwrap_expr_for_wit_type(ty: &Type, resolve: &Resolve) -> Result<TokenStream> {
+    match ty {
+        Type::U64 => Ok(quote! { unwrap_u64() }),
+        Type::S64 => Ok(quote! { unwrap_s64() }),
+        Type::String => Ok(quote! { unwrap_string().into_owned() }),
+        Type::Id(id) => {
+            let ty_def = &resolve.types[*id];
+            match &ty_def.kind {
+                TypeDefKind::Type(inner) => unwrap_expr_for_wit_type(inner, resolve),
+                TypeDefKind::Option(inner) => {
+                    let inner_unwrap = unwrap_expr_for_wit_type(inner, resolve)?;
+                    Ok(quote! { unwrap_option().map(|v| v.into_owned().#inner_unwrap) })
+                }
+                TypeDefKind::Result(result) => {
+                    let ok_unwrap = match result.ok {
+                        Some(ok_ty) => unwrap_expr_for_wit_type(&ok_ty, resolve)?,
+                        None => quote! { into() },
+                    };
+                    let err_unwrap = match result.err {
+                        Some(err_ty) => unwrap_expr_for_wit_type(&err_ty, resolve)?,
+                        None => quote! { into() },
+                    };
+                    Ok(quote! {
+                        unwrap_result().map(|v| v.unwrap().into_owned().#ok_unwrap).map_err(|e| e.unwrap().into_owned().#err_unwrap)
+                    })
+                }
+                TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
+                    Ok(quote! { into() })
+                }
+                _ => bail!("Unsupported WIT type definition kind: {:?}", ty_def.kind),
+            }
+        }
+        _ => bail!("Unsupported WIT type: {:?}", ty),
     }
 }
 
@@ -98,58 +168,45 @@ pub fn generate_functions(
     };
 
     let expr_parts = export
-            .params
-            .iter()
-            .enumerate()
-            .skip(1)
-            .map(|(_i, (name, ty))| {
-                let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
-                Ok(match ty {
-                    Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
-                        let _inner_ty = match resolve.types[*id].kind {
-                            TypeDefKind::Option(inner) => type_name(resolve, &inner)?,
-                            _ => unreachable!(),
-                        };
-                        quote! {
-                            match #param_name {
-                                Some(val) => wasm_wave::to_string(&wasm_wave::value::Value::from(val)).unwrap(),
-                                None => "null".to_string(),
-                            }
+        .params
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(_i, (name, ty))| {
+            let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
+            Ok(match ty {
+                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
+                    let _inner_ty = match resolve.types[*id].kind {
+                        TypeDefKind::Option(inner) => type_name(resolve, &inner)?,
+                        _ => unreachable!(),
+                    };
+                    quote! {
+                        match #param_name {
+                            Some(val) => wasm_wave::to_string(&wasm_wave::value::Value::from(val)).unwrap(),
+                            None => "null".to_string(),
                         }
                     }
-                    _ => quote! {
-                        wasm_wave::to_string(&wasm_wave::value::Value::from(#param_name)).unwrap()
-                    },
-                })
+                }
+                _ => quote! {
+                    wasm_wave::to_string(&wasm_wave::value::Value::from(#param_name)).unwrap()
+                },
             })
-            .collect::<Result<Vec<_>>>()?;
+        })
+        .collect::<Result<Vec<_>>>()?;
 
+    let fn_name_kebab = fn_name.to_string().to_kebab_case();
     let expr = if expr_parts.is_empty() {
-        quote! { format!("{}()", stringify!(#fn_name)) }
+        quote! { format!("{}()", #fn_name_kebab) }
     } else {
-        quote! { format!("{}({})", stringify!(#fn_name), [#(#expr_parts),*].join(", ")) }
+        quote! { format!("{}({})", #fn_name_kebab, [#(#expr_parts),*].join(", ")) }
     };
 
     let ret_expr = match &export.result {
         Some(ty) => {
             let value_ty = value_type_for(resolve, ty)?;
-            let is_option = value_ty
-                .to_string()
-                .starts_with("wasm_wave :: value :: Type :: option");
-
-            if is_option {
-                quote! {
-                    wasm_wave::from_str::<wasm_wave::value::Value>(&#value_ty, &ret)
-                        .unwrap()
-                        .unwrap_option()
-                        .map(|v| v.into_owned().into())
-                }
-            } else {
-                quote! {
-                    wasm_wave::from_str::<wasm_wave::value::Value>(&#value_ty, &ret)
-                        .unwrap()
-                        .into()
-                }
+            let unwrap_expr = unwrap_expr_for_wit_type(ty, resolve)?;
+            quote! {
+                wasm_wave::from_str::<wasm_wave::value::Value>(&#value_ty, &ret).unwrap().#unwrap_expr
             }
         }
         None => quote! { () },

@@ -3,6 +3,7 @@ package kontor:contract;
 world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{view-context, proc-context};
+    use kontor:built-in/error.{error};
 
     record operand {
         y: u64,
@@ -24,4 +25,6 @@ world contract {
     export eval: func(ctx: borrow<proc-context>, x: u64, op: op) -> arith-return;
 
     export last-op: func(ctx: borrow<view-context>) -> option<op>;
+
+    export checked-sub: func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 }
