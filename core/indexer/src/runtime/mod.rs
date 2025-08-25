@@ -446,8 +446,9 @@ impl built_in::context::HostProcContext for Runtime {
         value: String,
     ) -> Result<()> {
         let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        let bs = serialize_cbor(&value)?;
-        self.storage.set(contract_id, &path, &bs).await
+        self.storage
+            .set(contract_id, &path, &serialize_cbor(&value)?)
+            .await
     }
 
     async fn get_u64(
@@ -464,9 +465,10 @@ impl built_in::context::HostProcContext for Runtime {
         path: String,
         value: u64,
     ) -> Result<()> {
-        let bs = serialize_cbor(&value)?;
         let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &bs).await
+        self.storage
+            .set(contract_id, &path, &serialize_cbor(&value)?)
+            .await
     }
 
     async fn get_s64(
@@ -483,9 +485,10 @@ impl built_in::context::HostProcContext for Runtime {
         path: String,
         value: i64,
     ) -> Result<()> {
-        let bs = serialize_cbor(&value)?;
         let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &bs).await
+        self.storage
+            .set(contract_id, &path, &serialize_cbor(&value)?)
+            .await
     }
 
     async fn set_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<()> {
