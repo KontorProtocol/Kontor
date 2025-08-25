@@ -21,24 +21,24 @@ impl Guest for Token {
         let to = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();
 
-        ledger.set(ctx, to, n);
+        let balance = ledger.get(ctx, to.clone()).unwrap_or_default();
+        ledger.set(ctx, to, balance + n);
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: u64) {
         let from = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();
 
-        let funds = match ledger.get(ctx, from.clone()) {
-            Some(v) => v,
-            None => panic!("from account doesn't exist"), // TODO never gets here
-        };
+        let from_balance = ledger.get(ctx, from.clone()).unwrap_or_default();
+        let to_balance = ledger.get(ctx, to.clone()).unwrap_or_default();
 
-        if funds < n {
+        if from_balance < n {
+            // TODO implement panic or find a different way to revert
             panic!("insufficient funds");
         }
 
-        ledger.set(ctx, from, funds - n);
-        ledger.set(ctx, to, n);
+        ledger.set(ctx, from, from_balance - n);
+        ledger.set(ctx, to, to_balance + n);
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<u64> {
