@@ -3,10 +3,12 @@ use bitcoin::address::Address;
 use bitcoin::amount::Amount;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::{Keypair, Secp256k1};
+use bitcoin::script::Instruction;
 use bitcoin::secp256k1::All;
 use bitcoin::transaction::Version;
 use bitcoin::{OutPoint, Sequence, Transaction, TxIn, TxOut, XOnlyPublicKey, absolute::LockTime};
-use bitcoin::{Psbt, Txid, Witness};
+use bitcoin::{Psbt, TapSighashType, Txid, Witness};
+use futures_util::future::join_all;
 use tracing::info;
 
 use std::str::FromStr;
@@ -538,4 +540,284 @@ pub fn add_portal_input_and_output_to_psbt(
     };
     log_portal_commit(&ctx);
     Ok((portal_info, portal_change_value, portal_input_index))
+}
+
+pub fn add_node_input_and_output_to_reveal_psbt(
+    reveal_psbt: &mut Psbt,
+    commit_txid: Txid,
+    node_script_vouts: &[usize],
+    idx: usize,
+    dust_limit_sat: u64,
+    node_info: &NodeInfo,
+    commit_psbt: &Psbt,
+) {
+    let script_vout = node_script_vouts[idx] as u32;
+    reveal_psbt.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint {
+            txid: commit_txid,
+            vout: script_vout,
+        },
+        script_sig: bitcoin::script::ScriptBuf::new(),
+        sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+        witness: Witness::new(),
+    });
+    reveal_psbt.unsigned_tx.output.push(TxOut {
+        value: Amount::from_sat(dust_limit_sat),
+        script_pubkey: node_info.address.script_pubkey(),
+    });
+    reveal_psbt.inputs.push(Default::default());
+    reveal_psbt.inputs[idx].witness_utxo =
+        Some(commit_psbt.unsigned_tx.output[node_script_vouts[idx]].clone());
+    reveal_psbt.inputs[idx].tap_internal_key = Some(node_info.internal_key);
+}
+
+pub fn add_portal_input_and_output_to_reveal_psbt(
+    reveal_psbt: &mut Psbt,
+    portal_change_value: u64,
+    dust_limit_sat: u64,
+    portal_info: &PortalInfo,
+    commit_psbt: &Psbt,
+    nodes_length: usize,
+) {
+    let commit_txid = commit_psbt.unsigned_tx.compute_txid();
+    // Add portal reveal input/output
+    let portal_script_vout = (commit_psbt.unsigned_tx.output.len() - 1) as u32
+        - if portal_change_value > 0 { 1 } else { 0 };
+    reveal_psbt.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint {
+            txid: commit_txid,
+            vout: portal_script_vout,
+        },
+        script_sig: bitcoin::script::ScriptBuf::new(),
+        sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+        witness: Witness::new(),
+    });
+    reveal_psbt.unsigned_tx.output.push(TxOut {
+        value: Amount::from_sat(dust_limit_sat),
+        script_pubkey: portal_info.address.script_pubkey(),
+    });
+    reveal_psbt.inputs.push(Default::default());
+    reveal_psbt.inputs[nodes_length].witness_utxo =
+        Some(commit_psbt.unsigned_tx.output[portal_script_vout as usize].clone());
+    reveal_psbt.inputs[nodes_length].tap_internal_key = Some(portal_info.internal_key);
+}
+
+pub fn node_sign_commit_and_reveal(
+    node_info: &NodeInfo,
+    index: usize,
+    psbts: (Psbt, Psbt),
+    prevouts_commits: &[TxOut],
+    node_input_indices: &[usize],
+    min_sat_per_vb: u64,
+    node_secrets: &[NodeSecrets],
+) -> impl std::future::Future<Output = Result<(usize, Psbt, Psbt), anyhow::Error>> + Send {
+    let secp = Secp256k1::new();
+    let keypair = node_secrets[index].keypair;
+    let mut commit_tx_local = psbts.0.unsigned_tx.clone();
+    let mut commit_psbt_local = psbts.0;
+    let mut reveal_psbt_local = psbts.1;
+    let input_index = node_input_indices[index];
+    async move {
+        // Commit: sign only this node's input
+        test_utils::sign_key_spend(
+            &secp,
+            &mut commit_tx_local,
+            prevouts_commits,
+            &keypair,
+            input_index,
+            Some(TapSighashType::Default),
+        )?;
+        let commit_witness = commit_tx_local.input[input_index].witness.clone();
+        log_node_commit_witness(index, &commit_witness);
+        // Attach to local commit psbt
+        commit_psbt_local.inputs[input_index].final_script_witness = Some(commit_witness);
+
+        // Reveal: sign only this node's reveal input and log sizes/fees
+        let (tap_script, tap_info, _addr) =
+            build_tap_script_and_script_address(node_info.internal_key, b"node-data".to_vec())?;
+        let prevouts_reveal: Vec<TxOut> = reveal_psbt_local
+            .inputs
+            .iter()
+            .map(|inp| inp.witness_utxo.clone().expect("wutxo"))
+            .collect();
+        let mut reveal_tx_local = reveal_psbt_local.unsigned_tx.clone();
+        test_utils::sign_script_spend_with_sighash(
+            &secp,
+            &tap_info,
+            &tap_script,
+            &mut reveal_tx_local,
+            &prevouts_reveal,
+            &keypair,
+            index,
+            TapSighashType::Default,
+        )?;
+
+        log_node_sign_size_and_fee_breakdown(
+            &reveal_psbt_local,
+            index,
+            &mut reveal_tx_local,
+            min_sat_per_vb,
+        );
+
+        let reveal_witness = reveal_tx_local.input[index].witness.clone();
+        // Attach to local reveal psbt
+        reveal_psbt_local.inputs[index].final_script_witness = Some(reveal_witness);
+
+        Ok::<(usize, Psbt, Psbt), anyhow::Error>((index, commit_psbt_local, reveal_psbt_local))
+    }
+}
+
+pub async fn merge_node_signatures<I, F>(
+    node_sign_futs: I,
+    node_input_indices: &[usize],
+    commit_psbt: &mut Psbt,
+    reveal_psbt: &mut Psbt,
+) -> Result<()>
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = Result<(usize, Psbt, Psbt), anyhow::Error>> + Send,
+{
+    let node_psbts: Vec<(usize, Psbt, Psbt)> = join_all(node_sign_futs)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Merge node witnesses back into the original PSBTs
+    for (i, c_psbt, r_psbt) in node_psbts {
+        let idx = node_input_indices[i];
+        commit_psbt.inputs[idx].final_script_witness =
+            c_psbt.inputs[idx].final_script_witness.clone();
+        reveal_psbt.inputs[i].final_script_witness = r_psbt.inputs[i].final_script_witness.clone();
+        info!(
+            "merged node {} commit ({} elems), reveal ({} elems)",
+            i,
+            commit_psbt.inputs[idx]
+                .final_script_witness
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0),
+            reveal_psbt.inputs[i]
+                .final_script_witness
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0)
+        );
+    }
+    Ok(())
+}
+
+pub fn portal_signs_commit_and_reveal(
+    commit_psbt: &mut Psbt,
+    reveal_psbt: &mut Psbt,
+    portal_info: &PortalInfo,
+    all_prevouts_c: &[TxOut],
+    portal_input_index: usize,
+    min_sat_per_vb: u64,
+    nodes_length: usize,
+) -> Result<()> {
+    let secp = Secp256k1::new();
+
+    // Sign portal commit input
+    let mut tx_to_sign_portal = commit_psbt.unsigned_tx.clone();
+    test_utils::sign_key_spend(
+        &secp,
+        &mut tx_to_sign_portal,
+        all_prevouts_c,
+        &portal_info.keypair,
+        portal_input_index,
+        Some(TapSighashType::Default),
+    )?;
+    commit_psbt.inputs[portal_input_index].final_script_witness =
+        Some(tx_to_sign_portal.input[portal_input_index].witness.clone());
+    info!(
+        "portal added commit witness (stack_elems={})",
+        tx_to_sign_portal.input[portal_input_index].witness.len()
+    );
+
+    // Portal signs reveal input
+    let (tap_script, tap_info, _addr) =
+        build_tap_script_and_script_address(portal_info.internal_key, b"portal-data".to_vec())?;
+    let prevouts: Vec<TxOut> = reveal_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.clone().expect("wutxo"))
+        .collect();
+    let mut txp = reveal_psbt.unsigned_tx.clone();
+    test_utils::sign_script_spend_with_sighash(
+        &secp,
+        &tap_info,
+        &tap_script,
+        &mut txp,
+        &prevouts,
+        &portal_info.keypair,
+        nodes_length,
+        TapSighashType::Default,
+    )?;
+    // Log portal reveal
+    let mut reveal_before = reveal_psbt.unsigned_tx.clone();
+    for j in 0..reveal_before.input.len() {
+        if let Some(wit) = &reveal_psbt.inputs[j].final_script_witness {
+            reveal_before.input[j].witness = wit.clone();
+        }
+    }
+    let before_vb_r_portal = tx_vbytes(&reveal_before);
+    let mut reveal_after = reveal_before.clone();
+    reveal_after.input[nodes_length].witness = txp.input[nodes_length].witness.clone();
+    let after_vb_r_portal = tx_vbytes(&reveal_after);
+    let delta_vb_r_portal = after_vb_r_portal.saturating_sub(before_vb_r_portal);
+    let in_val_r_portal = reveal_psbt.inputs[nodes_length]
+        .witness_utxo
+        .as_ref()
+        .expect("wutxo")
+        .value
+        .to_sat();
+    let out_val_r_portal = reveal_psbt.unsigned_tx.output[nodes_length].value.to_sat();
+    let fee_paid_r_portal = in_val_r_portal.saturating_sub(out_val_r_portal);
+    let needed_fee_portal = delta_vb_r_portal.saturating_mul(min_sat_per_vb);
+    info!(
+        "portal reveal_vb_now={} vB; reveal_delta={} vB; reveal_fee_paid={} sat; reveal_fee_needed={} sat",
+        after_vb_r_portal, delta_vb_r_portal, fee_paid_r_portal, needed_fee_portal
+    );
+    assert!(
+        fee_paid_r_portal >= needed_fee_portal,
+        "portal reveal fee insufficient: paid={} < needed={}",
+        fee_paid_r_portal,
+        needed_fee_portal
+    );
+    reveal_psbt.inputs[nodes_length].final_script_witness =
+        Some(txp.input[nodes_length].witness.clone());
+    info!(
+        "portal added reveal witness (stack_elems={})",
+        txp.input[nodes_length].witness.len()
+    );
+    Ok(())
+}
+
+pub fn verify_x_only_pubkeys(
+    signups: &[NodeInfo],
+    reveal_psbt: &Psbt,
+    commit_psbt: &Psbt,
+    min_sat_per_vb: u64,
+) {
+    for (i, s) in signups.iter().enumerate() {
+        let wit = reveal_psbt.inputs[i]
+            .final_script_witness
+            .as_ref()
+            .expect("node reveal witness");
+        assert!(wit.len() >= 2, "witness must contain signature and script");
+        let script_bytes = wit.iter().nth(1).expect("script");
+        let script = bitcoin::script::ScriptBuf::from_bytes(script_bytes.to_vec());
+        let mut it = script.instructions();
+        if let Some(Ok(Instruction::PushBytes(bytes))) = it.next() {
+            assert_eq!(
+                bytes.as_bytes(),
+                &s.internal_key.serialize(),
+                "node xonly pubkey not revealed correctly"
+            );
+        } else {
+            panic!("node tapscript missing leading pubkey push");
+        }
+    }
+
+    log_total_size_and_fee_breakdown(commit_psbt, reveal_psbt, min_sat_per_vb);
 }
