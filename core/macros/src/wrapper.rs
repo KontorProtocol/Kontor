@@ -20,11 +20,11 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                 let field_name_str = field_name.to_string();
                 let field_ty = &field.ty;
 
-                if is_map_type(field_ty) {
+                if utils::is_map_type(field_ty) {
                     let (k_ty, v_ty) = get_map_types(field_ty)?;
                     let field_wrapper_name = Ident::new(&format!("{}{}Wrapper", type_name, &field_name.to_string().to_pascal_case()), field.span());
 
-                    let (get_return, get_body) = if is_primitive_type(&v_ty) {
+                    let (get_return, get_body) = if utils::is_primitive_type(&v_ty) {
                         (quote! { Option<#v_ty> }, quote! { ctx.__get(self.base_path.push(key.to_string())) })
                     } else {
                         let v_wrapper_ty = get_wrapper_ident(&v_ty, field.span())?;
@@ -61,7 +61,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                 } else if utils::is_option_type(field_ty) {
                     let inner_ty = get_option_inner_type(field_ty)?;
                     let base_path = quote! { self.base_path.push(#field_name_str) };
-                    if is_primitive_type(&inner_ty) {
+                    if utils::is_primitive_type(&inner_ty) {
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_ty> {
                                 let base_path = #base_path;
@@ -85,7 +85,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                             }
                         })
                     }
-                } else if is_primitive_type(field_ty) {
+                } else if utils::is_primitive_type(field_ty) {
                     Ok(quote! {
                         pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_ty {
                             ctx.__get(self.base_path.push(#field_name_str)).unwrap()
@@ -107,7 +107,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                 let field_ty = &field.ty;
                 let set_field_name = Ident::new(&format!("set_{}", field_name), field_name.span());
 
-                if is_map_type(field_ty) {
+                if utils::is_map_type(field_ty) {
                     Ok(quote! { })
                 } else if utils::is_option_type(field_ty) {
                     let inner_ty = get_option_inner_type(field_ty)?;
@@ -137,14 +137,14 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     let _field_name_str = field_name.to_string();
                     let field_ty = &field.ty;
 
-                    if is_map_type(field_ty) {
+                    if utils::is_map_type(field_ty) {
                         let (_k_ty, _v_ty) = get_map_types(field_ty)?;
                         Ok(quote! {
                             #field_name: self.#field_name().load(ctx)
                         })
                     } else if utils::is_option_type(field_ty) {
                         let inner_ty = get_option_inner_type(field_ty)?;
-                        if is_primitive_type(&inner_ty) {
+                        if utils::is_primitive_type(&inner_ty) {
                             Ok(quote! {
                                 #field_name: self.#field_name(ctx)
                             })
@@ -153,7 +153,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                                 #field_name: self.#field_name(ctx).map(|p| p.load(ctx))
                             })
                         }
-                    } else if is_primitive_type(field_ty) {
+                    } else if utils::is_primitive_type(field_ty) {
                         Ok(quote! {
                             #field_name: self.#field_name(ctx)
                         })
@@ -200,42 +200,6 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
     }
 }
 
-fn is_map_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        type_path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident == "Map")
-            .unwrap_or(false)
-    } else {
-        false
-    }
-}
-
-fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Map"
-        && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 2
-        && let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
-            (&args.args[0], &args.args[1])
-    {
-        return Ok((k_ty.clone(), v_ty.clone()));
-    }
-    Err(Error::new(ty.span(), "Expected Map<K, V> type"))
-}
-
-fn is_primitive_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        let segment = type_path.path.segments.last().map(|s| s.ident.to_string());
-        matches!(segment.as_deref(), Some("u64" | "i64" | "String"))
-    } else {
-        false
-    }
-}
-
 pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<TokenStream> {
     let wrapper_name = Ident::new(&format!("{}Wrapper", type_name), type_name.span());
 
@@ -248,7 +212,7 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
                 Fields::Unit => Ok(quote! { #variant_ident }),
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let inner_ty = &fields.unnamed[0].ty;
-                    if is_primitive_type(inner_ty) {
+                    if utils::is_primitive_type(inner_ty) {
                         Ok(quote! { #variant_ident(#inner_ty) })
                     } else {
                         let inner_wrapper_ty = get_wrapper_ident(inner_ty, variant.ident.span())?;
@@ -284,7 +248,7 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let inner_ty = &fields.unnamed[0].ty;
-                if is_primitive_type(inner_ty) {
+                if utils::is_primitive_type(inner_ty) {
                     Ok(quote! {
                         p if p.starts_with(base_path.push(#variant_name).as_ref()) => #wrapper_name::#variant_ident(ctx.__get(base_path.push(#variant_name)).unwrap())
                     })
@@ -307,7 +271,7 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
             },
             Fields::Unnamed(fields) => {
                 let inner_ty = &fields.unnamed[0].ty;
-                if is_primitive_type(inner_ty) {
+                if utils::is_primitive_type(inner_ty) {
                     quote! {
                         #wrapper_name::#variant_ident(inner) => #type_name::#variant_ident(inner.clone())
                     }
@@ -372,4 +336,18 @@ fn get_option_inner_type(ty: &Type) -> Result<Type> {
         return Ok(inner_ty.clone());
     }
     Err(Error::new(ty.span(), "Expected Option<T> type"))
+}
+
+fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Map"
+        && let PathArguments::AngleBracketed(args) = &segment.arguments
+        && args.args.len() == 2
+        && let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
+            (&args.args[0], &args.args[1])
+    {
+        return Ok((k_ty.clone(), v_ty.clone()));
+    }
+    Err(Error::new(ty.span(), "Expected Map<K, V> type"))
 }

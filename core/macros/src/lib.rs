@@ -13,6 +13,7 @@ use wit_parser::{Resolve, TypeDefKind, WorldItem, WorldKey};
 mod import;
 mod root;
 mod store;
+mod transformers;
 mod utils;
 mod wavey;
 mod wrapper;

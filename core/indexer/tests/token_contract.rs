@@ -10,7 +10,7 @@ use wasmtime::component::wasm_wave::{to_string as to_wave, value::Value};
 
 #[tokio::test]
 async fn test_token_contract() -> Result<()> {
-    let (_, writer, _test_db_dir) = new_test_db(&Config::parse()).await?;
+    let (_, writer, _test_db_dir) = new_test_db(&Config::try_parse_from([""])?).await?;
     let conn = writer.connection();
     let height = 1;
     insert_block(
