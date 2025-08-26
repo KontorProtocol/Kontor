@@ -351,6 +351,7 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
 #[derive(FromMeta)]
 struct ImportConfig {
     name: String,
+    mod_name: Option<String>,
     height: i64,
     tx_index: i64,
     path: String,
@@ -364,7 +365,7 @@ pub fn import(input: TokenStream) -> TokenStream {
     let config = ImportConfig::from_list(&attr_args).unwrap();
 
     let name = config.name;
-    let module_name = Ident::from_string(name.to_string().as_str()).unwrap();
+    let module_name = Ident::from_string(&config.mod_name.unwrap_or(name.clone())).unwrap();
     let height = config.height;
     let tx_index = config.tx_index;
     let path = config.path;
