@@ -12,6 +12,7 @@ checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 name = "arith"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
  "stdlib",
  "wasm-wave",
@@ -31,9 +32,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
+name = "bnum"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f781dba93de3a5ef6dc5b17c9958b208f6f3f021623b360fb605ea51ce443f10"
+
+[[package]]
 name = "crypto"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
  "stdlib",
  "wasm-wave",
@@ -82,9 +90,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "fastnum"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa12fae921d379d6282fd82ab14251283ea57184db769ecbfcedf332e34ee4e3"
+dependencies = [
+ "bnum",
+]
+
+[[package]]
 name = "fib"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
  "stdlib",
  "wasm-wave",
@@ -347,6 +365,7 @@ dependencies = [
 name = "proxy"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
  "stdlib",
  "wasm-wave",
@@ -422,6 +441,7 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 name = "stdlib"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
 ]
 
@@ -466,6 +486,7 @@ dependencies = [
 name = "token"
 version = "0.1.0"
 dependencies = [
+ "fastnum",
  "macros",
  "stdlib",
  "wasm-wave",

@@ -1,6 +1,8 @@
 mod dot_path_buf;
 mod storage_interface;
 
+use fastnum::{D256, decimal};
+
 pub use dot_path_buf::*;
 pub use macros::{Root, Storage, StorageRoot, Store, Wavey, Wrapper, import};
 pub use storage_interface::*;
@@ -58,6 +60,12 @@ impl Store for String {
     }
 }
 
+impl Store for D256 {
+    fn __set(ctx: &impl WriteContext, path: DotPathBuf, value: D256) {
+        ctx.__set_str(&path, &value.to_string());
+    }
+}
+
 impl Store for () {
     fn __set(ctx: &impl WriteContext, path: DotPathBuf, _: ()) {
         ctx.__set_void(&path);
@@ -79,5 +87,12 @@ impl Retrieve for i64 {
 impl Retrieve for String {
     fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
         ctx.__get_str(&path)
+    }
+}
+
+impl Retrieve for D256 {
+    fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
+        ctx.__get_str(&path)
+            .map(|s| D256::from_str(&s, decimal::Context::default()).unwrap())
     }
 }

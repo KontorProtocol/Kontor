@@ -40,29 +40,32 @@ async fn test_token_contract() -> Result<()> {
     let runtime = Runtime::new(storage.clone(), component_cache).await?;
     load_native_contracts(&runtime).await?;
 
-    token::mint(&runtime, minter, 900).await;
-    token::mint(&runtime, minter, 100).await;
+    token::mint(&runtime, minter, "900").await;
+    token::mint(&runtime, minter, "100").await;
 
     let result = token::balance(&runtime, minter).await;
-    assert_eq!(result, Some(1000));
+    assert_eq!(result, Some("1000".to_string()));
 
-    let result = token::transfer(&runtime, holder, minter, 123).await;
+    let result = token::transfer(&runtime, holder, minter, "123").await;
     assert_eq!(
         result,
         Err(Error::Message("insufficient funds".to_string()))
     );
 
-    token::transfer(&runtime, minter, holder, 40).await?;
-    token::transfer(&runtime, minter, holder, 2).await?;
+    token::transfer(&runtime, minter, holder, "40").await?;
+    token::transfer(&runtime, minter, holder, "2.00001").await?;
 
     let result = token::balance(&runtime, holder).await;
-    assert_eq!(result, Some(42));
+    assert_eq!(result, Some("42.00001".to_string()));
 
     let result = token::balance(&runtime, minter).await;
-    assert_eq!(result, Some(958));
+    assert_eq!(result, Some("957.99999".to_string()));
 
     let result = token::balance(&runtime, "foo").await;
     assert_eq!(result, None);
+
+    let result = token::balance_log10(&runtime, holder).await;
+    assert_eq!(result, Some("1.6232493938".to_string()));
 
     Ok(())
 }

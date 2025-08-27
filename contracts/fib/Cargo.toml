@@ -8,6 +8,7 @@ wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
 macros = { workspace = true }
 stdlib = { workspace = true }
+fastnum = "0.7.0"
 
 [lib]
 crate-type = ["cdylib"]

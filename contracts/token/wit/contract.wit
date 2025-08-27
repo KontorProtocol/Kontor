@@ -7,7 +7,8 @@ world contract {
 
     export init: func(ctx: borrow<proc-context>);
 
-    export mint: func(ctx: borrow<proc-context>, n: u64);
-    export transfer: func(ctx: borrow<proc-context>, to: string, n: u64) -> result<_, error>;
-    export balance: func(ctx: borrow<view-context>, acc: string) -> option<u64>;
+    export mint: func(ctx: borrow<proc-context>, n: string);
+    export transfer: func(ctx: borrow<proc-context>, to: string, n: string) -> result<_, error>;
+    export balance: func(ctx: borrow<view-context>, acc: string) -> option<string>;
+    export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<string>;
 }

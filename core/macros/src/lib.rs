@@ -154,6 +154,14 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
+        // NOTE this adds fastnum as a requirement for _all_ contracts
+        impl From<fastnum::decimal::ParseError> for kontor::built_in::error::Error {
+            fn from(err: fastnum::decimal::ParseError) -> Self {
+                kontor::built_in::error::Error::Message(
+                    format!("Parse decimal number error: {:?}", err))
+            }
+        }
+
         impl kontor::built_in::error::Error {
             pub fn new(message: impl Into<String>) -> Self {
                 kontor::built_in::error::Error::Message(message.into())
