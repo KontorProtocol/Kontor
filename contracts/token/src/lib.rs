@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use fastnum::{ D256, decimal::Context };
+use fastnum::{decimal::Context, D256};
 
 macros::contract!(name = "token");
 
@@ -54,6 +54,8 @@ impl Guest for Token {
 
     fn balance_log10(ctx: &ViewContext, acc: String) -> Option<String> {
         let ledger = storage(ctx).ledger();
-        ledger.get(ctx, acc).map(|v| v.log10().trunc_with_scale(10).to_string())
+        ledger
+            .get(ctx, acc)
+            .map(|v| v.log10().trunc_with_scale(10).to_string())
     }
 }
