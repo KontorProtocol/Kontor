@@ -225,55 +225,6 @@ pub fn build_tap_script_and_script_address_helper(
     Ok((tap_script, taproot_spend_info, script_spendable_address))
 }
 
-#[derive(Clone, Debug)]
-pub struct NodeCommitLogCtx {
-    pub idx: usize,
-    pub post_vb: u64,
-    pub delta_vb: u64,
-    pub total_paid: u64,
-    pub commit_fee: u64,
-    pub reveal_fee: u64,
-    pub buffer: u64,
-}
-
-pub fn log_node_commit(ctx: &NodeCommitLogCtx) {
-    info!(
-        "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-        ctx.idx,
-        ctx.post_vb,
-        ctx.delta_vb,
-        ctx.total_paid,
-        ctx.commit_fee,
-        ctx.reveal_fee,
-        ctx.buffer
-    );
-}
-
-#[derive(Clone, Debug)]
-pub struct PortalCommitLogCtx {
-    pub post_vb: u64,
-    pub delta_vb: u64,
-    pub total_paid: u64,
-    pub commit_fee: u64,
-    pub reveal_fee: u64,
-    pub buffer: u64,
-}
-
-pub fn log_portal_commit(ctx: &PortalCommitLogCtx) {
-    info!(
-        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-        ctx.post_vb, ctx.delta_vb, ctx.total_paid, ctx.commit_fee, ctx.reveal_fee, ctx.buffer
-    );
-}
-
-pub fn log_node_commit_witness(idx: usize, witness: &Witness) {
-    info!(
-        "idx={} produced commit witness (stack_elems={})",
-        idx,
-        witness.len()
-    );
-}
-
 pub fn log_node_sign_size_and_fee_breakdown(
     reveal_psbt_local: &Psbt,
     i: usize,
@@ -503,16 +454,16 @@ pub fn add_single_node_input_and_output_to_psbt(
     };
     let node_script_vout = script_vout;
 
-    let ctx = NodeCommitLogCtx {
+    info!(
+        "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
         idx,
-        post_vb: tx_vbytes(&temp),
-        delta_vb: full_delta_vb,
-        total_paid: node_prevout.value.to_sat() - (script_value + node_change_value),
-        commit_fee: fee_full_delta,
+        tx_vbytes(&temp),
+        full_delta_vb,
+        node_prevout.value.to_sat() - (script_value + node_change_value),
+        fee_full_delta,
         reveal_fee,
-        buffer: fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb),
-    };
-    log_node_commit(&ctx);
+        fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb)
+    );
 
     Ok((node_reveal_fee, node_input_index, node_script_vout))
 }
@@ -587,15 +538,17 @@ pub fn add_portal_input_and_output_to_psbt(
     } else {
         portal_change_value = 0;
     }
-    let ctx = PortalCommitLogCtx {
-        post_vb: tx_vbytes(&temp_portal),
-        delta_vb: portal_full_delta_vb,
-        total_paid: portal_prevout.value.to_sat() - (portal_script_value + portal_change_value),
-        commit_fee: portal_fee_full_delta,
-        reveal_fee: portal_reveal_fee,
-        buffer: portal_fee_full_delta - portal_full_delta_vb.saturating_mul(min_sat_per_vb),
-    };
-    log_portal_commit(&ctx);
+
+    info!(
+        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
+        tx_vbytes(&temp_portal),
+        portal_full_delta_vb,
+        portal_prevout.value.to_sat() - (portal_script_value + portal_change_value),
+        portal_fee_full_delta,
+        portal_reveal_fee,
+        portal_fee_full_delta - portal_full_delta_vb.saturating_mul(min_sat_per_vb)
+    );
+
     Ok((portal_info, portal_change_value, portal_input_index))
 }
 
@@ -685,7 +638,11 @@ pub fn node_sign_commit_and_reveal(
             Some(TapSighashType::Default),
         )?;
         let commit_witness = commit_tx_local.input[input_index].witness.clone();
-        log_node_commit_witness(index, &commit_witness);
+        info!(
+            "idx={} produced commit witness (stack_elems={})",
+            index,
+            commit_witness.len()
+        );
         // Attach to local commit psbt
         commit_psbt_local.inputs[input_index].final_script_witness = Some(commit_witness);
 

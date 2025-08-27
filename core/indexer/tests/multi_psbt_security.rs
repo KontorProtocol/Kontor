@@ -1072,3 +1072,887 @@ fn test_tapscript_prefix_structure_pubkey_then_op_checksig() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_async_node_sign_and_merge_flows() -> Result<()> {
+    // End-to-end async signing by nodes and merge back into the portal PSBTs
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    // Build commit
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_fee, input_index, script_vout) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_input_indices.push(input_index);
+        node_script_vouts.push(script_vout);
+    }
+    let (portal_info, portal_change_value, portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+
+    // Prevouts for commit signatures
+    let all_prevouts_c: Vec<TxOut> = commit_psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.clone().expect("wutxo"))
+        .collect();
+
+    // Build reveal
+    let commit_txid = commit_psbt.unsigned_tx.compute_txid();
+    let mut reveal_psbt: Psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    for (idx, s) in signups.iter().enumerate() {
+        add_node_input_and_output_to_reveal_psbt(
+            &mut reveal_psbt,
+            commit_txid,
+            &node_script_vouts,
+            idx,
+            dust_limit_sat,
+            s,
+            &commit_psbt,
+        );
+    }
+    let nodes_len = signups.len();
+    add_portal_input_and_output_to_reveal_psbt(
+        &mut reveal_psbt,
+        portal_change_value,
+        dust_limit_sat,
+        &portal_info,
+        &commit_psbt,
+        nodes_len,
+    );
+
+    // Async node signing and merge
+    let node_sign_futs: Vec<_> = signups
+        .iter()
+        .enumerate()
+        .map(|(index, node_info)| {
+            indexer::multi_psbt_test_utils::node_sign_commit_and_reveal(
+                node_info,
+                index,
+                (commit_psbt.clone(), reveal_psbt.clone()),
+                &all_prevouts_c,
+                &node_input_indices,
+                min_sat_per_vb,
+                &secrets,
+            )
+        })
+        .collect();
+
+    indexer::multi_psbt_test_utils::merge_node_signatures(
+        node_sign_futs,
+        &node_input_indices,
+        &mut commit_psbt,
+        &mut reveal_psbt,
+    )
+    .await?;
+
+    // Assert node witnesses present
+    for (i, input_index) in node_input_indices.iter().enumerate() {
+        assert!(
+            commit_psbt.inputs[*input_index]
+                .final_script_witness
+                .is_some(),
+            "missing commit witness for node {}",
+            i
+        );
+        assert!(
+            reveal_psbt.inputs[i].final_script_witness.is_some(),
+            "missing reveal witness for node {}",
+            i
+        );
+    }
+
+    // Portal signs and final checks
+    indexer::multi_psbt_test_utils::portal_signs_commit_and_reveal(
+        &mut commit_psbt,
+        &mut reveal_psbt,
+        &portal_info,
+        &all_prevouts_c,
+        portal_input_index,
+        min_sat_per_vb,
+        nodes_len,
+    )?;
+
+    indexer::multi_psbt_test_utils::verify_x_only_pubkeys(
+        &signups,
+        &reveal_psbt,
+        &commit_psbt,
+        min_sat_per_vb,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_tapscript_builder_rejects_empty_data() -> Result<()> {
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let res = indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper(
+        signups[0].internal_key,
+        Vec::new(),
+        Network::Testnet4,
+    );
+    assert!(
+        res.is_err(),
+        "empty data must be rejected by tapscript builder"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_script_address_hrp_across_networks() -> Result<()> {
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let ikey = signups[0].internal_key;
+
+    let (_s1, _i1, a_main) =
+        indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper(
+            ikey,
+            b"node-data".to_vec(),
+            Network::Bitcoin,
+        )?;
+    let (_s2, _i2, a_test) =
+        indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper(
+            ikey,
+            b"node-data".to_vec(),
+            Network::Testnet4,
+        )?;
+    let (_s3, _i3, a_reg) =
+        indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper(
+            ikey,
+            b"node-data".to_vec(),
+            Network::Regtest,
+        )?;
+
+    let sm = a_main.to_string();
+    let st = a_test.to_string();
+    let sr = a_reg.to_string();
+    assert!(
+        sm.starts_with("bc1p"),
+        "mainnet HRP must be bc1p..., got {}",
+        sm
+    );
+    assert!(
+        st.starts_with("tb1p"),
+        "testnet HRP must be tb1p..., got {}",
+        st
+    );
+    assert!(
+        sr.starts_with("bcrt1p"),
+        "regtest HRP must be bcrt1p..., got {}",
+        sr
+    );
+    Ok(())
+}
+
+#[test]
+fn test_script_output_funds_dust_plus_reveal_fee_estimate() -> Result<()> {
+    // Each script output should fund exactly (or at least) dust + reveal fee estimate
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_node_reveal_fee, _in_idx, script_vout) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_script_vouts.push(script_vout);
+    }
+
+    let (portal_info, _portal_change_value, _portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+
+    // Nodes
+    for (i, s) in signups.iter().enumerate() {
+        let (tap_script, tap_info, addr) = build_tap_script_and_script_address_helper(
+            s.internal_key,
+            b"node-data".to_vec(),
+            Network::Testnet4,
+        )?;
+        let est_vb = estimate_single_input_single_output_reveal_vbytes(
+            &tap_script,
+            &tap_info,
+            s.address.script_pubkey().len(),
+            dust_limit_sat,
+        );
+        let est_fee = est_vb.saturating_mul(min_sat_per_vb);
+        let expected_min = dust_limit_sat.saturating_add(est_fee);
+        let sv = node_script_vouts[i];
+        let actual = commit_psbt.unsigned_tx.output[sv].value.to_sat();
+        assert!(
+            actual >= expected_min,
+            "node {} script output underfunded: have={} expected_min={} (vb={}, feerate={})",
+            i,
+            actual,
+            expected_min,
+            est_vb,
+            min_sat_per_vb
+        );
+        assert_eq!(
+            commit_psbt.unsigned_tx.output[sv].script_pubkey,
+            addr.script_pubkey(),
+            "node {} script output script mismatch",
+            i
+        );
+    }
+
+    // Portal
+    let (ptap, ptap_info, paddr) = build_tap_script_and_script_address_helper(
+        portal_info.internal_key,
+        b"portal-data".to_vec(),
+        Network::Testnet4,
+    )?;
+    let est_vb_p = estimate_single_input_single_output_reveal_vbytes(
+        &ptap,
+        &ptap_info,
+        portal_info.address.script_pubkey().len(),
+        dust_limit_sat,
+    );
+    let est_fee_p = est_vb_p.saturating_mul(min_sat_per_vb);
+    let expected_min_p = dust_limit_sat.saturating_add(est_fee_p);
+    // Portal script output is last, or last-1 if portal change exists; find by script
+    let found_idx = commit_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == paddr.script_pubkey())
+        .expect("portal script output missing");
+    let actual_p = commit_psbt.unsigned_tx.output[found_idx].value.to_sat();
+    assert!(
+        actual_p >= expected_min_p,
+        "portal script output underfunded: have={} expected_min={} (vb={}, feerate={})",
+        actual_p,
+        expected_min_p,
+        est_vb_p,
+        min_sat_per_vb
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_pre_sign_estimated_commit_fee_is_covered() -> Result<()> {
+    // Participant contributions sum to commit fee paid (pre-sign accounting consistency)
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+
+    let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_node_reveal_fee, in_idx, script_vout) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_input_indices.push(in_idx);
+        node_script_vouts.push(script_vout);
+    }
+
+    let (portal_info, portal_change_value, portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+
+    // Overall commit fee paid
+    let commit_in_total: u64 = commit_psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.as_ref().unwrap().value.to_sat())
+        .sum();
+    let commit_out_total: u64 = commit_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    let commit_paid_total = commit_in_total.saturating_sub(commit_out_total);
+    assert!(commit_paid_total > 0, "commit must pay some fee");
+
+    // Sum contributions by nodes
+    let mut sum_contrib = 0u64;
+    for (i, s) in signups.iter().enumerate() {
+        let prevout_val = commit_psbt.inputs[node_input_indices[i]]
+            .witness_utxo
+            .as_ref()
+            .unwrap()
+            .value
+            .to_sat();
+        let script_value = commit_psbt.unsigned_tx.output[node_script_vouts[i]]
+            .value
+            .to_sat();
+        let change_value = commit_psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .enumerate()
+            .filter(|(k, o)| {
+                *k != node_script_vouts[i] && o.script_pubkey == s.address.script_pubkey()
+            })
+            .map(|(_, o)| o.value.to_sat())
+            .sum::<u64>();
+        let contrib = prevout_val.saturating_sub(script_value.saturating_add(change_value));
+        assert!(contrib > 0, "node {} must contribute positive fee", i);
+        sum_contrib = sum_contrib.saturating_add(contrib);
+    }
+
+    // Portal contribution
+    let portal_prevout_val = commit_psbt.inputs[portal_input_index]
+        .witness_utxo
+        .as_ref()
+        .unwrap()
+        .value
+        .to_sat();
+    let (_pts, _pti, paddr) = build_tap_script_and_script_address_helper(
+        portal_info.internal_key,
+        b"portal-data".to_vec(),
+        Network::Testnet4,
+    )?;
+    let portal_script_value = commit_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == paddr.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("portal script output missing");
+    let portal_change_actual = if portal_change_value > 0 {
+        portal_change_value
+    } else {
+        0
+    };
+    let portal_contrib =
+        portal_prevout_val.saturating_sub(portal_script_value.saturating_add(portal_change_actual));
+    assert!(portal_contrib > 0, "portal must contribute positive fee");
+    sum_contrib = sum_contrib.saturating_add(portal_contrib);
+
+    assert_eq!(
+        sum_contrib, commit_paid_total,
+        "sum of participant contributions must equal commit fee paid"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_commit_shortfall_is_offset_by_reveal_surplus_after_signing() -> Result<()> {
+    // After signing, total (commit_paid + reveal_paid) should cover (commit_req + reveal_req)
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_rf, in_idx, sv) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_input_indices.push(in_idx);
+        node_script_vouts.push(sv);
+    }
+    let (portal_info, portal_change_value, portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+
+    let all_prevouts_c: Vec<TxOut> = commit_psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.clone().expect("wutxo"))
+        .collect();
+
+    // Reveal
+    let commit_txid = commit_psbt.unsigned_tx.compute_txid();
+    let mut reveal_psbt: Psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    for (idx, s) in signups.iter().enumerate() {
+        add_node_input_and_output_to_reveal_psbt(
+            &mut reveal_psbt,
+            commit_txid,
+            &node_script_vouts,
+            idx,
+            dust_limit_sat,
+            s,
+            &commit_psbt,
+        );
+    }
+    let nodes_n = signups.len();
+    add_portal_input_and_output_to_reveal_psbt(
+        &mut reveal_psbt,
+        portal_change_value,
+        dust_limit_sat,
+        &portal_info,
+        &commit_psbt,
+        nodes_n,
+    );
+
+    // Nodes sign asynchronously
+    let node_sign_futs: Vec<_> = signups
+        .iter()
+        .enumerate()
+        .map(|(index, node_info)| {
+            indexer::multi_psbt_test_utils::node_sign_commit_and_reveal(
+                node_info,
+                index,
+                (commit_psbt.clone(), reveal_psbt.clone()),
+                &all_prevouts_c,
+                &node_input_indices,
+                min_sat_per_vb,
+                &secrets,
+            )
+        })
+        .collect();
+    indexer::multi_psbt_test_utils::merge_node_signatures(
+        node_sign_futs,
+        &node_input_indices,
+        &mut commit_psbt,
+        &mut reveal_psbt,
+    )
+    .await?;
+
+    // Portal signs
+    indexer::multi_psbt_test_utils::portal_signs_commit_and_reveal(
+        &mut commit_psbt,
+        &mut reveal_psbt,
+        &portal_info,
+        &all_prevouts_c,
+        portal_input_index,
+        min_sat_per_vb,
+        nodes_n,
+    )?;
+
+    // Compute actual vs required for commit and reveal
+    let mut commit_tx_f = commit_psbt.unsigned_tx.clone();
+    for i in 0..commit_psbt.inputs.len() {
+        if let Some(w) = &commit_psbt.inputs[i].final_script_witness {
+            commit_tx_f.input[i].witness = w.clone();
+        }
+    }
+    let commit_vb_actual = tx_vbytes(&commit_tx_f);
+    let commit_req_fee = commit_vb_actual.saturating_mul(min_sat_per_vb);
+    let commit_in_total: u64 = commit_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
+        .sum();
+    let commit_out_total: u64 = commit_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    let commit_paid = commit_in_total.saturating_sub(commit_out_total);
+
+    let mut reveal_tx_f = reveal_psbt.unsigned_tx.clone();
+    for i in 0..reveal_psbt.inputs.len() {
+        if let Some(w) = &reveal_psbt.inputs[i].final_script_witness {
+            reveal_tx_f.input[i].witness = w.clone();
+        }
+    }
+    let reveal_vb_actual = tx_vbytes(&reveal_tx_f);
+    let reveal_req_fee = reveal_vb_actual.saturating_mul(min_sat_per_vb);
+    let reveal_in_total: u64 = reveal_psbt
+        .inputs
+        .iter()
+        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
+        .sum();
+    let reveal_out_total: u64 = reveal_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    let reveal_paid = reveal_in_total.saturating_sub(reveal_out_total);
+
+    let required_total = commit_req_fee.saturating_add(reveal_req_fee);
+    let paid_total = commit_paid.saturating_add(reveal_paid);
+
+    let slack_vb: u64 = 8;
+    let allowed_shortfall = slack_vb.saturating_mul(min_sat_per_vb);
+    assert!(
+        paid_total.saturating_add(allowed_shortfall) >= required_total,
+        "overall payments insufficient: paid={} < required={} (allowed_shortfall={})",
+        paid_total,
+        required_total,
+        allowed_shortfall
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tap_internal_key_set_on_commit_and_reveal_inputs() -> Result<()> {
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    // Build commit
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_fee, in_idx, sv) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_input_indices.push(in_idx);
+        node_script_vouts.push(sv);
+        assert_eq!(
+            commit_psbt.inputs[in_idx].tap_internal_key,
+            Some(s.internal_key),
+            "commit tap_internal_key missing/mismatch for node {}",
+            idx
+        );
+    }
+    let (portal_info, portal_change_value, portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+    assert_eq!(
+        commit_psbt.inputs[portal_input_index].tap_internal_key,
+        Some(portal_info.internal_key),
+        "commit tap_internal_key missing/mismatch for portal"
+    );
+
+    // Build reveal
+    let commit_txid = commit_psbt.unsigned_tx.compute_txid();
+    let mut reveal_psbt: Psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    for (idx, s) in signups.iter().enumerate() {
+        add_node_input_and_output_to_reveal_psbt(
+            &mut reveal_psbt,
+            commit_txid,
+            &node_script_vouts,
+            idx,
+            dust_limit_sat,
+            s,
+            &commit_psbt,
+        );
+        assert_eq!(
+            reveal_psbt.inputs[idx].tap_internal_key,
+            Some(s.internal_key),
+            "reveal tap_internal_key missing/mismatch for node {}",
+            idx
+        );
+    }
+    let nodes_len = signups.len();
+    add_portal_input_and_output_to_reveal_psbt(
+        &mut reveal_psbt,
+        portal_change_value,
+        dust_limit_sat,
+        &portal_info,
+        &commit_psbt,
+        nodes_len,
+    );
+    assert_eq!(
+        reveal_psbt.inputs[nodes_len].tap_internal_key,
+        Some(portal_info.internal_key),
+        "reveal tap_internal_key missing/mismatch for portal"
+    );
+
+    // Sign to produce witnesses for the next test to assert shapes
+    let all_prevouts_c: Vec<TxOut> = commit_psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.clone().expect("wutxo"))
+        .collect();
+    let node_sign_futs: Vec<_> = signups
+        .iter()
+        .enumerate()
+        .map(|(index, node_info)| {
+            indexer::multi_psbt_test_utils::node_sign_commit_and_reveal(
+                node_info,
+                index,
+                (commit_psbt.clone(), reveal_psbt.clone()),
+                &all_prevouts_c,
+                &node_input_indices,
+                min_sat_per_vb,
+                &secrets,
+            )
+        })
+        .collect();
+    indexer::multi_psbt_test_utils::merge_node_signatures(
+        node_sign_futs,
+        &node_input_indices,
+        &mut commit_psbt,
+        &mut reveal_psbt,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_witness_stack_shapes_commit_and_reveal() -> Result<()> {
+    let mut test_cfg = TestConfig::try_parse()?;
+    test_cfg.network = Network::Testnet4;
+    let secp = Secp256k1::new();
+    let dust_limit_sat: u64 = 330;
+    let min_sat_per_vb: u64 = 3;
+
+    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let node_utxos = mock_fetch_utxos_for_addresses(&signups);
+
+    let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    let mut node_input_indices: Vec<usize> = Vec::with_capacity(signups.len());
+    let mut node_script_vouts: Vec<usize> = Vec::with_capacity(signups.len());
+    for (idx, s) in signups.iter().enumerate() {
+        let (_fee, in_idx, sv) = add_single_node_input_and_output_to_psbt(
+            &mut commit_psbt,
+            &node_utxos,
+            idx,
+            min_sat_per_vb,
+            s,
+            dust_limit_sat,
+        )?;
+        node_input_indices.push(in_idx);
+        node_script_vouts.push(sv);
+    }
+    let (portal_info, portal_change_value, portal_input_index) =
+        add_portal_input_and_output_to_psbt(
+            &mut commit_psbt,
+            min_sat_per_vb,
+            dust_limit_sat,
+            &secp,
+            &test_cfg,
+        )?;
+
+    let all_prevouts_c: Vec<TxOut> = commit_psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.clone().expect("wutxo"))
+        .collect();
+
+    let commit_txid = commit_psbt.unsigned_tx.compute_txid();
+    let mut reveal_psbt: Psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    for (idx, s) in signups.iter().enumerate() {
+        add_node_input_and_output_to_reveal_psbt(
+            &mut reveal_psbt,
+            commit_txid,
+            &node_script_vouts,
+            idx,
+            dust_limit_sat,
+            s,
+            &commit_psbt,
+        );
+    }
+    let nodes_len = signups.len();
+    add_portal_input_and_output_to_reveal_psbt(
+        &mut reveal_psbt,
+        portal_change_value,
+        dust_limit_sat,
+        &portal_info,
+        &commit_psbt,
+        nodes_len,
+    );
+
+    // Sign nodes and portal
+    let node_sign_futs: Vec<_> = signups
+        .iter()
+        .enumerate()
+        .map(|(index, node_info)| {
+            indexer::multi_psbt_test_utils::node_sign_commit_and_reveal(
+                node_info,
+                index,
+                (commit_psbt.clone(), reveal_psbt.clone()),
+                &all_prevouts_c,
+                &node_input_indices,
+                min_sat_per_vb,
+                &secrets,
+            )
+        })
+        .collect();
+    indexer::multi_psbt_test_utils::merge_node_signatures(
+        node_sign_futs,
+        &node_input_indices,
+        &mut commit_psbt,
+        &mut reveal_psbt,
+    )
+    .await?;
+    indexer::multi_psbt_test_utils::portal_signs_commit_and_reveal(
+        &mut commit_psbt,
+        &mut reveal_psbt,
+        &portal_info,
+        &all_prevouts_c,
+        portal_input_index,
+        min_sat_per_vb,
+        nodes_len,
+    )?;
+
+    // Assert shapes: commit key-spend = 1 element; reveal script-spend = 3 elements
+    for (i, input_idx) in node_input_indices.iter().enumerate() {
+        let cw = commit_psbt.inputs[*input_idx]
+            .final_script_witness
+            .as_ref()
+            .expect("commit witness");
+        assert_eq!(
+            cw.len(),
+            1,
+            "commit witness must have 1 element for node {}",
+            i
+        );
+        let rw = reveal_psbt.inputs[i]
+            .final_script_witness
+            .as_ref()
+            .expect("reveal witness");
+        assert_eq!(
+            rw.len(),
+            3,
+            "reveal witness must have 3 elements for node {}",
+            i
+        );
+    }
+    // Portal indices
+    let cwp = commit_psbt.inputs[portal_input_index]
+        .final_script_witness
+        .as_ref()
+        .expect("commit witness portal");
+    assert_eq!(
+        cwp.len(),
+        1,
+        "commit witness must have 1 element for portal"
+    );
+    let rwp = reveal_psbt.inputs[nodes_len]
+        .final_script_witness
+        .as_ref()
+        .expect("reveal witness portal");
+    assert_eq!(
+        rwp.len(),
+        3,
+        "reveal witness must have 3 elements for portal"
+    );
+
+    Ok(())
+}

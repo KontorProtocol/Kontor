@@ -13,7 +13,10 @@ use bitcoin::{Txid, Witness};
 use clap::Parser;
 use futures_util::future::join_all;
 use indexer::config::TestConfig;
-use indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper;
+use indexer::multi_psbt_test_utils::{
+    build_tap_script_and_script_address_helper, log_node_sign_size_and_fee_breakdown,
+    log_total_size_and_fee_breakdown,
+};
 use indexer::{bitcoin_client::Client, logging, test_utils};
 use std::str::FromStr;
 use tracing::info;
@@ -196,6 +199,27 @@ fn estimate_single_input_single_output_reveal_vbytes(
     tx_vbytes(&dummy_reveal)
 }
 
+/*
+Portal entity sends out a message node entities saying "who wants to join my agreement?"
+
+Each node that joins (3 minimum...N) sends the portal its address + x only pub key asynchronously to the portal in a period of 30 seconds.
+
+The portal then constructs a commit transaction with inputs it fetches for each node and outputs for the reveal and for change going back to each node.
+The fee for the commit/reveal is split as evenly as possible between the nodes and the portal, so when constructing the commit at each node interval we must calculate approximately how much each node fee must cover for both the commit and reveal.
+This is done in a waterfall fashion: at each node interval after the nodes own input + output + dummy change, it checks the current size of the commit and the overall fee needed for the current size, how much the previous node inputs have already contribute the fee.
+Then, the current node interval contributes the difference to the fee, plus an estimated fee for the reveal.
+
+The portal adds its own inputs and outputs to the commit, also estimating how much it needs to cover the commit + reveal.
+
+Then, the portal constructs the reveal psbt. It iterates through the nodes again and adds node inputs/outputs so the xonlypubkey of each node will be revealed in the transaction.
+After this iteration, the portal adds its own inputs/outputs for its own xonlypubkey to be revealed.
+
+The portal then sends a copy of the commit and reveal back to each node, which asynchronously add their signature to their own inputs.
+The nodes send the copy of the commit and reveal with their individual sigs back to the portal, which copies the sigs over to the actual commit/reveal. Then the portal adds its own sigs.
+
+Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
+*/
+
 #[tokio::test]
 async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Setup
@@ -321,16 +345,16 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         };
         node_script_vouts.push(script_vout);
 
-        let ctx = NodeCommitLogCtx {
+        log_node!(
+            "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
             idx,
-            post_vb: tx_vbytes(&temp),
-            delta_vb: full_delta_vb,
-            total_paid: node_prevout.value.to_sat() - (script_value + node_change_value),
-            commit_fee: fee_full_delta,
+            tx_vbytes(&temp),
+            full_delta_vb,
+            node_prevout.value.to_sat() - (script_value + node_change_value),
+            fee_full_delta,
             reveal_fee,
-            buffer: fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb),
-        };
-        log_node_commit(&ctx);
+            fee_full_delta - full_delta_vb.saturating_mul(min_sat_per_vb)
+        );
     }
 
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
@@ -396,15 +420,16 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     } else {
         portal_change_value = 0;
     }
-    let ctx = PortalCommitLogCtx {
-        post_vb: tx_vbytes(&temp_portal),
-        delta_vb: portal_full_delta_vb,
-        total_paid: portal_prevout.value.to_sat() - (portal_script_value + portal_change_value),
-        commit_fee: portal_fee_full_delta,
-        reveal_fee: portal_reveal_fee,
-        buffer: portal_fee_full_delta - portal_full_delta_vb.saturating_mul(min_sat_per_vb),
-    };
-    log_portal_commit(&ctx);
+
+    log_portal!(
+        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
+        tx_vbytes(&temp_portal),
+        portal_full_delta_vb,
+        portal_prevout.value.to_sat() - (portal_script_value + portal_change_value),
+        portal_fee_full_delta,
+        portal_reveal_fee,
+        portal_fee_full_delta - portal_full_delta_vb.saturating_mul(min_sat_per_vb)
+    );
 
     // Prepare prevouts for commit signing
     let all_prevouts_c: Vec<TxOut> = commit_psbt
@@ -498,7 +523,11 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
                 Some(TapSighashType::Default),
             )?;
             let commit_witness = commit_tx_local.input[input_index].witness.clone();
-            log_node_commit_witness(i, &commit_witness);
+            log_node!(
+                "idx={} produced commit witness (stack_elems={})",
+                i,
+                commit_witness.len()
+            );
             // Attach to local commit psbt
             commit_psbt_local.inputs[input_index].final_script_witness = Some(commit_witness);
 
@@ -695,193 +724,4 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     );
 
     Ok(())
-}
-
-#[derive(Clone, Debug)]
-struct NodeCommitLogCtx {
-    idx: usize,
-    post_vb: u64,
-    delta_vb: u64,
-    total_paid: u64,
-    commit_fee: u64,
-    reveal_fee: u64,
-    buffer: u64,
-}
-
-fn log_node_commit(ctx: &NodeCommitLogCtx) {
-    log_node!(
-        "idx={} commit_vb_with_dummy_sig={} vB; node_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-        ctx.idx,
-        ctx.post_vb,
-        ctx.delta_vb,
-        ctx.total_paid,
-        ctx.commit_fee,
-        ctx.reveal_fee,
-        ctx.buffer
-    );
-}
-
-#[derive(Clone, Debug)]
-struct PortalCommitLogCtx {
-    post_vb: u64,
-    delta_vb: u64,
-    total_paid: u64,
-    commit_fee: u64,
-    reveal_fee: u64,
-    buffer: u64,
-}
-
-fn log_portal_commit(ctx: &PortalCommitLogCtx) {
-    log_portal!(
-        "portal commit_vb_with_dummy_sig={} vB; portal_delta={} vB; total_fee_paid={} sat (commit_fee={} sat, reveal_fee={} sat, buffer={} sat)",
-        ctx.post_vb,
-        ctx.delta_vb,
-        ctx.total_paid,
-        ctx.commit_fee,
-        ctx.reveal_fee,
-        ctx.buffer
-    );
-}
-
-fn log_node_commit_witness(idx: usize, witness: &Witness) {
-    log_node!(
-        "idx={} produced commit witness (stack_elems={})",
-        idx,
-        witness.len()
-    );
-}
-
-fn log_node_sign_size_and_fee_breakdown(
-    reveal_psbt_local: &Psbt,
-    i: usize,
-    reveal_tx_local: &mut Transaction,
-    min_sat_per_vb: u64,
-) {
-    // Logging: compute delta for this node
-    let mut reveal_before = reveal_psbt_local.unsigned_tx.clone();
-    for j in 0..reveal_before.input.len() {
-        if let Some(wit) = &reveal_psbt_local.inputs[j].final_script_witness {
-            reveal_before.input[j].witness = wit.clone();
-        }
-    }
-    let before_vb_r = tx_vbytes(&reveal_before);
-    let mut reveal_after = reveal_before.clone();
-    reveal_after.input[i].witness = reveal_tx_local.input[i].witness.clone();
-    let after_vb_r = tx_vbytes(&reveal_after);
-    let delta_vb_r = after_vb_r.saturating_sub(before_vb_r);
-    let in_val_r = reveal_psbt_local.inputs[i]
-        .witness_utxo
-        .as_ref()
-        .expect("wutxo")
-        .value
-        .to_sat();
-    let out_val_r = reveal_psbt_local.unsigned_tx.output[i].value.to_sat();
-    let fee_paid_r_i = in_val_r.saturating_sub(out_val_r);
-    // Compute fair share of base (non-witness) bytes across inputs
-    let mut base_no_witness = reveal_psbt_local.unsigned_tx.clone();
-    for inp in &mut base_no_witness.input {
-        inp.witness = Witness::new();
-    }
-    let base_vb = tx_vbytes(&base_no_witness);
-    let num_inputs = reveal_psbt_local.unsigned_tx.input.len() as u64;
-    let base_share_vb = if num_inputs > 0 {
-        base_vb / num_inputs
-    } else {
-        0
-    };
-    let fair_needed_fee_node =
-        (base_share_vb.saturating_add(delta_vb_r)).saturating_mul(min_sat_per_vb);
-    let witness_only_needed = delta_vb_r.saturating_mul(min_sat_per_vb);
-    log_node!(
-        "idx={} reveal_vb_now={} vB; node_reveal_delta={} vB; base_share={} vB; reveal_fee_paid={} sat; witness_only_needed={} sat; fair_needed={} sat",
-        i,
-        after_vb_r,
-        delta_vb_r,
-        base_share_vb,
-        fee_paid_r_i,
-        witness_only_needed,
-        fair_needed_fee_node
-    );
-    assert!(
-        fee_paid_r_i >= fair_needed_fee_node,
-        "node {} reveal fee insufficient: paid={} < fair_needed={}",
-        i,
-        fee_paid_r_i,
-        fair_needed_fee_node
-    );
-
-    let reveal_witness = reveal_tx_local.input[i].witness.clone();
-    log_node!(
-        "idx={} produced reveal witness (stack_elems={})",
-        i,
-        reveal_witness.len()
-    );
-}
-
-fn log_total_size_and_fee_breakdown(commit_psbt: &Psbt, reveal_psbt: &Psbt, min_sat_per_vb: u64)
-// Final fee accounting: compute full signed sizes and required fees, and assert total paid >= total required
-{
-    // Commit actual size and required fee
-    let mut commit_tx_f = commit_psbt.unsigned_tx.clone();
-    for i in 0..commit_psbt.inputs.len() {
-        if let Some(w) = &commit_psbt.inputs[i].final_script_witness {
-            commit_tx_f.input[i].witness = w.clone();
-        }
-    }
-    let commit_vb_actual = tx_vbytes(&commit_tx_f);
-    let commit_req_fee_actual = commit_vb_actual.saturating_mul(min_sat_per_vb);
-    let commit_in_total: u64 = commit_psbt
-        .inputs
-        .iter()
-        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
-        .sum();
-    let commit_out_total: u64 = commit_psbt
-        .unsigned_tx
-        .output
-        .iter()
-        .map(|o| o.value.to_sat())
-        .sum();
-    let commit_paid_total = commit_in_total.saturating_sub(commit_out_total);
-
-    // Reveal actual size and required fee
-    let mut reveal_tx_f = reveal_psbt.unsigned_tx.clone();
-    for i in 0..reveal_psbt.inputs.len() {
-        if let Some(w) = &reveal_psbt.inputs[i].final_script_witness {
-            reveal_tx_f.input[i].witness = w.clone();
-        }
-    }
-    let reveal_vb_actual = tx_vbytes(&reveal_tx_f);
-    let reveal_req_fee_actual = reveal_vb_actual.saturating_mul(min_sat_per_vb);
-    let reveal_in_total: u64 = reveal_psbt
-        .inputs
-        .iter()
-        .map(|inp| inp.witness_utxo.as_ref().unwrap().value.to_sat())
-        .sum();
-    let reveal_out_total: u64 = reveal_psbt
-        .unsigned_tx
-        .output
-        .iter()
-        .map(|o| o.value.to_sat())
-        .sum();
-    let reveal_paid_total = reveal_in_total.saturating_sub(reveal_out_total);
-
-    let required_total = commit_req_fee_actual.saturating_add(reveal_req_fee_actual);
-    let paid_total = commit_paid_total.saturating_add(reveal_paid_total);
-    info!(
-        "final: commit_size={} vB, commit_required={} sat, commit_paid={} sat; reveal_size={} vB, reveal_required={} sat, reveal_paid={} sat; overall_required={} sat, overall_paid={} sat",
-        commit_vb_actual,
-        commit_req_fee_actual,
-        commit_paid_total,
-        reveal_vb_actual,
-        reveal_req_fee_actual,
-        reveal_paid_total,
-        required_total,
-        paid_total
-    );
-    assert!(
-        paid_total >= required_total,
-        "overall fee insufficient: paid={} < required={}",
-        paid_total,
-        required_total
-    );
 }

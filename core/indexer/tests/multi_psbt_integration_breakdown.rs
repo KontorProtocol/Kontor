@@ -15,8 +15,26 @@ use indexer::{bitcoin_client::Client, logging};
 use rand::Rng;
 use tracing::info;
 
-/// HIGH LEVEL COMMENTS
+/*
+Portal entity sends out a message node entities saying "who wants to join my agreement?"
 
+Each node that joins (3 minimum...N) sends the portal its address + x only pub key asynchronously to the portal in a period of 30 seconds.
+
+The portal then constructs a commit transaction with inputs it fetches for each node and outputs for the reveal and for change going back to each node.
+The fee for the commit/reveal is split as evenly as possible between the nodes and the portal, so when constructing the commit at each node interval we must calculate approximately how much each node fee must cover for both the commit and reveal.
+This is done in a waterfall fashion: at each node interval after the nodes own input + output + dummy change, it checks the current size of the commit and the overall fee needed for the current size, how much the previous node inputs have already contribute the fee.
+Then, the current node interval contributes the difference to the fee, plus an estimated fee for the reveal.
+
+The portal adds its own inputs and outputs to the commit, also estimating how much it needs to cover the commit + reveal.
+
+Then, the portal constructs the reveal psbt. It iterates through the nodes again and adds node inputs/outputs so the xonlypubkey of each node will be revealed in the transaction.
+After this iteration, the portal adds its own inputs/outputs for its own xonlypubkey to be revealed.
+
+The portal then sends a copy of the commit and reveal back to each node, which asynchronously add their signature to their own inputs.
+The nodes send the copy of the commit and reveal with their individual sigs back to the portal, which copies the sigs over to the actual commit/reveal. Then the portal adds its own sigs.
+
+Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
+*/
 #[tokio::test]
 async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Setup
