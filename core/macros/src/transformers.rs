@@ -108,16 +108,16 @@ pub fn wit_type_to_rust_type(
 
 pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<TokenStream> {
     match ty {
-        WitType::U64 => Ok(quote! { wasm_wave::value::Type::U64 }),
-        WitType::S64 => Ok(quote! { wasm_wave::value::Type::S64 }),
-        WitType::String => Ok(quote! { wasm_wave::value::Type::STRING }),
+        WitType::U64 => Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
+        WitType::S64 => Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+        WitType::String => Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];
             match &ty_def.kind {
                 TypeDefKind::Type(inner) => Ok(wit_type_to_wave_type(resolve, inner)?),
                 TypeDefKind::Option(inner) => {
                     let inner_ty = wit_type_to_wave_type(resolve, inner)?;
-                    Ok(quote! { wasm_wave::value::Type::option(#inner_ty) })
+                    Ok(quote! { stdlib::wasm_wave::value::Type::option(#inner_ty) })
                 }
                 TypeDefKind::Result(result) => {
                     let ok_ty = match result.ok {
@@ -138,7 +138,7 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
                             quote! { None }
                         }
                     };
-                    Ok(quote! { wasm_wave::value::Type::result(#ok_ty, #err_ty) })
+                    Ok(quote! { stdlib::wasm_wave::value::Type::result(#ok_ty, #err_ty) })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
                     let name = ty_def
@@ -166,9 +166,9 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
         let segment = &path.segments[0];
         if segment.arguments == PathArguments::None {
             match segment.ident.to_string().as_str() {
-                "u64" => return Ok(quote! { wasm_wave::value::Type::U64 }),
-                "i64" => return Ok(quote! { wasm_wave::value::Type::S64 }),
-                "String" => return Ok(quote! { wasm_wave::value::Type::STRING }),
+                "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
+                "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+                "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
                 _ => (),
             }
         }

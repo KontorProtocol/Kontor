@@ -34,8 +34,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&config.name.to_pascal_case()).unwrap();
     let boilerplate = quote! {
-        use stdlib::*;
-
         wit_bindgen::generate!({
             world: #world,
             path: #path,
@@ -338,21 +336,21 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
 
     quote! {
         impl #impl_generics #name #ty_generics #where_clause {
-            pub fn wave_type() -> wasm_wave::value::Type {
+            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 #wave_type_body
             }
         }
 
         #[automatically_derived]
-        impl #impl_generics From<#name #ty_generics> for wasm_wave::value::Value #where_clause {
+        impl #impl_generics From<#name #ty_generics> for stdlib::wasm_wave::value::Value #where_clause {
             fn from(value_: #name #ty_generics) -> Self {
                 #from_self_body
             }
         }
 
         #[automatically_derived]
-        impl #impl_generics From<wasm_wave::value::Value> for #name #ty_generics #where_clause {
-            fn from(value_: wasm_wave::value::Value) -> Self {
+        impl #impl_generics From<stdlib::wasm_wave::value::Value> for #name #ty_generics #where_clause {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                 #from_value_body
             }
         }
@@ -462,32 +460,32 @@ pub fn import(input: TokenStream) -> TokenStream {
     } else {
         quote! {
             impl ContractAddress {
-                pub fn wave_type() -> wasm_wave::value::Type {
-                    wasm_wave::value::Type::record([
-                        ("name", wasm_wave::value::Type::STRING),
-                        ("height", wasm_wave::value::Type::S64),
-                        ("tx_index", wasm_wave::value::Type::S64),
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::record([
+                        ("name", stdlib::wasm_wave::value::Type::STRING),
+                        ("height", stdlib::wasm_wave::value::Type::S64),
+                        ("tx_index", stdlib::wasm_wave::value::Type::S64),
                     ])
                     .unwrap()
                 }
             }
             #[automatically_derived]
-            impl From<ContractAddress> for wasm_wave::value::Value {
+            impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
                 fn from(value_: ContractAddress) -> Self {
-                    wasm_wave::value::Value::make_record(
+                    stdlib::wasm_wave::value::Value::make_record(
                         &ContractAddress::wave_type(),
                         [
-                            ("name", wasm_wave::value::Value::from(value_.name)),
-                            ("height", wasm_wave::value::Value::from(value_.height)),
-                            ("tx_index", wasm_wave::value::Value::from(value_.tx_index)),
+                            ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
+                            ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
+                            ("tx_index", stdlib::wasm_wave::value::Value::from(value_.tx_index)),
                         ],
                     )
                     .unwrap()
                 }
             }
             #[automatically_derived]
-            impl From<wasm_wave::value::Value> for ContractAddress {
-                fn from(value_: wasm_wave::value::Value) -> Self {
+            impl From<stdlib::wasm_wave::value::Value> for ContractAddress {
+                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                     let mut name = None;
                     let mut height = None;
                     let mut tx_index = None;
@@ -510,22 +508,22 @@ pub fn import(input: TokenStream) -> TokenStream {
             }
 
             impl Error {
-                pub fn wave_type() -> wasm_wave::value::Type {
-                    wasm_wave::value::Type::variant([
-                            ("message", Some(wasm_wave::value::Type::STRING)),
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::variant([
+                            ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
                         ])
                         .unwrap()
                 }
             }
             #[automatically_derived]
-            impl From<Error> for wasm_wave::value::Value {
+            impl From<Error> for stdlib::wasm_wave::value::Value {
                 fn from(value_: Error) -> Self {
                     (match value_ {
                         Error::Message(operand) => {
-                            wasm_wave::value::Value::make_variant(
+                            stdlib::wasm_wave::value::Value::make_variant(
                                 &Error::wave_type(),
                                 "message",
-                                Some(wasm_wave::value::Value::from(operand)),
+                                Some(stdlib::wasm_wave::value::Value::from(operand)),
                             )
                         }
                     })
@@ -533,8 +531,8 @@ pub fn import(input: TokenStream) -> TokenStream {
                 }
             }
             #[automatically_derived]
-            impl From<wasm_wave::value::Value> for Error {
-                fn from(value_: wasm_wave::value::Value) -> Self {
+            impl From<stdlib::wasm_wave::value::Value> for Error {
+                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                     let (key_, val_) = value_.unwrap_variant();
                     match key_ {
                         key_ if key_.eq("message") => {
@@ -549,7 +547,7 @@ pub fn import(input: TokenStream) -> TokenStream {
 
     quote! {
         mod #module_name {
-            use wasm_wave::wasm::WasmValue as _;
+            use stdlib::wasm_wave::wasm::WasmValue as _;
             use stdlib::Wavey;
 
             #supers

@@ -60,13 +60,13 @@ pub fn generate_functions(
                     };
                     quote! {
                         match #param_name {
-                            Some(val) => wasm_wave::to_string(&wasm_wave::value::Value::from(val)).unwrap(),
+                            Some(val) => stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(val)).unwrap(),
                             None => "null".to_string(),
                         }
                     }
                 }
                 _ => quote! {
-                    wasm_wave::to_string(&wasm_wave::value::Value::from(#param_name)).unwrap()
+                    stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(#param_name)).unwrap()
                 },
             })
         })
@@ -84,7 +84,7 @@ pub fn generate_functions(
             let wave_ty = transformers::wit_type_to_wave_type(resolve, ty)?;
             let unwrap_expr = transformers::wit_type_to_unwrap_expr(resolve, ty)?;
             quote! {
-                wasm_wave::from_str::<wasm_wave::value::Value>(&#wave_ty, &ret).unwrap().#unwrap_expr
+                stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap().#unwrap_expr
             }
         }
         None => quote! { () },

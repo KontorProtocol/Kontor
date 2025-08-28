@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 wit-bindgen = { workspace = true }
-wasm-wave = { workspace = true }
 stdlib = { workspace = true }
 
 [lib]

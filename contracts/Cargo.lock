@@ -13,7 +13,6 @@ name = "arith"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wasm-wave",
  "wit-bindgen",
 ]
 
@@ -34,7 +33,6 @@ name = "crypto"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wasm-wave",
  "wit-bindgen",
 ]
 
@@ -84,7 +82,6 @@ name = "fib"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wasm-wave",
  "wit-bindgen",
 ]
 
@@ -345,7 +342,6 @@ name = "proxy"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wasm-wave",
  "wit-bindgen",
 ]
 
@@ -419,6 +415,7 @@ name = "stdlib"
 version = "0.1.0"
 dependencies = [
  "macros",
+ "wasm-wave",
 ]
 
 [[package]]
@@ -463,7 +460,6 @@ name = "token"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wasm-wave",
  "wit-bindgen",
 ]
 

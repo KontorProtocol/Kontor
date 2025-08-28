@@ -3,23 +3,26 @@ pub struct Operand {
     pub y: u64,
 }
 impl Operand {
-    pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::record([("y", wasm_wave::value::Type::U64)]).unwrap()
+    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+        stdlib::wasm_wave::value::Type::record([
+                ("y", stdlib::wasm_wave::value::Type::U64),
+            ])
+            .unwrap()
     }
 }
 #[automatically_derived]
-impl From<Operand> for wasm_wave::value::Value {
+impl From<Operand> for stdlib::wasm_wave::value::Value {
     fn from(value_: Operand) -> Self {
-        wasm_wave::value::Value::make_record(
+        stdlib::wasm_wave::value::Value::make_record(
                 &Operand::wave_type(),
-                [("y", wasm_wave::value::Value::from(value_.y))],
+                [("y", stdlib::wasm_wave::value::Value::from(value_.y))],
             )
             .unwrap()
     }
 }
 #[automatically_derived]
-impl From<wasm_wave::value::Value> for Operand {
-    fn from(value_: wasm_wave::value::Value) -> Self {
+impl From<stdlib::wasm_wave::value::Value> for Operand {
+    fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
         let mut y = None;
         for (key_, val_) in value_.unwrap_record() {
             match key_.as_ref() {
