@@ -52,6 +52,7 @@ pub fn get_node_addresses(
     for i in 0..3 {
         let (address, child_key, _compressed) =
             test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, i as u32)?;
+        println!("address: {}", address);
         let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
         let (internal_key, _parity) = keypair.x_only_public_key();
         infos.push(NodeInfo {

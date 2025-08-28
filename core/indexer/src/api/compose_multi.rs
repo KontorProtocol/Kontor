@@ -128,6 +128,8 @@ pub struct ComposeMultiOutputs {
     pub reveal_psbt_hex: String,
     pub tap_leaf_scripts: Vec<TapLeafScriptMulti>,
     pub tap_scripts: Vec<ScriptBuf>,
+    pub chained_tap_script: Option<ScriptBuf>,
+    pub chained_tap_leaf_script: Option<TapLeafScriptMulti>,
 }
 
 #[derive(Builder)]
@@ -295,6 +297,21 @@ pub fn compose_multi(params: ComposeMultiInputs) -> Result<ComposeMultiOutputs> 
         })
         .collect();
 
+    // Optional chained commit (portal-like return) using the coordinator notion: reuse first participant's key
+    let mut chained_tap_script_opt: Option<ScriptBuf> = None;
+    if let (Some(chained), Some(first)) = (
+        params.chained_script_data.as_ref(),
+        params.participants.first(),
+    ) {
+        let (chained_tap_script_for_return, _ti, chained_script_spend_addr) =
+            build_tap_script_and_script_address_multi(first.x_only_public_key, chained.clone())?;
+        reveal_outputs_vec.push(TxOut {
+            value: Amount::from_sat(params.envelope),
+            script_pubkey: chained_script_spend_addr.script_pubkey(),
+        });
+        chained_tap_script_opt = Some(chained_tap_script_for_return);
+    }
+
     // Sizing using script-spend for each participant input
     const SCHNORR_SIGNATURE_SIZE: usize = 64;
     let input_tuples_reveal: Vec<(TxIn, TxOut)> = reveal_inputs
@@ -363,7 +380,7 @@ pub fn compose_multi(params: ComposeMultiInputs) -> Result<ComposeMultiOutputs> 
     }
     let reveal_psbt_hex = reveal_psbt.serialize_hex();
 
-    Ok(ComposeMultiOutputs::builder()
+    let base_builder = ComposeMultiOutputs::builder()
         .commit_transaction(commit_tx)
         .commit_transaction_hex(hex::encode(serialize_tx(
             &commit_outputs.commit_transaction,
@@ -373,8 +390,21 @@ pub fn compose_multi(params: ComposeMultiInputs) -> Result<ComposeMultiOutputs> 
         .reveal_transaction_hex(reveal_transaction_hex)
         .reveal_psbt_hex(reveal_psbt_hex)
         .tap_leaf_scripts(commit_outputs.tap_leaf_scripts)
-        .tap_scripts(commit_outputs.tap_scripts)
-        .build())
+        .tap_scripts(commit_outputs.tap_scripts);
+
+    let outputs = match chained_tap_script_opt {
+        Some(chained_ts) => base_builder
+            .chained_tap_script(chained_ts.clone())
+            .chained_tap_leaf_script(TapLeafScriptMulti {
+                leaf_version: LeafVersion::TapScript,
+                script: chained_ts,
+                control_block: ScriptBuf::new(),
+            })
+            .build(),
+        None => base_builder.build(),
+    };
+
+    Ok(outputs)
 }
 
 pub fn compose_commit_multi(params: CommitMultiInputs) -> Result<CommitMultiOutputs> {

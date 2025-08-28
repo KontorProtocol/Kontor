@@ -23,8 +23,8 @@ use super::{
     Env,
     error::ErrorResponse,
     handlers::{
-        get_block, get_block_latest, get_compose, get_compose_commit, get_compose_reveal,
-        test_mempool_accept,
+        get_block, get_block_latest, get_compose, get_compose_commit, get_compose_multi_batch,
+        get_compose_multi_single, get_compose_reveal, test_mempool_accept,
     },
     ws,
 };
@@ -103,7 +103,9 @@ pub fn new(context: Env) -> Router {
             Router::new()
                 .route("/", get(get_compose))
                 .route("/commit", get(get_compose_commit))
-                .route("/reveal", get(get_compose_reveal)),
+                .route("/reveal", get(get_compose_reveal))
+                .route("/multi", get(get_compose_multi_single))
+                .route("/multi/batch", get(get_compose_multi_batch)),
         )
         .route("/ws", any(ws::handler))
         .layer(

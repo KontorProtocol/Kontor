@@ -135,3 +135,62 @@ pub async fn get_transaction(
         None => Err(HttpError::NotFound(format!("transaction: {}", txid)).into()),
     }
 }
+
+// ===== compose_multi endpoints =====
+use super::compose_multi::{
+    ComposeMultiInputs, ComposeMultiOutputs, ComposeMultiQuery, ParticipantMultiQuery,
+    compose_multi,
+};
+
+#[derive(Deserialize)]
+pub struct ComposeMultiBatchQuery {
+    pub participants: String, // base64 JSON array of ParticipantMultiQuery
+    pub sat_per_vbyte: u64,
+    pub envelope: Option<u64>,
+    pub chained_script_data: Option<String>,
+}
+
+pub async fn get_compose_multi_single(
+    Query(query): Query<ComposeQuery>,
+    State(env): State<Env>,
+) -> Result<ComposeMultiOutputs> {
+    let single = ParticipantMultiQuery {
+        address: query.address,
+        x_only_public_key: query.x_only_public_key,
+        funding_utxo_ids: query.funding_utxo_ids,
+        script_data: query.script_data,
+        change_output: query.change_output,
+    };
+    let multi_query = ComposeMultiQuery {
+        participants: vec![single],
+        sat_per_vbyte: query.sat_per_vbyte,
+        envelope: query.envelope,
+        chained_script_data: query.chained_script_data,
+    };
+    let inputs = ComposeMultiInputs::from_query(multi_query, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let outputs = compose_multi(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    Ok(outputs.into())
+}
+
+pub async fn get_compose_multi_batch(
+    Query(query): Query<ComposeMultiBatchQuery>,
+    State(env): State<Env>,
+) -> Result<ComposeMultiOutputs> {
+    let bytes = base64::decode(&query.participants)
+        .map_err(|e| HttpError::BadRequest(format!("invalid participants base64: {}", e)))?;
+    let participants: Vec<ParticipantMultiQuery> = serde_json::from_slice(&bytes)
+        .map_err(|e| HttpError::BadRequest(format!("invalid participants json: {}", e)))?;
+    let multi_query = ComposeMultiQuery {
+        participants,
+        sat_per_vbyte: query.sat_per_vbyte,
+        envelope: query.envelope,
+        chained_script_data: query.chained_script_data,
+    };
+    let inputs = ComposeMultiInputs::from_query(multi_query, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let outputs = compose_multi(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    Ok(outputs.into())
+}
