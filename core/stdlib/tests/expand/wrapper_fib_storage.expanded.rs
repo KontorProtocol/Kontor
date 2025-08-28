@@ -14,7 +14,6 @@ impl ::core::clone::Clone for FibValueWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl FibValueWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }
@@ -44,7 +43,6 @@ impl ::core::clone::Clone for FibStorageWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl FibStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

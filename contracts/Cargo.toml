@@ -15,8 +15,6 @@ uninlined_format_args = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wit-bindgen = "0.44.0"
-wasm-wave = "0.238"
+wit-bindgen = "0.45.0"
 
-macros = { path = "../core/macros" }
 stdlib = { path = "../core/stdlib" }

@@ -24,7 +24,7 @@ const PROXY: &[u8] =
 const TOKEN: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
 
-pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
+pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> Result<()> {
     let height = 0;
     let tx_index = 0;
     let conn = runtime.get_storage_conn();
@@ -36,13 +36,7 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
         },
     )
     .await?;
-    for (name, bytes) in [
-        ("arith", ARITH),
-        ("crypto", CRYPTO),
-        ("fib", FIB),
-        ("proxy", PROXY),
-        ("token", TOKEN),
-    ] {
+    for (name, bytes) in contracts {
         let contract_id = insert_contract(
             &conn,
             ContractRow::builder()
@@ -67,6 +61,19 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
                 .await?;
         }
     }
-
     Ok(())
+}
+
+pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
+    load_contracts(
+        runtime,
+        &[
+            ("arith", ARITH),
+            ("crypto", CRYPTO),
+            ("fib", FIB),
+            ("proxy", PROXY),
+            ("token", TOKEN),
+        ],
+    )
+    .await
 }

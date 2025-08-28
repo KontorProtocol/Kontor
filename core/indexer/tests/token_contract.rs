@@ -1,12 +1,4 @@
-use anyhow::Result;
-use clap::Parser;
-use indexer::{
-    config::Config,
-    database::{queries::insert_block, types::BlockRow},
-    runtime::{ComponentCache, ContractAddress, Error, Runtime, Storage, load_native_contracts},
-    test_utils::{new_mock_block_hash, new_test_db},
-};
-use stdlib::import;
+use testlib::*;
 
 import!(
     name = "token",
@@ -16,30 +8,12 @@ import!(
     test = true,
 );
 
-#[tokio::test]
+#[testlib::test]
 async fn test_token_contract() -> Result<()> {
-    let (_, writer, _test_db_dir) = new_test_db(&Config::try_parse_from([""])?).await?;
-    let conn = writer.connection();
-    let height = 1;
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(height)
-            .hash(new_mock_block_hash(height as u32))
-            .build(),
-    )
-    .await?;
-    let storage = Storage::builder()
-        .height(height)
-        .conn(writer.connection())
-        .build();
+    let runtime = Runtime::new(RuntimeConfig::default()).await?;
+
     let minter = "test_minter";
     let holder = "test_holder";
-
-    let component_cache = ComponentCache::new();
-    let runtime = Runtime::new(storage.clone(), component_cache).await?;
-    load_native_contracts(&runtime).await?;
-
     token::mint(&runtime, minter, 900).await;
     token::mint(&runtime, minter, 100).await;
 

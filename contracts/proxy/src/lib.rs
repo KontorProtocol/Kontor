@@ -1,6 +1,6 @@
-#![allow(dead_code)]
+use stdlib::*;
 
-macros::contract!(name = "proxy");
+contract!(name = "proxy");
 
 #[derive(Clone, StorageRoot)]
 struct ProxyStorage {

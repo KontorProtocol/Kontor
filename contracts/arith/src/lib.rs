@@ -1,4 +1,6 @@
-macros::contract!(name = "arith");
+use stdlib::*;
+
+contract!(name = "arith");
 
 #[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {

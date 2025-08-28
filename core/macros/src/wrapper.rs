@@ -171,7 +171,6 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     pub base_path: stdlib::DotPathBuf,
                 }
 
-                #[allow(dead_code)]
                 impl #wrapper_name {
                     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
                         Self { base_path }

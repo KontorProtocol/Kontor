@@ -14,7 +14,6 @@ impl ::core::clone::Clone for ArithStorageWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl ArithStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

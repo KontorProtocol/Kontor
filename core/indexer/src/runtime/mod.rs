@@ -1,13 +1,13 @@
 mod component_cache;
+mod contracts;
 mod counter;
-mod native_contracts;
 mod storage;
 mod types;
-mod wit;
+pub mod wit;
 
 pub use component_cache::ComponentCache;
+pub use contracts::load_native_contracts;
 use libsql::Connection;
-pub use native_contracts::load_native_contracts;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{error::Error as StdError, fmt};
@@ -178,6 +178,10 @@ impl Runtime {
 
     pub fn get_storage_conn(&self) -> Connection {
         self.storage.conn.clone()
+    }
+
+    pub fn set_storage(&mut self, storage: Storage) {
+        self.storage = storage;
     }
 
     pub fn make_store(&self) -> Store<Self> {

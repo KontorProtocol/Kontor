@@ -14,7 +14,6 @@ impl ::core::clone::Clone for OperandWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl OperandWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

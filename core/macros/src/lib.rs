@@ -34,18 +34,18 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&config.name.to_pascal_case()).unwrap();
     let boilerplate = quote! {
-        use stdlib::*;
-
         wit_bindgen::generate!({
             world: #world,
             path: #path,
             generate_all,
             additional_derives: [stdlib::Storage],
+            export_macro_name: "__export__",
         });
 
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
 
+        #[automatically_derived]
         impl ReadContext for context::ViewContext {
             fn __get_str(&self, path: &str) -> Option<String> {
                 self.get_str(path)
@@ -76,6 +76,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
+        #[automatically_derived]
         impl ReadContext for context::ProcContext {
             fn __get_str(&self, path: &str) -> Option<String> {
                 self.get_str(path)
@@ -106,6 +107,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
+        #[automatically_derived]
         impl WriteContext for context::ProcContext {
             fn __set_str(&self, path: &str, value: &str) {
                 self.set_str(path, value)
@@ -128,32 +130,38 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
+        #[automatically_derived]
         impl ReadWriteContext for context::ProcContext {}
 
+        #[automatically_derived]
         impl From<core::num::ParseIntError> for kontor::built_in::error::Error {
             fn from(err: core::num::ParseIntError) -> Self {
                 kontor::built_in::error::Error::Message(format!("Parse integer error: {:?}", err))
             }
         }
 
+        #[automatically_derived]
         impl From<core::num::TryFromIntError> for kontor::built_in::error::Error {
             fn from(err: core::num::TryFromIntError) -> Self {
                 kontor::built_in::error::Error::Message(format!("Try from integer error: {:?}", err))
             }
         }
 
+        #[automatically_derived]
         impl From<core::str::Utf8Error> for kontor::built_in::error::Error {
             fn from(err: core::str::Utf8Error) -> Self {
                 kontor::built_in::error::Error::Message(format!("UTF-8 parse error: {:?}", err))
             }
         }
 
+        #[automatically_derived]
         impl From<core::char::ParseCharError> for kontor::built_in::error::Error {
             fn from(err: core::char::ParseCharError) -> Self {
                 kontor::built_in::error::Error::Message(format!("Parse char error: {:?}", err))
             }
         }
 
+        #[automatically_derived]
         impl kontor::built_in::error::Error {
             pub fn new(message: impl Into<String>) -> Self {
                 kontor::built_in::error::Error::Message(message.into())
@@ -162,7 +170,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         struct #name;
 
-        export!(#name);
+        __export__!(#name);
     };
 
     boilerplate.into()
@@ -199,6 +207,7 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let expanded = quote! {
+        #[automatically_derived]
         impl #impl_generics stdlib::Store for #name #ty_generics #where_clause {
             fn __set(ctx: &impl stdlib::WriteContext, base_path: stdlib::DotPathBuf, value: #name #ty_generics) {
                 #body
@@ -328,19 +337,21 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
 
     quote! {
         impl #impl_generics #name #ty_generics #where_clause {
-            pub fn wave_type() -> wasm_wave::value::Type {
+            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 #wave_type_body
             }
         }
 
-        impl #impl_generics From<#name #ty_generics> for wasm_wave::value::Value #where_clause {
+        #[automatically_derived]
+        impl #impl_generics From<#name #ty_generics> for stdlib::wasm_wave::value::Value #where_clause {
             fn from(value_: #name #ty_generics) -> Self {
                 #from_self_body
             }
         }
 
-        impl #impl_generics From<wasm_wave::value::Value> for #name #ty_generics #where_clause {
-            fn from(value_: wasm_wave::value::Value) -> Self {
+        #[automatically_derived]
+        impl #impl_generics From<stdlib::wasm_wave::value::Value> for #name #ty_generics #where_clause {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                 #from_value_body
             }
         }
@@ -450,32 +461,32 @@ pub fn import(input: TokenStream) -> TokenStream {
     } else {
         quote! {
             impl ContractAddress {
-                pub fn wave_type() -> wasm_wave::value::Type {
-                    wasm_wave::value::Type::record([
-                        ("name", wasm_wave::value::Type::STRING),
-                        ("height", wasm_wave::value::Type::S64),
-                        ("tx_index", wasm_wave::value::Type::S64),
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::record([
+                        ("name", stdlib::wasm_wave::value::Type::STRING),
+                        ("height", stdlib::wasm_wave::value::Type::S64),
+                        ("tx_index", stdlib::wasm_wave::value::Type::S64),
                     ])
                     .unwrap()
                 }
             }
-
-            impl From<ContractAddress> for wasm_wave::value::Value {
+            #[automatically_derived]
+            impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
                 fn from(value_: ContractAddress) -> Self {
-                    wasm_wave::value::Value::make_record(
+                    stdlib::wasm_wave::value::Value::make_record(
                         &ContractAddress::wave_type(),
                         [
-                            ("name", wasm_wave::value::Value::from(value_.name)),
-                            ("height", wasm_wave::value::Value::from(value_.height)),
-                            ("tx_index", wasm_wave::value::Value::from(value_.tx_index)),
+                            ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
+                            ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
+                            ("tx_index", stdlib::wasm_wave::value::Value::from(value_.tx_index)),
                         ],
                     )
                     .unwrap()
                 }
             }
-
-            impl From<wasm_wave::value::Value> for ContractAddress {
-                fn from(value_: wasm_wave::value::Value) -> Self {
+            #[automatically_derived]
+            impl From<stdlib::wasm_wave::value::Value> for ContractAddress {
+                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                     let mut name = None;
                     let mut height = None;
                     let mut tx_index = None;
@@ -498,29 +509,31 @@ pub fn import(input: TokenStream) -> TokenStream {
             }
 
             impl Error {
-                pub fn wave_type() -> wasm_wave::value::Type {
-                    wasm_wave::value::Type::variant([
-                            ("message", Some(wasm_wave::value::Type::STRING)),
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::variant([
+                            ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
                         ])
                         .unwrap()
                 }
             }
-            impl From<Error> for wasm_wave::value::Value {
+            #[automatically_derived]
+            impl From<Error> for stdlib::wasm_wave::value::Value {
                 fn from(value_: Error) -> Self {
                     (match value_ {
                         Error::Message(operand) => {
-                            wasm_wave::value::Value::make_variant(
+                            stdlib::wasm_wave::value::Value::make_variant(
                                 &Error::wave_type(),
                                 "message",
-                                Some(wasm_wave::value::Value::from(operand)),
+                                Some(stdlib::wasm_wave::value::Value::from(operand)),
                             )
                         }
                     })
                         .unwrap()
                 }
             }
-            impl From<wasm_wave::value::Value> for Error {
-                fn from(value_: wasm_wave::value::Value) -> Self {
+            #[automatically_derived]
+            impl From<stdlib::wasm_wave::value::Value> for Error {
+                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
                     let (key_, val_) = value_.unwrap_variant();
                     match key_ {
                         key_ if key_.eq("message") => {
@@ -535,7 +548,7 @@ pub fn import(input: TokenStream) -> TokenStream {
 
     quote! {
         mod #module_name {
-            use wasm_wave::wasm::WasmValue as _;
+            use stdlib::wasm_wave::wasm::WasmValue as _;
             use stdlib::Wavey;
 
             #supers

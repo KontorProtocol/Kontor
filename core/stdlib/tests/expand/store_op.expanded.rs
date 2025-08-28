@@ -4,6 +4,7 @@ pub enum Op {
     Mul(Operand),
     Div(Operand),
 }
+#[automatically_derived]
 impl stdlib::Store for Op {
     fn __set(ctx: &impl stdlib::WriteContext, base_path: stdlib::DotPathBuf, value: Op) {
         match value {

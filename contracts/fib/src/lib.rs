@@ -1,8 +1,8 @@
-#![allow(dead_code)]
+use stdlib::*;
 
-macros::contract!(name = "fib");
+contract!(name = "fib");
 
-macros::import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
+import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
 
 #[derive(Clone, Default, Storage)]
 struct FibValue {

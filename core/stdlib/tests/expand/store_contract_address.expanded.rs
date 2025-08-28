@@ -3,6 +3,7 @@ struct ContractAddress {
     height: i64,
     tx_index: i64,
 }
+#[automatically_derived]
 impl stdlib::Store for ContractAddress {
     fn __set(
         ctx: &impl stdlib::WriteContext,

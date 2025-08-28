@@ -1,0 +1,14 @@
+[package]
+name = "testlib"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+stdlib = { path = "../stdlib" }
+indexer = { path = "../indexer" }
+anyhow = { workspace = true }
+libsql = { workspace = true }
+tokio = { workspace = true }

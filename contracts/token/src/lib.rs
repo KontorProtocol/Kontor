@@ -1,6 +1,6 @@
-#![allow(dead_code)]
+use stdlib::*;
 
-macros::contract!(name = "token");
+contract!(name = "token");
 
 #[derive(Clone, Store, Wrapper, Root)]
 struct TokenStorage {

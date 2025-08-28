@@ -14,7 +14,6 @@ impl ::core::clone::Clone for ProxyStorageWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl ProxyStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

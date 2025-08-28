@@ -2110,6 +2110,7 @@ dependencies = [
  "sha2",
  "stdlib",
  "tempfile",
+ "testlib",
  "thiserror 2.0.14",
  "tokio",
  "tokio-tungstenite",
@@ -2315,9 +2316,9 @@ dependencies = [
 
 [[package]]
 name = "libsql"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e03a7c14824bc3cc728c3f91187d41bf6e8a6840198ea4e85c15fc33cd039778"
+checksum = "cfe6433aeb55f357fad8a2504ba221cc712072c406fc8531a6ee852e40f88b86"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2355,9 +2356,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-ffi"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe19debf1825fdc10ec296d18100fe950e868888230982ad293c447651bbba8"
+checksum = "c0861417fd61c30c1bf286dc4a528771a95f4c83e55592eae0064431d17abfe2"
 dependencies = [
  "bindgen",
  "cc",
@@ -2367,9 +2368,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-hrana"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e39b01b9ae293d03c7f40a1b6d1c5ee1ec06449592a87d35a50710738abdb20"
+checksum = "b7064534a514c59f219120987f1ec5a279bd3245cfac25e7e0c47148cfd1dd19"
 dependencies = [
  "base64 0.21.7",
  "bytes",
@@ -2379,9 +2380,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-rusqlite"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8f3dde36f7bca5a7f3eef244cc348b1fea81e85f7115853bbb2e2a87170a007"
+checksum = "f6ac1084b9af3e62242282aa09894df6c970561ef3c5334f23044ff3a13e447e"
 dependencies = [
  "bitflags 2.9.1",
  "fallible-iterator 0.2.0",
@@ -2411,9 +2412,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-sys"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33a59f5cdb17787b8a76c9c815eeab235689bf6aff24462c7c7325cbea80aca5"
+checksum = "a2b091e184462fa3d6bbb32f29911babd3c4493857155db98c67bc55e1c85362"
 dependencies = [
  "bytes",
  "libsql-ffi",
@@ -2425,9 +2426,9 @@ dependencies = [
 
 [[package]]
 name = "libsql_replication"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00bda997ecd5c095fe53ab08ec56b30f4004f088fdbcfa956346c7875c530be5"
+checksum = "0f0aad4d9f4c6c153d15e85aeb0d0e201fa2f2155c63abd6e995b945815f6d78"
 dependencies = [
  "aes",
  "async-stream",
@@ -3761,6 +3762,7 @@ dependencies = [
  "macros",
  "macrotest",
  "trybuild",
+ "wasm-wave 0.238.0",
 ]
 
 [[package]]
@@ -3884,6 +3886,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "testlib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "indexer",
+ "libsql",
+ "stdlib",
+ "tokio",
 ]
 
 [[package]]

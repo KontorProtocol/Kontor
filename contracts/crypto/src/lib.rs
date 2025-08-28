@@ -1,4 +1,6 @@
-macros::contract!(name = "crypto");
+use stdlib::*;
+
+contract!(name = "crypto");
 
 impl Guest for Crypto {
     fn init(_ctx: &ProcContext) {}
