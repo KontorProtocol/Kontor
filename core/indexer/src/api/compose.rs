@@ -24,63 +24,85 @@ use std::str::FromStr;
 
 use crate::bitcoin_client::Client;
 
-#[derive(Serialize, Deserialize)]
-pub struct ComposeQuery {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParticipantMultiQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
     pub script_data: String,
-    pub sat_per_vbyte: u64,
     pub change_output: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ComposeMultiQuery {
+    pub participants: Vec<ParticipantMultiQuery>,
+    pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
     pub chained_script_data: Option<String>,
 }
 
-#[derive(Serialize, Builder)]
-pub struct ComposeInputs {
+#[derive(Debug, Clone, Serialize)]
+pub struct ParticipantMultiInputs {
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
     pub script_data: Vec<u8>,
+    pub change_output: bool,
+}
+
+#[derive(Clone, Serialize, Builder)]
+pub struct ComposeMultiInputs {
+    pub participants: Vec<ParticipantMultiInputs>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
-    pub change_output: Option<bool>,
     pub chained_script_data: Option<Vec<u8>>,
 }
 
-impl ComposeInputs {
-    pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
-        let address =
-            Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
-        let address_type = address.address_type();
-
-        if let Some(address_type) = address_type
-            && address_type != AddressType::P2tr
-        {
-            return Err(anyhow!("Invalid address type"));
+impl ComposeMultiInputs {
+    pub async fn from_query(query: ComposeMultiQuery, bitcoin_client: &Client) -> Result<Self> {
+        if query.participants.is_empty() {
+            return Err(anyhow!("participants cannot be empty"));
         }
-        let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
+        if query.participants.len() > 16 {
+            return Err(anyhow!("too many participants"));
+        }
 
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
-
-        let funding_utxos = get_utxos(bitcoin_client, query.funding_utxo_ids).await?;
-
-        let script_data = base64.decode(&query.script_data)?;
-
         let chained_script_data_bytes = query
             .chained_script_data
             .map(|chained_data| base64.decode(chained_data))
             .transpose()?;
         let envelope = query.envelope.unwrap_or(546);
 
+        let mut participants: Vec<ParticipantMultiInputs> =
+            Vec::with_capacity(query.participants.len());
+        for qp in query.participants {
+            let address =
+                Address::from_str(&qp.address)?.require_network(bitcoin::Network::Bitcoin)?;
+            if !matches!(address.address_type(), Some(AddressType::P2tr)) {
+                return Err(anyhow!("Invalid address type"));
+            }
+            let x_only_public_key = XOnlyPublicKey::from_str(&qp.x_only_public_key)?;
+            let funding_utxos = get_utxos(bitcoin_client, qp.funding_utxo_ids).await?;
+            for (_, txo) in &funding_utxos {
+                if txo.script_pubkey != address.script_pubkey() {
+                    return Err(anyhow!("funding utxo does not match participant address"));
+                }
+            }
+            let script_data = base64.decode(&qp.script_data)?;
+            participants.push(ParticipantMultiInputs {
+                address,
+                x_only_public_key,
+                funding_utxos,
+                script_data,
+                change_output: qp.change_output.unwrap_or(false),
+            });
+        }
+
         Ok(Self {
-            address,
-            x_only_public_key,
-            funding_utxos,
-            script_data,
+            participants,
             fee_rate,
-            change_output: query.change_output,
             envelope,
             chained_script_data: chained_script_data_bytes,
         })
@@ -88,7 +110,7 @@ impl ComposeInputs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TapLeafScript {
+pub struct TapLeafScriptMulti {
     #[serde(rename = "leafVersion")]
     pub leaf_version: LeafVersion,
     pub script: ScriptBuf,
@@ -97,55 +119,47 @@ pub struct TapLeafScript {
 }
 
 #[derive(Debug, Serialize, Deserialize, Builder)]
-pub struct ComposeOutputs {
+pub struct ComposeMultiOutputs {
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
     pub reveal_transaction: Transaction,
     pub reveal_transaction_hex: String,
     pub reveal_psbt_hex: String,
-    pub tap_leaf_script: TapLeafScript,
-    pub tap_script: ScriptBuf,
+    pub tap_leaf_scripts: Vec<TapLeafScriptMulti>,
+    pub tap_scripts: Vec<ScriptBuf>,
     pub chained_tap_script: Option<ScriptBuf>,
-    pub chained_tap_leaf_script: Option<TapLeafScript>,
+    pub chained_tap_leaf_script: Option<TapLeafScriptMulti>,
 }
 
 #[derive(Builder)]
-pub struct CommitInputs {
-    pub address: Address,
-    pub x_only_public_key: XOnlyPublicKey,
-    pub funding_utxos: Vec<(OutPoint, TxOut)>,
-    pub script_data: Vec<u8>,
+pub struct CommitMultiInputs {
+    pub participants: Vec<ParticipantMultiInputs>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
-    pub change_output: Option<bool>,
 }
 
-impl From<ComposeInputs> for CommitInputs {
-    fn from(value: ComposeInputs) -> Self {
+impl From<ComposeMultiInputs> for CommitMultiInputs {
+    fn from(value: ComposeMultiInputs) -> Self {
         Self {
-            address: value.address.clone(),
-            x_only_public_key: value.x_only_public_key,
-            funding_utxos: value.funding_utxos,
-            script_data: value.script_data,
+            participants: value.participants,
             fee_rate: value.fee_rate,
-            change_output: value.change_output,
             envelope: value.envelope,
         }
     }
 }
 
 #[derive(Builder, Serialize, Deserialize)]
-pub struct CommitOutputs {
+pub struct CommitMultiOutputs {
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
-    pub tap_leaf_script: TapLeafScript,
-    pub tap_script: ScriptBuf,
+    pub tap_leaf_scripts: Vec<TapLeafScriptMulti>,
+    pub tap_scripts: Vec<ScriptBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct RevealQuery {
+pub struct RevealMultiQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub commit_output: String,
@@ -159,7 +173,7 @@ pub struct RevealQuery {
 }
 
 #[derive(Builder)]
-pub struct RevealInputs {
+pub struct RevealMultiInputs {
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
     pub commit_script_data: Vec<u8>,
@@ -172,8 +186,8 @@ pub struct RevealInputs {
     pub op_return_data: Option<Vec<u8>>,
 }
 
-impl RevealInputs {
-    pub async fn from_query(query: RevealQuery, bitcoin_client: &Client) -> Result<Self> {
+impl RevealMultiInputs {
+    pub async fn from_query(query: RevealMultiQuery, bitcoin_client: &Client) -> Result<Self> {
         let address =
             Address::from_str(&query.address)?.require_network(bitcoin::Network::Bitcoin)?;
         let x_only_public_key = XOnlyPublicKey::from_str(&query.x_only_public_key)?;
@@ -244,134 +258,196 @@ impl RevealInputs {
 }
 
 #[derive(Builder, Serialize, Deserialize)]
-pub struct RevealOutputs {
+pub struct RevealMultiOutputs {
     pub transaction: Transaction,
     pub transaction_hex: String,
     pub psbt: Psbt,
     pub psbt_hex: String,
     pub chained_tap_script: Option<ScriptBuf>,
-    pub chained_tap_leaf_script: Option<TapLeafScript>,
+    pub chained_tap_leaf_script: Option<TapLeafScriptMulti>,
 }
 
-pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
-    // Build the commit tx
-    let commit_outputs = compose_commit(CommitInputs {
-        address: params.address.clone(),
-        x_only_public_key: params.x_only_public_key,
-        funding_utxos: params.funding_utxos.clone(),
-        script_data: params.script_data.clone(),
-        fee_rate: params.fee_rate,
-        change_output: params.change_output,
-        envelope: params.envelope,
-    })?;
+pub fn compose_multi(params: ComposeMultiInputs) -> Result<ComposeMultiOutputs> {
+    // Commit for multiple participants
+    let commit_outputs = compose_commit_multi(CommitMultiInputs::from(params.clone()))?;
 
-    // Build the reveal tx inputs
-    let reveal_inputs = {
-        let builder = RevealInputs::builder()
-            .x_only_public_key(params.x_only_public_key)
-            .address(params.address.clone())
-            .envelope(params.envelope)
-            .commit_output((
-                OutPoint {
-                    txid: commit_outputs.commit_transaction.compute_txid(),
-                    vout: 0,
-                },
-                commit_outputs.commit_transaction.output[0].clone(),
-            ))
-            .commit_script_data(params.script_data.clone())
-            .fee_rate(params.fee_rate);
+    // Reveal inline
+    let commit_tx = commit_outputs.commit_transaction.clone();
+    let commit_txid = commit_tx.compute_txid();
 
-        // apply chained data if provided
-        match (params.chained_script_data, params.change_output) {
-            (Some(chained_data), Some(true)) => builder
-                .chained_script_data(chained_data)
-                .funding_utxos(vec![(
-                    OutPoint {
-                        txid: commit_outputs.commit_transaction.compute_txid(),
-                        vout: 1,
-                    },
-                    commit_outputs.commit_transaction.output[1].clone(),
-                )])
-                .build(),
-            (Some(chained_data), None) => builder.chained_script_data(chained_data).build(),
-            (None, Some(true)) => builder
-                .funding_utxos(vec![(
-                    OutPoint {
-                        txid: commit_outputs.commit_transaction.compute_txid(),
-                        vout: 1,
-                    },
-                    commit_outputs.commit_transaction.output[1].clone(),
-                )])
-                .build(),
-            _ => builder.build(),
-        }
-    };
-
-    // Build the reveal tx
-    let reveal_outputs = compose_reveal(reveal_inputs)?; // work with psbt here
-
-    // Build the final outputs
-    let compose_outputs = {
-        let base_builder = ComposeOutputs::builder()
-            .commit_transaction(commit_outputs.commit_transaction)
-            .commit_transaction_hex(commit_outputs.commit_transaction_hex)
-            .commit_psbt_hex(commit_outputs.commit_psbt_hex)
-            .reveal_transaction(reveal_outputs.transaction.clone())
-            .reveal_transaction_hex(reveal_outputs.transaction_hex)
-            .reveal_psbt_hex(reveal_outputs.psbt_hex)
-            .tap_leaf_script(commit_outputs.tap_leaf_script)
-            .tap_script(commit_outputs.tap_script);
-
-        match (
-            reveal_outputs.chained_tap_script,
-            reveal_outputs.chained_tap_leaf_script,
-        ) {
-            (Some(chained_tap_script), Some(chained_tap_leaf_script)) => base_builder
-                .chained_tap_script(chained_tap_script)
-                .chained_tap_leaf_script(chained_tap_leaf_script)
-                .build(),
-
-            _ => base_builder.build(),
-        }
-    };
-
-    Ok(compose_outputs)
-}
-
-pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
-    let inputs: Vec<TxIn> = params
-        .funding_utxos
-        .iter()
-        .map(|(outpoint, _)| TxIn {
-            previous_output: *outpoint,
+    let mut reveal_inputs: Vec<TxIn> = Vec::new();
+    let mut reveal_prevouts: Vec<TxOut> = Vec::new();
+    for (i, o) in commit_tx.output.iter().enumerate() {
+        reveal_inputs.push(TxIn {
+            previous_output: OutPoint {
+                txid: commit_txid,
+                vout: i as u32,
+            },
             ..Default::default()
+        });
+        reveal_prevouts.push(o.clone());
+    }
+
+    let mut reveal_outputs_vec: Vec<TxOut> = params
+        .participants
+        .iter()
+        .map(|p| TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: p.address.script_pubkey(),
         })
         .collect();
 
-    let input_tuples = inputs
+    // Optional chained commit (portal-like return) using the coordinator notion: reuse first participant's key
+    let mut chained_tap_script_opt: Option<ScriptBuf> = None;
+    if let (Some(chained), Some(first)) = (
+        params.chained_script_data.as_ref(),
+        params.participants.first(),
+    ) {
+        let (chained_tap_script_for_return, _ti, chained_script_spend_addr) =
+            build_tap_script_and_script_address_multi(first.x_only_public_key, chained.clone())?;
+        reveal_outputs_vec.push(TxOut {
+            value: Amount::from_sat(params.envelope),
+            script_pubkey: chained_script_spend_addr.script_pubkey(),
+        });
+        chained_tap_script_opt = Some(chained_tap_script_for_return);
+    }
+
+    // Sizing using script-spend for each participant input
+    const SCHNORR_SIGNATURE_SIZE: usize = 64;
+    let input_tuples_reveal: Vec<(TxIn, TxOut)> = reveal_inputs
         .clone()
         .into_iter()
-        .zip(
-            params
-                .funding_utxos
-                .clone()
-                .into_iter()
-                .map(|(_, txout)| txout),
-        )
+        .zip(reveal_prevouts.clone())
         .collect();
 
-    let mut outputs = Vec::new();
+    let mut taps: Vec<(ScriptBuf, TaprootSpendInfo)> = Vec::new();
+    for p in &params.participants {
+        let (tap_script, tap_info, _) =
+            build_tap_script_and_script_address_multi(p.x_only_public_key, p.script_data.clone())?;
+        taps.push((tap_script, tap_info));
+    }
 
-    let (tap_script, taproot_spend_info, script_spendable_address) =
-        build_tap_script_and_script_address(params.x_only_public_key, params.script_data)?;
+    let change_reveal = calculate_change(
+        |i, witness| {
+            let (tap_script, tap_info) = &taps[i];
+            witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
+            witness.push(tap_script.clone());
+            witness.push(
+                tap_info
+                    .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+                    .expect("cb")
+                    .serialize(),
+            );
+        },
+        input_tuples_reveal,
+        reveal_outputs_vec.clone(),
+        params.fee_rate,
+        false,
+    )
+    .ok_or(anyhow!("Inputs are insufficient to cover the reveal"))?;
 
-    outputs.push(TxOut {
-        value: Amount::from_sat(params.envelope),
-        script_pubkey: script_spendable_address.script_pubkey(),
-    });
+    let per_commit_vals: Vec<u64> = reveal_prevouts
+        .iter()
+        .take(params.participants.len())
+        .map(|o| o.value.to_sat())
+        .collect();
+    let total_commit: u64 = per_commit_vals.iter().sum();
+    let mut rem = change_reveal;
+    for i in 0..params.participants.len() {
+        let share = if i == params.participants.len() - 1 {
+            rem
+        } else {
+            change_reveal.saturating_mul(per_commit_vals[i]) / total_commit
+        };
+        rem = rem.saturating_sub(share);
+        reveal_outputs_vec[i].value = Amount::from_sat(share);
+    }
+
+    let reveal_transaction = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: reveal_inputs.clone(),
+        output: reveal_outputs_vec.clone(),
+    };
+    let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
+
+    let commit_psbt_hex = Psbt::from_unsigned_tx(commit_tx.clone())?.serialize_hex();
+    let mut reveal_psbt = Psbt::from_unsigned_tx(reveal_transaction.clone())?;
+    for (i, input) in reveal_psbt.inputs.iter_mut().enumerate() {
+        input.witness_utxo = Some(reveal_prevouts[i].clone());
+        input.tap_internal_key = Some(params.participants[i].x_only_public_key);
+        input.tap_merkle_root = Some(taps[i].1.merkle_root().expect("merkle"));
+    }
+    let reveal_psbt_hex = reveal_psbt.serialize_hex();
+
+    let base_builder = ComposeMultiOutputs::builder()
+        .commit_transaction(commit_tx)
+        .commit_transaction_hex(hex::encode(serialize_tx(
+            &commit_outputs.commit_transaction,
+        )))
+        .commit_psbt_hex(commit_psbt_hex)
+        .reveal_transaction(reveal_transaction)
+        .reveal_transaction_hex(reveal_transaction_hex)
+        .reveal_psbt_hex(reveal_psbt_hex)
+        .tap_leaf_scripts(commit_outputs.tap_leaf_scripts)
+        .tap_scripts(commit_outputs.tap_scripts);
+
+    let outputs = match chained_tap_script_opt {
+        Some(chained_ts) => base_builder
+            .chained_tap_script(chained_ts.clone())
+            .chained_tap_leaf_script(TapLeafScriptMulti {
+                leaf_version: LeafVersion::TapScript,
+                script: chained_ts,
+                control_block: ScriptBuf::new(),
+            })
+            .build(),
+        None => base_builder.build(),
+    };
+
+    Ok(outputs)
+}
+
+pub fn compose_commit_multi(params: CommitMultiInputs) -> Result<CommitMultiOutputs> {
+    // Flatten inputs across all participants
+    let mut inputs: Vec<TxIn> = Vec::new();
+    let mut prevouts: Vec<TxOut> = Vec::new();
+    for p in &params.participants {
+        for (op, txo) in &p.funding_utxos {
+            inputs.push(TxIn {
+                previous_output: *op,
+                ..Default::default()
+            });
+            prevouts.push(txo.clone());
+        }
+    }
+
+    // One script output per participant, envelope value initially
+    let mut outputs: Vec<TxOut> = Vec::new();
+    let mut tap_scripts: Vec<ScriptBuf> = Vec::new();
+    let mut tap_leafs: Vec<TapLeafScriptMulti> = Vec::new();
+    for p in &params.participants {
+        let (tap_script, taproot_spend_info, script_spendable_address) =
+            build_tap_script_and_script_address_multi(p.x_only_public_key, p.script_data.clone())?;
+        outputs.push(TxOut {
+            value: Amount::from_sat(params.envelope),
+            script_pubkey: script_spendable_address.script_pubkey(),
+        });
+        tap_leafs.push(TapLeafScriptMulti {
+            leaf_version: LeafVersion::TapScript,
+            script: tap_script.clone(),
+            control_block: ScriptBuf::from_bytes(
+                taproot_spend_info
+                    .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+                    .expect("cb")
+                    .serialize(),
+            ),
+        });
+        tap_scripts.push(tap_script);
+    }
 
     const SCHNORR_SIGNATURE_SIZE: usize = 64;
-
+    let input_tuples: Vec<(TxIn, TxOut)> =
+        inputs.clone().into_iter().zip(prevouts.clone()).collect();
     let change_amount = calculate_change(
         |_, witness| {
             witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
@@ -379,19 +455,27 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         input_tuples,
         outputs.clone(),
         params.fee_rate,
-        params.change_output.unwrap_or(false),
+        false,
     )
     .ok_or(anyhow!("Change amount is negative"))?;
 
-    if let Some(change_output) = params.change_output {
-        if change_output {
-            outputs.push(TxOut {
-                value: Amount::from_sat(change_amount),
-                script_pubkey: params.address.script_pubkey(),
-            });
-        }
-    } else {
-        outputs[0].value += Amount::from_sat(change_amount);
+    // Distribute change proportionally to participant input sum
+    let per_participant_input_sum: Vec<u64> = params
+        .participants
+        .iter()
+        .map(|p| p.funding_utxos.iter().map(|(_, t)| t.value.to_sat()).sum())
+        .collect();
+    let total_input_sum: u64 = per_participant_input_sum.iter().sum();
+    let mut remaining = change_amount;
+    let len = outputs.len();
+    for i in 0..len {
+        let share = if i == len - 1 {
+            remaining
+        } else {
+            change_amount.saturating_mul(per_participant_input_sum[i]) / total_input_sum
+        };
+        remaining = remaining.saturating_sub(share);
+        outputs[i].value += Amount::from_sat(share);
     }
 
     let commit_transaction = Transaction {
@@ -400,40 +484,19 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         input: inputs,
         output: outputs,
     };
-
     let commit_transaction_hex = hex::encode(serialize_tx(&commit_transaction));
+    let commit_psbt_hex = Psbt::from_unsigned_tx(commit_transaction.clone())?.serialize_hex();
 
-    let mut commit_psbt = Psbt::from_unsigned_tx(commit_transaction.clone())?;
-    commit_psbt
-        .inputs
-        .iter_mut()
-        .enumerate()
-        .for_each(|(i, input)| {
-            input.witness_utxo = Some(params.funding_utxos[i].1.clone());
-            input.tap_internal_key = Some(params.x_only_public_key);
-        });
-    let commit_psbt_hex = commit_psbt.serialize_hex();
-
-    let commit_outputs = CommitOutputs::builder()
+    Ok(CommitMultiOutputs::builder()
         .commit_transaction(commit_transaction)
-        .tap_script(tap_script.clone())
-        .tap_leaf_script(TapLeafScript {
-            leaf_version: LeafVersion::TapScript,
-            script: tap_script.clone(),
-            control_block: ScriptBuf::from_bytes(
-                taproot_spend_info
-                    .control_block(&(tap_script, LeafVersion::TapScript))
-                    .expect("Should not fail to generate control block because script is included")
-                    .serialize(),
-            ),
-        })
         .commit_transaction_hex(commit_transaction_hex)
         .commit_psbt_hex(commit_psbt_hex)
-        .build();
-    Ok(commit_outputs)
+        .tap_leaf_scripts(tap_leafs)
+        .tap_scripts(tap_scripts)
+        .build())
 }
 
-pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
+pub fn compose_reveal_multi(params: RevealMultiInputs) -> Result<RevealMultiOutputs> {
     const SCHNORR_SIGNATURE_SIZE: usize = 64;
 
     let mut reveal_transaction = Transaction {
@@ -456,7 +519,10 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     if let Some(chained_script_data) = params.chained_script_data {
         // if chained_script_data is provided, script_spendable_address output for the new commit
         let (chained_tap_script_for_return, _, chained_script_spendable_address) =
-            build_tap_script_and_script_address(params.x_only_public_key, chained_script_data)?;
+            build_tap_script_and_script_address_multi(
+                params.x_only_public_key,
+                chained_script_data,
+            )?;
 
         reveal_transaction.output.push(TxOut {
             value: Amount::from_sat(params.envelope),
@@ -480,8 +546,10 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             },
         });
     }
-    let (tap_script, taproot_spend_info, _) =
-        build_tap_script_and_script_address(params.x_only_public_key, params.commit_script_data)?;
+    let (tap_script, taproot_spend_info, _) = build_tap_script_and_script_address_multi(
+        params.x_only_public_key,
+        params.commit_script_data,
+    )?;
 
     let control_block = taproot_spend_info
         .control_block(&(tap_script.clone(), LeafVersion::TapScript))
@@ -613,7 +681,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             });
     }
     let psbt_hex = psbt.serialize_hex();
-    let base_builder = RevealOutputs::builder()
+    let base_builder = RevealMultiOutputs::builder()
         .transaction(reveal_transaction)
         .transaction_hex(reveal_transaction_hex)
         .psbt(psbt)
@@ -623,7 +691,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let reveal_outputs = match chained_tap_script_opt {
         Some(chained_tap_script) => base_builder
             .chained_tap_script(chained_tap_script.clone())
-            .chained_tap_leaf_script(TapLeafScript {
+            .chained_tap_leaf_script(TapLeafScriptMulti {
                 leaf_version: LeafVersion::TapScript,
                 script: chained_tap_script,
                 control_block: ScriptBuf::new(),
@@ -635,7 +703,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     Ok(reveal_outputs)
 }
 
-pub fn build_tap_script_and_script_address(
+pub fn build_tap_script_and_script_address_multi(
     x_only_public_key: XOnlyPublicKey,
     data: Vec<u8>,
 ) -> Result<(ScriptBuf, TaprootSpendInfo, Address)> {
