@@ -5,6 +5,7 @@ pub mod handlers;
 pub mod result;
 pub mod router;
 pub mod ws;
+pub mod compose_multi;
 
 use std::{net::SocketAddr, time::Duration};
 
