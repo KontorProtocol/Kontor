@@ -16,6 +16,7 @@ impl Op {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<Op> for wasm_wave::value::Value {
     fn from(value_: Op) -> Self {
         (match value_ {
@@ -45,6 +46,7 @@ impl From<Op> for wasm_wave::value::Value {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<wasm_wave::value::Value> for Op {
     fn from(value_: wasm_wave::value::Value) -> Self {
         let (key_, val_) = value_.unwrap_variant();

@@ -1,6 +1,7 @@
 pub struct Operand {
     pub y: u64,
 }
+#[automatically_derived]
 impl stdlib::Store for Operand {
     fn __set(
         ctx: &impl stdlib::WriteContext,

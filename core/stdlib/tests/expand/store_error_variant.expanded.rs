@@ -2,6 +2,7 @@ use stdlib::Store;
 enum Error {
     Message(String),
 }
+#[automatically_derived]
 impl stdlib::Store for Error {
     fn __set(
         ctx: &impl stdlib::WriteContext,

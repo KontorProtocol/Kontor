@@ -14,7 +14,6 @@ impl ::core::clone::Clone for TokenStorageWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl TokenStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

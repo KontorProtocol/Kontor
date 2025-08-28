@@ -7,6 +7,7 @@ impl ArithReturn {
         wasm_wave::value::Type::record([("value", wasm_wave::value::Type::U64)]).unwrap()
     }
 }
+#[automatically_derived]
 impl From<ArithReturn> for wasm_wave::value::Value {
     fn from(value_: ArithReturn) -> Self {
         wasm_wave::value::Value::make_record(
@@ -16,6 +17,7 @@ impl From<ArithReturn> for wasm_wave::value::Value {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<wasm_wave::value::Value> for ArithReturn {
     fn from(value_: wasm_wave::value::Value) -> Self {
         let mut value = None;

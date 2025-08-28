@@ -7,6 +7,7 @@ impl Operand {
         wasm_wave::value::Type::record([("y", wasm_wave::value::Type::U64)]).unwrap()
     }
 }
+#[automatically_derived]
 impl From<Operand> for wasm_wave::value::Value {
     fn from(value_: Operand) -> Self {
         wasm_wave::value::Value::make_record(
@@ -16,6 +17,7 @@ impl From<Operand> for wasm_wave::value::Value {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<wasm_wave::value::Value> for Operand {
     fn from(value_: wasm_wave::value::Value) -> Self {
         let mut y = None;

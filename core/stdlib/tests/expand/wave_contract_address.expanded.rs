@@ -14,6 +14,7 @@ impl ContractAddress {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<ContractAddress> for wasm_wave::value::Value {
     fn from(value_: ContractAddress) -> Self {
         wasm_wave::value::Value::make_record(
@@ -27,6 +28,7 @@ impl From<ContractAddress> for wasm_wave::value::Value {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<wasm_wave::value::Value> for ContractAddress {
     fn from(value_: wasm_wave::value::Value) -> Self {
         let mut name = None;

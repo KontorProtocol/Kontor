@@ -2,6 +2,7 @@ use stdlib::StorageRoot;
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
+#[automatically_derived]
 impl stdlib::Store for ProxyStorage {
     fn __set(
         ctx: &impl stdlib::WriteContext,
@@ -23,7 +24,6 @@ impl ::core::clone::Clone for ProxyStorageWrapper {
         }
     }
 }
-#[allow(dead_code)]
 impl ProxyStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }

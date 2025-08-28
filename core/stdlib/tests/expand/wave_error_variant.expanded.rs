@@ -10,6 +10,7 @@ impl Error {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<Error> for wasm_wave::value::Value {
     fn from(value_: Error) -> Self {
         (match value_ {
@@ -24,6 +25,7 @@ impl From<Error> for wasm_wave::value::Value {
             .unwrap()
     }
 }
+#[automatically_derived]
 impl From<wasm_wave::value::Value> for Error {
     fn from(value_: wasm_wave::value::Value) -> Self {
         let (key_, val_) = value_.unwrap_variant();
