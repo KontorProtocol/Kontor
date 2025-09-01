@@ -11,7 +11,7 @@ use indexer::{
 use libsql::Connection;
 pub use stdlib::import;
 
-pub use anyhow::Result;
+pub use anyhow::{Error as AnyhowError, Result};
 
 #[derive(Clone)]
 pub struct CallContext {

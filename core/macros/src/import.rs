@@ -40,10 +40,14 @@ pub fn generate_functions(
         }
     }
 
-    let ret_ty = match &export.result {
+    let mut ret_ty = match &export.result {
         Some(ty) => transformers::wit_type_to_rust_type(resolve, ty, false)?,
         None => quote! { () },
     };
+
+    if test {
+        ret_ty = quote! { Result<#ret_ty, AnyhowError> }
+    }
 
     let expr_parts = export
         .params
@@ -79,7 +83,7 @@ pub fn generate_functions(
         quote! { format!("{}({})", #fn_name_kebab, [#(#expr_parts),*].join(", ")) }
     };
 
-    let ret_expr = match &export.result {
+    let mut ret_expr = match &export.result {
         Some(ty) => {
             let wave_ty = transformers::wit_type_to_wave_type(resolve, ty)?;
             let unwrap_expr = transformers::wit_type_to_unwrap_expr(resolve, ty)?;
@@ -89,6 +93,9 @@ pub fn generate_functions(
         }
         None => quote! { () },
     };
+    if test {
+        ret_expr = quote! { Ok(#ret_expr) };
+    }
 
     let ctx_signer = if is_proc_context {
         if test {
@@ -113,7 +120,7 @@ pub fn generate_functions(
     };
 
     let awaited = if test {
-        quote! { .await.unwrap() }
+        quote! { .await? }
     } else {
         quote! {}
     };

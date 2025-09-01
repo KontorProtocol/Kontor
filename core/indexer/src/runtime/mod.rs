@@ -1,6 +1,7 @@
 mod component_cache;
 mod contracts;
 mod counter;
+mod stack;
 mod storage;
 mod types;
 pub mod wit;
@@ -41,6 +42,7 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::{
     counter::Counter,
+    stack::Stack,
     wit::{FallContext, HasContractId, ProcContext, Signer, ViewContext},
 };
 
@@ -154,6 +156,7 @@ pub struct Runtime {
     pub component_cache: ComponentCache,
     pub storage: Storage,
     pub id_generation_counter: Counter,
+    pub stack: Stack<i64>,
 }
 
 impl Runtime {
@@ -173,6 +176,7 @@ impl Runtime {
             component_cache,
             storage,
             id_generation_counter: Counter::new(),
+            stack: Stack::new(),
         })
     }
 
@@ -230,6 +234,7 @@ impl Runtime {
             .contract_id(contract_address)
             .await?
             .ok_or(anyhow!("Contract not found"))?;
+        self.stack.push(contract_id).await?;
         let component = self.load_component(contract_id).await?;
         let linker = self.make_linker()?;
         let mut store = self.make_store();
@@ -310,6 +315,7 @@ impl Runtime {
             .map(default_val_for_type)
             .collect::<Vec<_>>();
         func.call_async(&mut store, &params, &mut results).await?;
+        self.stack.pop().await;
         if results.is_empty() {
             return Ok("()".to_string());
         }

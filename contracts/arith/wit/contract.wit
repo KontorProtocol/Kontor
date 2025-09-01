@@ -27,4 +27,6 @@ world contract {
     export last-op: func(ctx: borrow<view-context>) -> option<op>;
 
     export checked-sub: func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
+
+    export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
 }

@@ -2,6 +2,8 @@ use stdlib::*;
 
 contract!(name = "arith");
 
+import!(name = "fib", height = 0, tx_index = 0, path = "fib/wit");
+
 #[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {
     pub last_op: Option<Op>,
@@ -36,5 +38,10 @@ impl Guest for Arith {
         let y = y.parse::<u64>()?;
         x.checked_sub(y)
             .ok_or(Error::Message("less than 0".to_string()))
+    }
+
+    // for cycle detection test
+    fn fib(ctx: &ProcContext, n: u64) -> u64 {
+        fib::fib(ctx, n)
     }
 }

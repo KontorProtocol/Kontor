@@ -446,6 +446,7 @@ pub fn import(input: TokenStream) -> TokenStream {
         quote! {
             use super::ContractAddress;
             use super::Error;
+            use super::AnyhowError;
             use super::Runtime;
         }
     } else {
