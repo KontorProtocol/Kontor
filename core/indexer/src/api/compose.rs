@@ -19,9 +19,18 @@ use bon::Builder;
 use base64::engine::general_purpose::STANDARD as base64;
 use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashSet},
+    str::FromStr,
+};
 
 use crate::bitcoin_client::Client;
+
+// Hardening limits
+const MAX_PARTICIPANTS: usize = 10;
+const MAX_SCRIPT_BYTES: usize = 16 * 1024; // 16 KiB
+const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
+const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 
 #[derive(Serialize, Deserialize)]
 pub struct ComposeAddressQuery {
@@ -61,6 +70,13 @@ impl ComposeInputs {
     pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
         use futures_util::future::try_join_all;
 
+        if query.addresses.is_empty() {
+            return Err(anyhow!("No addresses provided"));
+        }
+        if query.addresses.len() > MAX_PARTICIPANTS {
+            return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
+        }
+
         let addresses: Vec<ComposeAddressInputs> =
             try_join_all(query.addresses.iter().map(|address_query| async {
                 let address: Address = Address::from_str(&address_query.address)?
@@ -84,12 +100,46 @@ impl ComposeInputs {
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
         let script_data = base64.decode(&query.script_data)?;
+        if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
+            return Err(anyhow!("script data size invalid"));
+        }
 
         let chained_script_data_bytes = query
             .chained_script_data
             .map(|chained_data| base64.decode(chained_data))
             .transpose()?;
-        let envelope = query.envelope.unwrap_or(330);
+        if chained_script_data_bytes
+            .as_ref()
+            .is_some_and(|c| c.is_empty() || c.len() > MAX_SCRIPT_BYTES)
+        {
+            return Err(anyhow!("chained script data size invalid"));
+        }
+        let envelope = query
+            .envelope
+            .unwrap_or(MIN_ENVELOPE_SATS)
+            .max(MIN_ENVELOPE_SATS);
+
+        // Ensure unique addresses
+        let mut addr_set: HashSet<String> = HashSet::with_capacity(addresses.len());
+        for a in addresses.iter() {
+            let key = a.address.to_string();
+            if !addr_set.insert(key) {
+                return Err(anyhow!("duplicate address provided"));
+            }
+        }
+
+        // Ensure no duplicate outpoints across owners
+        let mut outpoint_set: HashSet<(Txid, u32)> = HashSet::new();
+        for a in addresses.iter() {
+            for (op, _) in a.funding_utxos.iter() {
+                let key = (op.txid, op.vout);
+                if !outpoint_set.insert(key) {
+                    return Err(anyhow!(
+                        "duplicate funding outpoint provided across participants"
+                    ));
+                }
+            }
+        }
 
         Ok(Self {
             addresses,
@@ -102,7 +152,7 @@ impl ComposeInputs {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TapLeafScript {
     #[serde(rename = "leafVersion")]
     pub leaf_version: LeafVersion,
@@ -111,7 +161,7 @@ pub struct TapLeafScript {
     pub control_block: ScriptBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TapScriptPair {
     pub tap_script: ScriptBuf,
     pub tap_leaf_script: TapLeafScript,
@@ -177,7 +227,6 @@ pub struct RevealParticipantQuery {
     pub commit_vout: u32,
     pub commit_script_data: String,
     pub envelope: Option<u64>,
-    pub chained_script_data: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -460,16 +509,23 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             value: Amount::from_sat(script_value),
             script_pubkey: script_spendable_address.script_pubkey(),
         });
-        // Re-estimate commit delta fee with dummy change to gauge if change > dust
-        let commit_delta_fee = estimate_commit_delta_fee(
-            &commit_psbt.unsigned_tx,
-            0,
-            |_, w: &mut Witness| w.push(vec![0u8; 65]),
-            script_spendable_address.script_pubkey().len(),
-            addr.address.script_pubkey().len(),
-            params.fee_rate,
-        );
-        let required_total = script_value.saturating_add(commit_delta_fee);
+        // Recompute fee more precisely by sizing current tx and a tx with one extra change output,
+        // then subtracting the base-sized fee to get exact delta for change.
+        let base_vb = tx_vbytes_est(&commit_psbt.unsigned_tx);
+        let base_fee = params.fee_rate.fee_vb(base_vb).expect("fee calc").to_sat();
+        let mut with_change = commit_psbt.unsigned_tx.clone();
+        with_change.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: addr.address.script_pubkey(),
+        });
+        let with_change_vb = tx_vbytes_est(&with_change);
+        let with_change_fee = params
+            .fee_rate
+            .fee_vb(with_change_vb)
+            .expect("fee calc")
+            .to_sat();
+        let change_fee_delta = with_change_fee.saturating_sub(base_fee);
+        let required_total = script_value.saturating_add(change_fee_delta);
         let change_value = selected_sum.saturating_sub(required_total);
         if change_value > params.envelope {
             commit_psbt.unsigned_tx.output.push(TxOut {
@@ -485,7 +541,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             control_block: ScriptBuf::from_bytes(
                 tap_info
                     .control_block(&(tap_script.clone(), LeafVersion::TapScript))
-                    .expect("cb")
+                    .ok_or_else(|| anyhow!("Failed to create control block"))?
                     .serialize(),
             ),
         };
@@ -531,6 +587,12 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
 
     // Optional OP_RETURN first (keeps vsize expectations stable)
     if let Some(data) = params.op_return_data.clone() {
+        if data.len() > MAX_OP_RETURN_BYTES {
+            return Err(anyhow!(
+                "OP_RETURN data exceeds {} bytes",
+                MAX_OP_RETURN_BYTES
+            ));
+        }
         reveal_transaction.output.push(TxOut {
             value: Amount::from_sat(0),
             script_pubkey: {
@@ -563,6 +625,9 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         if n == 0 {
             return Err(anyhow!("participants cannot be empty"));
         }
+        if params.envelope < MIN_ENVELOPE_SATS {
+            return Err(anyhow!("envelope below dust"));
+        }
         let total = chained.len();
         let base = total / n;
         let rem = total % n;
@@ -586,7 +651,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 control_block: ScriptBuf::from_bytes(
                     ch_info
                         .control_block(&(ch_tap.clone(), LeafVersion::TapScript))
-                        .expect("cb")
+                        .ok_or_else(|| anyhow!("Failed to create control block"))?
                         .serialize(),
                 ),
             };

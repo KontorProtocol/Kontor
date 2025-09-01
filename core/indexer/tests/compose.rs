@@ -7,9 +7,9 @@ use bitcoin::{
 };
 use bitcoin::{FeeRate, TapSighashType};
 use clap::Parser;
-use indexer::api::compose::{RevealInputs, compose, compose_reveal};
+use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
-use indexer::api::compose::ComposeInputs;
+use indexer::api::compose::{ComposeAddressInputs, ComposeInputs};
 use indexer::config::TestConfig;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
@@ -51,11 +51,13 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .address(seller_address.clone())
-        .x_only_public_key(internal_key)
-        .funding_utxos(vec![(out_point, utxo_for_output.clone())])
+        .addresses(vec![ComposeAddressInputs {
+            address: seller_address.clone(),
+            x_only_public_key: internal_key,
+            funding_utxos: vec![(out_point, utxo_for_output.clone())],
+        }])
         .script_data(b"Hello, world!".to_vec())
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .envelope(546)
         .chained_script_data(serialized_token_balance.clone())
         .build();
@@ -63,31 +65,35 @@ async fn test_taproot_transaction() -> Result<()> {
     let compose_outputs = compose(compose_params)?;
 
     let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.tap_script;
+    let tap_script = compose_outputs
+        .address_tap_script
+        .get(&seller_address.to_string())
+        .unwrap()
+        .tap_script
+        .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
-    let chained_tap_script = compose_outputs.chained_tap_script.unwrap();
+    let chained_pair = compose_outputs
+        .address_chained_tap_script
+        .get(&seller_address.to_string())
+        .cloned()
+        .unwrap();
+    let chained_tap_script = chained_pair.tap_script.clone();
 
     let chained_reveal_tx = compose_reveal(
         RevealInputs::builder()
-            .x_only_public_key(internal_key)
-            .address(seller_address.clone())
-            .commit_output((
-                OutPoint {
+            .commit_txid(reveal_tx.compute_txid())
+            .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
+            .participants(vec![RevealParticipantInputs {
+                address: seller_address.clone(),
+                x_only_public_key: internal_key,
+                commit_outpoint: OutPoint {
                     txid: reveal_tx.compute_txid(),
                     vout: 0,
                 },
-                reveal_tx.output[0].clone(),
-            ))
-            .funding_utxos(vec![(
-                OutPoint {
-                    txid: reveal_tx.compute_txid(),
-                    vout: 1,
-                },
-                reveal_tx.output[1].clone(),
-            )])
+                commit_prevout: reveal_tx.output[0].clone(),
+                commit_script_data: chained_pair.script_data_chunk.clone(),
+            }])
             .envelope(546)
-            .commit_script_data(serialized_token_balance)
-            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
             .build(),
     )?;
 
@@ -152,7 +158,12 @@ async fn test_taproot_transaction() -> Result<()> {
         .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex, chained_reveal_tx_hex])
         .await?;
 
-    assert_eq!(result.len(), 3, "Expected exactly two transaction results");
+    assert_eq!(
+        result.len(),
+        3,
+        "Expected exactly three transaction results"
+    );
+    println!("RESULT {:#?}", result);
     assert!(result[0].allowed, "Commit transaction was rejected");
     assert!(result[1].allowed, "Reveal transaction was rejected");
     assert!(result[2].allowed, "Chained reveal transaction was rejected");

@@ -14,14 +14,19 @@ use crate::{
 use super::{
     Env,
     compose::{
-        CommitInputs, CommitOutputs, ComposeInputs, ComposeOutputs, ComposeQuery, RevealInputs,
-        RevealOutputs, RevealQuery, compose, compose_commit, compose_reveal,
+        CommitInputs, CommitOutputs, ComposeAddressQuery, ComposeInputs, ComposeOutputs,
+        ComposeQuery, RevealInputs, RevealOutputs, RevealQuery, compose, compose_commit,
+        compose_reveal,
     },
     error::HttpError,
     result::Result,
 };
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as base64_engine;
 use serde::Deserialize;
+use serde::Serialize;
+use serde_json;
 
 #[derive(Deserialize)]
 pub struct TxsQuery {
@@ -53,10 +58,26 @@ pub async fn test_mempool_accept(
 }
 
 pub async fn get_compose(
-    Query(query): Query<ComposeQuery>,
+    Query(query): Query<ComposeAddressesB64Query>,
     State(env): State<Env>,
 ) -> Result<ComposeOutputs> {
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+    // Hard cap addresses payload
+    if query.addresses.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    }
+    let decoded_addresses: Vec<ComposeAddressQuery> =
+        decode_addresses_b64(&query.addresses).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let cq = ComposeQuery {
+        addresses: decoded_addresses,
+        script_data: query.script_data,
+        sat_per_vbyte: query.sat_per_vbyte,
+        change_output: query.change_output,
+        envelope: query.envelope,
+        chained_script_data: query.chained_script_data,
+    };
+
+    let inputs = ComposeInputs::from_query(cq, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
@@ -66,10 +87,25 @@ pub async fn get_compose(
 }
 
 pub async fn get_compose_commit(
-    Query(query): Query<ComposeQuery>,
+    Query(query): Query<ComposeAddressesB64Query>,
     State(env): State<Env>, // TODO
 ) -> Result<CommitOutputs> {
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+    if query.addresses.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    }
+    let decoded_addresses: Vec<ComposeAddressQuery> =
+        decode_addresses_b64(&query.addresses).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let cq = ComposeQuery {
+        addresses: decoded_addresses,
+        script_data: query.script_data,
+        sat_per_vbyte: query.sat_per_vbyte,
+        change_output: query.change_output,
+        envelope: query.envelope,
+        chained_script_data: query.chained_script_data,
+    };
+
+    let inputs = ComposeInputs::from_query(cq, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let commit_inputs = CommitInputs::from(inputs);
@@ -90,6 +126,25 @@ pub async fn get_compose_reveal(
     let outputs = compose_reveal(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
     Ok(outputs.into())
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ComposeAddressesB64Query {
+    pub addresses: String, // base64-encoded JSON Vec<ComposeAddressQuery>
+    pub script_data: String,
+    pub sat_per_vbyte: u64,
+    pub change_output: Option<bool>,
+    pub envelope: Option<u64>,
+    pub chained_script_data: Option<String>,
+}
+
+fn decode_addresses_b64(s: &str) -> anyhow::Result<Vec<ComposeAddressQuery>> {
+    let bytes = base64_engine
+        .decode(s)
+        .map_err(|e| anyhow::anyhow!("invalid base64 in addresses: {}", e))?;
+    let addrs: Vec<ComposeAddressQuery> = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("invalid JSON in addresses: {}", e))?;
+    Ok(addrs)
 }
 
 pub async fn get_transactions(

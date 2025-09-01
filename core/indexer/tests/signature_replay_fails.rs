@@ -14,7 +14,10 @@ use bitcoin::{
     transaction::TxOut,
 };
 use clap::Parser;
-use indexer::api::compose::{ComposeInputs, RevealInputs, compose, compose_reveal};
+use indexer::api::compose::{
+    ComposeAddressInputs, ComposeInputs, RevealInputs, RevealParticipantInputs, compose,
+    compose_reveal,
+};
 use indexer::config::TestConfig;
 use indexer::op_return::OpReturnData;
 use indexer::test_utils;
@@ -57,9 +60,11 @@ async fn test_signature_replay_failse() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .address(seller_address.clone())
-        .x_only_public_key(seller_internal_key)
-        .funding_utxos(vec![(out_point, utxo_for_output.clone())])
+        .addresses(vec![ComposeAddressInputs {
+            address: seller_address.clone(),
+            x_only_public_key: seller_internal_key,
+            funding_utxos: vec![(out_point, utxo_for_output.clone())],
+        }])
         .script_data(serialized_token_balance.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
@@ -68,7 +73,12 @@ async fn test_signature_replay_failse() -> Result<()> {
     let compose_outputs = compose(compose_params)?;
 
     let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.tap_script;
+    let tap_script = compose_outputs
+        .address_tap_script
+        .get(&seller_address.to_string())
+        .unwrap()
+        .tap_script
+        .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
 
     // 1. SIGN THE ORIGINAL COMMIT
@@ -127,9 +137,11 @@ async fn test_signature_replay_failse() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .address(seller_address.clone())
-        .x_only_public_key(seller_internal_key)
-        .funding_utxos(vec![(buyer_out_point, buyer_utxo_for_output.clone())])
+        .addresses(vec![ComposeAddressInputs {
+            address: seller_address.clone(),
+            x_only_public_key: seller_internal_key,
+            funding_utxos: vec![(buyer_out_point, buyer_utxo_for_output.clone())],
+        }])
         .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
@@ -221,9 +233,11 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .address(seller_address.clone())
-        .x_only_public_key(internal_key)
-        .funding_utxos(vec![(outpoint, txout)])
+        .addresses(vec![ComposeAddressInputs {
+            address: seller_address.clone(),
+            x_only_public_key: internal_key,
+            funding_utxos: vec![(outpoint, txout)],
+        }])
         .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .chained_script_data(serialized_detach_data.clone())
@@ -233,8 +247,18 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let compose_outputs = compose(compose_params)?;
     let mut attach_commit_tx = compose_outputs.commit_transaction;
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
-    let attach_tap_script = compose_outputs.tap_script;
-    let detach_tap_script = compose_outputs.chained_tap_script.unwrap();
+    let attach_tap_script = compose_outputs
+        .address_tap_script
+        .get(&seller_address.to_string())
+        .unwrap()
+        .tap_script
+        .clone();
+    let detach_tap_script = compose_outputs
+        .address_chained_tap_script
+        .get(&seller_address.to_string())
+        .unwrap()
+        .tap_script
+        .clone();
 
     let prevouts = vec![TxOut {
         value: Amount::from_sat(9000),
@@ -395,34 +419,19 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
 
     let reveal_inputs = RevealInputs::builder()
-        .x_only_public_key(buyer_internal_key)
-        .address(buyer_address.clone())
-        .commit_output((
-            OutPoint {
+        .commit_txid(attach_reveal_tx.compute_txid())
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .participants(vec![RevealParticipantInputs {
+            address: seller_address.clone(),
+            x_only_public_key: internal_key,
+            commit_outpoint: OutPoint {
                 txid: attach_reveal_tx.compute_txid(),
                 vout: 0,
             },
-            attach_reveal_tx.output[0].clone(),
-        ))
-        .funding_utxos(vec![(
-            OutPoint {
-                txid: Txid::from_str(
-                    "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
-                )?,
-                vout: 0,
-            },
-            TxOut {
-                value: Amount::from_sat(10000),
-                script_pubkey: buyer_address.script_pubkey(),
-            },
-        )])
-        .commit_script_data(serialized_detach_data)
-        .reveal_output(TxOut {
-            value: Amount::from_sat(600),
-            script_pubkey: seller_address.script_pubkey(),
-        })
+            commit_prevout: attach_reveal_tx.output[0].clone(),
+            commit_script_data: serialized_detach_data,
+        }])
         .op_return_data(transfer_bytes)
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
@@ -431,11 +440,29 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let mut buyer_psbt = buyer_reveal_outputs.psbt;
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
-    buyer_psbt.inputs[1].witness_utxo = Some(TxOut {
-        script_pubkey: buyer_address.script_pubkey(),
-        value: Amount::from_sat(10000),
+    // Add buyer funding input as a second input
+    buyer_psbt.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint {
+            txid: Txid::from_str(
+                "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
+            )?,
+            vout: 0,
+        },
+        ..Default::default()
     });
-    buyer_psbt.inputs[1].tap_internal_key = Some(buyer_internal_key);
+    buyer_psbt.inputs.push(Input {
+        witness_utxo: Some(TxOut {
+            script_pubkey: buyer_address.script_pubkey(),
+            value: Amount::from_sat(10000),
+        }),
+        tap_internal_key: Some(buyer_internal_key),
+        ..Default::default()
+    });
+    // Ensure seller is paid 600 sats as in original test
+    buyer_psbt.unsigned_tx.output.push(TxOut {
+        value: Amount::from_sat(600),
+        script_pubkey: seller_address.script_pubkey(),
+    });
 
     // Define the prevouts explicitly in the same order as inputs
     let prevouts = [
