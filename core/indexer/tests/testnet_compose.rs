@@ -221,12 +221,20 @@ async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
             .tap_script
             .clone();
 
-        // Sign multiple inputs of the commit transaction
-        let all_utxos: Vec<TxOut> = available_utxos
+        // Sign commit inputs with correctly ordered prevouts matching the selected inputs
+        let commit_prevouts: Vec<TxOut> = attach_tx
+            .input
             .iter()
-            .map(|(_, utxo)| utxo.clone())
+            .map(|txin| {
+                let op = txin.previous_output;
+                available_utxos
+                    .iter()
+                    .find(|(outpoint, _)| outpoint.txid == op.txid && outpoint.vout == op.vout)
+                    .map(|(_, utxo)| utxo.clone())
+                    .expect("matching prevout for commit input")
+            })
             .collect();
-        test_utils::sign_multiple_key_spend(&secp, &mut attach_tx, &all_utxos, &keypair)?;
+        test_utils::sign_multiple_key_spend(&secp, &mut attach_tx, &commit_prevouts, &keypair)?;
 
         // Sign the script_spend input for the reveal transaction
         let spend_tx_prevouts = vec![attach_tx.output[0].clone()];

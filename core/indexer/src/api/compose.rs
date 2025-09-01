@@ -509,10 +509,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             value: Amount::from_sat(script_value),
             script_pubkey: script_spendable_address.script_pubkey(),
         });
-        // Recompute fee more precisely by sizing current tx and a tx with one extra change output,
-        // then subtracting the base-sized fee to get exact delta for change.
-        let base_vb = tx_vbytes_est(&commit_psbt.unsigned_tx);
-        let base_fee = params.fee_rate.fee_vb(base_vb).expect("fee calc").to_sat();
+        // Recompute fees precisely: compare base (no change) vs with-change.
         let mut with_change = commit_psbt.unsigned_tx.clone();
         with_change.output.push(TxOut {
             value: Amount::from_sat(0),
@@ -524,12 +521,14 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             .fee_vb(with_change_vb)
             .expect("fee calc")
             .to_sat();
-        let change_fee_delta = with_change_fee.saturating_sub(base_fee);
-        let required_total = script_value.saturating_add(change_fee_delta);
-        let change_value = selected_sum.saturating_sub(required_total);
-        if change_value > params.envelope {
+
+        // If we do NOT add change, miner fee will be: selected_sum - script_value - base_fee.
+        // If we DO add change, change amount equals: selected_sum - script_value - with_change_fee.
+        let change_candidate =
+            selected_sum.saturating_sub(script_value.saturating_add(with_change_fee));
+        if change_candidate >= params.envelope {
             commit_psbt.unsigned_tx.output.push(TxOut {
-                value: Amount::from_sat(change_value),
+                value: Amount::from_sat(change_candidate),
                 script_pubkey: addr.address.script_pubkey(),
             });
         }
@@ -706,19 +705,37 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 script_pubkey: ScriptBuf::from_bytes(vec![0; 34]),
             });
         }
-        if let Some(change_i) = calculate_change(
+        if let Some(v) = calculate_change(
             f_for_index(i),
             single_input,
             owner_outputs,
             params.fee_rate,
             false,
-        )
-        .and_then(|v| (v > params.envelope).then_some(v))
-        {
-            reveal_transaction.output.push(TxOut {
-                value: Amount::from_sat(change_i),
-                script_pubkey: p.address.script_pubkey(),
-            });
+        ) {
+            if params.chained_script_data.is_some() {
+                if v > params.envelope {
+                    reveal_transaction.output.push(TxOut {
+                        value: Amount::from_sat(v),
+                        script_pubkey: p.address.script_pubkey(),
+                    });
+                }
+            } else if v >= MIN_ENVELOPE_SATS {
+                reveal_transaction.output.push(TxOut {
+                    value: Amount::from_sat(v),
+                    script_pubkey: p.address.script_pubkey(),
+                });
+            } else {
+                // Fallback: add OP_RETURN to avoid empty/dust outputs when payout cannot meet dust
+                reveal_transaction.output.push(TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: {
+                        let mut s = ScriptBuf::new();
+                        s.push_opcode(OP_RETURN);
+                        s.push_slice(b"kon");
+                        s
+                    },
+                });
+            }
         }
     }
 

@@ -66,7 +66,7 @@ async fn test_signature_replay_failse() -> Result<()> {
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
         }])
         .script_data(serialized_token_balance.clone())
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .envelope(546)
         .build();
 
@@ -119,6 +119,7 @@ async fn test_signature_replay_failse() -> Result<()> {
         .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex])
         .await?;
 
+    println!("result: {:#?}", result);
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Commit transaction was rejected");
     assert!(result[1].allowed, "Reveal transaction was rejected");
@@ -143,7 +144,7 @@ async fn test_signature_replay_failse() -> Result<()> {
             funding_utxos: vec![(buyer_out_point, buyer_utxo_for_output.clone())],
         }])
         .script_data(serialized_token_balance)
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .envelope(546)
         .build();
 
@@ -420,7 +421,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
 
     let reveal_inputs = RevealInputs::builder()
         .commit_txid(attach_reveal_tx.compute_txid())
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .participants(vec![RevealParticipantInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
@@ -489,6 +490,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         3,
         "Expected exactly three transaction results"
     );
+    println!("result: {:#?}", result);
     assert!(result[0].reject_reason.is_none());
     assert!(result[1].reject_reason.is_none());
     assert!(result[2].reject_reason.is_some());

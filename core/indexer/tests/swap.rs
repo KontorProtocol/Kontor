@@ -92,7 +92,7 @@ async fn test_psbt_inscription() -> Result<()> {
             funding_utxos: vec![(outpoint, txout)],
         }])
         .script_data(serialized_token_balance)
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .chained_script_data(serialized_detach_data.clone())
         .envelope(546)
         .build();
@@ -294,11 +294,32 @@ async fn test_psbt_inscription() -> Result<()> {
     let mut buyer_psbt = buyer_reveal_outputs.psbt;
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
-    buyer_psbt.inputs[1].witness_utxo = Some(TxOut {
-        script_pubkey: buyer_address.script_pubkey(),
-        value: Amount::from_sat(10000),
+    buyer_psbt.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint {
+            txid: Txid::from_str(
+                "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
+            )?,
+            vout: 0,
+        },
+        ..Default::default()
     });
-    buyer_psbt.inputs[1].tap_internal_key = Some(buyer_internal_key);
+    buyer_psbt.inputs.push(Input {
+        witness_utxo: Some(TxOut {
+            script_pubkey: buyer_address.script_pubkey(),
+            value: Amount::from_sat(10000),
+        }),
+        tap_internal_key: Some(buyer_internal_key),
+        ..Default::default()
+    });
+
+    // Ensure seller is paid 600 sats at output index 0 to satisfy SIGHASH_SINGLE
+    buyer_psbt.unsigned_tx.output.insert(
+        0,
+        TxOut {
+            value: Amount::from_sat(600),
+            script_pubkey: seller_address.script_pubkey(),
+        },
+    );
 
     // Define the prevouts explicitly in the same order as inputs
     let prevouts = [
@@ -319,6 +340,8 @@ async fn test_psbt_inscription() -> Result<()> {
     let result = client
         .test_mempool_accept(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
         .await?;
+
+    println!("result: {:#?}", result);
 
     assert_eq!(
         result.len(),

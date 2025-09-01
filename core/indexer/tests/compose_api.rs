@@ -380,6 +380,7 @@ async fn test_compose_all_fields() -> Result<()> {
     let result = bitcoin_client
         .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex])
         .await?;
+
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Commit transaction was rejected");
     assert!(result[1].allowed, "Reveal transaction was rejected");
