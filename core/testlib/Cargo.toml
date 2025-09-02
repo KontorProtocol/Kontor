@@ -12,3 +12,5 @@ indexer = { path = "../indexer" }
 anyhow = { workspace = true }
 libsql = { workspace = true }
 bon = { workspace = true }
+tokio = { workspace = true }
+glob = "0.3.3"
