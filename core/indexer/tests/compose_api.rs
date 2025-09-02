@@ -235,7 +235,7 @@ async fn test_compose_all_fields() -> Result<()> {
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2&change_output=true&envelope=600&chained_script_data={}",
+            "/compose?addresses={}&script_data={}&sat_per_vbyte=2&envelope=600&chained_script_data={}",
             urlencoding::encode(&addresses_b64),
             urlencoding::encode(&token_data_base64),
             urlencoding::encode(&_chained_script_data_base64),
@@ -424,7 +424,7 @@ async fn test_compose_missing_params() -> Result<()> {
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2&change_output=true&envelope=600&chained_script_data=",
+            "/compose?addresses={}&sat_per_vbyte=2&envelope=600&chained_script_data=",
             urlencoding::encode(&addresses_b64),
             // no script_data on purpose
         ))
