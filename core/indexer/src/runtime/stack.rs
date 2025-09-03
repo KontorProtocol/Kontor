@@ -9,7 +9,7 @@ pub enum StackError {
     CycleDetected(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Stack<T> {
     inner: Arc<Mutex<Vec<T>>>,
 }

@@ -25,10 +25,10 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     let field_wrapper_name = Ident::new(&format!("{}{}Wrapper", type_name, &field_name.to_string().to_pascal_case()), field.span());
 
                     let (get_return, get_body) = if utils::is_primitive_type(&v_ty) {
-                        (quote! { Option<#v_ty> }, quote! { ctx.__get(self.base_path.push(key.to_string())) })
+                        (quote! { Option<#v_ty> }, quote! { ctx.__get(base_path) })
                     } else {
                         let v_wrapper_ty = get_wrapper_ident(&v_ty, field.span())?;
-                        (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path.push(key.to_string())).then(|| #v_wrapper_ty::new(ctx, base_path.push(key.to_string()))) })
+                        (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path)) })
                     };
 
                     special_wrappers.push(quote! {
@@ -38,7 +38,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         }
 
                         impl #field_wrapper_name {
-                            pub fn get(&self, ctx: &impl stdlib::ReadContext, key: #k_ty) -> #get_return {
+                            pub fn get(&self, ctx: &impl stdlib::ReadContext, key: impl ToString) -> #get_return {
                                 let base_path = self.base_path.push(key.to_string());
                                 #get_body
                             }

@@ -38,6 +38,12 @@ pub fn generate_functions(
             let signer_ty = quote! { &str };
             params.insert(1, quote! { #signer_name: #signer_ty });
         }
+    } else if is_proc_context {
+        let signer_name = Ident::new("signer", Span::call_site());
+        let signer_ty = quote! { foreign::Signer };
+        params[0] = quote! { #signer_name: #signer_ty };
+    } else {
+        params.remove(0);
     }
 
     let mut ret_ty = match &export.result {
@@ -98,11 +104,7 @@ pub fn generate_functions(
     }
 
     let ctx_signer = if is_proc_context {
-        if test {
-            quote! { Some(signer) }
-        } else {
-            quote! { Some(&ctx.signer()) }
-        }
+        quote! { Some(signer) }
     } else {
         quote! { None }
     };

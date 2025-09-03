@@ -74,11 +74,10 @@ impl FibStorageCacheWrapper {
     pub fn get(
         &self,
         ctx: &impl stdlib::ReadContext,
-        key: u64,
+        key: impl ToString,
     ) -> Option<FibValueWrapper> {
         let base_path = self.base_path.push(key.to_string());
-        ctx.__exists(&base_path.push(key.to_string()))
-            .then(|| FibValueWrapper::new(ctx, base_path.push(key.to_string())))
+        ctx.__exists(&base_path).then(|| FibValueWrapper::new(ctx, base_path))
     }
     pub fn set(&self, ctx: &impl stdlib::WriteContext, key: u64, value: FibValue) {
         ctx.__set(self.base_path.push(key.to_string()), value)

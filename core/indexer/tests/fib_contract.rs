@@ -1,3 +1,4 @@
+use indexer::logging;
 use testlib::*;
 
 import!(
@@ -44,6 +45,7 @@ import!(
 
 #[tokio::test]
 async fn test_fib_contract() -> Result<()> {
+    logging::setup();
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let signer = "test_signer";
@@ -107,7 +109,7 @@ async fn test_fib_contract() -> Result<()> {
     assert_eq!(result, Err(Error::Message("less than 0".to_string())));
 
     // reentrancy prevented
-    let result = arith::fib(&runtime, signer, n).await;
+    let result = arith::fib(&runtime, signer, 9).await;
     assert!(result.is_err_and(|e| e.root_cause().to_string().contains("reentrancy prevented")));
 
     Ok(())

@@ -25,7 +25,7 @@ impl Fib {
             0 | 1 => n,
             _ => {
                 arith::eval(
-                    ctx,
+                    ctx.signer(),
                     Self::raw_fib(ctx, n - 1),
                     arith::Op::Sum(arith::Operand {
                         y: Self::raw_fib(ctx, n - 2),
@@ -52,7 +52,7 @@ impl Guest for Fib {
     }
 
     fn fib_of_sub(ctx: &ProcContext, x: String, y: String) -> Result<u64, Error> {
-        let n = arith::checked_sub(&ctx.view_context(), &x, &y)?;
+        let n = arith::checked_sub(&x, &y)?;
         Ok(Fib::fib(ctx, n))
     }
 }

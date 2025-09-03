@@ -2,24 +2,21 @@ use stdlib::*;
 
 contract!(name = "token");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Default, Store, Wrapper, Root)]
 struct TokenStorage {
     pub ledger: Map<String, u64>,
 }
 
 impl Guest for Token {
     fn init(ctx: &ProcContext) {
-        TokenStorage {
-            ledger: Map::default(),
-        }
-        .init(ctx);
+        TokenStorage::default().init(ctx);
     }
 
     fn mint(ctx: &ProcContext, n: u64) {
         let to = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();
 
-        let balance = ledger.get(ctx, to.clone()).unwrap_or_default();
+        let balance = ledger.get(ctx, &to).unwrap_or_default();
         ledger.set(ctx, to, balance + n);
     }
 
@@ -27,8 +24,8 @@ impl Guest for Token {
         let from = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();
 
-        let from_balance = ledger.get(ctx, from.clone()).unwrap_or_default();
-        let to_balance = ledger.get(ctx, to.clone()).unwrap_or_default();
+        let from_balance = ledger.get(ctx, &from).unwrap_or_default();
+        let to_balance = ledger.get(ctx, &to).unwrap_or_default();
 
         if from_balance < n {
             return Err(Error::Message("insufficient funds".to_string()));

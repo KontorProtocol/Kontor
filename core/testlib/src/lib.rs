@@ -7,6 +7,7 @@ use indexer::{
     database::{queries::insert_block, types::BlockRow},
     runtime::{
         ComponentCache, Runtime as IndexerRuntime, Storage, load_contracts, load_native_contracts,
+        wit::Signer,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
@@ -142,6 +143,12 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        self.runtime.execute(signer, contract_address, expr).await
+        self.runtime
+            .execute(
+                signer.map(|s| Signer::XOnlyPubKey(s.to_string())),
+                contract_address,
+                expr,
+            )
+            .await
     }
 }

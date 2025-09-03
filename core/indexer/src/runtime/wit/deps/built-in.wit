@@ -9,6 +9,7 @@ interface context {
         get-str: func(path: string) -> option<string>;
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
         is-void: func(path: string) -> bool;
         exists: func(path: string) -> bool;
         matching-path: func(regexp: string) -> option<string>;
@@ -18,6 +19,7 @@ interface context {
         get-str: func(path: string) -> option<string>;
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
         is-void: func(path: string) -> bool;
         exists: func(path: string) -> bool;
         matching-path: func(regexp: string) -> option<string>;
@@ -25,9 +27,11 @@ interface context {
         set-str: func(path: string, value: string);
         set-u64: func(path: string, value: u64);
         set-s64: func(path: string, value: s64);
+        set-bool: func(path: string, value: bool);
         set-void: func(path: string);
 
         signer: func() -> signer;
+        contract-signer: func() -> signer;
         view-context: func() -> view-context;
     }
 
@@ -47,7 +51,7 @@ interface foreign {
         tx-index: s64,
     }
 
-    call: func(signer: option<borrow<signer>>, contract-address: contract-address, expr: string) -> string;
+    call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
 
 interface crypto {

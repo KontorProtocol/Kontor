@@ -59,6 +59,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
                 self.get_s64(path)
             }
 
+            fn __get_bool(&self, path: &str) -> Option<bool> {
+                self.get_bool(path)
+            }
+
             fn __exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
@@ -90,6 +94,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
                 self.get_s64(path)
             }
 
+            fn __get_bool(&self, path: &str) -> Option<bool> {
+                self.get_bool(path)
+            }
+
             fn __exists(&self, path: &str) -> bool {
                 self.exists(path)
             }
@@ -119,6 +127,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
             fn __set_s64(&self, path: &str, value: i64) {
                 self.set_s64(path, value)
+            }
+
+            fn __set_bool(&self, path: &str, value: bool) {
+                self.set_bool(path, value)
             }
 
             fn __set_void(&self, path: &str) {
