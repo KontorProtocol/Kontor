@@ -42,6 +42,6 @@ impl Guest for Arith {
 
     // for cycle detection test
     fn fib(ctx: &ProcContext, n: u64) -> u64 {
-        fib::fib(ctx, n)
+        fib::fib(ctx.signer(), n)
     }
 }

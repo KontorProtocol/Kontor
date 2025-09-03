@@ -47,7 +47,7 @@ interface foreign {
         tx-index: s64,
     }
 
-    call: func(signer: option<borrow<signer>>, contract-address: contract-address, expr: string) -> string;
+    call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
 
 interface crypto {
