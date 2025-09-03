@@ -29,7 +29,7 @@ const MAX_SCRIPT_BYTES: usize = 16 * 1024; // 16 KiB
 const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ComposeAddressQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -488,6 +488,8 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             value: Amount::from_sat(script_value),
             script_pubkey: script_spendable_address.script_pubkey(),
         });
+        // Maintain PSBT outputs array in sync with transaction outputs
+        commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         // Recompute fees precisely: compare base (no change) vs with-change.
         let mut with_change = commit_psbt.unsigned_tx.clone();
         with_change.output.push(TxOut {
@@ -510,6 +512,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                 value: Amount::from_sat(change_candidate),
                 script_pubkey: addr.address.script_pubkey(),
             });
+            commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         }
 
         // Record mapping
@@ -535,8 +538,11 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     let commit_psbt_hex = commit_psbt.serialize_hex();
 
     // Build reveal inputs here for convenience
+    use std::collections::HashMap;
     let commit_txid = commit_transaction.compute_txid();
     let mut participants: Vec<RevealParticipantInputs> = Vec::with_capacity(params.addresses.len());
+    // Track how many times we've assigned a given script_pubkey to ensure unique vout selection
+    let mut spk_usage_counts: HashMap<ScriptBuf, u32> = HashMap::new();
     for (idx, a) in params.addresses.iter().enumerate() {
         let pair = &per_participant_tap[idx];
         let (_tap, _info, script_addr) = build_tap_script_and_script_address(
@@ -544,12 +550,26 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             pair.script_data_chunk.clone(),
         )?;
         let spk = script_addr.script_pubkey();
+        let desired_occurrence = *spk_usage_counts.get(&spk).unwrap_or(&0);
+        let mut seen = 0u32;
         let vout = commit_transaction
             .output
             .iter()
-            .position(|o| o.script_pubkey == spk)
-            .ok_or_else(|| anyhow!("failed to locate commit vout for {}", a.address))?
-            as u32;
+            .enumerate()
+            .find_map(|(i, o)| {
+                if o.script_pubkey == spk {
+                    if seen == desired_occurrence {
+                        Some(i as u32)
+                    } else {
+                        seen += 1;
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow!("failed to locate unique commit vout for {}", a.address))?;
+        *spk_usage_counts.entry(spk.clone()).or_insert(0) += 1;
         let commit_outpoint = OutPoint {
             txid: commit_txid,
             vout,
