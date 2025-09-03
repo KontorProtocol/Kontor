@@ -25,8 +25,8 @@ use std::{
 use wit::kontor::*;
 
 pub use wit::kontor::built_in::error::Error;
-pub use wit::kontor::built_in::numbers::Integer;
 pub use wit::kontor::built_in::foreign::ContractAddress;
+pub use wit::kontor::built_in::numbers::Integer;
 
 use anyhow::{Result, anyhow};
 use wasm_wave::{self, wasm::WasmValue as _};
@@ -466,19 +466,7 @@ impl built_in::crypto::Host for Runtime {
 }
 
 impl built_in::numbers::Host for Runtime {
-}
-
-impl built_in::numbers::HostInteger for Runtime {
-    async fn drop(&mut self, resource: Resource<Integer>) -> Result<()> {
-        let _res = self.table.lock().await.delete(resource)?;
-        Ok(())
-    }
-
-    async fn add(
-        &mut self,
-        a: Resource<Integer>,
-        _b: Resource<Integer>,
-    ) -> Result<Resource<Integer>, anyhow::Error> {
+    async fn add(&mut self, a: Integer, _b: Integer) -> Result<Integer, anyhow::Error> {
         Ok(a)
     }
 }

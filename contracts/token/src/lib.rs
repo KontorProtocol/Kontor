@@ -1,8 +1,9 @@
 use stdlib::*;
+use crate::numbers::IntegerWrapper;
 
 contract!(name = "token");
 
-#[derive(Clone, Store, Wrapper, Root)]
+#[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<String, Integer>,
 }
@@ -20,7 +21,7 @@ impl Guest for Token {
         let ledger = storage(ctx).ledger();
 
         let balance = ledger.get(ctx, to.clone()).unwrap_or_default();
-        ledger.set(ctx, to, Integer::add(balance, n));
+        ledger.set(ctx, to, numbers::add(balance, &n));
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: u64) -> Result<(), Error> {

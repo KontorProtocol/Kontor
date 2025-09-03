@@ -26,8 +26,6 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
 
                     let (get_return, get_body) = if utils::is_primitive_type(&v_ty) {
                         (quote! { Option<#v_ty> }, quote! { ctx.__get(self.base_path.push(key.to_string())) })
-                    } else if utils::is_native_type(&v_ty) {
-                        (quote! { Option<#v_ty> }, quote! { ctx.__get(self.base_path.push(key.to_string())) })
                     } else {
                         let v_wrapper_ty = get_wrapper_ident(&v_ty, field.span())?;
                         (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path.push(key.to_string())).then(|| #v_wrapper_ty::new(ctx, base_path.push(key.to_string()))) })

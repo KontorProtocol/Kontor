@@ -65,9 +65,11 @@ interface error {
 }
 
 interface numbers {
-    resource integer {
-        add: static func(a: integer, b: integer) -> integer;
+    record integer {
+		value: string,
     }
+
+	add: func(a: integer, b: integer) -> integer;
 }
 
 world built-in {

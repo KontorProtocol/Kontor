@@ -1,6 +1,6 @@
 mod resources;
 
-pub use resources::{FallContext, HasContractId, Integer, ProcContext, Signer, ViewContext};
+pub use resources::{FallContext, HasContractId, ProcContext, Signer, ViewContext};
 
 wasmtime::component::bindgen!({
     world: "contract",
@@ -10,7 +10,6 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context/view-context": ViewContext,
         "kontor:built-in/context/proc-context": ProcContext,
         "kontor:built-in/context/fall-context": FallContext,
-        "kontor:built-in/numbers/integer": Integer,
     },
     additional_derives: [PartialEq, Eq],
     imports: {

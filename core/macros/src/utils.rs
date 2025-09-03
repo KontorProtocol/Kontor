@@ -41,15 +41,6 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
     }
 }
 
-pub fn is_native_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        let segment = type_path.path.segments.last().map(|s| s.ident.to_string());
-        matches!(segment.as_deref(), Some("Integer"))
-    } else {
-        false
-    }
-}
-
 pub fn is_map_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         type_path
