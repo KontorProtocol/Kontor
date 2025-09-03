@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 macros = { path = "../macros" }
-indexer = { path = "../indexer" }
 wasm-wave = { version = "0.238"}
 
 [dev-dependencies]

@@ -4,7 +4,7 @@ contract!(name = "token");
 
 #[derive(Clone, Store, Wrapper, Root)]
 struct TokenStorage {
-    pub ledger: Map<String, u64>,
+    pub ledger: Map<String, Integer>,
 }
 
 impl Guest for Token {
@@ -15,12 +15,12 @@ impl Guest for Token {
         .init(ctx);
     }
 
-    fn mint(ctx: &ProcContext, n: u64) {
+    fn mint(ctx: &ProcContext, n: Integer) {
         let to = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();
 
         let balance = ledger.get(ctx, to.clone()).unwrap_or_default();
-        ledger.set(ctx, to, balance + n);
+        ledger.set(ctx, to, Integer::add(balance, n));
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: u64) -> Result<(), Error> {

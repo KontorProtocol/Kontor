@@ -2,7 +2,6 @@ mod dot_path_buf;
 mod storage_interface;
 
 pub use dot_path_buf::*;
-pub use indexer::runtime::wit::kontor::built_in::numbers::Integer;
 pub use macros::{Root, Storage, StorageRoot, Store, Wavey, Wrapper, contract, import};
 pub use storage_interface::*;
 pub use wasm_wave;

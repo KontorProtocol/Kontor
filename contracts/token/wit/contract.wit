@@ -4,6 +4,7 @@ world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{view-context, proc-context, signer};
     use kontor:built-in/error.{error};
+    use kontor:built-in/numbers.{integer};
 
     export init: func(ctx: borrow<proc-context>);
 
