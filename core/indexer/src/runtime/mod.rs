@@ -19,9 +19,9 @@ pub use types::default_val_for_type;
 pub use wit::Contract;
 
 use std::{
+    cmp::Ordering,
     io::{Cursor, Read},
     sync::Arc,
-    cmp::Ordering,
 };
 
 use wit::kontor::*;
@@ -96,8 +96,35 @@ impl From<wasm_wave::value::Value> for Error {
 
 impl Integer {
     pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::variant([("message", Some(wasm_wave::value::Type::STRING))])
-            .unwrap()
+        wasm_wave::value::Type::STRING
+    }
+}
+
+impl fmt::Display for Integer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl From<Integer> for wasm_wave::value::Value {
+    fn from(value_: Integer) -> Self {
+        wasm_wave::value::Value::from(value_.value)
+    }
+}
+
+impl From<wasm_wave::value::Value> for Integer {
+    fn from(value_: wasm_wave::value::Value) -> Self {
+        Integer {
+            value: value_.unwrap_string().into_owned(),
+        }
+    }
+}
+
+impl From<i64> for Integer {
+    fn from(value_: i64) -> Self {
+        Integer {
+            value: value_.to_string(),
+        }
     }
 }
 
@@ -762,12 +789,16 @@ impl built_in::numbers::Host for Runtime {
     async fn add(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
         let big_a = a.value.parse::<BigInt>()?;
         let big_b = b.value.parse::<BigInt>()?;
-        Ok(Integer{ value: (big_a + big_b).to_string() })
+        Ok(Integer {
+            value: (big_a + big_b).to_string(),
+        })
     }
 
     async fn sub(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
         let big_a = a.value.parse::<BigInt>()?;
         let big_b = b.value.parse::<BigInt>()?;
-        Ok(Integer{ value: (big_a - big_b).to_string() })
+        Ok(Integer {
+            value: (big_a - big_b).to_string(),
+        })
     }
 }

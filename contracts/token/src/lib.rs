@@ -1,4 +1,3 @@
-use crate::numbers::IntegerWrapper;
 use stdlib::*;
 
 contract!(name = "token");

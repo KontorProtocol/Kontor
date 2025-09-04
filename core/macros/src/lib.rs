@@ -45,6 +45,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         use std::{cmp::Ordering, ops::{Add, Sub}};
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
+        use kontor::built_in::numbers::IntegerWrapper;
 
         #[automatically_derived]
         impl ReadContext for context::ViewContext {
@@ -487,6 +488,7 @@ pub fn import(input: TokenStream) -> TokenStream {
                 "proc-context",
                 "signer",
                 "error",
+                "integer",
             ]
             .contains(&name)
         } else {
@@ -518,6 +520,7 @@ pub fn import(input: TokenStream) -> TokenStream {
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
+            use indexer::runtime::numbers::Integer;
         }
     } else {
         quote! {
@@ -525,6 +528,7 @@ pub fn import(input: TokenStream) -> TokenStream {
             use super::foreign;
             use super::foreign::ContractAddress;
             use super::error::Error;
+            use indexer::runtime::numbers::Integer;
         }
     };
 
@@ -612,6 +616,29 @@ pub fn import(input: TokenStream) -> TokenStream {
                             Error::Message(val_.unwrap().unwrap_string().into_owned())
                         }
                         key_ => panic!("Unknown tag {}", key_),
+                    }
+                }
+            }
+
+            #[automatically_derived]
+            impl Integer {
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::STRING
+                }
+            }
+
+            #[automatically_derived]
+            impl From<Integer> for stdlib::wasm_wave::value::Value {
+                fn from(value_: Integer) -> Self {
+                    stdlib::wasm_wave::value::Value::from(value_.value)
+                }
+            }
+
+            #[automatically_derived]
+            impl From<stdlib::wasm_wave::value::Value> for Integer {
+                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                    Integer {
+                        value: value_.unwrap_string().into_owned(),
                     }
                 }
             }
