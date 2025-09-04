@@ -9,8 +9,10 @@ use bitcoin::{FeeRate, TapSighashType};
 use clap::Parser;
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
+use bitcoin::Psbt;
 use indexer::api::compose::{ComposeAddressInputs, ComposeInputs};
 use indexer::config::TestConfig;
+use indexer::multi_psbt_test_utils::{get_node_addresses, mock_fetch_utxos_for_addresses};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
 use indexer::{bitcoin_client::Client, config::Config};
@@ -157,6 +159,98 @@ async fn test_taproot_transaction() -> Result<()> {
     assert!(result[0].allowed, "Commit transaction was rejected");
     assert!(result[1].allowed, "Reveal transaction was rejected");
     assert!(result[2].allowed, "Chained reveal transaction was rejected");
+
+    Ok(())
+}
+
+#[test]
+fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
+    let cfg = TestConfig::try_parse_from(["test"])?;
+    let secp = bitcoin::key::Secp256k1::new();
+    let (nodes, _secrets) = get_node_addresses(&secp, &cfg)?;
+    let utxos = mock_fetch_utxos_for_addresses(&nodes);
+
+    let mut addresses = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        addresses.push(indexer::api::compose::ComposeAddressInputs {
+            address: n.address.clone(),
+            x_only_public_key: n.internal_key,
+            funding_utxos: vec![utxos[i].clone()],
+        });
+    }
+
+    let params = ComposeInputs::builder()
+        .addresses(addresses.clone())
+        .script_data(b"hello-world".to_vec())
+        .fee_rate(bitcoin::FeeRate::from_sat_per_vb(2).unwrap())
+        .envelope(600)
+        .build();
+
+    let outputs = compose(params)?;
+
+    assert_eq!(outputs.per_participant.len(), addresses.len());
+    for (i, p) in outputs.per_participant.iter().enumerate() {
+        assert_eq!(p.index as usize, i);
+        assert_eq!(p.address, addresses[i].address.to_string());
+        assert_eq!(
+            p.x_only_public_key,
+            addresses[i].x_only_public_key.to_string()
+        );
+    }
+
+    // Decode PSBTs
+    let commit_psbt: Psbt = Psbt::deserialize(&hex::decode(&outputs.commit_psbt_hex)?)?;
+    let reveal_psbt: Psbt = Psbt::deserialize(&hex::decode(&outputs.reveal_psbt_hex)?)?;
+
+    // Txids match between PSBTs and returned transactions
+    assert_eq!(
+        commit_psbt.unsigned_tx.compute_txid(),
+        outputs.commit_transaction.compute_txid()
+    );
+    assert_eq!(
+        reveal_psbt.unsigned_tx.compute_txid(),
+        outputs.reveal_transaction.compute_txid()
+    );
+
+    // Inputs/outputs counts are consistent
+    assert_eq!(
+        commit_psbt.inputs.len(),
+        outputs.commit_transaction.input.len()
+    );
+    assert_eq!(
+        commit_psbt.outputs.len(),
+        outputs.commit_transaction.output.len()
+    );
+    assert_eq!(
+        reveal_psbt.inputs.len(),
+        outputs.reveal_transaction.input.len()
+    );
+    assert_eq!(
+        reveal_psbt.outputs.len(),
+        outputs.reveal_transaction.output.len()
+    );
+
+    // Required PSBT metadata is present
+    assert!(commit_psbt.inputs.iter().all(|i| i.witness_utxo.is_some()));
+    assert!(
+        commit_psbt
+            .inputs
+            .iter()
+            .all(|i| i.tap_internal_key.is_some())
+    );
+    assert!(reveal_psbt.inputs.iter().all(|i| i.witness_utxo.is_some()));
+    assert!(
+        reveal_psbt
+            .inputs
+            .iter()
+            .all(|i| i.tap_internal_key.is_some())
+    );
+    assert!(
+        reveal_psbt
+            .inputs
+            .iter()
+            .all(|i| i.tap_merkle_root.is_some())
+    );
 
     Ok(())
 }
