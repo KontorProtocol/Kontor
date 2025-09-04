@@ -870,7 +870,6 @@ pub fn estimate_reveal_fee_for_address(
     if let Some(cb) = tap_info.control_block(&(tap_script.clone(), LeafVersion::TapScript)) {
         w.push(cb.serialize());
     } else {
-        // If control block cannot be created, fall back to zero fee estimate
         return Err(anyhow!("failed to create control block"));
     }
     dummy.input[0].witness = w;
