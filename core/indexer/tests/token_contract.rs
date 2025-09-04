@@ -1,5 +1,5 @@
-use testlib::*;
 use fastnum::dec256;
+use testlib::*;
 
 import!(
     name = "token",
