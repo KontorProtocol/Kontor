@@ -12,7 +12,7 @@ use indexer::{
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::Connection;
-pub use stdlib::import;
+pub use stdlib::{import, interface};
 
 use anyhow::anyhow;
 pub use anyhow::{Error as AnyhowError, Result};

@@ -1,3 +1,5 @@
+use std::fs;
+
 use crate::transformers;
 
 use anyhow::Result;
@@ -5,14 +7,109 @@ use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
-use wit_parser::{Enum, Function, Record, Resolve, Type, TypeDefKind, Variant};
+use wit_parser::{
+    Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
+};
+
+pub fn import(
+    path: String,
+    module_name: Ident,
+    world_name: String,
+    contract_id: Option<(&str, i64, i64)>,
+    test: bool,
+) -> TokenStream {
+    assert!(fs::metadata(&path).is_ok());
+    let mut resolve = Resolve::new();
+    resolve.push_dir(&path).unwrap();
+
+    let (_world_id, world) = resolve
+        .worlds
+        .iter()
+        .find(|(_, w)| w.name == world_name)
+        .unwrap();
+
+    let exports = world
+        .exports
+        .iter()
+        .filter_map(|e| match e {
+            (WorldKey::Name(name), WorldItem::Function(f))
+                if !["init"].contains(&name.as_str()) =>
+            {
+                Some(f)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut type_streams = Vec::new();
+    for (_id, def) in resolve.types.iter().filter(|(_, def)| {
+        if let Some(name) = def.name.as_deref() {
+            ![
+                "contract-address",
+                "view-context",
+                "fall-context",
+                "proc-context",
+                "signer",
+                "error",
+            ]
+            .contains(&name)
+        } else {
+            false
+        }
+    }) {
+        let name = def.name.as_deref().expect("Filtered types have names");
+        let stream = match &def.kind {
+            TypeDefKind::Record(record) => print_typedef_record(&resolve, name, record),
+            TypeDefKind::Enum(enum_) => print_typedef_enum(name, enum_),
+            TypeDefKind::Variant(variant) => print_typedef_variant(&resolve, name, variant),
+            _ => panic!("Unsupported type definition kind: {:?}", def.kind),
+        }
+        .expect("Failed to generate type");
+        type_streams.push(stream);
+    }
+
+    let mut func_streams = Vec::new();
+    for export in exports {
+        func_streams.push(
+            generate_functions(&resolve, test, export, contract_id)
+                .expect("Function didn't generate"),
+        )
+    }
+
+    let supers = if test {
+        quote! {
+            use super::ContractAddress;
+            use super::Error;
+            use super::AnyhowError;
+            use super::Runtime;
+        }
+    } else {
+        quote! {
+            use super::context;
+            use super::foreign;
+            use super::foreign::ContractAddress;
+            use super::error::Error;
+        }
+    };
+
+    quote! {
+        mod #module_name {
+            use stdlib::wasm_wave::wasm::WasmValue as _;
+            use stdlib::Wavey;
+
+            #supers
+
+            #(#type_streams)*
+            #(#func_streams)*
+        }
+    }
+}
 
 pub fn generate_functions(
     resolve: &Resolve,
     test: bool,
     export: &Function,
-    height: i64,
-    tx_index: i64,
+    contract_id: Option<(&str, i64, i64)>,
 ) -> Result<TokenStream> {
     let fn_name = Ident::new(&export.name.to_snake_case(), Span::call_site());
     let mut params = export
@@ -45,6 +142,22 @@ pub fn generate_functions(
     } else {
         params.remove(0);
     }
+
+    let contract_arg = if let Some((name, height, tx_index)) = contract_id {
+        quote! {
+            &ContractAddress {
+                name: #name.to_string(),
+                height: #height,
+                tx_index: #tx_index,
+            }
+        }
+    } else {
+        params.insert(
+            if test { 1 } else { 0 },
+            quote! { contract_address: &ContractAddress },
+        );
+        quote! { contract_address }
+    };
 
     let mut ret_ty = match &export.result {
         Some(ty) => transformers::wit_type_to_rust_type(resolve, ty, false)?,
@@ -133,11 +246,7 @@ pub fn generate_functions(
             let expr = #expr;
             let ret = #execute(
                 #ctx_signer,
-                &ContractAddress {
-                    name: CONTRACT_NAME.to_string(),
-                    height: #height,
-                    tx_index: #tx_index,
-                },
+                #contract_arg,
                 expr.as_str(),
             )#awaited;
             #ret_expr

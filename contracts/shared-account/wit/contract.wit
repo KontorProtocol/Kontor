@@ -4,12 +4,19 @@ world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{view-context, proc-context, signer};
     use kontor:built-in/error.{error};
+    use kontor:built-in/foreign.{contract-address};
 
     export init: func(ctx: borrow<proc-context>);
 
     export open: func(ctx: borrow<proc-context>, n: u64, other-tenants: list<string>) -> result<string, error>;
+
     export deposit: func(ctx: borrow<proc-context>, account-id: string, n: u64) -> result<_, error>;
+
     export withdraw: func(ctx: borrow<proc-context>, account-id: string, n: u64) -> result<_, error>;
+
     export balance: func(ctx: borrow<view-context>, account-id: string) -> option<u64>;
+
+    export token-balance: func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<u64>;
+
     export tenants: func(ctx: borrow<view-context>, account-id: string) -> option<list<string>>;
 }

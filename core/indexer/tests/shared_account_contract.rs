@@ -17,6 +17,12 @@ import!(
     test = true,
 );
 
+interface!(
+    name = "token-dyn",
+    path = "../contracts/token/wit",
+    test = true
+);
+
 #[tokio::test]
 async fn test_shared_account_contract() -> Result<()> {
     logging::setup();
@@ -55,6 +61,17 @@ async fn test_shared_account_contract() -> Result<()> {
 
     let result = shared_account::withdraw(&runtime, claire, &account_id, 1).await?;
     assert_eq!(result, Err(Error::Message("unauthorized".to_string())));
+
+    let token_address = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    let result = shared_account::token_balance(&runtime, token_address.clone(), alice).await?;
+    assert_eq!(result, Some(75));
+
+    let result = token_dyn::balance(&runtime, &token_address, bob).await?;
+    assert_eq!(result, Some(25));
 
     Ok(())
 }

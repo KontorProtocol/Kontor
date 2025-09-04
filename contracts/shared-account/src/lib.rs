@@ -4,6 +4,8 @@ contract!(name = "shared-account");
 
 import!(name = "token", height = 0, tx_index = 0, path = "token/wit");
 
+interface!(name = "token_dyn", path = "token/wit");
+
 #[derive(Clone, Default, Storage)]
 struct Account {
     pub other_tenants: Map<String, bool>,
@@ -104,6 +106,10 @@ impl Guest for SharedAccount {
             .accounts()
             .get(ctx, account_id)
             .map(|a| a.balance(ctx))
+    }
+
+    fn token_balance(_ctx: &ViewContext, token: ContractAddress, holder: String) -> Option<u64> {
+        token_dyn::balance(&token, &holder)
     }
 
     fn tenants(_ctx: &ViewContext, _account_id: String) -> Option<Vec<String>> {
