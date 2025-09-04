@@ -59,6 +59,12 @@ impl Store for String {
     }
 }
 
+impl Store for bool {
+    fn __set(ctx: &impl WriteContext, path: DotPathBuf, value: bool) {
+        ctx.__set_bool(&path, value);
+    }
+}
+
 impl Store for () {
     fn __set(ctx: &impl WriteContext, path: DotPathBuf, _: ()) {
         ctx.__set_void(&path);
@@ -80,5 +86,11 @@ impl Retrieve for i64 {
 impl Retrieve for String {
     fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
         ctx.__get_str(&path)
+    }
+}
+
+impl Retrieve for bool {
+    fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
+        ctx.__get_bool(&path)
     }
 }

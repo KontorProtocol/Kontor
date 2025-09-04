@@ -405,6 +405,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared-account"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -18,6 +18,10 @@ pub fn wit_type_to_unwrap_expr(resolve: &Resolve, ty: &WitType) -> anyhow::Resul
                     let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
                     Ok(quote! { unwrap_option().map(|v| v.into_owned().#inner_unwrap) })
                 }
+                TypeDefKind::List(inner) => {
+                    let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
+                    Ok(quote! { unwrap_list().map(|v| v.into_owned().#inner_unwrap).collect() })
+                }
                 TypeDefKind::Result(result) => {
                     let ok_unwrap = match result.ok {
                         Some(ok_ty) => {
@@ -69,6 +73,10 @@ pub fn wit_type_to_rust_type(
                     let inner_ty = wit_type_to_rust_type(resolve, inner, use_str)?;
                     Ok(quote! { Option<#inner_ty> })
                 }
+                TypeDefKind::List(inner) => {
+                    let inner_ty = wit_type_to_rust_type(resolve, inner, use_str)?;
+                    Ok(quote! { Vec<#inner_ty> })
+                }
                 TypeDefKind::Result(result) => {
                     let ok_ty = match result.ok {
                         Some(ty) => wit_type_to_rust_type(resolve, &ty, use_str)?,
@@ -118,6 +126,10 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
                 TypeDefKind::Option(inner) => {
                     let inner_ty = wit_type_to_wave_type(resolve, inner)?;
                     Ok(quote! { stdlib::wasm_wave::value::Type::option(#inner_ty) })
+                }
+                TypeDefKind::List(inner) => {
+                    let inner_ty = wit_type_to_wave_type(resolve, inner)?;
+                    Ok(quote! { stdlib::wasm_wave::value::Type::list(#inner_ty) })
                 }
                 TypeDefKind::Result(result) => {
                     let ok_ty = match result.ok {
@@ -169,6 +181,7 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
                 "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
                 "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
                 "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
+                "bool" => return Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
                 _ => (),
             }
         }
@@ -188,6 +201,7 @@ pub fn syn_type_to_unwrap_expr(ty: &SynType) -> syn::Result<TokenStream> {
                 "u64" => return Ok(quote! { unwrap_u64() }),
                 "i64" => return Ok(quote! { unwrap_s64() }),
                 "String" => return Ok(quote! { unwrap_string().into_owned() }),
+                "bool" => return Ok(quote! { unwrap_bool() }),
                 _ => {}
             }
         }

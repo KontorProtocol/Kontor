@@ -110,6 +110,12 @@ impl ContractAddress {
     }
 }
 
+impl fmt::Display for ContractAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}_{}_{}", self.name, self.height, self.tx_index)
+    }
+}
+
 impl From<ContractAddress> for wasm_wave::value::Value {
     fn from(value_: ContractAddress) -> Self {
         wasm_wave::value::Value::make_record(
@@ -233,7 +239,7 @@ impl Runtime {
 
     pub async fn execute(
         &self,
-        signer: Option<&str>,
+        signer: Option<Signer>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
@@ -284,7 +290,7 @@ impl Runtime {
                         wasmtime::component::Val::Resource(
                             table
                                 .push(ProcContext {
-                                    signer: signer.to_string(),
+                                    signer,
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
@@ -306,7 +312,7 @@ impl Runtime {
                         wasmtime::component::Val::Resource(
                             table
                                 .push(FallContext {
-                                    signer: signer.map(|s| s.to_string()),
+                                    signer,
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
@@ -346,11 +352,11 @@ impl Runtime {
         ))
     }
 
-    async fn _get_str<T: HasContractId>(
+    async fn _get_primitive<T: HasContractId, R: for<'de> Deserialize<'de>>(
         &mut self,
         resource: Resource<T>,
         path: String,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<R>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         self.storage
@@ -358,6 +364,14 @@ impl Runtime {
             .await?
             .map(|bs| deserialize_cbor(&bs))
             .transpose()
+    }
+
+    async fn _get_str<T: HasContractId>(
+        &mut self,
+        resource: Resource<T>,
+        path: String,
+    ) -> Result<Option<String>> {
+        self._get_primitive(resource, path).await
     }
 
     async fn _get_u64<T: HasContractId>(
@@ -365,13 +379,7 @@ impl Runtime {
         resource: Resource<T>,
         path: String,
     ) -> Result<Option<u64>> {
-        let table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        self.storage
-            .get(_self.get_contract_id(), &path)
-            .await?
-            .map(|bs| deserialize_cbor(&bs))
-            .transpose()
+        self._get_primitive(resource, path).await
     }
 
     async fn _get_s64<T: HasContractId>(
@@ -379,13 +387,15 @@ impl Runtime {
         resource: Resource<T>,
         path: String,
     ) -> Result<Option<i64>> {
-        let table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        self.storage
-            .get(_self.get_contract_id(), &path)
-            .await?
-            .map(|bs| deserialize_cbor(&bs))
-            .transpose()
+        self._get_primitive(resource, path).await
+    }
+
+    async fn _get_bool<T: HasContractId>(
+        &mut self,
+        resource: Resource<T>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        self._get_primitive(resource, path).await
     }
 
     async fn _is_void<T: HasContractId>(
@@ -425,6 +435,18 @@ impl Runtime {
         let _self = table.get(&resource)?;
         self.storage
             .matching_path(_self.get_contract_id(), &regexp)
+            .await
+    }
+
+    async fn _set_primitive<T: Serialize>(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+        value: T,
+    ) -> Result<()> {
+        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        self.storage
+            .set(contract_id, &path, &serialize_cbor(&value)?)
             .await
     }
 }
@@ -481,12 +503,11 @@ impl built_in::foreign::Host for Runtime {
         let signer = if let Some(resource) = signer {
             let table = self.table.lock().await;
             let _self = table.get(&resource)?;
-            Some(_self.signer.clone())
+            Some(_self.clone())
         } else {
             None
         };
-        self.execute(signer.as_deref(), &contract_address, &expr)
-            .await
+        self.execute(signer, &contract_address, &expr).await
     }
 }
 
@@ -517,6 +538,14 @@ impl built_in::context::HostViewContext for Runtime {
         self._get_s64(resource, path).await
     }
 
+    async fn get_bool(
+        &mut self,
+        resource: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        self._get_bool(resource, path).await
+    }
+
     async fn is_void(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
         self._is_void(resource, path).await
     }
@@ -541,7 +570,7 @@ impl built_in::context::HostViewContext for Runtime {
 
 impl built_in::context::HostSigner for Runtime {
     async fn to_string(&mut self, resource: Resource<Signer>) -> Result<String> {
-        Ok(self.table.lock().await.get(&resource)?.signer.clone())
+        Ok(self.table.lock().await.get(&resource)?.to_string())
     }
 
     async fn drop(&mut self, resource: Resource<Signer>) -> Result<()> {
@@ -565,10 +594,7 @@ impl built_in::context::HostProcContext for Runtime {
         path: String,
         value: String,
     ) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage
-            .set(contract_id, &path, &serialize_cbor(&value)?)
-            .await
+        self._set_primitive(resource, path, value).await
     }
 
     async fn get_u64(
@@ -585,10 +611,7 @@ impl built_in::context::HostProcContext for Runtime {
         path: String,
         value: u64,
     ) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage
-            .set(contract_id, &path, &serialize_cbor(&value)?)
-            .await
+        self._set_primitive(resource, path, value).await
     }
 
     async fn get_s64(
@@ -605,10 +628,24 @@ impl built_in::context::HostProcContext for Runtime {
         path: String,
         value: i64,
     ) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage
-            .set(contract_id, &path, &serialize_cbor(&value)?)
-            .await
+        self._set_primitive(resource, path, value).await
+    }
+
+    async fn get_bool(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        self._get_bool(resource, path).await
+    }
+
+    async fn set_bool(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+        value: bool,
+    ) -> Result<()> {
+        self._set_primitive(resource, path, value).await
     }
 
     async fn set_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<()> {
@@ -636,7 +673,17 @@ impl built_in::context::HostProcContext for Runtime {
         let mut table = self.table.lock().await;
         let _self = table.get(&resource)?;
         let signer = _self.signer.clone();
-        Ok(table.push(Signer { signer })?)
+        Ok(table.push(signer)?)
+    }
+
+    async fn contract_signer(
+        &mut self,
+        resource: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        let mut table = self.table.lock().await;
+        let _self = table.get(&resource)?;
+        let signer = Signer::ContractId(_self.contract_id);
+        Ok(table.push(signer)?)
     }
 
     async fn view_context(
@@ -661,7 +708,7 @@ impl built_in::context::HostFallContext for Runtime {
     ) -> Result<Option<Resource<Signer>>> {
         let mut table = self.table.lock().await;
         if let Some(signer) = table.get(&resource)?.signer.clone() {
-            Ok(Some(table.push(Signer { signer })?))
+            Ok(Some(table.push(signer)?))
         } else {
             Ok(None)
         }

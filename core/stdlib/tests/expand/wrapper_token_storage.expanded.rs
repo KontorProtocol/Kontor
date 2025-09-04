@@ -42,9 +42,13 @@ impl ::core::clone::Clone for TokenStorageLedgerWrapper {
     }
 }
 impl TokenStorageLedgerWrapper {
-    pub fn get(&self, ctx: &impl stdlib::ReadContext, key: String) -> Option<u64> {
+    pub fn get(
+        &self,
+        ctx: &impl stdlib::ReadContext,
+        key: impl ToString,
+    ) -> Option<u64> {
         let base_path = self.base_path.push(key.to_string());
-        ctx.__get(self.base_path.push(key.to_string()))
+        ctx.__get(base_path)
     }
     pub fn set(&self, ctx: &impl stdlib::WriteContext, key: String, value: u64) {
         ctx.__set(self.base_path.push(key.to_string()), value)

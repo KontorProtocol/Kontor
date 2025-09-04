@@ -5,7 +5,7 @@ use crate::{
         queries::{contract_has_state, insert_block, insert_contract},
         types::{BlockRow, ContractRow},
     },
-    runtime::{ContractAddress, Runtime},
+    runtime::{ContractAddress, Runtime, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -20,6 +20,10 @@ const FIB: &[u8] =
 
 const PROXY: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/proxy.wasm.br");
+
+const SHARED_ACCOUNT: &[u8] = include_bytes!(
+    "../../../../contracts/target/wasm32-unknown-unknown/release/shared_account.wasm.br"
+);
 
 const TOKEN: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
@@ -50,7 +54,7 @@ pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> R
         if !contract_has_state(&conn, contract_id).await? {
             runtime
                 .execute(
-                    Some("kontor"),
+                    Some(Signer::XOnlyPubKey("kontor".to_string())),
                     &ContractAddress {
                         name: name.to_string(),
                         height,
@@ -72,6 +76,7 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
             ("crypto", CRYPTO),
             ("fib", FIB),
             ("proxy", PROXY),
+            ("shared-account", SHARED_ACCOUNT),
             ("token", TOKEN),
         ],
     )
