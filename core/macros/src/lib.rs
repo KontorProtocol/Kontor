@@ -46,6 +46,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
         use kontor::built_in::numbers::IntegerWrapper;
+        use kontor::built_in::numbers::DecimalWrapper;
 
         #[automatically_derived]
         impl ReadContext for context::ViewContext {
@@ -237,6 +238,68 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
         #[automatically_derived]
         impl Eq for Integer {}
+
+        #[automatically_derived]
+        impl Default for Decimal {
+            fn default() -> Self {
+                Self {
+                    value: "0.0".to_string(),
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl Add for Decimal {
+            type Output = Self;
+
+            fn add(self, other: Self) -> Self::Output {
+                numbers::add_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Sub for Decimal {
+            type Output = Self;
+
+            fn sub(self, other: Self) -> Self::Output {
+                numbers::sub_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl PartialOrd for Decimal {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        #[automatically_derived]
+        impl Ord for Decimal {
+            fn cmp(&self, other: &Self) -> Ordering {
+                match numbers::cmp_decimal(&self, &other) {
+                    numbers::Ordering::Less => Ordering::Less,
+                    numbers::Ordering::Equal => Ordering::Equal,
+                    numbers::Ordering::Greater => Ordering::Greater,
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl PartialEq for Decimal {
+            fn eq(&self, other: &Self) -> bool {
+                numbers::eq_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Eq for Decimal {}
+
+        #[automatically_derived]
+        impl From<Integer> for Decimal {
+            fn from(i: Integer) -> Decimal {
+                numbers::integer_to_decimal(&i)
+            }
+        }
 
 
         struct #name;
@@ -489,6 +552,7 @@ pub fn import(input: TokenStream) -> TokenStream {
                 "signer",
                 "error",
                 "integer",
+                "decimal",
             ]
             .contains(&name)
         } else {
@@ -521,6 +585,7 @@ pub fn import(input: TokenStream) -> TokenStream {
             use super::AnyhowError;
             use super::Runtime;
             use indexer::runtime::numbers::Integer;
+            use indexer::runtime::numbers::Decimal;
         }
     } else {
         quote! {
@@ -529,6 +594,7 @@ pub fn import(input: TokenStream) -> TokenStream {
             use super::foreign::ContractAddress;
             use super::error::Error;
             use indexer::runtime::numbers::Integer;
+            use indexer::runtime::numbers::Decimal;
         }
     };
 
@@ -628,17 +694,64 @@ pub fn import(input: TokenStream) -> TokenStream {
             }
 
             #[automatically_derived]
-            impl From<Integer> for stdlib::wasm_wave::value::Value {
+            impl From<Integer> for wasm_wave::value::Value {
                 fn from(value_: Integer) -> Self {
-                    stdlib::wasm_wave::value::Value::from(value_.value)
+                    wasm_wave::value::Value::make_record(
+                        &Integer::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
+                    )
+                    .unwrap()
                 }
             }
 
             #[automatically_derived]
-            impl From<stdlib::wasm_wave::value::Value> for Integer {
-                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                    Integer {
-                        value: value_.unwrap_string().into_owned(),
+            impl From<wasm_wave::value::Value> for Integer {
+                fn from(value_: wasm_wave::value::Value) -> Self {
+                    let mut value = None;
+
+                    for (key_, val_) in value_.unwrap_record() {
+                        match key_.as_ref() {
+                            "value" => value = Some(val_.unwrap_string().into_owned()),
+                            key_ => panic!("Unknown field: {}", key_),
+                        }
+                    }
+
+                    Self {
+                        value: value.expect("Missing 'value' field"),
+                    }
+                }
+            }
+
+            #[automatically_derived]
+            impl Decimal {
+                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                    stdlib::wasm_wave::value::Type::STRING
+                }
+            }
+
+            #[automatically_derived]
+            impl From<Decimal> for wasm_wave::value::Value {
+                fn from(value_: Decimal) -> Self {
+                    wasm_wave::value::Value::make_record(
+                        &Decimal::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
+                    )
+                    .unwrap()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<wasm_wave::value::Value> for Decimal {
+                fn from(value_: wasm_wave::value::Value) -> Self {
+                    let mut value = None;
+
+                    for (key_, val_) in value_.unwrap_record() {
+                        match key_.as_ref() {
+                            "value" => value = Some(val_.unwrap_string().into_owned()),
+                            key_ => panic!("Unknown field: {}", key_),
+                        }
+                    }
+
+                    Self {
+                        value: value.expect("Missing 'value' field"),
                     }
                 }
             }

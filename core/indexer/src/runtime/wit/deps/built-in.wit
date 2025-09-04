@@ -73,6 +73,10 @@ interface numbers {
 		value: string,
     }
 
+    record decimal {
+		value: string,
+    }
+
     enum ordering {
 		less,
 		equal,
@@ -81,9 +85,17 @@ interface numbers {
 
 	eq: func(a: integer, b: integer) -> bool;
 	cmp: func(a: integer, b: integer) -> ordering;
-
 	add: func(a: integer, b: integer) -> integer;
 	sub: func(a: integer, b: integer) -> integer;
+
+	integer-to-decimal: func(i: integer) -> decimal;
+	eq-decimal: func(a: decimal, b: decimal) -> bool;
+	cmp-decimal: func(a: decimal, b: decimal) -> ordering;
+	add-decimal: func(a: decimal, b: decimal) -> decimal;
+	sub-decimal: func(a: decimal, b: decimal) -> decimal;
+	mul-decimal: func(a: decimal, b: decimal) -> decimal;
+
+	log10: func(a: decimal) -> decimal;
 }
 
 world built-in {

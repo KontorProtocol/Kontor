@@ -618,6 +618,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bnum"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f781dba93de3a5ef6dc5b17c9958b208f6f3f021623b360fb605ea51ce443f10"
+
+[[package]]
 name = "bon"
 version = "3.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1383,6 +1389,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
+name = "fastnum"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47993152179471626bee7bbb51aeb9bd628d23095c56d41bcffa53d548b22dfe"
+dependencies = [
+ "bnum",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2134,6 +2149,7 @@ dependencies = [
  "ciborium",
  "clap",
  "deadpool",
+ "fastnum",
  "futures-util",
  "hex",
  "indexmap 2.10.0",

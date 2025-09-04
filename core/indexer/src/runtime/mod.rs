@@ -10,6 +10,7 @@ pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
 use libsql::Connection;
 use num::bigint::BigInt;
+use fastnum::{ D256, dec256 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{error::Error as StdError, fmt};
@@ -28,7 +29,7 @@ use wit::kontor::*;
 
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::foreign::ContractAddress;
-pub use wit::kontor::built_in::numbers::{self, Integer};
+pub use wit::kontor::built_in::numbers::{self, Integer, Decimal};
 
 use anyhow::{Result, anyhow};
 use wasm_wave::{self, wasm::WasmValue as _};
@@ -96,7 +97,10 @@ impl From<wasm_wave::value::Value> for Error {
 
 impl Integer {
     pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::STRING
+        wasm_wave::value::Type::record([
+            ("value", wasm_wave::value::Type::STRING),
+        ])
+        .unwrap()
     }
 }
 
@@ -108,14 +112,26 @@ impl fmt::Display for Integer {
 
 impl From<Integer> for wasm_wave::value::Value {
     fn from(value_: Integer) -> Self {
-        wasm_wave::value::Value::from(value_.value)
+        wasm_wave::value::Value::make_record(
+            &Integer::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
+        )
+        .unwrap()
     }
 }
 
 impl From<wasm_wave::value::Value> for Integer {
     fn from(value_: wasm_wave::value::Value) -> Self {
-        Integer {
-            value: value_.unwrap_string().into_owned(),
+        let mut value = None;
+
+        for (key_, val_) in value_.unwrap_record() {
+            match key_.as_ref() {
+                "value" => value = Some(val_.unwrap_string().into_owned()),
+                key_ => panic!("Unknown field: {}", key_),
+            }
+        }
+
+        Self {
+            value: value.expect("Missing 'value' field"),
         }
     }
 }
@@ -123,6 +139,63 @@ impl From<wasm_wave::value::Value> for Integer {
 impl From<i64> for Integer {
     fn from(value_: i64) -> Self {
         Integer {
+            value: value_.to_string(),
+        }
+    }
+}
+
+impl Decimal {
+    pub fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::record([
+            ("value", wasm_wave::value::Type::STRING),
+        ])
+        .unwrap()
+    }
+}
+
+impl fmt::Display for Decimal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl From<Decimal> for wasm_wave::value::Value {
+    fn from(value_: Decimal) -> Self {
+        wasm_wave::value::Value::make_record(
+            &Decimal::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
+        )
+        .unwrap()
+    }
+}
+
+impl From<wasm_wave::value::Value> for Decimal {
+    fn from(value_: wasm_wave::value::Value) -> Self {
+        let mut value = None;
+
+        for (key_, val_) in value_.unwrap_record() {
+            match key_.as_ref() {
+                "value" => value = Some(val_.unwrap_string().into_owned()),
+                key_ => panic!("Unknown field: {}", key_),
+            }
+        }
+
+        Self {
+            value: value.expect("Missing 'value' field"),
+        }
+    }
+}
+
+impl From<f64> for Decimal {
+    fn from(value_: f64) -> Self {
+        Decimal {
+            value: value_.to_string(),
+        }
+    }
+}
+
+impl From<D256> for Decimal {
+    fn from(value_: D256) -> Self {
+        Decimal {
             value: value_.to_string(),
         }
     }
@@ -799,6 +872,60 @@ impl built_in::numbers::Host for Runtime {
         let big_b = b.value.parse::<BigInt>()?;
         Ok(Integer {
             value: (big_a - big_b).to_string(),
+        })
+    }
+
+    async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal, anyhow::Error> {
+        let dec = i.value.parse::<D256>()?;
+        Ok(Decimal {
+            value: dec.quantize(dec256!(0.000_000_000_000_000_001)).to_string(),
+        })
+    }
+
+    async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(dec_a == dec_b)
+    }
+
+    async fn cmp_decimal(&mut self, a: Decimal, b: Decimal) -> Result<numbers::Ordering, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(match dec_a.cmp(&dec_b) {
+            Ordering::Less => numbers::Ordering::Less,
+            Ordering::Equal => numbers::Ordering::Equal,
+            Ordering::Greater => numbers::Ordering::Greater,
+        })
+    }
+
+    async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(Decimal {
+            value: (dec_a + dec_b).quantize(dec256!(0.000_000_000_000_000_001)).to_string(),
+        })
+    }
+
+    async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(Decimal {
+            value: (dec_a - dec_b).quantize(dec256!(0.000_000_000_000_000_001)).to_string(),
+        })
+    }
+
+    async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(Decimal {
+            value: (dec_a * dec_b).quantize(dec256!(0.000_000_000_000_000_001)).to_string(),
+        })
+    }
+
+    async fn log10 (&mut self, a: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        Ok(Decimal {
+            value: (dec_a.log10()).quantize(dec256!(0.000_000_000_000_000_001)).to_string(),
         })
     }
 }
