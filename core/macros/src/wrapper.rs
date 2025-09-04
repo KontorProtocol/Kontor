@@ -50,6 +50,13 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                             pub fn load(&self, ctx: &impl stdlib::ReadContext) -> Map<#k_ty, #v_ty> {
                                 Map::new(&[])
                             }
+
+                            pub fn keys<'a, T: ToString + FromString + Clone + 'a>(
+                                &'a self,
+                                ctx: &'a impl ReadContext,
+                            ) -> impl Iterator<Item = T> + 'a {
+                                ctx.__get_keys(&self.base_path)
+                            }
                         }
                     });
 

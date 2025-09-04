@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bon::Builder;
+use futures_util::Stream;
 use libsql::Connection;
 
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
         queries::{
             delete_contract_state, exists_contract_state, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value, insert_contract_state,
-            matching_path,
+            matching_path, path_prefix_filter_contract_state,
         },
         types::ContractStateRow,
     },
@@ -61,5 +62,13 @@ impl Storage {
 
     pub async fn contract_bytes(&self, contract_id: i64) -> Result<Option<Vec<u8>>> {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
+    }
+
+    pub async fn keys(
+        &self,
+        contract_id: i64,
+        path: String,
+    ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static> {
+        Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path).await?)
     }
 }

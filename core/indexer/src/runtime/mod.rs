@@ -8,6 +8,7 @@ pub mod wit;
 
 pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
+use futures_util::StreamExt;
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,7 +44,7 @@ use wit_component::ComponentEncoder;
 use crate::runtime::{
     counter::Counter,
     stack::Stack,
-    wit::{FallContext, HasContractId, ProcContext, Signer, ViewContext},
+    wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
 
 impl Error {
@@ -320,8 +321,9 @@ impl Runtime {
             .iter()
             .map(default_val_for_type)
             .collect::<Vec<_>>();
-        func.call_async(&mut store, &params, &mut results).await?;
+        let call_result = func.call_async(&mut store, &params, &mut results).await;
         self.stack.pop().await;
+        call_result?;
         if results.is_empty() {
             return Ok("()".to_string());
         }
@@ -388,6 +390,17 @@ impl Runtime {
         path: String,
     ) -> Result<Option<bool>> {
         self._get_primitive(resource, path).await
+    }
+
+    async fn _get_keys<T: HasContractId>(
+        &mut self,
+        resource: Resource<T>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.get_contract_id();
+        let stream = Box::pin(self.storage.keys(contract_id, path.clone()).await?);
+        Ok(table.push(Keys { stream })?)
     }
 
     async fn _is_void<T: HasContractId>(
@@ -532,6 +545,14 @@ impl built_in::context::HostViewContext for Runtime {
         self._get_bool(resource, path).await
     }
 
+    async fn get_keys(
+        &mut self,
+        resource: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        self._get_keys(resource, path).await
+    }
+
     async fn is_void(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
         self._is_void(resource, path).await
     }
@@ -625,6 +646,14 @@ impl built_in::context::HostProcContext for Runtime {
         self._get_bool(resource, path).await
     }
 
+    async fn get_keys(
+        &mut self,
+        resource: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        self._get_keys(resource, path).await
+    }
+
     async fn set_bool(
         &mut self,
         resource: Resource<ProcContext>,
@@ -682,6 +711,19 @@ impl built_in::context::HostProcContext for Runtime {
     }
 
     async fn drop(&mut self, rep: Resource<ProcContext>) -> Result<()> {
+        let _res = self.table.lock().await.delete(rep)?;
+        Ok(())
+    }
+}
+
+impl built_in::context::HostKeys for Runtime {
+    async fn next(&mut self, rep: Resource<Keys>) -> Result<Option<String>> {
+        let mut table = self.table.lock().await;
+        let keys = table.get_mut(&rep)?;
+        Ok(keys.stream.next().await.transpose()?)
+    }
+
+    async fn drop(&mut self, rep: Resource<Keys>) -> Result<()> {
         let _res = self.table.lock().await.delete(rep)?;
         Ok(())
     }

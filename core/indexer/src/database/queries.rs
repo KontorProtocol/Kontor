@@ -224,22 +224,32 @@ const PATH_PREFIX_FILTER_QUERY: &str = include_str!("sql/path_prefix_filter_quer
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: i64,
-    path: &str,
-) -> Result<impl Stream<Item = Result<String, libsql::Error>>, Error> {
+    path: String,
+) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
     let rows = conn
         .query(
             PATH_PREFIX_FILTER_QUERY,
-            ((":contract_id", contract_id), (":path", path)),
+            ((":contract_id", contract_id), (":path", path.clone())),
         )
         .await?;
-    let stream = stream::unfold(rows, |mut rows| async move {
-        match rows.next().await {
-            Ok(Some(row)) => match row.get::<String>(0) {
-                Ok(path) => Some((Ok(path), rows)),
+    let stream = stream::unfold(rows, move |mut rows| {
+        let path_owned = path.clone();
+        async move {
+            match rows.next().await {
+                Ok(Some(row)) => match row.get::<String>(0) {
+                    Ok(full_path) => {
+                        let segment = full_path
+                            .get((path_owned.len() + 1)..)
+                            .and_then(|rest| rest.split('.').next())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        Some((Ok(segment), rows))
+                    }
+                    Err(e) => Some((Err(e), rows)),
+                },
+                Ok(None) => None,
                 Err(e) => Some((Err(e), rows)),
-            },
-            Ok(None) => None,
-            Err(e) => Some((Err(e), rows)),
+            }
         }
     });
 

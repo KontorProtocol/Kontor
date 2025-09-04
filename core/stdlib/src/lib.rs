@@ -6,12 +6,24 @@ pub use macros::{Root, Storage, StorageRoot, Store, Wavey, Wrapper, contract, im
 pub use storage_interface::*;
 pub use wasm_wave;
 
+impl FromString for String {
+    fn from_string(s: String) -> Self {
+        s
+    }
+}
+
+impl FromString for u64 {
+    fn from_string(s: String) -> Self {
+        s.parse::<u64>().unwrap()
+    }
+}
+
 #[derive(Clone)]
-pub struct Map<K: ToString + Clone, V: Store> {
+pub struct Map<K: ToString + FromString + Clone, V: Store> {
     pub entries: Vec<(K, V)>,
 }
 
-impl<K: ToString + Clone, V: Store> Map<K, V> {
+impl<K: ToString + FromString + Clone, V: Store> Map<K, V> {
     pub fn new(entries: &[(K, V)]) -> Self {
         Map {
             entries: entries.to_vec(),
@@ -19,7 +31,7 @@ impl<K: ToString + Clone, V: Store> Map<K, V> {
     }
 }
 
-impl<K: ToString + Clone, V: Store> Default for Map<K, V> {
+impl<K: ToString + FromString + Clone, V: Store> Default for Map<K, V> {
     fn default() -> Self {
         Self {
             entries: Default::default(),
@@ -27,7 +39,7 @@ impl<K: ToString + Clone, V: Store> Default for Map<K, V> {
     }
 }
 
-impl<K: ToString + Clone, V: Store> Store for Map<K, V> {
+impl<K: ToString + FromString + Clone, V: Store> Store for Map<K, V> {
     fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Map<K, V>) {
         for (k, v) in value.entries.into_iter() {
             ctx.__set(base_path.push(k.to_string()), v)

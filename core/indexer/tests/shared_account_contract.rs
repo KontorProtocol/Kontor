@@ -1,4 +1,3 @@
-use indexer::logging;
 use testlib::*;
 
 import!(
@@ -25,15 +24,15 @@ interface!(
 
 #[tokio::test]
 async fn test_shared_account_contract() -> Result<()> {
-    logging::setup();
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
     let alice = "alice";
     let bob = "bob";
     let claire = "claire";
+    let dara = "dara";
 
     token::mint(&runtime, alice, 100).await?;
 
-    let account_id = shared_account::open(&runtime, alice, 50, vec![bob]).await??;
+    let account_id = shared_account::open(&runtime, alice, 50, vec![bob, dara]).await??;
 
     let result = shared_account::balance(&runtime, &account_id).await?;
     assert_eq!(result, Some(50));
@@ -72,6 +71,12 @@ async fn test_shared_account_contract() -> Result<()> {
 
     let result = token_dyn::balance(&runtime, &token_address, bob).await?;
     assert_eq!(result, Some(25));
+
+    let result = shared_account::tenants(&runtime, &account_id).await?;
+    assert_eq!(
+        result,
+        Some(vec![alice.to_string(), bob.to_string(), dara.to_string()])
+    );
 
     Ok(())
 }

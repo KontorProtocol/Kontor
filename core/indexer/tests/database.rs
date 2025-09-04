@@ -477,7 +477,17 @@ async fn test_map_keys() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id)
         .height(height)
-        .path(format!("{}.key0", path))
+        .path(format!("{}.key0.foo", path))
+        .value(value.clone())
+        .build();
+
+    insert_contract_state(&conn, contract_state).await?;
+
+    let contract_state = ContractStateRow::builder()
+        .contract_id(contract_id)
+        .tx_id(tx_id)
+        .height(height)
+        .path(format!("{}.key0.bar", path))
         .value(value.clone())
         .build();
 
@@ -501,15 +511,13 @@ async fn test_map_keys() -> Result<()> {
         .build();
     insert_contract_state(&conn, contract_state).await?;
 
-    assert!(contract_has_state(&conn, contract_id).await?);
-    assert!(exists_contract_state(&conn, contract_id, "test.path").await?);
-
-    let stream = path_prefix_filter_contract_state(&conn, contract_id, "test.path").await?;
+    let stream =
+        path_prefix_filter_contract_state(&conn, contract_id, "test.path".to_string()).await?;
     let paths = stream.try_collect::<Vec<String>>().await?;
     assert_eq!(paths.len(), 3);
-    assert_eq!(paths[0], "test.path.key0");
-    assert_eq!(paths[1], "test.path.key1");
-    assert_eq!(paths[2], "test.path.key2");
+    assert_eq!(paths[0], "key0");
+    assert_eq!(paths[1], "key1");
+    assert_eq!(paths[2], "key2");
 
     Ok(())
 }

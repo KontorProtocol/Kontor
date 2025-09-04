@@ -1,4 +1,6 @@
-use std::fmt;
+use std::{fmt, pin::Pin};
+
+use futures_util::Stream;
 
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
@@ -49,4 +51,8 @@ impl HasContractId for FallContext {
     fn get_contract_id(&self) -> i64 {
         self.contract_id
     }
+}
+
+pub struct Keys {
+    pub stream: Pin<Box<dyn Stream<Item = Result<String, libsql::Error>> + Send>>,
 }

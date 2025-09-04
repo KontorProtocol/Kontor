@@ -55,4 +55,8 @@ impl Guest for Fib {
         let n = arith::checked_sub(&x, &y)?;
         Ok(Fib::fib(ctx, n))
     }
+
+    fn cached_values(ctx: &ViewContext) -> Vec<u64> {
+        storage(ctx).cache().keys(ctx).collect()
+    }
 }

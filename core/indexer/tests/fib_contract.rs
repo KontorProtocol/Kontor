@@ -112,5 +112,8 @@ async fn test_fib_contract() -> Result<()> {
     let result = arith::fib(&runtime, signer, 9).await;
     assert!(result.is_err_and(|e| e.root_cause().to_string().contains("reentrancy prevented")));
 
+    let result = fib::cached_values(&runtime).await?;
+    assert_eq!(result, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
     Ok(())
 }

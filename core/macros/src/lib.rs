@@ -42,6 +42,25 @@ pub fn contract(input: TokenStream) -> TokenStream {
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
 
+        fn make_keys_iterator<T: FromString>(keys: context::Keys) -> impl Iterator<Item = T> {
+            struct KeysIterator<T: FromString> {
+                keys: context::Keys,
+                _phantom: std::marker::PhantomData<T>,
+            }
+
+            impl<T: FromString> Iterator for KeysIterator<T> {
+                type Item = T;
+                fn next(&mut self) -> Option<Self::Item> {
+                    self.keys.next().map(|s| T::from_string(s))
+                }
+            }
+
+            KeysIterator {
+                keys,
+                _phantom: std::marker::PhantomData,
+            }
+        }
+
         #[automatically_derived]
         impl ReadContext for context::ViewContext {
             fn __get_str(&self, path: &str) -> Option<String> {
@@ -58,6 +77,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
             fn __get_bool(&self, path: &str) -> Option<bool> {
                 self.get_bool(path)
+            }
+
+            fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a {
+                make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(&self, path: &str) -> bool {
@@ -93,6 +116,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
             fn __get_bool(&self, path: &str) -> Option<bool> {
                 self.get_bool(path)
+            }
+
+            fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a{
+                make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(&self, path: &str) -> bool {

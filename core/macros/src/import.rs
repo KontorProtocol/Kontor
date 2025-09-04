@@ -51,6 +51,7 @@ pub fn import(
                 "proc-context",
                 "signer",
                 "error",
+                "keys",
             ]
             .contains(&name)
         } else {

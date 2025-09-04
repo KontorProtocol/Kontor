@@ -85,4 +85,10 @@ impl FibStorageCacheWrapper {
     pub fn load(&self, ctx: &impl stdlib::ReadContext) -> Map<u64, FibValue> {
         Map::new(&[])
     }
+    pub fn keys<'a, T: ToString + FromString + Clone + 'a>(
+        &'a self,
+        ctx: &'a impl ReadContext,
+    ) -> impl Iterator<Item = T> + 'a {
+        ctx.__get_keys(&self.base_path)
+    }
 }

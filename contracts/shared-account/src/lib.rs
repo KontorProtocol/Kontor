@@ -112,7 +112,12 @@ impl Guest for SharedAccount {
         token_dyn::balance(&token, &holder)
     }
 
-    fn tenants(_ctx: &ViewContext, _account_id: String) -> Option<Vec<String>> {
-        Some(vec!["foo".to_string(), "bar".to_string()])
+    fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {
+        storage(ctx).accounts().get(ctx, account_id).map(|a| {
+            [a.owner(ctx)]
+                .into_iter()
+                .chain(a.other_tenants().keys(ctx))
+                .collect()
+        })
     }
 }

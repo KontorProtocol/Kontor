@@ -5,11 +5,16 @@ interface context {
         to-string: func() -> string;
     }
 
+    resource keys {
+        next: func() -> option<string>;
+    }
+
     resource view-context {
         get-str: func(path: string) -> option<string>;
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
         get-bool: func(path: string) -> option<bool>;
+        get-keys: func(path: string) -> keys;
         is-void: func(path: string) -> bool;
         exists: func(path: string) -> bool;
         matching-path: func(regexp: string) -> option<string>;
@@ -20,6 +25,7 @@ interface context {
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
         get-bool: func(path: string) -> option<bool>;
+        get-keys: func(path: string) -> keys;
         is-void: func(path: string) -> bool;
         exists: func(path: string) -> bool;
         matching-path: func(regexp: string) -> option<string>;
