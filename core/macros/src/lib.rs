@@ -322,6 +322,8 @@ pub fn contract(input: TokenStream) -> TokenStream {
             pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 stdlib::wasm_wave::value::Type::variant([
                         ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
+                        ("overflow", Some(wasm_wave::value::Type::STRING)),
+                        ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
                     ])
                     .unwrap()
             }
@@ -340,7 +342,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     kontor::built_in::error::Error::Overflow(operand) => {
                         stdlib::wasm_wave::value::Value::make_variant(
                             &kontor::built_in::error::Error::wave_type(),
-                            "message",
+                            "overflow",
                             Some(stdlib::wasm_wave::value::Value::from(operand)),
                         )
                     },

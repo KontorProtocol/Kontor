@@ -56,6 +56,7 @@ impl Error {
         wasm_wave::value::Type::variant([
             ("message", Some(wasm_wave::value::Type::STRING)),
             ("overflow", Some(wasm_wave::value::Type::STRING)),
+            ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
         ])
         .unwrap()
     }
