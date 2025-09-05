@@ -87,7 +87,7 @@ impl RuntimeConfig<'_> {
 }
 
 pub struct Runtime {
-    runtime: IndexerRuntime,
+    pub runtime: IndexerRuntime,
 }
 
 impl Runtime {

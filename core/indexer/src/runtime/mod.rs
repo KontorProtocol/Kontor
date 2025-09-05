@@ -214,16 +214,25 @@ impl From<wasm_wave::value::Value> for Decimal {
 
 impl From<f64> for Decimal {
     fn from(value_: f64) -> Self {
+        let dec: D256 = value_.into();
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
         Decimal {
-            value: value_.to_string(),
+            value: res.to_string(),
         }
     }
 }
 
 impl From<D256> for Decimal {
-    fn from(value_: D256) -> Self {
+    fn from(dec: D256) -> Self {
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
         Decimal {
-            value: value_.to_string(),
+            value: res.to_string(),
         }
     }
 }
@@ -233,8 +242,12 @@ impl From<String> for Decimal {
         let dec = value_
             .parse::<D256>()
             .expect("Must be valid decimal number");
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
         Decimal {
-            value: dec.to_string(),
+            value: res.to_string(),
         }
     }
 }
@@ -244,8 +257,12 @@ impl From<&str> for Decimal {
         let dec = value_
             .parse::<D256>()
             .expect("Must be valid decimal number");
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
         Decimal {
-            value: dec.to_string(),
+            value: res.to_string(),
         }
     }
 }
@@ -985,8 +1002,19 @@ impl built_in::numbers::Host for Runtime {
     }
 
     async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool, anyhow::Error> {
-        let dec_a = a.value.parse::<D256>()?;
-        let dec_b = b.value.parse::<D256>()?;
+        let dec_a_ = a.value.parse::<D256>()?;
+        let dec_b_ = b.value.parse::<D256>()?;
+
+        let dec_a = dec_a_.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if dec_a.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+
+        let dec_b = dec_b_.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if dec_b.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+
         Ok(dec_a == dec_b)
     }
 
