@@ -207,7 +207,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
-        #[automatically_derived]
         impl foreign::ContractAddress {
             pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 stdlib::wasm_wave::value::Type::record([
@@ -283,7 +282,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
-        // TODO can we get this derived?
         #[automatically_derived]
         impl PartialOrd for Integer {
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -298,7 +296,10 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     numbers::Ordering::Less => Ordering::Less,
                     numbers::Ordering::Equal => Ordering::Equal,
                     numbers::Ordering::Greater => Ordering::Greater,
-=======
+                }
+            }
+        }
+
         impl kontor::built_in::error::Error {
             pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 stdlib::wasm_wave::value::Type::variant([
@@ -331,6 +332,74 @@ pub fn contract(input: TokenStream) -> TokenStream {
                         kontor::built_in::error::Error::Message(val_.unwrap().unwrap_string().into_owned())
                     }
                     key_ => panic!("Unknown tag {}", key_),
+                }
+            }
+        }
+
+        impl kontor::built_in::numbers::Integer {
+            pub fn wave_type() -> wasm_wave::value::Type {
+                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<Integer> for stdlib::wasm_wave::value::Value {
+            fn from(value_: Integer) -> Self {
+                stdlib::wasm_wave::value::Value::make_record(
+                    &Integer::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
+                )
+                .unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<stdlib::wasm_wave::value::Value> for Integer {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                let mut value = None;
+
+                for (key_, val_) in value_.unwrap_record() {
+                    match key_.as_ref() {
+                        "value" => value = Some(val_.unwrap_string().into_owned()),
+                        key_ => panic!("Unknown field: {}", key_),
+                    }
+                }
+
+                Self {
+                    value: value.expect("Missing 'value' field"),
+                }
+            }
+        }
+
+        impl kontor::built_in::numbers::Decimal {
+            pub fn wave_type() -> wasm_wave::value::Type {
+                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<Decimal> for stdlib::wasm_wave::value::Value {
+            fn from(value_: Decimal) -> Self {
+                stdlib::wasm_wave::value::Value::make_record(
+                    &Decimal::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
+                )
+                .unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<stdlib::wasm_wave::value::Value> for Decimal {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                let mut value = None;
+
+                for (key_, val_) in value_.unwrap_record() {
+                    match key_.as_ref() {
+                        "value" => value = Some(val_.unwrap_string().into_owned()),
+                        key_ => panic!("Unknown field: {}", key_),
+                    }
+                }
+
+                Self {
+                    value: value.expect("Missing 'value' field"),
                 }
             }
         }
@@ -407,9 +476,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
-
-=======
->>>>>>> 34fd85e5e289bdf42dd0bf8c6d40683a99803ebd
         struct #name;
 
         __export__!(#name);
@@ -626,262 +692,6 @@ pub fn import(input: TokenStream) -> TokenStream {
     let world_name = config.world.unwrap_or("contract".to_string());
     let test = config.test.unwrap_or(false);
 
-    assert!(fs::metadata(&path).is_ok());
-    let mut resolve = Resolve::new();
-    resolve.push_dir(&path).unwrap();
-
-    let (_world_id, world) = resolve
-        .worlds
-        .iter()
-        .find(|(_, w)| w.name == world_name)
-        .unwrap();
-
-    let exports = world
-        .exports
-        .iter()
-        .filter_map(|e| match e {
-            (WorldKey::Name(name), WorldItem::Function(f))
-                if !["init"].contains(&name.as_str()) =>
-            {
-                Some(f)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut type_streams = Vec::new();
-    for (_id, def) in resolve.types.iter().filter(|(_, def)| {
-        if let Some(name) = def.name.as_deref() {
-            ![
-                "contract-address",
-                "view-context",
-                "fall-context",
-                "proc-context",
-                "signer",
-                "error",
-                "integer",
-                "decimal",
-            ]
-            .contains(&name)
-        } else {
-            false
-        }
-    }) {
-        let name = def.name.as_deref().expect("Filtered types have names");
-        let stream = match &def.kind {
-            TypeDefKind::Record(record) => import::print_typedef_record(&resolve, name, record),
-            TypeDefKind::Enum(enum_) => import::print_typedef_enum(name, enum_),
-            TypeDefKind::Variant(variant) => import::print_typedef_variant(&resolve, name, variant),
-            _ => panic!("Unsupported type definition kind: {:?}", def.kind),
-        }
-        .expect("Failed to generate type");
-        type_streams.push(stream);
-    }
-
-    let mut func_streams = Vec::new();
-    for export in exports {
-        func_streams.push(
-            import::generate_functions(&resolve, test, export, height, tx_index)
-                .expect("Function didn't generate"),
-        )
-    }
-
-    let supers = if test {
-        quote! {
-            use super::ContractAddress;
-            use super::Error;
-            use super::AnyhowError;
-            use super::Runtime;
-            use indexer::runtime::numbers::Integer;
-            use indexer::runtime::numbers::Decimal;
-        }
-    } else {
-        quote! {
-            use super::context;
-            use super::foreign;
-            use super::foreign::ContractAddress;
-            use super::error::Error;
-            use indexer::runtime::numbers::Integer;
-            use indexer::runtime::numbers::Decimal;
-        }
-    };
-
-    let impls = if test {
-        quote! {}
-    } else {
-        quote! {
-            impl ContractAddress {
-                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                    stdlib::wasm_wave::value::Type::record([
-                        ("name", stdlib::wasm_wave::value::Type::STRING),
-                        ("height", stdlib::wasm_wave::value::Type::S64),
-                        ("tx_index", stdlib::wasm_wave::value::Type::S64),
-                    ])
-                    .unwrap()
-                }
-            }
-            #[automatically_derived]
-            impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
-                fn from(value_: ContractAddress) -> Self {
-                    stdlib::wasm_wave::value::Value::make_record(
-                        &ContractAddress::wave_type(),
-                        [
-                            ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
-                            ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
-                            ("tx_index", stdlib::wasm_wave::value::Value::from(value_.tx_index)),
-                        ],
-                    )
-                    .unwrap()
-                }
-            }
-            #[automatically_derived]
-            impl From<stdlib::wasm_wave::value::Value> for ContractAddress {
-                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                    let mut name = None;
-                    let mut height = None;
-                    let mut tx_index = None;
-
-                    for (key_, val_) in  value_.unwrap_record() {
-                        match key_.as_ref() {
-                            "name" => name = Some(val_.unwrap_string().into_owned()),
-                            "height" => height = Some(val_.unwrap_s64()),
-                            "tx_index" => tx_index = Some(val_.unwrap_s64()),
-                            key_ => panic!("Unknown field: {}", key_),
-                        }
-                    }
-
-                    Self {
-                        name: name.expect("Missing 'name' field"),
-                        height: height.expect("Missing 'height' field"),
-                        tx_index: tx_index.expect("Missing 'tx_index' field"),
-                    }
-                }
-            }
-
-            impl Error {
-                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                    stdlib::wasm_wave::value::Type::variant([
-                            ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
-                        ])
-                        .unwrap()
-                }
-            }
-            #[automatically_derived]
-            impl From<Error> for stdlib::wasm_wave::value::Value {
-                fn from(value_: Error) -> Self {
-                    (match value_ {
-                        Error::Message(operand) => {
-                            stdlib::wasm_wave::value::Value::make_variant(
-                                &Error::wave_type(),
-                                "message",
-                                Some(stdlib::wasm_wave::value::Value::from(operand)),
-                            )
-                        }
-                    })
-                        .unwrap()
-                }
-            }
-            #[automatically_derived]
-            impl From<stdlib::wasm_wave::value::Value> for Error {
-                fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                    let (key_, val_) = value_.unwrap_variant();
-                    match key_ {
-                        key_ if key_.eq("message") => {
-                            Error::Message(val_.unwrap().unwrap_string().into_owned())
-                        }
-                        key_ => panic!("Unknown tag {}", key_),
-                    }
-                }
-            }
-
-            #[automatically_derived]
-            impl Integer {
-                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                    stdlib::wasm_wave::value::Type::STRING
-                }
-            }
-
-            #[automatically_derived]
-            impl From<Integer> for wasm_wave::value::Value {
-                fn from(value_: Integer) -> Self {
-                    wasm_wave::value::Value::make_record(
-                        &Integer::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
-                    )
-                    .unwrap()
-                }
-            }
-
-            #[automatically_derived]
-            impl From<wasm_wave::value::Value> for Integer {
-                fn from(value_: wasm_wave::value::Value) -> Self {
-                    let mut value = None;
-
-                    for (key_, val_) in value_.unwrap_record() {
-                        match key_.as_ref() {
-                            "value" => value = Some(val_.unwrap_string().into_owned()),
-                            key_ => panic!("Unknown field: {}", key_),
-                        }
-                    }
-
-                    Self {
-                        value: value.expect("Missing 'value' field"),
-                    }
-                }
-            }
-
-            #[automatically_derived]
-            impl Decimal {
-                pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                    stdlib::wasm_wave::value::Type::STRING
-                }
-            }
-
-            #[automatically_derived]
-            impl From<Decimal> for wasm_wave::value::Value {
-                fn from(value_: Decimal) -> Self {
-                    wasm_wave::value::Value::make_record(
-                        &Decimal::wave_type(), [ ("value", wasm_wave::value::Value::from(value_.value)) ],
-                    )
-                    .unwrap()
-                }
-            }
-
-            #[automatically_derived]
-            impl From<wasm_wave::value::Value> for Decimal {
-                fn from(value_: wasm_wave::value::Value) -> Self {
-                    let mut value = None;
-
-                    for (key_, val_) in value_.unwrap_record() {
-                        match key_.as_ref() {
-                            "value" => value = Some(val_.unwrap_string().into_owned()),
-                            key_ => panic!("Unknown field: {}", key_),
-                        }
-                    }
-
-                    Self {
-                        value: value.expect("Missing 'value' field"),
-                    }
-                }
-            }
-        }
-    };
-
-    quote! {
-        mod #module_name {
-            use stdlib::wasm_wave::wasm::WasmValue as _;
-            use stdlib::Wavey;
-
-            #supers
-
-            const CONTRACT_NAME: &str = #name;
-
-            #impls
-
-             #(#type_streams)*
-             #(#func_streams)*
-        }
-    }
-
     import::import(
         path,
         module_name,
@@ -889,7 +699,6 @@ pub fn import(input: TokenStream) -> TokenStream {
         Some((&name, height, tx_index)),
         test,
     )
-
     .into()
 }
 
