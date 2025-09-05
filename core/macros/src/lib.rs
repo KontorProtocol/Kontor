@@ -328,6 +328,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     .unwrap()
             }
         }
+
         #[automatically_derived]
         impl From<kontor::built_in::error::Error> for stdlib::wasm_wave::value::Value {
             fn from(value_: kontor::built_in::error::Error) -> Self {
@@ -357,6 +358,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     .unwrap()
             }
         }
+
         #[automatically_derived]
         impl From<stdlib::wasm_wave::value::Value> for kontor::built_in::error::Error {
             fn from(value_: stdlib::wasm_wave::value::Value) -> Self {

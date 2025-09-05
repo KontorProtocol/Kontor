@@ -81,7 +81,7 @@ impl Guest for SharedAccount {
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        account.set_balance(ctx, account.balance(ctx).load(ctx) + n.clone());
+        account.set_balance(ctx, account.balance(ctx) + n.clone());
         token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)
     }
 
@@ -93,7 +93,7 @@ impl Guest for SharedAccount {
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        let balance = account.balance(ctx).load(ctx);
+        let balance = account.balance(ctx);
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -105,7 +105,7 @@ impl Guest for SharedAccount {
         storage(ctx)
             .accounts()
             .get(ctx, account_id)
-            .map(|a| a.balance(ctx).load(ctx))
+            .map(|a| a.balance(ctx))
     }
 
     fn token_balance(

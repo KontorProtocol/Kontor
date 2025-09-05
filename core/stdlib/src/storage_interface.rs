@@ -3,6 +3,7 @@ use crate::DotPathBuf;
 pub trait FromString {
     fn from_string(s: String) -> Self;
 }
+
 pub trait ReadContext {
     fn __get_str(&self, path: &str) -> Option<String>;
     fn __get_u64(&self, path: &str) -> Option<u64>;

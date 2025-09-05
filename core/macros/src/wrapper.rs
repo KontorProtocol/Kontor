@@ -100,9 +100,17 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     })
                 } else {
                     let field_wrapper_ty = get_wrapper_ident(field_ty, field.span())?;
-                    Ok(quote! {
-                        pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_wrapper_ty {
-                            #field_wrapper_ty::new(ctx, self.base_path.push(#field_name_str))
+                    Ok(if utils::is_numeric_type(field_ty) {
+                        quote! {
+                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_ty {
+                                #field_wrapper_ty::new(ctx, self.base_path.push(#field_name_str)).load(ctx)
+                            }
+                        }
+                    } else {
+                        quote! {
+                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_wrapper_ty {
+                                #field_wrapper_ty::new(ctx, self.base_path.push(#field_name_str))
+                            }
                         }
                     })
                 }
@@ -165,8 +173,14 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                             #field_name: self.#field_name(ctx)
                         })
                     } else {
-                        Ok(quote! {
-                            #field_name: self.#field_name(ctx).load(ctx)
+                        Ok(if utils::is_numeric_type(field_ty) {
+                            quote! {
+                                #field_name: self.#field_name(ctx)
+                            }
+                        } else {
+                            quote! {
+                                #field_name: self.#field_name(ctx).load(ctx)
+                            }
                         })
                     }
                 })
