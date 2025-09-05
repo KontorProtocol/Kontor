@@ -1,7 +1,11 @@
 use std::{env::current_dir, path::Path};
 
 use bon::Builder;
-pub use indexer::runtime::wit::kontor::built_in::{error::Error, foreign::ContractAddress};
+pub use indexer::runtime::wit::kontor::built_in::{
+    error::Error,
+    foreign::ContractAddress,
+    numbers::{Decimal, Integer},
+};
 use indexer::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},

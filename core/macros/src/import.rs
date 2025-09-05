@@ -85,8 +85,7 @@ pub fn import(
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
-            use indexer::runtime::numbers::Integer;
-            use indexer::runtime::numbers::Decimal;
+            use indexer::runtime::numbers::{ Decimal, Integer };
         }
     } else {
         quote! {
@@ -94,8 +93,7 @@ pub fn import(
             use super::foreign;
             use super::foreign::ContractAddress;
             use super::error::Error;
-            use indexer::runtime::numbers::Integer;
-            use indexer::runtime::numbers::Decimal;
+            use super::numbers::{ Decimal, Integer };
         }
     };
 
