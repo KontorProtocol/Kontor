@@ -62,7 +62,7 @@ pub fn generate_struct_to_value(data: &DataStruct, name: &Ident) -> Result<Token
                 quote! { (#field_name_str, stdlib::wasm_wave::value::Value::from(value_.#field_name)) }
             });
             Ok(quote! {
-                stdlib::wasm_wave::value::Value::make_record(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                     &#name::wave_type(),
                     [#(#field_assigns),*],
                 ).unwrap()
@@ -81,10 +81,10 @@ pub fn generate_enum_to_value(data: &DataEnum, name: &Ident) -> Result<TokenStre
         let variant_name = variant_ident.to_string().to_lowercase();
         match &variant.fields {
             Fields::Unit => Ok(quote! {
-                #name::#variant_ident => stdlib::wasm_wave::value::Value::make_variant(&#name::wave_type(), #variant_name, None)
+                #name::#variant_ident => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&#name::wave_type(), #variant_name, None)
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => Ok(quote! {
-                #name::#variant_ident(operand) => stdlib::wasm_wave::value::Value::make_variant(&#name::wave_type(), #variant_name, Some(stdlib::wasm_wave::value::Value::from(operand)))
+                #name::#variant_ident(operand) => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&#name::wave_type(), #variant_name, Some(stdlib::wasm_wave::value::Value::from(operand)))
             }),
             _ => Err(Error::new(variant.span(), "Wavey derive only supports unit or single-field tuple variants for enums")),
         }

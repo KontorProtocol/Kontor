@@ -220,7 +220,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl From<foreign::ContractAddress> for stdlib::wasm_wave::value::Value {
             fn from(value_: foreign::ContractAddress) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                     &foreign::ContractAddress::wave_type(),
                     [
                         ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
@@ -334,21 +334,21 @@ pub fn contract(input: TokenStream) -> TokenStream {
             fn from(value_: kontor::built_in::error::Error) -> Self {
                 (match value_ {
                     kontor::built_in::error::Error::Message(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
+                        <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                             &kontor::built_in::error::Error::wave_type(),
                             "message",
                             Some(stdlib::wasm_wave::value::Value::from(operand)),
                         )
                     },
                     kontor::built_in::error::Error::Overflow(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
+                        <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                             &kontor::built_in::error::Error::wave_type(),
                             "overflow",
                             Some(stdlib::wasm_wave::value::Value::from(operand)),
                         )
                     },
                     kontor::built_in::error::Error::DivByZero(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
+                        <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                             &kontor::built_in::error::Error::wave_type(),
                             "div-by-zero",
                             Some(stdlib::wasm_wave::value::Value::from(operand)),
@@ -387,7 +387,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl From<numbers::Integer> for stdlib::wasm_wave::value::Value {
             fn from(value_: numbers::Integer) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                     &numbers::Integer::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
                 )
                 .unwrap()
@@ -421,7 +421,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl From<numbers::Decimal> for stdlib::wasm_wave::value::Value {
             fn from(value_: numbers::Decimal) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                     &numbers::Decimal::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
                 )
                 .unwrap()
