@@ -8,8 +8,10 @@ pub mod wit;
 
 pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
+use fastnum::{D256, dec256, decimal};
 use futures_util::StreamExt;
 use libsql::Connection;
+use num::bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{error::Error as StdError, fmt};
@@ -19,6 +21,7 @@ pub use types::default_val_for_type;
 pub use wit::Contract;
 
 use std::{
+    cmp::Ordering,
     io::{Cursor, Read},
     sync::Arc,
 };
@@ -27,6 +30,7 @@ use wit::kontor::*;
 
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::foreign::ContractAddress;
+pub use wit::kontor::built_in::numbers::{self, Decimal, Integer};
 
 use anyhow::{Result, anyhow};
 use wasm_wave::{self, wasm::WasmValue as _};
@@ -49,8 +53,12 @@ use crate::runtime::{
 
 impl Error {
     pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::variant([("message", Some(wasm_wave::value::Type::STRING))])
-            .unwrap()
+        wasm_wave::value::Type::variant([
+            ("message", Some(wasm_wave::value::Type::STRING)),
+            ("overflow", Some(wasm_wave::value::Type::STRING)),
+            ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
+        ])
+        .unwrap()
     }
 }
 
@@ -64,6 +72,8 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Message(msg) => write!(f, "Error: {}", msg),
+            Error::Overflow(msg) => write!(f, "Overflow Error: {}", msg),
+            Error::DivByZero(msg) => write!(f, "DivByZero Error: {}", msg),
         }
     }
 }
@@ -74,6 +84,16 @@ impl From<Error> for wasm_wave::value::Value {
             Error::Message(operand) => wasm_wave::value::Value::make_variant(
                 &Error::wave_type(),
                 "message",
+                Some(wasm_wave::value::Value::from(operand)),
+            ),
+            Error::Overflow(operand) => wasm_wave::value::Value::make_variant(
+                &Error::wave_type(),
+                "overflow",
+                Some(wasm_wave::value::Value::from(operand)),
+            ),
+            Error::DivByZero(operand) => wasm_wave::value::Value::make_variant(
+                &Error::wave_type(),
+                "div-by-zero",
                 Some(wasm_wave::value::Value::from(operand)),
             ),
         })
@@ -87,7 +107,172 @@ impl From<wasm_wave::value::Value> for Error {
             key_ if key_.eq("message") => {
                 Error::Message(val_.unwrap().unwrap_string().into_owned())
             }
+            key_ if key_.eq("overflow") => {
+                Error::Overflow(val_.unwrap().unwrap_string().into_owned())
+            }
+            key_ if key_.eq("div-by-zero") => {
+                Error::DivByZero(val_.unwrap().unwrap_string().into_owned())
+            }
             key_ => panic!("Unknown tag {}", key_),
+        }
+    }
+}
+
+impl Integer {
+    pub fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+    }
+}
+
+impl fmt::Display for Integer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl From<Integer> for wasm_wave::value::Value {
+    fn from(value_: Integer) -> Self {
+        wasm_wave::value::Value::make_record(
+            &Integer::wave_type(),
+            [("value", wasm_wave::value::Value::from(value_.value))],
+        )
+        .unwrap()
+    }
+}
+
+impl From<wasm_wave::value::Value> for Integer {
+    fn from(value_: wasm_wave::value::Value) -> Self {
+        let mut value = None;
+
+        for (key_, val_) in value_.unwrap_record() {
+            match key_.as_ref() {
+                "value" => value = Some(val_.unwrap_string().into_owned()),
+                key_ => panic!("Unknown field: {}", key_),
+            }
+        }
+
+        Self {
+            value: value.expect("Missing 'value' field"),
+        }
+    }
+}
+
+impl From<i64> for Integer {
+    fn from(value_: i64) -> Self {
+        Integer {
+            value: value_.to_string(),
+        }
+    }
+}
+
+impl From<String> for Integer {
+    fn from(value_: String) -> Self {
+        let i = value_.parse::<BigInt>().expect("Must be valid integer");
+        Integer {
+            value: i.to_string(),
+        }
+    }
+}
+
+impl From<&str> for Integer {
+    fn from(value_: &str) -> Self {
+        let i = value_.parse::<BigInt>().expect("Must be valid integer");
+        Integer {
+            value: i.to_string(),
+        }
+    }
+}
+
+impl Decimal {
+    pub fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+    }
+}
+
+impl fmt::Display for Decimal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl From<Decimal> for wasm_wave::value::Value {
+    fn from(value_: Decimal) -> Self {
+        wasm_wave::value::Value::make_record(
+            &Decimal::wave_type(),
+            [("value", wasm_wave::value::Value::from(value_.value))],
+        )
+        .unwrap()
+    }
+}
+
+impl From<wasm_wave::value::Value> for Decimal {
+    fn from(value_: wasm_wave::value::Value) -> Self {
+        let mut value = None;
+
+        for (key_, val_) in value_.unwrap_record() {
+            match key_.as_ref() {
+                "value" => value = Some(val_.unwrap_string().into_owned()),
+                key_ => panic!("Unknown field: {}", key_),
+            }
+        }
+
+        Self {
+            value: value.expect("Missing 'value' field"),
+        }
+    }
+}
+
+impl From<f64> for Decimal {
+    fn from(value_: f64) -> Self {
+        let dec: D256 = value_.into();
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
+        Decimal {
+            value: res.to_string(),
+        }
+    }
+}
+
+impl From<D256> for Decimal {
+    fn from(dec: D256) -> Self {
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
+        Decimal {
+            value: res.to_string(),
+        }
+    }
+}
+
+impl From<String> for Decimal {
+    fn from(value_: String) -> Self {
+        let dec = value_
+            .parse::<D256>()
+            .expect("Must be valid decimal number");
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
+        Decimal {
+            value: res.to_string(),
+        }
+    }
+}
+
+impl From<&str> for Decimal {
+    fn from(value_: &str) -> Self {
+        let dec = value_
+            .parse::<D256>()
+            .expect("Must be valid decimal number");
+        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            panic!("invalid decimal number");
+        }
+        Decimal {
+            value: res.to_string(),
         }
     }
 }
@@ -771,5 +956,177 @@ impl built_in::context::HostFallContext for Runtime {
     async fn drop(&mut self, rep: Resource<FallContext>) -> Result<()> {
         let _res = self.table.lock().await.delete(rep)?;
         Ok(())
+    }
+}
+
+const MIN_DECIMAL: D256 = dec256!(0.000_000_000_000_000_001);
+const CTX: decimal::Context =
+    decimal::Context::default().with_signal_traps(decimal::SignalsTraps::empty());
+
+impl built_in::numbers::Host for Runtime {
+    async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        Ok(big_a == big_b)
+    }
+
+    async fn cmp_integer(
+        &mut self,
+        a: Integer,
+        b: Integer,
+    ) -> Result<numbers::Ordering, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        Ok(match big_a.cmp(&big_b) {
+            Ordering::Less => numbers::Ordering::Less,
+            Ordering::Equal => numbers::Ordering::Equal,
+            Ordering::Greater => numbers::Ordering::Greater,
+        })
+    }
+
+    async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        Ok(Integer {
+            value: (big_a + big_b).to_string(),
+        })
+    }
+
+    async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        Ok(Integer {
+            value: (big_a - big_b).to_string(),
+        })
+    }
+
+    async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        Ok(Integer {
+            value: (big_a * big_b).to_string(),
+        })
+    }
+
+    async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Integer, anyhow::Error> {
+        let big_a = a.value.parse::<BigInt>()?;
+        let big_b = b.value.parse::<BigInt>()?;
+        if big_b == BigInt::ZERO {
+            return Err(Error::DivByZero("integer divide by zero".to_string()).into());
+        }
+        Ok(Integer {
+            value: (big_a / big_b).to_string(),
+        })
+    }
+
+    async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal, anyhow::Error> {
+        let dec_ = i.value.parse::<D256>()?;
+        let dec = dec_.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if dec.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: dec.to_string(),
+        })
+    }
+
+    async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool, anyhow::Error> {
+        let dec_a_ = a.value.parse::<D256>()?;
+        let dec_b_ = b.value.parse::<D256>()?;
+
+        let dec_a = dec_a_.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if dec_a.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+
+        let dec_b = dec_b_.with_ctx(CTX).quantize(MIN_DECIMAL);
+        if dec_b.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+
+        Ok(dec_a == dec_b)
+    }
+
+    async fn cmp_decimal(
+        &mut self,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<numbers::Ordering, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        Ok(match dec_a.cmp(&dec_b) {
+            Ordering::Less => numbers::Ordering::Less,
+            Ordering::Equal => numbers::Ordering::Equal,
+            Ordering::Greater => numbers::Ordering::Greater,
+        })
+    }
+
+    async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        let res = (dec_a + dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: res.to_string(),
+        })
+    }
+
+    async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        let res = (dec_a - dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: res.to_string(),
+        })
+    }
+
+    async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        let res = (dec_a * dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: res.to_string(),
+        })
+    }
+
+    async fn div_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let dec_b = b.value.parse::<D256>()?;
+        if dec_b.is_zero() {
+            return Err(Error::DivByZero("decimal divide by zero".to_string()).into());
+        }
+        let res = (dec_a / dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: res.to_string(),
+        })
+    }
+
+    async fn log10(&mut self, a: Decimal) -> Result<Decimal, anyhow::Error> {
+        let dec_a = a.value.parse::<D256>()?;
+        let res = (dec_a.log10()).with_ctx(CTX).quantize(MIN_DECIMAL);
+        if res.is_op_invalid() {
+            return Err(Error::Overflow("invalid decimal number".to_string()).into());
+        }
+        Ok(Decimal {
+            value: res.to_string(),
+        })
+    }
+
+    async fn meta_force_generate_integer(&mut self, _i: built_in::numbers::Integer) -> Result<()> {
+        unimplemented!()
+    }
+    async fn meta_force_generate_decimal(&mut self, _d: built_in::numbers::Decimal) -> Result<()> {
+        unimplemented!()
     }
 }

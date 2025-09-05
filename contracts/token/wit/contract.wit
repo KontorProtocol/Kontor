@@ -4,10 +4,12 @@ world contract {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{view-context, proc-context, signer};
     use kontor:built-in/error.{error};
+    use kontor:built-in/numbers.{integer, decimal};
 
     export init: func(ctx: borrow<proc-context>);
 
-    export mint: func(ctx: borrow<proc-context>, n: u64);
-    export transfer: func(ctx: borrow<proc-context>, to: string, n: u64) -> result<_, error>;
-    export balance: func(ctx: borrow<view-context>, acc: string) -> option<u64>;
+    export mint: func(ctx: borrow<proc-context>, n: integer);
+    export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
+    export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
+    export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 }

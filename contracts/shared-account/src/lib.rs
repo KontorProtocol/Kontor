@@ -9,7 +9,7 @@ interface!(name = "token_dyn", path = "token/wit");
 #[derive(Clone, Default, Storage)]
 struct Account {
     pub other_tenants: Map<String, bool>,
-    pub balance: u64,
+    pub balance: Integer,
     pub owner: String,
 }
 
@@ -43,7 +43,7 @@ impl Guest for SharedAccount {
         SharedAccountStorage::default().init(ctx);
     }
 
-    fn open(ctx: &ProcContext, n: u64, other_tenants: Vec<String>) -> Result<String, Error> {
+    fn open(ctx: &ProcContext, n: Integer, other_tenants: Vec<String>) -> Result<String, Error> {
         let balance =
             token::balance(&ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
         if balance < n {
@@ -54,7 +54,7 @@ impl Guest for SharedAccount {
             ctx,
             account_id.clone(),
             Account {
-                balance: n,
+                balance: n.clone(),
                 owner: ctx.signer().to_string(),
                 other_tenants: Map::new(
                     &other_tenants
@@ -68,7 +68,7 @@ impl Guest for SharedAccount {
         Ok(account_id)
     }
 
-    fn deposit(ctx: &ProcContext, account_id: String, n: u64) -> Result<(), Error> {
+    fn deposit(ctx: &ProcContext, account_id: String, n: Integer) -> Result<(), Error> {
         let balance =
             token::balance(&ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
         if balance < n {
@@ -81,11 +81,11 @@ impl Guest for SharedAccount {
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        account.set_balance(ctx, account.balance(ctx) + n);
+        account.set_balance(ctx, account.balance(ctx) + n.clone());
         token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)
     }
 
-    fn withdraw(ctx: &ProcContext, account_id: String, n: u64) -> Result<(), Error> {
+    fn withdraw(ctx: &ProcContext, account_id: String, n: Integer) -> Result<(), Error> {
         let account = storage(ctx)
             .accounts()
             .get(ctx, account_id)
@@ -97,18 +97,22 @@ impl Guest for SharedAccount {
         if balance < n {
             return Err(insufficient_balance_error());
         }
-        account.set_balance(ctx, balance - n);
+        account.set_balance(ctx, balance - n.clone());
         token::transfer(ctx.contract_signer(), &ctx.signer().to_string(), n)
     }
 
-    fn balance(ctx: &ViewContext, account_id: String) -> Option<u64> {
+    fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
         storage(ctx)
             .accounts()
             .get(ctx, account_id)
             .map(|a| a.balance(ctx))
     }
 
-    fn token_balance(_ctx: &ViewContext, token: ContractAddress, holder: String) -> Option<u64> {
+    fn token_balance(
+        _ctx: &ViewContext,
+        token: ContractAddress,
+        holder: String,
+    ) -> Option<Integer> {
         token_dyn::balance(&token, &holder)
     }
 

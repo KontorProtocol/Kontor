@@ -5,18 +5,19 @@ world contract {
     use kontor:built-in/context.{view-context, proc-context, signer};
     use kontor:built-in/error.{error};
     use kontor:built-in/foreign.{contract-address};
+    use kontor:built-in/numbers.{integer, decimal};
 
     export init: func(ctx: borrow<proc-context>);
 
-    export open: func(ctx: borrow<proc-context>, n: u64, other-tenants: list<string>) -> result<string, error>;
+    export open: func(ctx: borrow<proc-context>, n: integer, other-tenants: list<string>) -> result<string, error>;
 
-    export deposit: func(ctx: borrow<proc-context>, account-id: string, n: u64) -> result<_, error>;
+    export deposit: func(ctx: borrow<proc-context>, account-id: string, n: integer) -> result<_, error>;
 
-    export withdraw: func(ctx: borrow<proc-context>, account-id: string, n: u64) -> result<_, error>;
+    export withdraw: func(ctx: borrow<proc-context>, account-id: string, n: integer) -> result<_, error>;
 
-    export balance: func(ctx: borrow<view-context>, account-id: string) -> option<u64>;
+    export balance: func(ctx: borrow<view-context>, account-id: string) -> option<integer>;
 
-    export token-balance: func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<u64>;
+    export token-balance: func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<integer>;
 
     export tenants: func(ctx: borrow<view-context>, account-id: string) -> option<list<string>>;
 }

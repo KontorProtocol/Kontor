@@ -52,6 +52,8 @@ pub fn import(
                 "signer",
                 "error",
                 "keys",
+                "integer",
+                "decimal",
             ]
             .contains(&name)
         } else {
@@ -83,6 +85,7 @@ pub fn import(
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
+            use indexer::runtime::numbers::{ Decimal, Integer };
         }
     } else {
         quote! {
@@ -90,6 +93,7 @@ pub fn import(
             use super::foreign;
             use super::foreign::ContractAddress;
             use super::error::Error;
+            use super::numbers::{ Decimal, Integer };
         }
     };
 

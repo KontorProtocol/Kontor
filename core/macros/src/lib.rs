@@ -38,9 +38,12 @@ pub fn contract(input: TokenStream) -> TokenStream {
             export_macro_name: "__export__",
         });
 
+        use std::{cmp::Ordering, ops::{Add, Sub, Mul, Div}};
         use stdlib::wasm_wave::wasm::WasmValue as _;
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
+        use kontor::built_in::numbers::IntegerWrapper;
+        use kontor::built_in::numbers::DecimalWrapper;
 
         fn make_keys_iterator<T: FromString>(keys: context::Keys) -> impl Iterator<Item = T> {
             struct KeysIterator<T: FromString> {
@@ -252,14 +255,80 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
+        #[automatically_derived]
+        impl Default for numbers::Integer {
+            fn default() -> Self {
+                Self {
+                    value: "0".to_string(),
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl Add for numbers::Integer {
+            type Output = Self;
+
+            fn add(self, other: Self) -> Self::Output {
+                numbers::add_integer(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Sub for numbers::Integer {
+            type Output = Self;
+
+            fn sub(self, other: Self) -> Self::Output {
+                numbers::sub_integer(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Mul for numbers::Integer {
+            type Output = Self;
+
+            fn mul(self, rhs: Self) -> Self {
+                numbers::mul_integer(&self, &rhs)
+            }
+        }
+
+        #[automatically_derived]
+        impl Div for numbers::Integer {
+            type Output = Self;
+
+            fn div(self, rhs: Self) -> Self {
+                numbers::div_integer(&self, &rhs)
+            }
+        }
+
+        #[automatically_derived]
+        impl PartialOrd for numbers::Integer {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        #[automatically_derived]
+        impl Ord for numbers::Integer {
+            fn cmp(&self, other: &Self) -> Ordering {
+                match numbers::cmp_integer(&self, &other) {
+                    numbers::Ordering::Less => Ordering::Less,
+                    numbers::Ordering::Equal => Ordering::Equal,
+                    numbers::Ordering::Greater => Ordering::Greater,
+                }
+            }
+        }
+
         impl kontor::built_in::error::Error {
             pub fn wave_type() -> stdlib::wasm_wave::value::Type {
                 stdlib::wasm_wave::value::Type::variant([
                         ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
+                        ("overflow", Some(wasm_wave::value::Type::STRING)),
+                        ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
                     ])
                     .unwrap()
             }
         }
+
         #[automatically_derived]
         impl From<kontor::built_in::error::Error> for stdlib::wasm_wave::value::Value {
             fn from(value_: kontor::built_in::error::Error) -> Self {
@@ -270,11 +339,26 @@ pub fn contract(input: TokenStream) -> TokenStream {
                             "message",
                             Some(stdlib::wasm_wave::value::Value::from(operand)),
                         )
+                    },
+                    kontor::built_in::error::Error::Overflow(operand) => {
+                        stdlib::wasm_wave::value::Value::make_variant(
+                            &kontor::built_in::error::Error::wave_type(),
+                            "overflow",
+                            Some(stdlib::wasm_wave::value::Value::from(operand)),
+                        )
+                    },
+                    kontor::built_in::error::Error::DivByZero(operand) => {
+                        stdlib::wasm_wave::value::Value::make_variant(
+                            &kontor::built_in::error::Error::wave_type(),
+                            "div-by-zero",
+                            Some(stdlib::wasm_wave::value::Value::from(operand)),
+                        )
                     }
                 })
                     .unwrap()
             }
         }
+
         #[automatically_derived]
         impl From<stdlib::wasm_wave::value::Value> for kontor::built_in::error::Error {
             fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
@@ -283,8 +367,173 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     key_ if key_.eq("message") => {
                         kontor::built_in::error::Error::Message(val_.unwrap().unwrap_string().into_owned())
                     }
+                    key_ if key_.eq("overflow") => {
+                        kontor::built_in::error::Error::Overflow(val_.unwrap().unwrap_string().into_owned())
+                    }
+                    key_ if key_.eq("div-by-zero") => {
+                        kontor::built_in::error::Error::DivByZero(val_.unwrap().unwrap_string().into_owned())
+                    }
                     key_ => panic!("Unknown tag {}", key_),
                 }
+            }
+        }
+
+        impl kontor::built_in::numbers::Integer {
+            pub fn wave_type() -> wasm_wave::value::Type {
+                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<numbers::Integer> for stdlib::wasm_wave::value::Value {
+            fn from(value_: numbers::Integer) -> Self {
+                stdlib::wasm_wave::value::Value::make_record(
+                    &numbers::Integer::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
+                )
+                .unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<stdlib::wasm_wave::value::Value> for numbers::Integer {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                let mut value = None;
+
+                for (key_, val_) in value_.unwrap_record() {
+                    match key_.as_ref() {
+                        "value" => value = Some(val_.unwrap_string().into_owned()),
+                        key_ => panic!("Unknown field: {}", key_),
+                    }
+                }
+
+                Self {
+                    value: value.expect("Missing 'value' field"),
+                }
+            }
+        }
+
+        impl kontor::built_in::numbers::Decimal {
+            pub fn wave_type() -> wasm_wave::value::Type {
+                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<numbers::Decimal> for stdlib::wasm_wave::value::Value {
+            fn from(value_: numbers::Decimal) -> Self {
+                stdlib::wasm_wave::value::Value::make_record(
+                    &numbers::Decimal::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
+                )
+                .unwrap()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<stdlib::wasm_wave::value::Value> for numbers::Decimal {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                let mut value = None;
+
+                for (key_, val_) in value_.unwrap_record() {
+                    match key_.as_ref() {
+                        "value" => value = Some(val_.unwrap_string().into_owned()),
+                        key_ => panic!("Unknown field: {}", key_),
+                    }
+                }
+
+                Self {
+                    value: value.expect("Missing 'value' field"),
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl PartialEq for numbers::Integer {
+            fn eq(&self, other: &Self) -> bool {
+                numbers::eq_integer(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Eq for numbers::Integer {}
+
+        #[automatically_derived]
+        impl Default for numbers::Decimal {
+            fn default() -> Self {
+                Self {
+                    value: "0.0".to_string(),
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl Add for numbers::Decimal {
+            type Output = Self;
+
+            fn add(self, other: Self) -> Self::Output {
+                numbers::add_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Sub for numbers::Decimal {
+            type Output = Self;
+
+            fn sub(self, other: Self) -> Self::Output {
+                numbers::sub_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Mul for numbers::Decimal {
+            type Output = Self;
+
+            fn mul(self, rhs: Self) -> Self {
+                numbers::mul_decimal(&self, &rhs)
+            }
+        }
+
+        #[automatically_derived]
+        impl Div for numbers::Decimal {
+            type Output = Self;
+
+            fn div(self, rhs: Self) -> Self {
+                numbers::div_decimal(&self, &rhs)
+            }
+        }
+
+
+        #[automatically_derived]
+        impl PartialOrd for numbers::Decimal {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        #[automatically_derived]
+        impl Ord for numbers::Decimal {
+            fn cmp(&self, other: &Self) -> Ordering {
+                match numbers::cmp_decimal(&self, &other) {
+                    numbers::Ordering::Less => Ordering::Less,
+                    numbers::Ordering::Equal => Ordering::Equal,
+                    numbers::Ordering::Greater => Ordering::Greater,
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl PartialEq for numbers::Decimal {
+            fn eq(&self, other: &Self) -> bool {
+                numbers::eq_decimal(&self, &other)
+            }
+        }
+
+        #[automatically_derived]
+        impl Eq for numbers::Decimal {}
+
+        #[automatically_derived]
+        impl From<numbers::Integer> for numbers::Decimal {
+            fn from(i: numbers::Integer) -> numbers::Decimal {
+                numbers::integer_to_decimal(&i)
             }
         }
 
