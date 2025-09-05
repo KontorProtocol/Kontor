@@ -28,7 +28,11 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         (quote! { Option<#v_ty> }, quote! { ctx.__get(base_path) })
                     } else {
                         let v_wrapper_ty = get_wrapper_ident(&v_ty, field.span())?;
-                        (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path)) })
+                        if utils::is_numeric_type(&v_ty) {
+                            (quote! { Option<#v_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path).load(ctx)) })
+                        } else {
+                            (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path)) })
+                        }
                     };
 
                     special_wrappers.push(quote! {

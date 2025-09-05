@@ -13,7 +13,7 @@ struct Account {
     pub owner: String,
 }
 
-#[derive(Clone, Default, Storage, Root)]
+#[derive(Clone, Default, StorageRoot)]
 struct SharedAccountStorage {
     pub accounts: Map<String, Account>,
 }

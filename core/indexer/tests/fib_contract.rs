@@ -1,4 +1,3 @@
-use indexer::logging;
 use testlib::*;
 
 import!(
@@ -45,7 +44,6 @@ import!(
 
 #[tokio::test]
 async fn test_fib_contract() -> Result<()> {
-    logging::setup();
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let signer = "test_signer";
