@@ -100,7 +100,6 @@ pub fn import(
     quote! {
         mod #module_name {
             use stdlib::wasm_wave::wasm::WasmValue as _;
-            use stdlib::Wavey;
 
             #supers
 
@@ -272,7 +271,7 @@ pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> R
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        #[derive(Debug, Clone, Wavey, PartialEq, Eq)]
+        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
         pub struct #struct_name {
             #(#fields),*
         }
@@ -316,7 +315,7 @@ pub fn print_typedef_variant(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        #[derive(Debug, Clone, Wavey, PartialEq, Eq)]
+        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
         pub enum #enum_name {
             #(#variants),*
         }
