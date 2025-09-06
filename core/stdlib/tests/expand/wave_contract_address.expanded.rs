@@ -17,7 +17,7 @@ impl ContractAddress {
 #[automatically_derived]
 impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
     fn from(value_: ContractAddress) -> Self {
-        stdlib::wasm_wave::value::Value::make_record(
+        <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                 &ContractAddress::wave_type(),
                 [
                     ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
@@ -34,11 +34,30 @@ impl From<stdlib::wasm_wave::value::Value> for ContractAddress {
         let mut name = None;
         let mut height = None;
         let mut tx_index = None;
-        for (key_, val_) in value_.unwrap_record() {
+        for (key_, val_) in stdlib::wasm_wave::wasm::WasmValue::unwrap_record(&value_) {
             match key_.as_ref() {
-                "name" => name = Some(val_.unwrap_string().into_owned()),
-                "height" => height = Some(val_.unwrap_s64()),
-                "tx-index" => tx_index = Some(val_.unwrap_s64()),
+                "name" => {
+                    name = Some(
+                        stdlib::wasm_wave::wasm::WasmValue::unwrap_string(
+                                &val_.into_owned(),
+                            )
+                            .into_owned(),
+                    );
+                }
+                "height" => {
+                    height = Some(
+                        stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(
+                            &val_.into_owned(),
+                        ),
+                    );
+                }
+                "tx-index" => {
+                    tx_index = Some(
+                        stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(
+                            &val_.into_owned(),
+                        ),
+                    );
+                }
                 key_ => {
                     ::core::panicking::panic_fmt(
                         format_args!("Unknown field: {0}", key_),

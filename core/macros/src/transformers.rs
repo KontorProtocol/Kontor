@@ -5,48 +5,68 @@ use quote::quote;
 use syn::{Ident, PathArguments, Type as SynType, TypePath};
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
 
-pub fn wit_type_to_unwrap_expr(resolve: &Resolve, ty: &WitType) -> anyhow::Result<TokenStream> {
+pub fn wit_type_to_unwrap_expr(
+    resolve: &Resolve,
+    ty: &WitType,
+    value: TokenStream,
+) -> anyhow::Result<TokenStream> {
     match ty {
-        WitType::U64 => Ok(quote! { unwrap_u64() }),
-        WitType::S64 => Ok(quote! { unwrap_s64() }),
-        WitType::String => Ok(quote! { unwrap_string().into_owned() }),
+        WitType::U64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value) }),
+        WitType::S64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value) }),
+        WitType::String => {
+            Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value).into_owned() })
+        }
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];
             match &ty_def.kind {
-                TypeDefKind::Type(inner) => wit_type_to_unwrap_expr(resolve, inner),
+                TypeDefKind::Type(inner) => wit_type_to_unwrap_expr(resolve, inner, value),
                 TypeDefKind::Option(inner) => {
-                    let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
-                    Ok(quote! { unwrap_option().map(|v| v.into_owned().#inner_unwrap) })
+                    let inner_unwrap =
+                        wit_type_to_unwrap_expr(resolve, inner, quote! { v.into_owned() })?;
+                    Ok(
+                        quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_option(&#value).map(|v| #inner_unwrap) },
+                    )
                 }
                 TypeDefKind::List(inner) => {
-                    let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
-                    Ok(quote! { unwrap_list().map(|v| v.into_owned().#inner_unwrap).collect() })
+                    let inner_unwrap =
+                        wit_type_to_unwrap_expr(resolve, inner, quote! { v.into_owned() })?;
+                    Ok(
+                        quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_list(&#value).map(|v| #inner_unwrap).collect() },
+                    )
                 }
                 TypeDefKind::Result(result) => {
                     let ok_unwrap = match result.ok {
                         Some(ok_ty) => {
-                            let unwrap_expr = wit_type_to_unwrap_expr(resolve, &ok_ty)?;
+                            let unwrap_expr = wit_type_to_unwrap_expr(
+                                resolve,
+                                &ok_ty,
+                                quote! { v.unwrap().into_owned() },
+                            )?;
                             quote! {
-                                |v| v.unwrap().into_owned().#unwrap_expr
+                                |v| #unwrap_expr
                             }
                         }
                         None => quote! { |_| () },
                     };
                     let err_unwrap = match result.err {
                         Some(err_ty) => {
-                            let unwrap_expr = wit_type_to_unwrap_expr(resolve, &err_ty)?;
+                            let unwrap_expr = wit_type_to_unwrap_expr(
+                                resolve,
+                                &err_ty,
+                                quote! { e.unwrap().into_owned() },
+                            )?;
                             quote! {
-                                |e| e.unwrap().into_owned().#unwrap_expr
+                                |e| #unwrap_expr
                             }
                         }
                         None => quote! { |_| () },
                     };
                     Ok(quote! {
-                        unwrap_result().map(#ok_unwrap).map_err(#err_unwrap)
+                        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(&#value).map(#ok_unwrap).map_err(#err_unwrap)
                     })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
-                    Ok(quote! { into() })
+                    Ok(quote! { #value.into() })
                 }
                 _ => bail!("Unsupported WIT type definition kind: {:?}", ty_def.kind),
             }
@@ -173,38 +193,50 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
 
 pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
     if let SynType::Path(TypePath { qself: None, path }) = ty
-        && path.segments.len() == 1
+        && let Some(segment) = &path.segments.last()
+        && segment.arguments == PathArguments::None
     {
-        let segment = &path.segments[0];
-        if segment.arguments == PathArguments::None {
-            match segment.ident.to_string().as_str() {
-                "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
-                "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
-                "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
-                "bool" => return Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
-                _ => (),
-            }
+        match segment.ident.to_string().as_str() {
+            "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
+            "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+            "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
+            "bool" => return Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
+            _ => (),
         }
     }
 
     Ok(quote! { #ty::wave_type() })
 }
 
-pub fn syn_type_to_unwrap_expr(ty: &SynType) -> syn::Result<TokenStream> {
+pub fn syn_type_to_unwrap_expr(ty: &SynType, value: TokenStream) -> syn::Result<TokenStream> {
     if let SynType::Path(TypePath { qself: None, path }) = ty
-        && path.segments.len() == 1
+        && let Some(segment) = &path.segments.last()
+        && segment.arguments == PathArguments::None
     {
-        let segment = &path.segments[0];
-        if segment.arguments == PathArguments::None {
-            let ident = segment.ident.to_string();
-            match ident.as_str() {
-                "u64" => return Ok(quote! { unwrap_u64() }),
-                "i64" => return Ok(quote! { unwrap_s64() }),
-                "String" => return Ok(quote! { unwrap_string().into_owned() }),
-                "bool" => return Ok(quote! { unwrap_bool() }),
-                _ => {}
+        let ident = segment.ident.to_string();
+        match ident.as_str() {
+            "u64" => {
+                return Ok(
+                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value.into_owned()) },
+                );
             }
+            "i64" => {
+                return Ok(
+                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value.into_owned()) },
+                );
+            }
+            "String" => {
+                return Ok(
+                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
+                );
+            }
+            "bool" => {
+                return Ok(
+                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value.into_owned()) },
+                );
+            }
+            _ => {}
         }
     }
-    Ok(quote! { into_owned().into() })
+    Ok(quote! { #value.into_owned().into() })
 }

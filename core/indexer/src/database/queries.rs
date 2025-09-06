@@ -232,24 +232,14 @@ pub async fn path_prefix_filter_contract_state(
             ((":contract_id", contract_id), (":path", path.clone())),
         )
         .await?;
-    let stream = stream::unfold(rows, move |mut rows| {
-        let path_owned = path.clone();
-        async move {
-            match rows.next().await {
-                Ok(Some(row)) => match row.get::<String>(0) {
-                    Ok(full_path) => {
-                        let segment = full_path
-                            .get((path_owned.len() + 1)..)
-                            .and_then(|rest| rest.split('.').next())
-                            .map(|s| s.to_string())
-                            .unwrap_or_default();
-                        Some((Ok(segment), rows))
-                    }
-                    Err(e) => Some((Err(e), rows)),
-                },
-                Ok(None) => None,
+    let stream = stream::unfold(rows, |mut rows| async move {
+        match rows.next().await {
+            Ok(Some(row)) => match row.get::<String>(0) {
+                Ok(segment) => Some((Ok(segment), rows)),
                 Err(e) => Some((Err(e), rows)),
-            }
+            },
+            Ok(None) => None,
+            Err(e) => Some((Err(e), rows)),
         }
     });
 

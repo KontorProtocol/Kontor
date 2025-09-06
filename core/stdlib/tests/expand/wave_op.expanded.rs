@@ -21,28 +21,28 @@ impl From<Op> for stdlib::wasm_wave::value::Value {
     fn from(value_: Op) -> Self {
         (match value_ {
             Op::Id => {
-                stdlib::wasm_wave::value::Value::make_variant(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &Op::wave_type(),
                     "id",
                     None,
                 )
             }
             Op::Sum(operand) => {
-                stdlib::wasm_wave::value::Value::make_variant(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &Op::wave_type(),
                     "sum",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )
             }
             Op::Mul(operand) => {
-                stdlib::wasm_wave::value::Value::make_variant(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &Op::wave_type(),
                     "mul",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )
             }
             Op::Div(operand) => {
-                stdlib::wasm_wave::value::Value::make_variant(
+                <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &Op::wave_type(),
                     "div",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
@@ -55,7 +55,7 @@ impl From<Op> for stdlib::wasm_wave::value::Value {
 #[automatically_derived]
 impl From<stdlib::wasm_wave::value::Value> for Op {
     fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-        let (key_, val_) = value_.unwrap_variant();
+        let (key_, val_) = stdlib::wasm_wave::wasm::WasmValue::unwrap_variant(&value_);
         match key_ {
             key_ if key_.eq("id") => Op::Id,
             key_ if key_.eq("sum") => Op::Sum(val_.unwrap().into_owned().into()),

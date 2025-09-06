@@ -33,7 +33,6 @@ pub use wit::kontor::built_in::foreign::ContractAddress;
 pub use wit::kontor::built_in::numbers::{self, Decimal, Integer};
 
 use anyhow::{Result, anyhow};
-use wasm_wave::{self, wasm::WasmValue as _};
 use wasmtime::{
     Engine, Store,
     component::{
@@ -51,17 +50,6 @@ use crate::runtime::{
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
 
-impl Error {
-    pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::variant([
-            ("message", Some(wasm_wave::value::Type::STRING)),
-            ("overflow", Some(wasm_wave::value::Type::STRING)),
-            ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
-        ])
-        .unwrap()
-    }
-}
-
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         None
@@ -78,82 +66,9 @@ impl fmt::Display for Error {
     }
 }
 
-impl From<Error> for wasm_wave::value::Value {
-    fn from(value_: Error) -> Self {
-        (match value_ {
-            Error::Message(operand) => wasm_wave::value::Value::make_variant(
-                &Error::wave_type(),
-                "message",
-                Some(wasm_wave::value::Value::from(operand)),
-            ),
-            Error::Overflow(operand) => wasm_wave::value::Value::make_variant(
-                &Error::wave_type(),
-                "overflow",
-                Some(wasm_wave::value::Value::from(operand)),
-            ),
-            Error::DivByZero(operand) => wasm_wave::value::Value::make_variant(
-                &Error::wave_type(),
-                "div-by-zero",
-                Some(wasm_wave::value::Value::from(operand)),
-            ),
-        })
-        .unwrap()
-    }
-}
-impl From<wasm_wave::value::Value> for Error {
-    fn from(value_: wasm_wave::value::Value) -> Self {
-        let (key_, val_) = value_.unwrap_variant();
-        match key_ {
-            key_ if key_.eq("message") => {
-                Error::Message(val_.unwrap().unwrap_string().into_owned())
-            }
-            key_ if key_.eq("overflow") => {
-                Error::Overflow(val_.unwrap().unwrap_string().into_owned())
-            }
-            key_ if key_.eq("div-by-zero") => {
-                Error::DivByZero(val_.unwrap().unwrap_string().into_owned())
-            }
-            key_ => panic!("Unknown tag {}", key_),
-        }
-    }
-}
-
-impl Integer {
-    pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
-    }
-}
-
 impl fmt::Display for Integer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.value)
-    }
-}
-
-impl From<Integer> for wasm_wave::value::Value {
-    fn from(value_: Integer) -> Self {
-        wasm_wave::value::Value::make_record(
-            &Integer::wave_type(),
-            [("value", wasm_wave::value::Value::from(value_.value))],
-        )
-        .unwrap()
-    }
-}
-
-impl From<wasm_wave::value::Value> for Integer {
-    fn from(value_: wasm_wave::value::Value) -> Self {
-        let mut value = None;
-
-        for (key_, val_) in value_.unwrap_record() {
-            match key_.as_ref() {
-                "value" => value = Some(val_.unwrap_string().into_owned()),
-                key_ => panic!("Unknown field: {}", key_),
-            }
-        }
-
-        Self {
-            value: value.expect("Missing 'value' field"),
-        }
     }
 }
 
@@ -183,42 +98,9 @@ impl From<&str> for Integer {
     }
 }
 
-impl Decimal {
-    pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
-    }
-}
-
 impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.value)
-    }
-}
-
-impl From<Decimal> for wasm_wave::value::Value {
-    fn from(value_: Decimal) -> Self {
-        wasm_wave::value::Value::make_record(
-            &Decimal::wave_type(),
-            [("value", wasm_wave::value::Value::from(value_.value))],
-        )
-        .unwrap()
-    }
-}
-
-impl From<wasm_wave::value::Value> for Decimal {
-    fn from(value_: wasm_wave::value::Value) -> Self {
-        let mut value = None;
-
-        for (key_, val_) in value_.unwrap_record() {
-            match key_.as_ref() {
-                "value" => value = Some(val_.unwrap_string().into_owned()),
-                key_ => panic!("Unknown field: {}", key_),
-            }
-        }
-
-        Self {
-            value: value.expect("Missing 'value' field"),
-        }
     }
 }
 
@@ -277,57 +159,9 @@ impl From<&str> for Decimal {
     }
 }
 
-impl ContractAddress {
-    pub fn wave_type() -> wasm_wave::value::Type {
-        wasm_wave::value::Type::record([
-            ("name", wasm_wave::value::Type::STRING),
-            ("height", wasm_wave::value::Type::S64),
-            ("tx-index", wasm_wave::value::Type::S64),
-        ])
-        .unwrap()
-    }
-}
-
 impl fmt::Display for ContractAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}_{}_{}", self.name, self.height, self.tx_index)
-    }
-}
-
-impl From<ContractAddress> for wasm_wave::value::Value {
-    fn from(value_: ContractAddress) -> Self {
-        wasm_wave::value::Value::make_record(
-            &ContractAddress::wave_type(),
-            [
-                ("name", wasm_wave::value::Value::from(value_.name)),
-                ("height", wasm_wave::value::Value::from(value_.height)),
-                ("tx-index", wasm_wave::value::Value::from(value_.tx_index)),
-            ],
-        )
-        .unwrap()
-    }
-}
-
-impl From<wasm_wave::value::Value> for ContractAddress {
-    fn from(value_: wasm_wave::value::Value) -> Self {
-        let mut name = None;
-        let mut height = None;
-        let mut tx_index = None;
-
-        for (key_, val_) in value_.unwrap_record() {
-            match key_.as_ref() {
-                "name" => name = Some(val_.unwrap_string().into_owned()),
-                "height" => height = Some(val_.unwrap_s64()),
-                "tx-index" => tx_index = Some(val_.unwrap_s64()),
-                key_ => panic!("Unknown field: {}", key_),
-            }
-        }
-
-        Self {
-            name: name.expect("Missing 'name' field"),
-            height: height.expect("Missing 'height' field"),
-            tx_index: tx_index.expect("Missing 'tx_index' field"),
-        }
     }
 }
 

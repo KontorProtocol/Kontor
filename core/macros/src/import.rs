@@ -99,9 +99,6 @@ pub fn import(
 
     quote! {
         mod #module_name {
-            use stdlib::wasm_wave::wasm::WasmValue as _;
-            use stdlib::Wavey;
-
             #supers
 
             #(#type_streams)*
@@ -210,10 +207,13 @@ pub fn generate_functions(
     let mut ret_expr = match &export.result {
         Some(ty) => {
             let wave_ty = transformers::wit_type_to_wave_type(resolve, ty)?;
-            let unwrap_expr = transformers::wit_type_to_unwrap_expr(resolve, ty)?;
-            quote! {
-                stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap().#unwrap_expr
-            }
+            transformers::wit_type_to_unwrap_expr(
+                resolve,
+                ty,
+                quote! {
+                    stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap()
+                },
+            )?
         }
         None => quote! { () },
     };
@@ -272,7 +272,7 @@ pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> R
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        #[derive(Debug, Clone, Wavey, PartialEq, Eq)]
+        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
         pub struct #struct_name {
             #(#fields),*
         }
@@ -316,7 +316,7 @@ pub fn print_typedef_variant(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        #[derive(Debug, Clone, Wavey, PartialEq, Eq)]
+        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
         pub enum #enum_name {
             #(#variants),*
         }

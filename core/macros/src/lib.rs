@@ -34,7 +34,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             world: #world,
             path: #path,
             generate_all,
-            additional_derives: [stdlib::Storage],
+            additional_derives: [stdlib::Storage, stdlib::Wavey],
             export_macro_name: "__export__",
         });
 
@@ -207,54 +207,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl foreign::ContractAddress {
-            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                stdlib::wasm_wave::value::Type::record([
-                    ("name", stdlib::wasm_wave::value::Type::STRING),
-                    ("height", stdlib::wasm_wave::value::Type::S64),
-                    ("tx_index", stdlib::wasm_wave::value::Type::S64),
-                ])
-                .unwrap()
-            }
-        }
-        #[automatically_derived]
-        impl From<foreign::ContractAddress> for stdlib::wasm_wave::value::Value {
-            fn from(value_: foreign::ContractAddress) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
-                    &foreign::ContractAddress::wave_type(),
-                    [
-                        ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
-                        ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
-                        ("tx_index", stdlib::wasm_wave::value::Value::from(value_.tx_index)),
-                    ],
-                )
-                .unwrap()
-            }
-        }
-        #[automatically_derived]
-        impl From<stdlib::wasm_wave::value::Value> for foreign::ContractAddress {
-            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                let mut name = None;
-                let mut height = None;
-                let mut tx_index = None;
-
-                for (key_, val_) in  value_.unwrap_record() {
-                    match key_.as_ref() {
-                        "name" => name = Some(val_.unwrap_string().into_owned()),
-                        "height" => height = Some(val_.unwrap_s64()),
-                        "tx_index" => tx_index = Some(val_.unwrap_s64()),
-                        key_ => panic!("Unknown field: {}", key_),
-                    }
-                }
-
-                Self {
-                    name: name.expect("Missing 'name' field"),
-                    height: height.expect("Missing 'height' field"),
-                    tx_index: tx_index.expect("Missing 'tx_index' field"),
-                }
-            }
-        }
-
         #[automatically_derived]
         impl Default for numbers::Integer {
             fn default() -> Self {
@@ -314,134 +266,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
                     numbers::Ordering::Less => Ordering::Less,
                     numbers::Ordering::Equal => Ordering::Equal,
                     numbers::Ordering::Greater => Ordering::Greater,
-                }
-            }
-        }
-
-        impl kontor::built_in::error::Error {
-            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-                stdlib::wasm_wave::value::Type::variant([
-                        ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
-                        ("overflow", Some(wasm_wave::value::Type::STRING)),
-                        ("div-by-zero", Some(wasm_wave::value::Type::STRING)),
-                    ])
-                    .unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<kontor::built_in::error::Error> for stdlib::wasm_wave::value::Value {
-            fn from(value_: kontor::built_in::error::Error) -> Self {
-                (match value_ {
-                    kontor::built_in::error::Error::Message(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
-                            &kontor::built_in::error::Error::wave_type(),
-                            "message",
-                            Some(stdlib::wasm_wave::value::Value::from(operand)),
-                        )
-                    },
-                    kontor::built_in::error::Error::Overflow(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
-                            &kontor::built_in::error::Error::wave_type(),
-                            "overflow",
-                            Some(stdlib::wasm_wave::value::Value::from(operand)),
-                        )
-                    },
-                    kontor::built_in::error::Error::DivByZero(operand) => {
-                        stdlib::wasm_wave::value::Value::make_variant(
-                            &kontor::built_in::error::Error::wave_type(),
-                            "div-by-zero",
-                            Some(stdlib::wasm_wave::value::Value::from(operand)),
-                        )
-                    }
-                })
-                    .unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<stdlib::wasm_wave::value::Value> for kontor::built_in::error::Error {
-            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                let (key_, val_) = value_.unwrap_variant();
-                match key_ {
-                    key_ if key_.eq("message") => {
-                        kontor::built_in::error::Error::Message(val_.unwrap().unwrap_string().into_owned())
-                    }
-                    key_ if key_.eq("overflow") => {
-                        kontor::built_in::error::Error::Overflow(val_.unwrap().unwrap_string().into_owned())
-                    }
-                    key_ if key_.eq("div-by-zero") => {
-                        kontor::built_in::error::Error::DivByZero(val_.unwrap().unwrap_string().into_owned())
-                    }
-                    key_ => panic!("Unknown tag {}", key_),
-                }
-            }
-        }
-
-        impl kontor::built_in::numbers::Integer {
-            pub fn wave_type() -> wasm_wave::value::Type {
-                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<numbers::Integer> for stdlib::wasm_wave::value::Value {
-            fn from(value_: numbers::Integer) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
-                    &numbers::Integer::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
-                )
-                .unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<stdlib::wasm_wave::value::Value> for numbers::Integer {
-            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                let mut value = None;
-
-                for (key_, val_) in value_.unwrap_record() {
-                    match key_.as_ref() {
-                        "value" => value = Some(val_.unwrap_string().into_owned()),
-                        key_ => panic!("Unknown field: {}", key_),
-                    }
-                }
-
-                Self {
-                    value: value.expect("Missing 'value' field"),
-                }
-            }
-        }
-
-        impl kontor::built_in::numbers::Decimal {
-            pub fn wave_type() -> wasm_wave::value::Type {
-                wasm_wave::value::Type::record([("value", wasm_wave::value::Type::STRING)]).unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<numbers::Decimal> for stdlib::wasm_wave::value::Value {
-            fn from(value_: numbers::Decimal) -> Self {
-                stdlib::wasm_wave::value::Value::make_record(
-                    &numbers::Decimal::wave_type(), [ ("value", stdlib::wasm_wave::value::Value::from(value_.value)) ],
-                )
-                .unwrap()
-            }
-        }
-
-        #[automatically_derived]
-        impl From<stdlib::wasm_wave::value::Value> for numbers::Decimal {
-            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                let mut value = None;
-
-                for (key_, val_) in value_.unwrap_record() {
-                    match key_.as_ref() {
-                        "value" => value = Some(val_.unwrap_string().into_owned()),
-                        key_ => panic!("Unknown field: {}", key_),
-                    }
-                }
-
-                Self {
-                    value: value.expect("Missing 'value' field"),
                 }
             }
         }

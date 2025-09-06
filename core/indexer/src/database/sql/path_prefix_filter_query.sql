@@ -1,16 +1,11 @@
-SELECT path
+SELECT regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)
 FROM (
   SELECT
     path,
     height,
     tx_id,
     ROW_NUMBER() OVER (
-      PARTITION BY 
-        CASE 
-          WHEN INSTR(SUBSTR(path, LENGTH(:path) + 2), '.') > 0 
-          THEN SUBSTR(path, 1, LENGTH(:path) + INSTR(SUBSTR(path, LENGTH(:path) + 2), '.'))
-          ELSE path
-        END
+      PARTITION BY regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)
       ORDER BY height DESC, tx_id DESC
     ) AS rank
   FROM
