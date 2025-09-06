@@ -99,8 +99,6 @@ pub fn import(
 
     quote! {
         mod #module_name {
-            use stdlib::wasm_wave::wasm::WasmValue as _;
-
             #supers
 
             #(#type_streams)*
@@ -209,10 +207,13 @@ pub fn generate_functions(
     let mut ret_expr = match &export.result {
         Some(ty) => {
             let wave_ty = transformers::wit_type_to_wave_type(resolve, ty)?;
-            let unwrap_expr = transformers::wit_type_to_unwrap_expr(resolve, ty)?;
-            quote! {
-                stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap().#unwrap_expr
-            }
+            transformers::wit_type_to_unwrap_expr(
+                resolve,
+                ty,
+                quote! {
+                    stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap()
+                },
+            )?
         }
         None => quote! { () },
     };

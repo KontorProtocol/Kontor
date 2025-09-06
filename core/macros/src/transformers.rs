@@ -5,48 +5,68 @@ use quote::quote;
 use syn::{Ident, PathArguments, Type as SynType, TypePath};
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
 
-pub fn wit_type_to_unwrap_expr(resolve: &Resolve, ty: &WitType) -> anyhow::Result<TokenStream> {
+pub fn wit_type_to_unwrap_expr(
+    resolve: &Resolve,
+    ty: &WitType,
+    value: TokenStream,
+) -> anyhow::Result<TokenStream> {
     match ty {
-        WitType::U64 => Ok(quote! { unwrap_u64() }),
-        WitType::S64 => Ok(quote! { unwrap_s64() }),
-        WitType::String => Ok(quote! { unwrap_string().into_owned() }),
+        WitType::U64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value) }),
+        WitType::S64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value) }),
+        WitType::String => {
+            Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value).into_owned() })
+        }
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];
             match &ty_def.kind {
-                TypeDefKind::Type(inner) => wit_type_to_unwrap_expr(resolve, inner),
+                TypeDefKind::Type(inner) => wit_type_to_unwrap_expr(resolve, inner, value),
                 TypeDefKind::Option(inner) => {
-                    let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
-                    Ok(quote! { unwrap_option().map(|v| v.into_owned().#inner_unwrap) })
+                    let inner_unwrap =
+                        wit_type_to_unwrap_expr(resolve, inner, quote! { v.into_owned() })?;
+                    Ok(
+                        quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_option(&#value).map(|v| #inner_unwrap) },
+                    )
                 }
                 TypeDefKind::List(inner) => {
-                    let inner_unwrap = wit_type_to_unwrap_expr(resolve, inner)?;
-                    Ok(quote! { unwrap_list().map(|v| v.into_owned().#inner_unwrap).collect() })
+                    let inner_unwrap =
+                        wit_type_to_unwrap_expr(resolve, inner, quote! { v.into_owned() })?;
+                    Ok(
+                        quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_list(&#value).map(|v| #inner_unwrap).collect() },
+                    )
                 }
                 TypeDefKind::Result(result) => {
                     let ok_unwrap = match result.ok {
                         Some(ok_ty) => {
-                            let unwrap_expr = wit_type_to_unwrap_expr(resolve, &ok_ty)?;
+                            let unwrap_expr = wit_type_to_unwrap_expr(
+                                resolve,
+                                &ok_ty,
+                                quote! { v.unwrap().into_owned() },
+                            )?;
                             quote! {
-                                |v| v.unwrap().into_owned().#unwrap_expr
+                                |v| #unwrap_expr
                             }
                         }
                         None => quote! { |_| () },
                     };
                     let err_unwrap = match result.err {
                         Some(err_ty) => {
-                            let unwrap_expr = wit_type_to_unwrap_expr(resolve, &err_ty)?;
+                            let unwrap_expr = wit_type_to_unwrap_expr(
+                                resolve,
+                                &err_ty,
+                                quote! { e.unwrap().into_owned() },
+                            )?;
                             quote! {
-                                |e| e.unwrap().into_owned().#unwrap_expr
+                                |e| #unwrap_expr
                             }
                         }
                         None => quote! { |_| () },
                     };
                     Ok(quote! {
-                        unwrap_result().map(#ok_unwrap).map_err(#err_unwrap)
+                        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(&#value).map(#ok_unwrap).map_err(#err_unwrap)
                     })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
-                    Ok(quote! { into() })
+                    Ok(quote! { #value.into() })
                 }
                 _ => bail!("Unsupported WIT type definition kind: {:?}", ty_def.kind),
             }
