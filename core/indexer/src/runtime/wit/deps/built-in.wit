@@ -91,6 +91,9 @@ interface numbers {
 		greater
     }
 
+    u64-to-integer: func(i: u64) -> integer;
+    s64-to-integer: func(i: s64) -> integer;
+    string-to-integer: func(s: string) -> integer;
 	eq-integer: func(a: integer, b: integer) -> bool;
 	cmp-integer: func(a: integer, b: integer) -> ordering;
 	add-integer: func(a: integer, b: integer) -> integer;
@@ -99,6 +102,10 @@ interface numbers {
 	div-integer: func(a: integer, b: integer) -> integer;
 
 	integer-to-decimal: func(i: integer) -> decimal;
+    u64-to-decimal: func(i: u64) -> decimal;
+    s64-to-decimal: func(i: s64) -> decimal;
+    f64-to-decimal: func(f: f64) -> decimal;
+    string-to-decimal: func(s: string) -> decimal;
 	eq-decimal: func(a: decimal, b: decimal) -> bool;
 	cmp-decimal: func(a: decimal, b: decimal) -> ordering;
 	add-decimal: func(a: decimal, b: decimal) -> decimal;

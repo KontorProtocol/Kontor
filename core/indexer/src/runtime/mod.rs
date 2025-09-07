@@ -9,13 +9,10 @@ pub mod wit;
 
 pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
-use fastnum::{D256, dec256, decimal};
 use futures_util::StreamExt;
 use libsql::Connection;
-use num::bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fmt;
 use stdlib::impls;
 pub use storage::Storage;
 use tokio::sync::Mutex;
@@ -32,7 +29,7 @@ use wit::kontor::*;
 pub use wit::kontor;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::foreign::ContractAddress;
-pub use wit::kontor::built_in::numbers::{self, Decimal, Integer, Ordering as NumericOrdering};
+pub use wit::kontor::built_in::numbers::{Decimal, Integer, Ordering as NumericOrdering};
 
 use anyhow::{Result, anyhow};
 use wasmtime::{
@@ -52,122 +49,19 @@ use crate::runtime::{
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
 
-impl std::fmt::Display for Error {
+impl std::fmt::Display for kontor::built_in::error::Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Message(msg) => write!(f, "Error: {}", msg),
-            Error::Overflow(msg) => write!(f, "Overflow Error: {}", msg),
-            Error::DivByZero(msg) => write!(f, "DivByZero Error: {}", msg),
+            kontor::built_in::error::Error::Message(msg) => write!(f, "Error: {}", msg),
+            kontor::built_in::error::Error::Overflow(msg) => write!(f, "Overflow Error: {}", msg),
+            kontor::built_in::error::Error::DivByZero(msg) => write!(f, "DivByZero Error: {}", msg),
         }
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for kontor::built_in::error::Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
-    }
-}
-
-impl fmt::Display for Integer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
-impl From<i64> for Integer {
-    fn from(value_: i64) -> Self {
-        Integer {
-            value: value_.to_string(),
-        }
-    }
-}
-
-impl From<String> for Integer {
-    fn from(value_: String) -> Self {
-        let i = value_.parse::<BigInt>().expect("Must be valid integer");
-        Integer {
-            value: i.to_string(),
-        }
-    }
-}
-
-impl From<&str> for Integer {
-    fn from(value_: &str) -> Self {
-        let i = value_.parse::<BigInt>().expect("Must be valid integer");
-        Integer {
-            value: i.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for Decimal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
-const MIN_DECIMAL: D256 = dec256!(0.000_000_000_000_000_001);
-const CTX: decimal::Context =
-    decimal::Context::default().with_signal_traps(decimal::SignalsTraps::empty());
-
-impl From<f64> for Decimal {
-    fn from(value_: f64) -> Self {
-        let dec: D256 = value_.into();
-        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
-        if res.is_op_invalid() {
-            panic!("invalid decimal number");
-        }
-        Decimal {
-            value: res.to_string(),
-        }
-    }
-}
-
-impl From<D256> for Decimal {
-    fn from(dec: D256) -> Self {
-        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
-        if res.is_op_invalid() {
-            panic!("invalid decimal number");
-        }
-        Decimal {
-            value: res.to_string(),
-        }
-    }
-}
-
-impl From<String> for Decimal {
-    fn from(value_: String) -> Self {
-        let dec = value_
-            .parse::<D256>()
-            .expect("Must be valid decimal number");
-        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
-        if res.is_op_invalid() {
-            panic!("invalid decimal number");
-        }
-        Decimal {
-            value: res.to_string(),
-        }
-    }
-}
-
-impl From<&str> for Decimal {
-    fn from(value_: &str) -> Self {
-        let dec = value_
-            .parse::<D256>()
-            .expect("Must be valid decimal number");
-        let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
-        if res.is_op_invalid() {
-            panic!("invalid decimal number");
-        }
-        Decimal {
-            value: res.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for ContractAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.name, self.height, self.tx_index)
     }
 }
 
@@ -802,6 +696,18 @@ impl built_in::context::HostFallContext for Runtime {
 }
 
 impl built_in::numbers::Host for Runtime {
+    async fn u64_to_integer(&mut self, i: u64) -> Result<Integer> {
+        numerics::u64_to_integer(i)
+    }
+
+    async fn s64_to_integer(&mut self, i: i64) -> Result<Integer> {
+        numerics::s64_to_integer(i)
+    }
+
+    async fn string_to_integer(&mut self, s: String) -> Result<Integer> {
+        numerics::string_to_integer(&s)
+    }
+
     async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool> {
         numerics::eq_integer(&a, &b)
     }
@@ -828,6 +734,22 @@ impl built_in::numbers::Host for Runtime {
 
     async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal> {
         numerics::integer_to_decimal(&i)
+    }
+
+    async fn u64_to_decimal(&mut self, i: u64) -> Result<Decimal> {
+        numerics::u64_to_decimal(i)
+    }
+
+    async fn s64_to_decimal(&mut self, i: i64) -> Result<Decimal> {
+        numerics::s64_to_decimal(i)
+    }
+
+    async fn f64_to_decimal(&mut self, f: f64) -> Result<Decimal> {
+        numerics::f64_to_decimal(f)
+    }
+
+    async fn string_to_decimal(&mut self, s: String) -> Result<Decimal> {
+        numerics::string_to_decimal(&s)
     }
 
     async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool> {

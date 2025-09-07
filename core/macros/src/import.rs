@@ -3,6 +3,7 @@ use std::fs;
 use crate::transformers;
 
 use anyhow::Result;
+use darling::FromMeta;
 use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -10,6 +11,36 @@ use syn::Ident;
 use wit_parser::{
     Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
 };
+
+#[derive(FromMeta)]
+pub struct Config {
+    name: String,
+    mod_name: Option<String>,
+    height: i64,
+    tx_index: i64,
+    path: String,
+    world: Option<String>,
+    test: Option<bool>,
+}
+
+pub fn generate(config: Config) -> TokenStream {
+    let name = config.name;
+    let module_name =
+        Ident::from_string(&config.mod_name.unwrap_or(name.clone().to_snake_case())).unwrap();
+    let height = config.height;
+    let tx_index = config.tx_index;
+    let path = config.path;
+    let world_name = config.world.unwrap_or("contract".to_string());
+    let test = config.test.unwrap_or(false);
+
+    import(
+        path,
+        module_name,
+        world_name,
+        Some((&name, height, tx_index)),
+        test,
+    )
+}
 
 pub fn import(
     path: String,
@@ -85,7 +116,7 @@ pub fn import(
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
-            use indexer::runtime::numbers::{ Decimal, Integer };
+            use super::{ Decimal, Integer };
         }
     } else {
         quote! {
