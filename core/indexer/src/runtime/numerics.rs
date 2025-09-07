@@ -12,6 +12,25 @@ use super::{Decimal, Error, Integer, NumericOrdering};
 const MIN_DECIMAL: D256 = dec256!(0.000_000_000_000_000_001);
 const CTX: Context = Context::default().with_signal_traps(SignalsTraps::empty());
 
+pub fn u64_to_integer(i: u64) -> Result<Integer> {
+    Ok(Integer {
+        value: i.to_string(),
+    })
+}
+
+pub fn s64_to_integer(i: i64) -> Result<Integer> {
+    Ok(Integer {
+        value: i.to_string(),
+    })
+}
+
+pub fn string_to_integer(s: &str) -> Result<Integer> {
+    let i = s.parse::<BigInt>()?;
+    Ok(Integer {
+        value: i.to_string(),
+    })
+}
+
 pub fn eq_integer(a: &Integer, b: &Integer) -> Result<bool> {
     let big_a = a.value.parse::<BigInt>()?;
     let big_b = b.value.parse::<BigInt>()?;
@@ -71,6 +90,40 @@ pub fn integer_to_decimal(i: &Integer) -> Result<Decimal> {
     }
     Ok(Decimal {
         value: dec.to_string(),
+    })
+}
+
+fn num_to_decimal(n: impl Into<D256>) -> Result<Decimal> {
+    let dec: D256 = n.into();
+    let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+    if res.is_op_invalid() {
+        return Err(Error::Overflow("invalid decimal number".to_string()).into());
+    }
+    Ok(Decimal {
+        value: res.to_string(),
+    })
+}
+
+pub fn u64_to_decimal(i: u64) -> Result<Decimal> {
+    num_to_decimal(i)
+}
+
+pub fn s64_to_decimal(i: i64) -> Result<Decimal> {
+    num_to_decimal(i)
+}
+
+pub fn f64_to_decimal(f: f64) -> Result<Decimal> {
+    num_to_decimal(f)
+}
+
+pub fn string_to_decimal(s: &str) -> Result<Decimal> {
+    let dec = s.parse::<D256>()?;
+    let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
+    if res.is_op_invalid() {
+        return Err(Error::Overflow("invalid decimal number".to_string()).into());
+    }
+    Ok(Decimal {
+        value: res.to_string(),
     })
 }
 

@@ -193,10 +193,17 @@ pub fn impls(input: TokenStream) -> TokenStream {
     let (numerics_mod_name, numerics_unwrap) = if host {
         (quote! { numerics }, quote! { .unwrap() })
     } else {
-        (quote! { numbers }, quote! {})
+        (quote! { kontor::built_in::numbers }, quote! {})
     };
 
     quote! {
+        #[automatically_derived]
+        impl std::fmt::Display for kontor::built_in::foreign::ContractAddress {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}_{}_{}", self.name, self.height, self.tx_index)
+            }
+        }
+
         #[automatically_derived]
         impl PartialEq for kontor::built_in::foreign::ContractAddress {
             fn eq(&self, other: &Self) -> bool {
@@ -254,6 +261,13 @@ pub fn impls(input: TokenStream) -> TokenStream {
         impl From<core::char::ParseCharError> for kontor::built_in::error::Error {
             fn from(err: core::char::ParseCharError) -> Self {
                 kontor::built_in::error::Error::Message(format!("Parse char error: {:?}", err))
+            }
+        }
+
+        #[automatically_derived]
+        impl std::fmt::Display for kontor::built_in::numbers::Integer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.value)
             }
         }
 
@@ -329,6 +343,55 @@ pub fn impls(input: TokenStream) -> TokenStream {
 
         #[automatically_derived]
         impl Eq for kontor::built_in::numbers::Integer {}
+
+        #[automatically_derived]
+        impl From<u64> for kontor::built_in::numbers::Integer {
+            fn from(i: u64) -> Self {
+                #numerics_mod_name::u64_to_integer(i)#numerics_unwrap
+            }
+        }
+
+        #[automatically_derived]
+        impl From<u32> for kontor::built_in::numbers::Integer {
+            fn from(i: u32) -> Self {
+                (i as u64).into()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<i64> for kontor::built_in::numbers::Integer {
+            fn from(i: i64) -> Self {
+                #numerics_mod_name::s64_to_integer(i)#numerics_unwrap
+            }
+        }
+
+        #[automatically_derived]
+        impl From<i32> for kontor::built_in::numbers::Integer {
+            fn from(i: i32) -> Self {
+                (i as i64).into()
+            }
+        }
+
+        #[automatically_derived]
+        impl From<&str> for kontor::built_in::numbers::Integer {
+            fn from(s: &str) -> Self {
+                #numerics_mod_name::string_to_integer(s)#numerics_unwrap
+            }
+        }
+        
+        #[automatically_derived]
+        impl From<String> for kontor::built_in::numbers::Integer {
+            fn from(s: String) -> Self {
+                s.as_str().into()
+            }
+        }
+
+        #[automatically_derived]
+        impl std::fmt::Display for kontor::built_in::numbers::Decimal {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.value)
+            }
+        }
 
         #[automatically_derived]
         impl Default for kontor::built_in::numbers::Decimal {
@@ -408,6 +471,54 @@ pub fn impls(input: TokenStream) -> TokenStream {
         impl From<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
             fn from(i: kontor::built_in::numbers::Integer) -> kontor::built_in::numbers::Decimal {
                 #numerics_mod_name::integer_to_decimal(&i)#numerics_unwrap
+            }
+        }
+
+        impl From<u64> for kontor::built_in::numbers::Decimal {
+            fn from(i: u64) -> Self {
+                #numerics_mod_name::u64_to_decimal(i)#numerics_unwrap
+            }
+        }
+
+        impl From<u32> for kontor::built_in::numbers::Decimal {
+            fn from(i: u32) -> Self {
+                (i as u64).into()
+            }
+        }
+
+        impl From<i64> for kontor::built_in::numbers::Decimal {
+            fn from(i: i64) -> Self {
+                #numerics_mod_name::s64_to_decimal(i)#numerics_unwrap
+            }
+        }
+
+        impl From<i32> for kontor::built_in::numbers::Decimal {
+            fn from(i: i32) -> Self {
+                (i as i64).into()
+            }
+        }
+
+        impl From<f64> for kontor::built_in::numbers::Decimal {
+            fn from(f: f64) -> Self {
+                #numerics_mod_name::f64_to_decimal(f)#numerics_unwrap
+            }
+        }
+
+        impl From<f32> for kontor::built_in::numbers::Decimal {
+            fn from(f: f32) -> Self {
+                (f as f64).into()
+            }
+        }
+
+        impl From<&str> for kontor::built_in::numbers::Decimal {
+            fn from(s: &str) -> Self {
+                #numerics_mod_name::string_to_decimal(s)#numerics_unwrap
+            }
+        }
+
+        impl From<String> for kontor::built_in::numbers::Decimal {
+            fn from(s: String) -> Self {
+                s.as_str().into()
             }
         }
     }

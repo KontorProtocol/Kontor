@@ -85,7 +85,7 @@ pub fn import(
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
-            use indexer::runtime::numbers::{ Decimal, Integer };
+            use super::{ Decimal, Integer };
         }
     } else {
         quote! {
