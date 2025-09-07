@@ -12,7 +12,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context/fall-context": FallContext,
         "kontor:built-in/context/keys": Keys,
     },
-    additional_derives: [PartialEq, Eq, stdlib::Wavey],
+    additional_derives: [stdlib::Wavey],
     imports: {
         default: async | trappable,
     }

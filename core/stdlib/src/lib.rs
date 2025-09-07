@@ -2,7 +2,9 @@ mod dot_path_buf;
 mod storage_interface;
 
 pub use dot_path_buf::*;
-pub use macros::{Root, Storage, StorageRoot, Store, Wavey, Wrapper, contract, import, interface};
+pub use macros::{
+    Root, Storage, StorageRoot, Store, Wavey, Wrapper, contract, impls, import, interface,
+};
 pub use storage_interface::*;
 pub use wasm_wave;
 

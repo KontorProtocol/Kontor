@@ -38,8 +38,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
             export_macro_name: "__export__",
         });
 
-        use std::{cmp::Ordering, ops::{Add, Sub, Mul, Div}};
-        use stdlib::wasm_wave::wasm::WasmValue as _;
         use kontor::built_in::*;
         use kontor::built_in::foreign::ContractAddressWrapper;
         use kontor::built_in::numbers::IntegerWrapper;
@@ -172,6 +170,65 @@ pub fn contract(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl ReadWriteContext for context::ProcContext {}
 
+        impls!();
+
+        struct #name;
+
+        __export__!(#name);
+    };
+
+    boilerplate.into()
+}
+
+#[derive(FromMeta)]
+struct ImplsConfig {
+    host: Option<bool>,
+}
+
+#[proc_macro]
+pub fn impls(input: TokenStream) -> TokenStream {
+    let attr_args = NestedMeta::parse_meta_list(input.into()).unwrap();
+    let config = ImplsConfig::from_list(&attr_args).unwrap();
+    let host = config.host.unwrap_or_default();
+    let (numerics_mod_name, numerics_unwrap) = if host {
+        (quote! { numerics }, quote! { .unwrap() })
+    } else {
+        (quote! { numbers }, quote! {})
+    };
+
+    quote! {
+        #[automatically_derived]
+        impl PartialEq for kontor::built_in::foreign::ContractAddress {
+            fn eq(&self, other: &Self) -> bool {
+                self.name == other.name && self.height == other.height && self.tx_index == other.tx_index
+            }
+        }
+
+        #[automatically_derived]
+        impl Eq for kontor::built_in::foreign::ContractAddress {}
+
+        #[automatically_derived]
+        impl PartialEq for kontor::built_in::error::Error {
+            fn eq(&self, other: &Self) -> bool {
+                match (self, other) {
+                    (kontor::built_in::error::Error::Message(msg1), kontor::built_in::error::Error::Message(msg2)) => msg1 == msg2,
+                    (kontor::built_in::error::Error::Overflow(msg1), kontor::built_in::error::Error::Overflow(msg2)) => msg1 == msg2,
+                    (kontor::built_in::error::Error::DivByZero(msg1), kontor::built_in::error::Error::DivByZero(msg2)) => msg1 == msg2,
+                    _ => false,
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl Eq for kontor::built_in::error::Error {}
+
+        #[automatically_derived]
+        impl kontor::built_in::error::Error {
+            pub fn new(message: impl Into<String>) -> Self {
+                kontor::built_in::error::Error::Message(message.into())
+            }
+        }
+
         #[automatically_derived]
         impl From<core::num::ParseIntError> for kontor::built_in::error::Error {
             fn from(err: core::num::ParseIntError) -> Self {
@@ -201,14 +258,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         }
 
         #[automatically_derived]
-        impl kontor::built_in::error::Error {
-            pub fn new(message: impl Into<String>) -> Self {
-                kontor::built_in::error::Error::Message(message.into())
-            }
-        }
-
-        #[automatically_derived]
-        impl Default for numbers::Integer {
+        impl Default for kontor::built_in::numbers::Integer {
             fn default() -> Self {
                 Self {
                     value: "0".to_string(),
@@ -217,71 +267,71 @@ pub fn contract(input: TokenStream) -> TokenStream {
         }
 
         #[automatically_derived]
-        impl Add for numbers::Integer {
+        impl std::ops::Add for kontor::built_in::numbers::Integer {
             type Output = Self;
 
             fn add(self, other: Self) -> Self::Output {
-                numbers::add_integer(&self, &other)
+                #numerics_mod_name::add_integer(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Sub for numbers::Integer {
+        impl std::ops::Sub for kontor::built_in::numbers::Integer {
             type Output = Self;
 
             fn sub(self, other: Self) -> Self::Output {
-                numbers::sub_integer(&self, &other)
+                #numerics_mod_name::sub_integer(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Mul for numbers::Integer {
+        impl std::ops::Mul for kontor::built_in::numbers::Integer {
             type Output = Self;
 
             fn mul(self, rhs: Self) -> Self {
-                numbers::mul_integer(&self, &rhs)
+                #numerics_mod_name::mul_integer(&self, &rhs)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Div for numbers::Integer {
+        impl std::ops::Div for kontor::built_in::numbers::Integer {
             type Output = Self;
 
             fn div(self, rhs: Self) -> Self {
-                numbers::div_integer(&self, &rhs)
+                #numerics_mod_name::div_integer(&self, &rhs)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl PartialOrd for numbers::Integer {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        impl PartialOrd for kontor::built_in::numbers::Integer {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
 
         #[automatically_derived]
-        impl Ord for numbers::Integer {
-            fn cmp(&self, other: &Self) -> Ordering {
-                match numbers::cmp_integer(&self, &other) {
-                    numbers::Ordering::Less => Ordering::Less,
-                    numbers::Ordering::Equal => Ordering::Equal,
-                    numbers::Ordering::Greater => Ordering::Greater,
+        impl Ord for kontor::built_in::numbers::Integer {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match #numerics_mod_name::cmp_integer(&self, &other)#numerics_unwrap {
+                    kontor::built_in::numbers::Ordering::Less => std::cmp::Ordering::Less,
+                    kontor::built_in::numbers::Ordering::Equal => std::cmp::Ordering::Equal,
+                    kontor::built_in::numbers::Ordering::Greater => std::cmp::Ordering::Greater,
                 }
             }
         }
 
         #[automatically_derived]
-        impl PartialEq for numbers::Integer {
+        impl PartialEq for kontor::built_in::numbers::Integer {
             fn eq(&self, other: &Self) -> bool {
-                numbers::eq_integer(&self, &other)
+                #numerics_mod_name::eq_integer(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Eq for numbers::Integer {}
+        impl Eq for kontor::built_in::numbers::Integer {}
 
         #[automatically_derived]
-        impl Default for numbers::Decimal {
+        impl Default for kontor::built_in::numbers::Decimal {
             fn default() -> Self {
                 Self {
                     value: "0.0".to_string(),
@@ -290,83 +340,78 @@ pub fn contract(input: TokenStream) -> TokenStream {
         }
 
         #[automatically_derived]
-        impl Add for numbers::Decimal {
+        impl std::ops::Add for kontor::built_in::numbers::Decimal {
             type Output = Self;
 
             fn add(self, other: Self) -> Self::Output {
-                numbers::add_decimal(&self, &other)
+                #numerics_mod_name::add_decimal(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Sub for numbers::Decimal {
+        impl std::ops::Sub for kontor::built_in::numbers::Decimal {
             type Output = Self;
 
             fn sub(self, other: Self) -> Self::Output {
-                numbers::sub_decimal(&self, &other)
+                #numerics_mod_name::sub_decimal(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Mul for numbers::Decimal {
+        impl std::ops::Mul for kontor::built_in::numbers::Decimal {
             type Output = Self;
 
             fn mul(self, rhs: Self) -> Self {
-                numbers::mul_decimal(&self, &rhs)
+                #numerics_mod_name::mul_decimal(&self, &rhs)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Div for numbers::Decimal {
+        impl std::ops::Div for kontor::built_in::numbers::Decimal {
             type Output = Self;
 
             fn div(self, rhs: Self) -> Self {
-                numbers::div_decimal(&self, &rhs)
+                #numerics_mod_name::div_decimal(&self, &rhs)#numerics_unwrap
             }
         }
 
 
         #[automatically_derived]
-        impl PartialOrd for numbers::Decimal {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        impl PartialOrd for kontor::built_in::numbers::Decimal {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
 
         #[automatically_derived]
-        impl Ord for numbers::Decimal {
-            fn cmp(&self, other: &Self) -> Ordering {
-                match numbers::cmp_decimal(&self, &other) {
-                    numbers::Ordering::Less => Ordering::Less,
-                    numbers::Ordering::Equal => Ordering::Equal,
-                    numbers::Ordering::Greater => Ordering::Greater,
+        impl Ord for kontor::built_in::numbers::Decimal {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match #numerics_mod_name::cmp_decimal(&self, &other)#numerics_unwrap {
+                    kontor::built_in::numbers::Ordering::Less => std::cmp::Ordering::Less,
+                    kontor::built_in::numbers::Ordering::Equal => std::cmp::Ordering::Equal,
+                    kontor::built_in::numbers::Ordering::Greater => std::cmp::Ordering::Greater,
                 }
             }
         }
 
         #[automatically_derived]
-        impl PartialEq for numbers::Decimal {
+        impl PartialEq for kontor::built_in::numbers::Decimal {
             fn eq(&self, other: &Self) -> bool {
-                numbers::eq_decimal(&self, &other)
+                #numerics_mod_name::eq_decimal(&self, &other)#numerics_unwrap
             }
         }
 
         #[automatically_derived]
-        impl Eq for numbers::Decimal {}
+        impl Eq for kontor::built_in::numbers::Decimal {}
 
         #[automatically_derived]
-        impl From<numbers::Integer> for numbers::Decimal {
-            fn from(i: numbers::Integer) -> numbers::Decimal {
-                numbers::integer_to_decimal(&i)
+        impl From<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
+            fn from(i: kontor::built_in::numbers::Integer) -> kontor::built_in::numbers::Decimal {
+                #numerics_mod_name::integer_to_decimal(&i)#numerics_unwrap
             }
         }
-
-        struct #name;
-
-        __export__!(#name);
-    };
-
-    boilerplate.into()
+    }
+    .into()
 }
 
 #[proc_macro_derive(Store)]
