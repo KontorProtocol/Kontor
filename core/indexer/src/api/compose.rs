@@ -455,7 +455,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             &tap_script,
             &tap_info,
             addr.address.script_pubkey().len(),
-            params.envelope,
             params.fee_rate,
         )?;
 
@@ -858,35 +857,26 @@ pub fn build_tap_script_and_script_address(
 }
 
 pub fn calculate_change_single(
-    mut outputs: Vec<TxOut>,
+    outputs: Vec<TxOut>,
     input_tuple: (TxIn, TxOut),
     tap_script: &ScriptBuf,
     control_block: &ScriptBuf,
     fee_rate: FeeRate,
 ) -> Option<u64> {
-    let (mut txin, txout) = input_tuple;
-    let mut witness = Witness::new();
-    witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
-    witness.push(tap_script.clone());
-    witness.push(control_block.clone());
-    txin.witness = witness;
-
+    // Sum actual input value
+    let (_txin, txout) = input_tuple;
     let input_sum = txout.value.to_sat();
 
-    let mut dummy_tx = build_dummy_tx(vec![txin], std::mem::take(&mut outputs));
+    // Prepare output script lengths (existing owner outputs + dummy change spk len = 34)
+    let mut spk_lens: Vec<usize> = outputs.iter().map(|o| o.script_pubkey.len()).collect();
+    spk_lens.push(34);
 
-    // push dummy change to the tx
-    dummy_tx.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0; 34]),
-    });
+    // Compute fee for single-input script spend with provided tapscript/control_block
+    let vb = script_spend_vbytes(1, tap_script, control_block, &spk_lens);
+    let fee = fee_rate.fee_vb(vb)?.to_sat();
 
-    let output_sum: u64 = dummy_tx.output.iter().map(|o| o.value.to_sat()).sum();
-    let vsize = dummy_tx.vsize() as u64;
-    let fee = match fee_rate.fee_vb(vsize) {
-        Some(a) => a.to_sat(),
-        None => return None,
-    };
+    // Output sum excludes dummy change (value 0)
+    let output_sum: u64 = outputs.iter().map(|o| o.value.to_sat()).sum();
 
     input_sum.checked_sub(output_sum + fee)
 }
@@ -904,63 +894,51 @@ pub fn tx_vbytes_est(tx: &Transaction) -> u64 {
     weight.div_ceil(4)
 }
 
+// Core low-level helper: return vbytes for a script-spend with the given tapscript/control_block,
+// number of inputs, and output scriptPubKey lengths. Used by both fee estimation and change calc.
+fn script_spend_vbytes(
+    inputs_count: usize,
+    tap_script: &ScriptBuf,
+    control_block: &ScriptBuf,
+    output_spk_lens: &[usize],
+) -> u64 {
+    let mut tx = build_dummy_tx(vec![], vec![]);
+    for _ in 0..inputs_count {
+        let mut txin = dummy_txin();
+        let mut witness = Witness::new();
+        witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
+        witness.push(tap_script.clone());
+        witness.push(control_block.clone());
+        txin.witness = witness;
+        tx.input.push(txin);
+    }
+    for &len in output_spk_lens.iter() {
+        tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; len]),
+        });
+    }
+    tx_vbytes_est(&tx)
+}
+
 pub fn estimate_reveal_fee_for_address(
     tap_script: &ScriptBuf,
     tap_info: &TaprootSpendInfo,
     recipient_spk_len: usize,
-    envelope: u64,
     fee_rate: FeeRate,
 ) -> Result<u64> {
-    let mut dummy = build_dummy_tx(
-        vec![dummy_txin()],
-        vec![TxOut {
-            value: Amount::from_sat(envelope),
-            script_pubkey: ScriptBuf::from_bytes(vec![0u8; recipient_spk_len]),
-        }],
+    let cb = tap_info
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+        .ok_or(anyhow!("failed to create control block"))?;
+    let vb = script_spend_vbytes(
+        1,
+        tap_script,
+        &ScriptBuf::from_bytes(cb.serialize()),
+        &[recipient_spk_len],
     );
-    let mut w = Witness::new();
-    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-    w.push(tap_script.clone());
-    if let Some(cb) = tap_info.control_block(&(tap_script.clone(), LeafVersion::TapScript)) {
-        w.push(cb.serialize());
-    } else {
-        return Err(anyhow!("failed to create control block"));
-    }
-    dummy.input[0].witness = w;
-    let vb = tx_vbytes_est(&dummy);
     fee_rate
         .fee_vb(vb)
         .map_or(Err(anyhow!("fee calculation overflow")), |a| Ok(a.to_sat()))
-}
-
-pub fn estimate_commit_delta_fee(
-    base_tx: &Transaction,
-    new_inputs_count: usize,
-    script_spk_len: usize,
-    change_spk_len: usize,
-    fee_rate: FeeRate,
-) -> u64 {
-    let before_vb = tx_vbytes_est(base_tx);
-    let mut temp = base_tx.clone();
-    (0..new_inputs_count).for_each(|_| {
-        temp.input.push(dummy_txin());
-        let idx = temp.input.len() - 1;
-        let mut w = Witness::new();
-        // Model key-path spend for commit inputs: single Schnorr signature
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        temp.input[idx].witness = w;
-    });
-    temp.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; script_spk_len]),
-    });
-    temp.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; change_spk_len]),
-    });
-    let after_vb = tx_vbytes_est(&temp);
-    let delta_vb = after_vb.saturating_sub(before_vb);
-    fee_rate.fee_vb(delta_vb).map_or(0, |a| a.to_sat())
 }
 
 pub fn build_dummy_tx(inputs: Vec<TxIn>, outputs: Vec<TxOut>) -> Transaction {
@@ -978,17 +956,13 @@ fn dummy_txin() -> TxIn {
     }
 }
 
-fn set_dummy_key_witness_for_all_inputs(tx: &mut Transaction) {
-    for inp in &mut tx.input {
+pub fn estimate_fee_with_dummy_key_witness(tx: &Transaction, fee_rate: FeeRate) -> Option<u64> {
+    let mut t = tx.clone();
+    for inp in &mut t.input {
         let mut w = Witness::new();
         w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
         inp.witness = w;
     }
-}
-
-fn estimate_fee_with_dummy_key_witness(tx: &Transaction, fee_rate: FeeRate) -> Option<u64> {
-    let mut t = tx.clone();
-    set_dummy_key_witness_for_all_inputs(&mut t);
     let vb = tx_vbytes_est(&t);
     fee_rate.fee_vb(vb).map(|a| a.to_sat())
 }

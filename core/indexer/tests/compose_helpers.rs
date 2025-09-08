@@ -3,7 +3,7 @@ use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
     RevealInputs, RevealParticipantInputs, build_dummy_tx, build_tap_script_and_script_address,
-    calculate_change_single, estimate_commit_delta_fee, estimate_reveal_fee_for_address,
+    calculate_change_single, estimate_fee_with_dummy_key_witness, estimate_reveal_fee_for_address,
     split_even_chunks,
 };
 use std::str::FromStr;
@@ -227,12 +227,72 @@ fn test_estimate_commit_delta_fee_increases_with_each_spk_len_independently() {
     let base = build_dummy_tx(vec![], vec![]);
     let fr = FeeRate::from_sat_per_vb(3).unwrap();
     // Vary script_spk_len
-    let a = estimate_commit_delta_fee(&base, 1, 22, 34, fr);
-    let b = estimate_commit_delta_fee(&base, 1, 34, 34, fr);
+    let a = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 22]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
+    let b = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
     assert!(b >= a);
     // Vary change_spk_len
-    let c = estimate_commit_delta_fee(&base, 1, 34, 22, fr);
-    let d = estimate_commit_delta_fee(&base, 1, 34, 34, fr);
+    let c = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 22]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
+    let d = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
     assert!(d >= c);
 }
 
@@ -335,16 +395,16 @@ fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance() {
 
     let fee_rate = FeeRate::from_sat_per_vb(5).unwrap();
     let fee_small =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 22, 546, fee_rate).unwrap();
+        estimate_reveal_fee_for_address(&tap_script, &tap_info, 22, fee_rate).unwrap();
     let fee_large =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, 546, fee_rate).unwrap();
+        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
     assert!(fee_large >= fee_small);
 
     // Changing envelope value should not affect fee
     let fee_env_small =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, 546, fee_rate).unwrap();
+        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
     let fee_env_large =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, 100_000, fee_rate).unwrap();
+        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
     assert_eq!(fee_env_small, fee_env_large);
 }
 
@@ -352,15 +412,90 @@ fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance() {
 fn test_estimate_commit_delta_fee_monotonic() {
     let base = build_dummy_tx(vec![], vec![]);
     let fr = FeeRate::from_sat_per_vb(5).unwrap();
-    let d1 = estimate_commit_delta_fee(&base, 1, 34, 34, fr);
-    let d2 = estimate_commit_delta_fee(&base, 2, 34, 34, fr);
+    let d1 = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
+    let d2 = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
     assert!(d2 > d1);
 
-    let small_spk = estimate_commit_delta_fee(&base, 1, 22, 22, fr);
-    let large_spk = estimate_commit_delta_fee(&base, 1, 34, 34, fr);
+    let small_spk = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 22]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 22]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
+    let large_spk = {
+        let mut temp = base.clone();
+        temp.input.push(bitcoin::TxIn {
+            ..Default::default()
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
     assert!(large_spk >= small_spk);
 
-    let d0 = estimate_commit_delta_fee(&base, 0, 34, 34, fr);
+    let d0 = {
+        let mut temp = base.clone();
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        temp.output.push(bitcoin::TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+        });
+        estimate_fee_with_dummy_key_witness(&temp, fr).unwrap_or(0)
+            - estimate_fee_with_dummy_key_witness(&base, fr).unwrap_or(0)
+    };
     assert!(d0 > 0);
 }
 
