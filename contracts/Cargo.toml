@@ -12,6 +12,7 @@ panic = "abort"
 [workspace.lints.clippy]
 new_without_default = "allow"
 uninlined_format_args = "allow"
+too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT

@@ -5,6 +5,7 @@ use testlib::*;
 #[tokio::test]
 async fn test_numerics() -> Result<()> {
     assert!(Integer::from(123) == 123.into());
+    assert!(Integer::from(123) == 123.into());
     assert!(
         Integer::from("57843975908437589027340573245") == "57843975908437589027340573245".into()
     );
@@ -16,6 +17,17 @@ async fn test_numerics() -> Result<()> {
     assert_eq!(Integer::from(5) * 6.into(), 30.into());
 
     assert_eq!(Integer::from(5) / 2.into(), 2.into());
+
+    assert_eq!(Integer::from(-5) / 2.into(), (-2).into());
+    assert_eq!(
+        Integer::from("-1000000000000000000000000000") / (-2).into(),
+        ("500000000000000000000000000").into()
+    );
+
+    assert_eq!(
+        Decimal::from(Integer::from(123)) / (10).into(),
+        "12.3".into()
+    );
 
     Ok(())
 }

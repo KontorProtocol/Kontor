@@ -54,7 +54,7 @@ impl Guest for SharedAccount {
             ctx,
             account_id.clone(),
             Account {
-                balance: n.clone(),
+                balance: n,
                 owner: ctx.signer().to_string(),
                 other_tenants: Map::new(
                     &other_tenants
@@ -81,7 +81,7 @@ impl Guest for SharedAccount {
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        account.set_balance(ctx, account.balance(ctx) + n.clone());
+        account.set_balance(ctx, account.balance(ctx) + n);
         token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)
     }
 
@@ -97,7 +97,7 @@ impl Guest for SharedAccount {
         if balance < n {
             return Err(insufficient_balance_error());
         }
-        account.set_balance(ctx, balance - n.clone());
+        account.set_balance(ctx, balance - n);
         token::transfer(ctx.contract_signer(), &ctx.signer().to_string(), n)
     }
 

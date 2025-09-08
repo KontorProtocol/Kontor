@@ -77,8 +77,17 @@ interface error {
 }
 
 interface numbers {
+    enum sign {
+		plus,
+		minus
+    }
+
     record integer {
-		value: string,
+		r0: u64,
+		r1: u64,
+		r2: u64,
+		r3: u64,
+		sign: sign
     }
 
     record decimal {
@@ -94,6 +103,7 @@ interface numbers {
     u64-to-integer: func(i: u64) -> integer;
     s64-to-integer: func(i: s64) -> integer;
     string-to-integer: func(s: string) -> integer;
+    integer-to-string: func(i: integer) -> string;
 	eq-integer: func(a: integer, b: integer) -> bool;
 	cmp-integer: func(a: integer, b: integer) -> ordering;
 	add-integer: func(a: integer, b: integer) -> integer;

@@ -86,7 +86,8 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl std::fmt::Display for kontor::built_in::numbers::Integer {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.value)
+                let s = #numerics_mod_name::integer_to_string(*self)#numerics_unwrap;
+                write!(f, "{}", s)
             }
         }
 
@@ -94,7 +95,11 @@ pub fn generate(config: Config) -> TokenStream {
         impl Default for kontor::built_in::numbers::Integer {
             fn default() -> Self {
                 Self {
-                    value: "0".to_string(),
+                    r0: 0,
+                    r1: 0,
+                    r2: 0,
+                    r3: 0,
+                    sign: kontor::built_in::numbers::Sign::Plus,
                 }
             }
         }
@@ -104,7 +109,7 @@ pub fn generate(config: Config) -> TokenStream {
             type Output = Self;
 
             fn add(self, other: Self) -> Self::Output {
-                #numerics_mod_name::add_integer(&self, &other)#numerics_unwrap
+                #numerics_mod_name::add_integer(self, other)#numerics_unwrap
             }
         }
 
@@ -113,7 +118,7 @@ pub fn generate(config: Config) -> TokenStream {
             type Output = Self;
 
             fn sub(self, other: Self) -> Self::Output {
-                #numerics_mod_name::sub_integer(&self, &other)#numerics_unwrap
+                #numerics_mod_name::sub_integer(self, other)#numerics_unwrap
             }
         }
 
@@ -122,7 +127,7 @@ pub fn generate(config: Config) -> TokenStream {
             type Output = Self;
 
             fn mul(self, rhs: Self) -> Self {
-                #numerics_mod_name::mul_integer(&self, &rhs)#numerics_unwrap
+                #numerics_mod_name::mul_integer(self, rhs)#numerics_unwrap
             }
         }
 
@@ -131,7 +136,7 @@ pub fn generate(config: Config) -> TokenStream {
             type Output = Self;
 
             fn div(self, rhs: Self) -> Self {
-                #numerics_mod_name::div_integer(&self, &rhs)#numerics_unwrap
+                #numerics_mod_name::div_integer(self, rhs)#numerics_unwrap
             }
         }
 
@@ -145,7 +150,7 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl Ord for kontor::built_in::numbers::Integer {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                match #numerics_mod_name::cmp_integer(&self, &other)#numerics_unwrap {
+                match #numerics_mod_name::cmp_integer(*self, *other)#numerics_unwrap {
                     kontor::built_in::numbers::Ordering::Less => std::cmp::Ordering::Less,
                     kontor::built_in::numbers::Ordering::Equal => std::cmp::Ordering::Equal,
                     kontor::built_in::numbers::Ordering::Greater => std::cmp::Ordering::Greater,
@@ -156,7 +161,7 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl PartialEq for kontor::built_in::numbers::Integer {
             fn eq(&self, other: &Self) -> bool {
-                #numerics_mod_name::eq_integer(&self, &other)#numerics_unwrap
+                #numerics_mod_name::eq_integer(*self, *other)#numerics_unwrap
             }
         }
 
@@ -289,7 +294,7 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl From<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
             fn from(i: kontor::built_in::numbers::Integer) -> kontor::built_in::numbers::Decimal {
-                #numerics_mod_name::integer_to_decimal(&i)#numerics_unwrap
+                #numerics_mod_name::integer_to_decimal(i)#numerics_unwrap
             }
         }
 

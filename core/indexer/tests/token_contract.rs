@@ -43,3 +43,52 @@ async fn test_token_contract() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_token_contract_large_numbers() -> Result<()> {
+    let runtime = Runtime::new(RuntimeConfig::default()).await?;
+
+    let minter = "test_minter";
+    let holder = "test_holder";
+    token::mint(
+        &runtime,
+        minter,
+        "1000000000000000000000000000000000000000000000000000000000000000".into(),
+    )
+    .await?;
+    token::mint(&runtime, minter, 100.into()).await?;
+
+    let result = token::balance(&runtime, minter).await?;
+    assert_eq!(
+        result,
+        Some("1000000000000000000000000000000000000000000000000000000000000100".into())
+    );
+
+    token::transfer(
+        &runtime,
+        minter,
+        holder,
+        "1_000_000_000_000_000_000_000_000_000_000".into(),
+    )
+    .await??;
+
+    let result = token::balance(&runtime, holder).await?;
+    assert_eq!(
+        result,
+        Some("1_000_000_000_000_000_000_000_000_000_000".into())
+    );
+
+    let result = token::balance(&runtime, minter).await?;
+    assert_eq!(
+        result,
+        Some("999999999999999999999999999999999000000000000000000000000000100".into())
+    );
+
+    // balance is too large to convert into decimal
+    assert!(token::balance_log10(&runtime, minter).await.is_err());
+
+    let result = token::balance_log10(&runtime, holder).await?;
+    assert_eq!(result, Some("30.000_000_000_000_000_000".into()));
+
+    Ok(())
+}
