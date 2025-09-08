@@ -43,8 +43,6 @@ impl Guest for Token {
 
     fn balance_log10(ctx: &ViewContext, acc: String) -> Option<Decimal> {
         let ledger = storage(ctx).ledger();
-        ledger
-            .get(ctx, acc.clone())
-            .map(|i| numbers::log10(&i.into()))
+        ledger.get(ctx, acc).map(|i| numbers::log10(&i.into()))
     }
 }
