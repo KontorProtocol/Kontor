@@ -29,7 +29,9 @@ use wit::kontor::*;
 pub use wit::kontor;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::foreign::ContractAddress;
-pub use wit::kontor::built_in::numbers::{Decimal, Integer, Ordering as NumericOrdering};
+pub use wit::kontor::built_in::numbers::{
+    Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
+};
 
 use anyhow::{Result, anyhow};
 use wasmtime::{
@@ -310,6 +312,14 @@ impl Runtime {
         resource: Resource<T>,
         path: String,
     ) -> Result<Option<bool>> {
+        self._get_primitive(resource, path).await
+    }
+
+    async fn _get_void<T: HasContractId>(
+        &mut self,
+        resource: Resource<T>,
+        path: String,
+    ) -> Result<Option<()>> {
         self._get_primitive(resource, path).await
     }
 
@@ -605,6 +615,18 @@ impl built_in::context::HostProcContext for Runtime {
         self._matching_path(resource, regexp).await
     }
 
+    async fn delete_matching_paths(
+        &mut self,
+        resource: Resource<ProcContext>,
+        regexp: String,
+    ) -> Result<u64> {
+        let table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.contract_id;
+        self.storage
+            .delete_matching_paths(contract_id, &regexp)
+            .await
+    }
+
     async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {
         let mut table = self.table.lock().await;
         let _self = table.get(&resource)?;
@@ -708,32 +730,36 @@ impl built_in::numbers::Host for Runtime {
         numerics::string_to_integer(&s)
     }
 
+    async fn integer_to_string(&mut self, i: Integer) -> Result<String> {
+        numerics::integer_to_string(i)
+    }
+
     async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool> {
-        numerics::eq_integer(&a, &b)
+        numerics::eq_integer(a, b)
     }
 
     async fn cmp_integer(&mut self, a: Integer, b: Integer) -> Result<NumericOrdering> {
-        numerics::cmp_integer(&a, &b)
+        numerics::cmp_integer(a, b)
     }
 
     async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::add_integer(&a, &b)
+        numerics::add_integer(a, b)
     }
 
     async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::sub_integer(&a, &b)
+        numerics::sub_integer(a, b)
     }
 
     async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::mul_integer(&a, &b)
+        numerics::mul_integer(a, b)
     }
 
     async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::div_integer(&a, &b)
+        numerics::div_integer(a, b)
     }
 
     async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal> {
-        numerics::integer_to_decimal(&i)
+        numerics::integer_to_decimal(i)
     }
 
     async fn u64_to_decimal(&mut self, i: u64) -> Result<Decimal> {

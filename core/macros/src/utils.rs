@@ -41,10 +41,13 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
     }
 }
 
-pub fn is_numeric_type(ty: &syn::Type) -> bool {
+pub fn is_built_in_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last().map(|s| s.ident.to_string());
-        matches!(segment.as_deref(), Some("Integer" | "Decimal"))
+        matches!(
+            segment.as_deref(),
+            Some("Integer" | "Decimal" | "ContractAddress")
+        )
     } else {
         false
     }
