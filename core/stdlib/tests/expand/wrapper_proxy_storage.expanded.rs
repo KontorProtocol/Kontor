@@ -18,11 +18,9 @@ impl ProxyStorageWrapper {
     pub fn new(_: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
         Self { base_path }
     }
-    pub fn contract_address(
-        &self,
-        ctx: &impl stdlib::ReadContext,
-    ) -> ContractAddressWrapper {
+    pub fn contract_address(&self, ctx: &impl stdlib::ReadContext) -> ContractAddress {
         ContractAddressWrapper::new(ctx, self.base_path.push("contract_address"))
+            .load(ctx)
     }
     pub fn set_contract_address(
         &self,
@@ -33,7 +31,7 @@ impl ProxyStorageWrapper {
     }
     pub fn load(&self, ctx: &impl stdlib::ReadContext) -> ProxyStorage {
         ProxyStorage {
-            contract_address: self.contract_address(ctx).load(ctx),
+            contract_address: self.contract_address(ctx),
         }
     }
 }

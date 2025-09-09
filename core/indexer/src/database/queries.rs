@@ -273,6 +273,28 @@ pub async fn matching_path(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
+const DELETE_MATCHING_PATHS_QUERY: &str = include_str!("sql/delete_matching_paths.sql");
+
+pub async fn delete_matching_paths(
+    conn: &Connection,
+    contract_id: i64,
+    height: i64,
+    tx_id: i64,
+    path_regexp: &str,
+) -> Result<u64, Error> {
+    Ok(conn
+        .execute(
+            DELETE_MATCHING_PATHS_QUERY,
+            (
+                (":contract_id", contract_id),
+                (":height", height),
+                (":tx_id", tx_id),
+                (":path_regexp", path_regexp),
+            ),
+        )
+        .await?)
+}
+
 pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<bool, Error> {
     let mut rows = conn
         .query(

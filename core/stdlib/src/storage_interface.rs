@@ -9,6 +9,7 @@ pub trait ReadContext {
     fn __get_u64(&self, path: &str) -> Option<u64>;
     fn __get_s64(&self, path: &str) -> Option<i64>;
     fn __get_bool(&self, path: &str) -> Option<bool>;
+    fn __get_void(&self, path: &str) -> Option<()>;
     fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(
         &self,
         path: &'a str,
@@ -26,6 +27,7 @@ pub trait WriteContext {
     fn __set_bool(&self, path: &str, value: bool);
     fn __set_void(&self, path: &str);
     fn __set<T: Store>(&self, path: DotPathBuf, value: T);
+    fn __delete_matching_paths(&self, regexp: &str) -> u64;
 }
 
 pub trait ReadWriteContext: ReadContext + WriteContext {}
