@@ -66,6 +66,14 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_bool(path)
             }
 
+            fn __get_void(&self, path: &str) -> Option<()> {
+                if self.is_void(path) {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a {
                 make_keys_iterator(self.get_keys(path))
             }
@@ -103,6 +111,14 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __get_bool(&self, path: &str) -> Option<bool> {
                 self.get_bool(path)
+            }
+
+            fn __get_void(&self, path: &str) -> Option<()> {
+                if self.is_void(path) {
+                    Some(())
+                } else {
+                    None
+                }
             }
 
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a{
@@ -150,6 +166,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __set<T: stdlib::Store>(&self, path: DotPathBuf, value: T) {
                 T::__set(self, path, value)
+            }
+
+            fn __delete_matching_paths(&self, regexp: &str) -> u64 {
+                self.delete_matching_paths(regexp)
             }
         }
 

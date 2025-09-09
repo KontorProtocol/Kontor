@@ -10,7 +10,7 @@ struct ProxyStorage {
 impl Guest for Proxy {
     fn fallback(ctx: &FallContext, expr: String) -> String {
         let _ctx = &ctx.view_context();
-        let contract_address = storage(_ctx).contract_address(_ctx).load(_ctx);
+        let contract_address = storage(_ctx).contract_address(_ctx);
         foreign::call(ctx.signer(), &contract_address, &expr)
     }
 
@@ -26,7 +26,7 @@ impl Guest for Proxy {
     }
 
     fn get_contract_address(ctx: &ViewContext) -> ContractAddress {
-        storage(ctx).contract_address(ctx).load(ctx)
+        storage(ctx).contract_address(ctx)
     }
 
     fn set_contract_address(ctx: &ProcContext, contract_address: ContractAddress) {

@@ -6,13 +6,13 @@ use indexer::{
     config::Config,
     database::{
         queries::{
-            contract_has_state, delete_contract_state, exists_contract_state,
-            get_contract_bytes_by_address, get_contract_bytes_by_id, get_contract_id_from_address,
-            get_latest_contract_state, get_latest_contract_state_value, get_transaction_by_id,
-            get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_state, insert_transaction, matching_path,
-            path_prefix_filter_contract_state, select_block_at_height,
-            select_block_by_height_or_hash, select_block_latest,
+            contract_has_state, delete_contract_state, delete_matching_paths,
+            exists_contract_state, get_contract_bytes_by_address, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_latest_contract_state,
+            get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
+            get_transactions_at_height, insert_block, insert_contract, insert_contract_state,
+            insert_transaction, matching_path, path_prefix_filter_contract_state,
+            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
         },
         types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
     },
@@ -518,6 +518,16 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[0], "key0");
     assert_eq!(paths[1], "key1");
     assert_eq!(paths[2], "key2");
+
+    let result = delete_matching_paths(
+        &conn,
+        contract_id,
+        height,
+        tx_id,
+        &format!(r"^{}.({})(\..*|$)", "test.path", ["key0"].join("|")),
+    )
+    .await?;
+    assert_eq!(result, 2);
 
     Ok(())
 }

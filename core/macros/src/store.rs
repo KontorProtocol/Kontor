@@ -19,9 +19,10 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
                     ));
                 } else if utils::is_option_type(field_ty) {
                     field_sets.push(quote! {
+                        ctx.__delete_matching_paths(&format!(r"^{}.({})(\..*|$)", base_path.push(#field_name_str), ["none", "some"].join("|")));
                         match value.#field_name {
-                            Some(inner) => ctx.__set(base_path.push(#field_name_str), inner),
-                            None => ctx.__set(base_path.push(#field_name_str), ()),
+                            Some(inner) => ctx.__set(base_path.push(#field_name_str).push("some"), inner),
+                            None => ctx.__set(base_path.push(#field_name_str).push("none"), ()),
                         }
                     })
                 } else {
@@ -40,9 +41,11 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
 }
 
 pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<TokenStream> {
+    let mut variant_names = vec![];
     let arms = data_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string().to_lowercase();
+        variant_names.push(variant_name.clone());
 
         match &variant.fields {
             Fields::Unit => {
@@ -68,6 +71,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
     }).collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
+        ctx.__delete_matching_paths(&format!(r"^{}.({})(\..*|$)", base_path, [#(#variant_names),*].join("|")));
         match value {
             #(#arms)*
         }

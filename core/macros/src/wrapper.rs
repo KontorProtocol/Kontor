@@ -28,7 +28,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         (quote! { Option<#v_ty> }, quote! { ctx.__get(base_path) })
                     } else {
                         let v_wrapper_ty = get_wrapper_ident(&v_ty, field.span())?;
-                        if utils::is_numeric_type(&v_ty) {
+                        if utils::is_built_in_type(&v_ty) {
                             (quote! { Option<#v_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path).load(ctx)) })
                         } else {
                             (quote! { Option<#v_wrapper_ty> }, quote! { ctx.__exists(&base_path).then(|| #v_wrapper_ty::new(ctx, base_path)) })
@@ -76,22 +76,27 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if ctx.__is_void(&base_path) {
+                                if ctx.__exists(&base_path.push("none")) {
                                     None
                                 } else {
-                                    ctx.__get(base_path)
+                                    ctx.__get(base_path.push("some"))
                                 }
                             }
                         })
                     } else {
                         let inner_wrapper_ty = get_wrapper_ident(&inner_ty, field.span())?;
+                        let (load, ret_ty)= if utils::is_built_in_type(&inner_ty) {
+                            (quote! { .load(ctx) }, quote! { #inner_ty })
+                        } else {
+                            (quote! {}, quote! { #inner_wrapper_ty })
+                        };
                         Ok(quote! {
-                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_wrapper_ty> {
+                            pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if ctx.__is_void(&base_path) {
+                                if ctx.__exists(&base_path.push("none")) {
                                     None
                                 } else {
-                                    Some(#inner_wrapper_ty::new(ctx, base_path))
+                                    Some(#inner_wrapper_ty::new(ctx, base_path.push("some"))#load)
                                 }
                             }
                         })
@@ -104,7 +109,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     })
                 } else {
                     let field_wrapper_ty = get_wrapper_ident(field_ty, field.span())?;
-                    Ok(if utils::is_numeric_type(field_ty) {
+                    Ok(if utils::is_built_in_type(field_ty) {
                         quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> #field_ty {
                                 #field_wrapper_ty::new(ctx, self.base_path.push(#field_name_str)).load(ctx)
@@ -133,9 +138,10 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                     Ok(quote! {
                         pub fn #set_field_name(&self, ctx: &impl stdlib::WriteContext, value: Option<#inner_ty>) {
                             let base_path = self.base_path.push(#field_name_str);
+                            ctx.__delete_matching_paths(&format!(r"^{}.({})(\..*|$)", base_path, ["none", "some"].join("|")));
                             match value {
-                                Some(inner) => ctx.__set(base_path, inner),
-                                None => ctx.__set(base_path, ()),
+                                Some(inner) => ctx.__set(base_path.push("some"), inner),
+                                None => ctx.__set(base_path.push("none"), ()),
                             }
                         }
                     })
@@ -168,8 +174,15 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                                 #field_name: self.#field_name(ctx)
                             })
                         } else {
+                            let load = if utils::is_built_in_type(&inner_ty) {
+                                quote! {}
+                            } else {
+                                quote! {
+                                    .map(|p| p.load(ctx))
+                                }
+                            };
                             Ok(quote! {
-                                #field_name: self.#field_name(ctx).map(|p| p.load(ctx))
+                                #field_name: self.#field_name(ctx)#load
                             })
                         }
                     } else if utils::is_primitive_type(field_ty) {
@@ -177,7 +190,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                             #field_name: self.#field_name(ctx)
                         })
                     } else {
-                        Ok(if utils::is_numeric_type(field_ty) {
+                        Ok(if utils::is_built_in_type(field_ty) {
                             quote! {
                                 #field_name: self.#field_name(ctx)
                             }
