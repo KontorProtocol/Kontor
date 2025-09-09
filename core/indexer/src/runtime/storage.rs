@@ -6,9 +6,10 @@ use libsql::Connection;
 use crate::{
     database::{
         queries::{
-            delete_contract_state, exists_contract_state, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state_value, insert_contract_state,
-            matching_path, path_prefix_filter_contract_state,
+            delete_contract_state, delete_matching_paths, exists_contract_state,
+            get_contract_bytes_by_id, get_contract_id_from_address,
+            get_latest_contract_state_value, insert_contract_state, matching_path,
+            path_prefix_filter_contract_state,
         },
         types::ContractStateRow,
     },
@@ -54,6 +55,10 @@ impl Storage {
 
     pub async fn matching_path(&self, contract_id: i64, regexp: &str) -> Result<Option<String>> {
         Ok(matching_path(&self.conn, contract_id, regexp).await?)
+    }
+
+    pub async fn delete_matching_paths(&self, contract_id: i64, regexp: &str) -> Result<u64> {
+        Ok(delete_matching_paths(&self.conn, contract_id, self.height, self.tx_id, regexp).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<i64>> {

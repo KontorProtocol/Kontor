@@ -13,4 +13,4 @@ anyhow = { workspace = true }
 libsql = { workspace = true }
 bon = { workspace = true }
 tokio = { workspace = true }
-glob = "0.3.3"
+glob = "=0.3.3"

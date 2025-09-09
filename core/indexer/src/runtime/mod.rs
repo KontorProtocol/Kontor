@@ -315,6 +315,14 @@ impl Runtime {
         self._get_primitive(resource, path).await
     }
 
+    async fn _get_void<T: HasContractId>(
+        &mut self,
+        resource: Resource<T>,
+        path: String,
+    ) -> Result<Option<()>> {
+        self._get_primitive(resource, path).await
+    }
+
     async fn _get_keys<T: HasContractId>(
         &mut self,
         resource: Resource<T>,
@@ -605,6 +613,18 @@ impl built_in::context::HostProcContext for Runtime {
         regexp: String,
     ) -> Result<Option<String>> {
         self._matching_path(resource, regexp).await
+    }
+
+    async fn delete_matching_paths(
+        &mut self,
+        resource: Resource<ProcContext>,
+        regexp: String,
+    ) -> Result<u64> {
+        let table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.contract_id;
+        self.storage
+            .delete_matching_paths(contract_id, &regexp)
+            .await
     }
 
     async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {

@@ -35,6 +35,7 @@ interface context {
         set-s64: func(path: string, value: s64);
         set-bool: func(path: string, value: bool);
         set-void: func(path: string);
+        delete-matching-paths: func(regexp: string) -> u64;
 
         signer: func() -> signer;
         contract-signer: func() -> signer;

@@ -12,9 +12,10 @@ panic = "abort"
 [workspace.lints.clippy]
 new_without_default = "allow"
 uninlined_format_args = "allow"
+too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wit-bindgen = "0.45.0"
+wit-bindgen = "=0.45.1"
 
 stdlib = { path = "../core/stdlib" }
