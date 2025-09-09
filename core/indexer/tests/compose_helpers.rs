@@ -394,10 +394,8 @@ fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance() {
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
 
     let fee_rate = FeeRate::from_sat_per_vb(5).unwrap();
-    let fee_small =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 22, fee_rate).unwrap();
-    let fee_large =
-        estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
+    let fee_small = estimate_reveal_fee_for_address(&tap_script, &tap_info, 22, fee_rate).unwrap();
+    let fee_large = estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
     assert!(fee_large >= fee_small);
 
     // Changing envelope value should not affect fee
