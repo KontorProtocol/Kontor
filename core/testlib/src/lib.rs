@@ -16,7 +16,7 @@ use indexer::{
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::Connection;
-pub use stdlib::{import, interface};
+pub use macros::{import_test as import, interface_test as interface};
 
 use anyhow::anyhow;
 pub use anyhow::{Error as AnyhowError, Result};

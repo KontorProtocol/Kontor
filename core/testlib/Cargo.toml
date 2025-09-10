@@ -7,7 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-stdlib = { path = "../stdlib" }
+macros = { path = "../macros" }
 indexer = { path = "../indexer" }
 anyhow = { workspace = true }
 libsql = { workspace = true }

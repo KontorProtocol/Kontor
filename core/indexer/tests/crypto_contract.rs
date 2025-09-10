@@ -5,7 +5,6 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/crypto/wit",
-    test = true,
 );
 
 #[tokio::test]

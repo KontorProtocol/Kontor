@@ -20,10 +20,9 @@ pub struct Config {
     tx_index: i64,
     path: String,
     world: Option<String>,
-    test: Option<bool>,
 }
 
-pub fn generate(config: Config) -> TokenStream {
+pub fn generate(config: Config, test: bool) -> TokenStream {
     let name = config.name;
     let module_name =
         Ident::from_string(&config.mod_name.unwrap_or(name.clone().to_snake_case())).unwrap();
@@ -31,7 +30,6 @@ pub fn generate(config: Config) -> TokenStream {
     let tx_index = config.tx_index;
     let path = config.path;
     let world_name = config.world.unwrap_or("contract".to_string());
-    let test = config.test.unwrap_or(false);
 
     import(
         path,
