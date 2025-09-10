@@ -12,6 +12,8 @@ world contract {
     export remove-liquidity: func(ctx: borrow<proc-context>, share: integer) -> result<tuple<integer, integer>, error>;
     export swap-a-for-b: func(ctx: borrow<proc-context>, amount-in: integer, min-out: integer) -> result<integer, error>;
     export swap-b-for-a: func(ctx: borrow<proc-context>, amount-in: integer, min-out: integer) -> result<integer, error>;
+    export transfer-shares: func(ctx: borrow<proc-context>, to: string, amount: integer) -> result<_, error>;
     export get-reserves: func(ctx: borrow<view-context>) -> tuple<integer, integer>;
     export share-of: func(ctx: borrow<view-context>, addr: string) -> integer;
 }
+

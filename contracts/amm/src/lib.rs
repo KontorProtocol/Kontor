@@ -5,6 +5,8 @@ use stdlib::*;
 
 contract!(name = "amm");
 
+const MINIMUM_LIQUIDITY: i64 = 1000;
+
 #[derive(Clone, Default, StorageRoot)]
 struct AmmStorage {
     pub reserve_a: Integer,
@@ -47,7 +49,12 @@ impl Guest for Amm {
 
         // mint LP tokens
         let mint = if total_shares == 0.into() {
-            sqrt(amount_a * amount_b)
+            let initial_mint = sqrt(amount_a * amount_b);
+            // Enforce minimum liquidity on first deposit
+            if initial_mint < MINIMUM_LIQUIDITY.into() {
+                return Err(Error::new("initial liquidity below minimum"));
+            }
+            initial_mint
         } else {
             let share_a = amount_a * total_shares / reserve_a;
             let share_b = amount_b * total_shares / reserve_b;
@@ -105,6 +112,9 @@ impl Guest for Amm {
         if amount_in <= 0.into() {
             return Err(Error::new("invalid input"));
         }
+        if min_out <= 0.into() {
+            return Err(Error::new("min_out must be positive"));
+        }
 
         let reserve_a = storage(ctx).reserve_a(ctx);
         let reserve_b = storage(ctx).reserve_b(ctx);
@@ -134,6 +144,9 @@ impl Guest for Amm {
         if amount_in <= 0.into() {
             return Err(Error::new("invalid input"));
         }
+        if min_out <= 0.into() {
+            return Err(Error::new("min_out must be positive"));
+        }
 
         let reserve_a = storage(ctx).reserve_a(ctx);
         let reserve_b = storage(ctx).reserve_b(ctx);
@@ -153,6 +166,29 @@ impl Guest for Amm {
         storage(ctx).set_reserve_b(ctx, reserve_b + amount_in);
         storage(ctx).set_reserve_a(ctx, reserve_a - amount_out);
         Ok(amount_out)
+    }
+
+    fn transfer_shares(ctx: &ProcContext, to: String, amount: Integer) -> Result<(), Error> {
+        if amount <= 0.into() {
+            return Err(Error::new("invalid transfer amount"));
+        }
+
+        let from = ctx.signer().to_string();
+        if from == to {
+            return Err(Error::new("cannot transfer to self"));
+        }
+
+        let ledger = storage(ctx).shares();
+        let from_balance = ledger.get(ctx, &from).unwrap_or_default();
+        if from_balance < amount {
+            return Err(Error::new("insufficient share balance"));
+        }
+
+        let to_balance = ledger.get(ctx, &to).unwrap_or_default();
+        ledger.set(ctx, from, from_balance - amount);
+        ledger.set(ctx, to.clone(), to_balance + amount);
+
+        Ok(())
     }
 
     fn get_reserves(ctx: &ViewContext) -> (Integer, Integer) {

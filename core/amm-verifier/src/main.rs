@@ -56,7 +56,7 @@ fn no_overdraw(ctx: &Context) {
     }
 }
 
-fn liquidity_removal_counterexample(ctx: &Context) {
+fn verify_liquidity_removal_price_ratio_change(ctx: &Context) {
     let reserve_a = Int::new_const(ctx, "reserve_a_l");
     let reserve_b = Int::new_const(ctx, "reserve_b_l");
     let total_shares = Int::new_const(ctx, "total_shares");
@@ -82,10 +82,106 @@ fn liquidity_removal_counterexample(ctx: &Context) {
 
     match solver.check() {
         SatResult::Sat => println!(
-            "liquidity removal counterexample: {}",
+            "liquidity removal changes price ratio (expected due to rounding): {}",
             solver.get_model().unwrap()
         ),
-        SatResult::Unsat => println!("no rounding counterexample found"),
+        SatResult::Unsat => println!("no price ratio change on liquidity removal"),
+        SatResult::Unknown => println!("solver returned Unknown"),
+    }
+}
+
+fn swap_b_for_a_constant_product(ctx: &Context) {
+    let reserve_a = Int::new_const(ctx, "reserve_a_swap_ba");
+    let reserve_b = Int::new_const(ctx, "reserve_b_swap_ba");
+    let amount_in = Int::new_const(ctx, "amount_in_swap_ba");
+
+    let fee_num = Int::from_i64(ctx, 997);
+    let thousand = Int::from_i64(ctx, 1000);
+    let amount_in_fee = amount_in.clone() * fee_num.clone();
+    let num = amount_in_fee.clone() * reserve_a.clone();
+    let den = reserve_b.clone() * thousand + amount_in_fee.clone();
+    let amount_out = num / den;
+
+    let lhs = (reserve_b.clone() + amount_in.clone()) * (reserve_a.clone() - amount_out.clone());
+    let rhs = reserve_a.clone() * reserve_b.clone();
+
+    let solver = Solver::new(ctx);
+    solver.assert(&reserve_a.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&reserve_b.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&amount_in.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&lhs.lt(&rhs));
+
+    match solver.check() {
+        SatResult::Unsat => println!("swap_b_for_a: constant product preserved"),
+        SatResult::Sat => println!("swap_b_for_a counterexample: {}", solver.get_model().unwrap()),
+        SatResult::Unknown => println!("solver returned Unknown"),
+    }
+}
+
+fn swap_b_for_a_no_overdraw(ctx: &Context) {
+    let reserve_a = Int::new_const(ctx, "reserve_a_ba_od");
+    let reserve_b = Int::new_const(ctx, "reserve_b_ba_od");
+    let amount_in = Int::new_const(ctx, "amount_in_ba_od");
+
+    let fee_num = Int::from_i64(ctx, 997);
+    let thousand = Int::from_i64(ctx, 1000);
+    let amount_in_fee = amount_in.clone() * fee_num.clone();
+    let num = amount_in_fee.clone() * reserve_a.clone();
+    let den = reserve_b.clone() * thousand + amount_in_fee.clone();
+    let amount_out = num / den;
+
+    let solver = Solver::new(ctx);
+    solver.assert(&reserve_a.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&reserve_b.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&amount_in.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&amount_out.ge(&reserve_a));
+
+    match solver.check() {
+        SatResult::Unsat => println!("swap_b_for_a: cannot overdraw token A"),
+        SatResult::Sat => println!("swap_b_for_a overdraw model: {}", solver.get_model().unwrap()),
+        SatResult::Unknown => println!("solver returned Unknown"),
+    }
+}
+
+fn add_liquidity_price_stability(ctx: &Context) {
+    // Verify that adding liquidity doesn't change the price ratio
+    let reserve_a_before = Int::new_const(ctx, "reserve_a_before");
+    let reserve_b_before = Int::new_const(ctx, "reserve_b_before");
+    let total_shares_before = Int::new_const(ctx, "total_shares_before");
+    let amount_a = Int::new_const(ctx, "amount_a_add");
+    let amount_b = Int::new_const(ctx, "amount_b_add");
+
+    // Calculate shares to mint based on the smaller ratio
+    let share_a = amount_a.clone() * total_shares_before.clone() / reserve_a_before.clone();
+    let share_b = amount_b.clone() * total_shares_before.clone() / reserve_b_before.clone();
+
+    // After adding liquidity
+    let reserve_a_after = reserve_a_before.clone() + amount_a.clone();
+    let reserve_b_after = reserve_b_before.clone() + amount_b.clone();
+
+    // Price ratio should remain the same
+    // reserve_a_before / reserve_b_before == reserve_a_after / reserve_b_after
+    // Cross multiply to avoid division
+    let lhs = reserve_a_before.clone() * reserve_b_after.clone();
+    let rhs = reserve_b_before.clone() * reserve_a_after.clone();
+
+    let solver = Solver::new(ctx);
+    solver.assert(&reserve_a_before.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&reserve_b_before.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&total_shares_before.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&amount_a.gt(&Int::from_i64(ctx, 0)));
+    solver.assert(&amount_b.gt(&Int::from_i64(ctx, 0)));
+    
+    // We use the minimum of the two share calculations
+    // For exact proportional deposits, share_a equals share_b
+    solver.assert(&share_a._eq(&share_b));
+    
+    // Check if price ratio can change
+    solver.assert(&lhs._eq(&rhs).not());
+
+    match solver.check() {
+        SatResult::Unsat => println!("add_liquidity: price ratio preserved for proportional deposits"),
+        SatResult::Sat => println!("add_liquidity price change example: {}", solver.get_model().unwrap()),
         SatResult::Unknown => println!("solver returned Unknown"),
     }
 }
@@ -95,7 +191,15 @@ fn main() {
     cfg.set_model_generation(true);
     let ctx = Context::new(&cfg);
 
+    println!("=== Swap A for B Verification ===");
     constant_product(&ctx);
     no_overdraw(&ctx);
-    liquidity_removal_counterexample(&ctx);
+    
+    println!("\n=== Swap B for A Verification ===");
+    swap_b_for_a_constant_product(&ctx);
+    swap_b_for_a_no_overdraw(&ctx);
+    
+    println!("\n=== Liquidity Operations ===");
+    add_liquidity_price_stability(&ctx);
+    verify_liquidity_removal_price_ratio_change(&ctx);
 }
