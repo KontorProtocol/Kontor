@@ -12,3 +12,4 @@
 **/*.so
 !/core/indexer/sqlean*/**/*.so
 !/core/indexer/sqlean*/**/*.dylib
+!/contracts/target/**/*.wasm.br
