@@ -1,5 +1,5 @@
 [workspace]
-members = ["indexer", "macros", "stdlib", "testlib", "ui"]
+members = ["indexer", "macros", "stdlib", "testlib", "ui", "amm-verifier"]
 resolver = "2"
 
 [workspace.lints.clippy]
@@ -29,3 +29,4 @@ tower-http = { version = "=0.6.6", features = [
 tower = "=0.5.2"
 tracing = "=0.1.41"
 libsql = "=0.9.23"
+z3 = "=0.11.2"

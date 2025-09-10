@@ -4,6 +4,8 @@ The Kontor project is split into two workspaces: `core` and `contracts`.
 
 The `core` workspace contains the application and its tests, while `contracts` contains the native contracts. This separation exists because contracts compile to `wasm32-unknown-unknown`. In `cargo`, compile targets can only be set at the workspace level, not at the crate level ([yet](https://github.com/rust-lang/cargo/issues/9406)).
 
+An example constant-product automated market maker (AMM) lives under `contracts/amm`, and a corresponding Z3-based verification harness resides in `core/amm-verifier`.
+
 ## Getting Started
 
 Install build dependencies:

@@ -1,0 +1,17 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context};
+    use kontor:built-in/error.{error};
+    use kontor:built-in/numbers.{integer};
+
+    export init: func(ctx: borrow<proc-context>);
+
+    export add-liquidity: func(ctx: borrow<proc-context>, amount-a: integer, amount-b: integer) -> result<integer, error>;
+    export remove-liquidity: func(ctx: borrow<proc-context>, share: integer) -> result<tuple<integer, integer>, error>;
+    export swap-a-for-b: func(ctx: borrow<proc-context>, amount-in: integer, min-out: integer) -> result<integer, error>;
+    export swap-b-for-a: func(ctx: borrow<proc-context>, amount-in: integer, min-out: integer) -> result<integer, error>;
+    export get-reserves: func(ctx: borrow<view-context>) -> tuple<integer, integer>;
+    export share-of: func(ctx: borrow<view-context>, addr: string) -> integer;
+}

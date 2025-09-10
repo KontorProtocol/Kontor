@@ -1,5 +1,5 @@
 [workspace]
-members = ["arith", "crypto", "fib", "proxy", "shared-account", "token"]
+members = ["arith", "crypto", "fib", "proxy", "shared-account", "token", "amm"]
 resolver = "2"
 
 [profile.release]
