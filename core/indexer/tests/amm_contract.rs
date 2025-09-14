@@ -19,6 +19,7 @@ import!(
 #[tokio::test]
 async fn test_amm_basic_flow() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
+    load_amm_test_tokens(&runtime).await?;
     
     let user = "test_user";
     let _admin = "test_admin";
@@ -101,6 +102,7 @@ async fn test_amm_basic_flow() -> Result<()> {
 #[tokio::test] 
 async fn test_amm_validation() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
+    load_amm_test_tokens(&runtime).await?;
     
     let user = "test_user";
     
@@ -149,6 +151,7 @@ async fn test_amm_validation() -> Result<()> {
 #[tokio::test]
 async fn test_amm_admin_functions() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
+    load_amm_test_tokens(&runtime).await?;
     
     let admin = "test_admin";  // First signer becomes admin
     let user = "test_user";
@@ -227,6 +230,7 @@ async fn test_amm_admin_functions() -> Result<()> {
 #[tokio::test]
 async fn test_amm_lp_tokens() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
+    load_amm_test_tokens(&runtime).await?;
     
     let alice = "alice";
     let bob = "bob";

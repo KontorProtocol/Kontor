@@ -156,3 +156,46 @@ impl Runtime {
             .await
     }
 }
+
+/// Load additional token instances for AMM tests that need multiple token contracts
+pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
+    use indexer::{
+        database::{queries::{insert_contract, contract_has_state}, types::ContractRow},
+        runtime::{ContractAddress, wit::Signer},
+    };
+    
+    const TOKEN: &[u8] = include_bytes!("../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
+    
+    let conn = runtime.runtime.get_storage_conn();
+    let height = 0;
+    
+    // Create token instances at tx_index 1 and 2 for AMM tests
+    for tx_index in [1, 2] {
+        let contract_id = insert_contract(
+            &conn,
+            ContractRow::builder()
+                .height(height)
+                .tx_index(tx_index)
+                .name("token".to_string())
+                .bytes(TOKEN.to_vec())
+                .build(),
+        )
+        .await?;
+
+        if !contract_has_state(&conn, contract_id).await? {
+            runtime.runtime
+                .execute(
+                    Some(Signer::XOnlyPubKey("kontor".to_string())),
+                    &ContractAddress {
+                        name: "token".to_string(),
+                        height,
+                        tx_index,
+                    },
+                    "init()",
+                )
+                .await?;
+        }
+    }
+    
+    Ok(())
+}

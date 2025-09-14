@@ -81,45 +81,8 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
             ("proxy", PROXY),
             ("shared-account", SHARED_ACCOUNT),
             ("token", TOKEN),
-            // Additional test-time aliases for token to simulate distinct contracts
-            ("token_a", TOKEN),
-            ("token_b", TOKEN),
-            // AMM contract
             ("amm", AMM),
         ],
     )
-    .await?;
-
-    // Insert additional token instances at distinct tx_index values for tests that
-    // simulate multiple tokens using the same code (e.g. tx_index 1 and 2)
-    let conn = runtime.get_storage_conn();
-    let height = 0;
-    for tx_index in [1, 2] {
-        let contract_id = insert_contract(
-            &conn,
-            ContractRow::builder()
-                .height(height)
-                .tx_index(tx_index)
-                .name("token".to_string())
-                .bytes(TOKEN.to_vec())
-                .build(),
-        )
-        .await?;
-
-        if !contract_has_state(&conn, contract_id).await? {
-            runtime
-                .execute(
-                    Some(Signer::XOnlyPubKey("kontor".to_string())),
-                    &ContractAddress {
-                        name: "token".to_string(),
-                        height,
-                        tx_index,
-                    },
-                    "init()",
-                )
-                .await?;
-        }
-    }
-
-    Ok(())
+    .await
 }
