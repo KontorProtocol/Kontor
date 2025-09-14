@@ -28,6 +28,9 @@ const SHARED_ACCOUNT: &[u8] = include_bytes!(
 const TOKEN: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
 
+const AMM: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/amm.wasm.br");
+
 pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> Result<()> {
     let height = 0;
     let tx_index = 0;
@@ -78,6 +81,11 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
             ("proxy", PROXY),
             ("shared-account", SHARED_ACCOUNT),
             ("token", TOKEN),
+            // Additional test-time aliases for token to simulate distinct contracts
+            ("token_a", TOKEN),
+            ("token_b", TOKEN),
+            // AMM contract
+            ("amm", AMM),
         ],
     )
     .await
