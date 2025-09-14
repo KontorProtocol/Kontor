@@ -21,7 +21,7 @@ async fn test_amm_basic_flow() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
     
     let user = "test_user";
-    let admin = "test_admin";
+    let _admin = "test_admin";
     
     // Create token pair - in real scenario these would be different contracts
     // For testing, we use different height/index to differentiate them
@@ -38,13 +38,30 @@ async fn test_amm_basic_flow() -> Result<()> {
         }
     };
     
-    // Mint tokens to user (using same token contract for simplicity)
-    token::mint(&runtime, user, 100_000.into()).await?;
+    // Mint tokens to user for both token instances
+    // We need to mint to each token contract instance separately since they have different tx_index
+    let token_a_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 1,
+    };
+    let token_b_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 2,
+    };
     
-    // Since we're using the same token contract for both A and B in testing,
-    // we need to be careful with approvals and balances
-    let amm_address_str = "amm_0_0";
-    token::approve(&runtime, user, amm_address_str, 100_000.into()).await??;
+    // Mint tokens on both token contracts using proper integer format
+    let mint_result_a = runtime.execute(Some("test_user"), &token_a_addr, "mint({r0: 100000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    println!("Token A mint result: {}", mint_result_a);
+    let mint_result_b = runtime.execute(Some("test_user"), &token_b_addr, "mint({r0: 100000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    println!("Token B mint result: {}", mint_result_b);
+    
+    // Check balances
+    let balance_a = runtime.execute(None, &token_a_addr, "balance(\"test_user\")").await?;
+    println!("Token A balance: {}", balance_a);
+    let balance_b = runtime.execute(None, &token_b_addr, "balance(\"test_user\")").await?;
+    println!("Token B balance: {}", balance_b);
     
     // Test pool creation
     let lp_tokens = amm::create(&runtime, user, token_pair.clone(), 1_000.into(), 2_000.into(), 30.into(), 50.into()).await??;
@@ -149,14 +166,34 @@ async fn test_amm_admin_functions() -> Result<()> {
         }
     };
     
-    // Admin creates pool
-    token::mint(&runtime, admin, 50_000.into()).await?;
-    token::approve(&runtime, admin, "amm_0_0", 50_000.into()).await??;
+    // Admin creates pool - mint on both token instances
+    let token_a_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 1,
+    };
+    let token_b_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 2,
+    };
+    
+    runtime.execute(Some(admin), &token_a_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    runtime.execute(Some(admin), &token_b_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    
+    // Initialize AMM with test_admin as the admin
+    let amm_addr = ContractAddress {
+        name: "amm".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    runtime.execute(Some(admin), &amm_addr, "init()").await?;
     
     let _ = amm::create(&runtime, admin, token_pair.clone(), 10_000.into(), 10_000.into(), 30.into(), 50.into()).await??;
     
     // Generate some fees through swaps
-    let _ = amm::swap_a(&runtime, admin, token_pair.clone(), 1_000.into(), 1.into()).await??;
+    let swap_result = amm::swap_a(&runtime, admin, token_pair.clone(), 1_000.into(), 1.into()).await??;
+    println!("Swap result: {}", swap_result);
     
     // Check admin
     let stored_admin = amm::admin(&runtime).await?;
@@ -164,6 +201,7 @@ async fn test_amm_admin_functions() -> Result<()> {
     
     // Check admin fees accumulated
     let admin_fees = amm::admin_fee_value(&runtime, token_pair.clone()).await?.unwrap();
+    println!("Admin fees accumulated: {}", admin_fees);
     assert!(admin_fees > 0.into());
     
     // Admin can withdraw fees
@@ -176,8 +214,9 @@ async fn test_amm_admin_functions() -> Result<()> {
     assert_eq!(fees.lp_fee_bps, 10.into());
     assert_eq!(fees.admin_fee_pct, 25.into());
     
-    // Non-admin cannot withdraw fees
-    token::mint(&runtime, user, 1_000.into()).await?;
+    // Non-admin cannot withdraw fees - mint tokens for user too
+    runtime.execute(Some(user), &token_a_addr, "mint({r0: 1000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    runtime.execute(Some(user), &token_b_addr, "mint({r0: 1000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     let err = amm::admin_withdraw_fees(&runtime, user, token_pair.clone(), 0.into()).await?;
     assert!(err.is_err());
     assert!(err.unwrap_err().to_string().contains("Not authorized"));
@@ -205,9 +244,20 @@ async fn test_amm_lp_tokens() -> Result<()> {
         }
     };
     
-    // Alice creates pool
-    token::mint(&runtime, alice, 20_000.into()).await?;
-    token::approve(&runtime, alice, "amm_0_0", 20_000.into()).await??;
+    // Alice creates pool - mint on both token instances
+    let token_a_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 1,
+    };
+    let token_b_addr = ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 2,
+    };
+    
+    runtime.execute(Some(alice), &token_a_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
+    runtime.execute(Some(alice), &token_b_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     
     let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), 30.into(), 50.into()).await??;
     
