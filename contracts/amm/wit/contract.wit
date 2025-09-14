@@ -1,0 +1,68 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context, signer};
+    use kontor:built-in/error.{error};
+    use kontor:built-in/numbers.{integer, decimal};
+    use kontor:built-in/foreign.{contract-address};
+
+    // Types
+    record pool-creation-event { pool-id: string }
+
+    record pool-values { a: integer, b: integer, lp: integer }
+    record fee-info { lp-fee-bps: integer, admin-fee-pct: integer }
+    record withdraw-result { a-out: integer, b-out: integer }
+
+    // Token contract addresses
+    record token-pair { 
+        token-a: contract-address,
+        token-b: contract-address
+    }
+
+
+    // API
+    export init: func(ctx: borrow<proc-context>);
+
+    // Pool lifecycle
+    export create: func(
+        ctx: borrow<proc-context>,
+        pair: token-pair,
+        init-a: integer,
+        init-b: integer,
+        lp-fee-bps: integer,
+        admin-fee-pct: integer,
+    ) -> result<integer, error>; // returns initial lp minted
+
+    export values: func(ctx: borrow<view-context>, pair: token-pair) -> option<pool-values>;
+    export fees: func(ctx: borrow<view-context>, pair: token-pair) -> option<fee-info>;
+    export admin-fee-value: func(ctx: borrow<view-context>, pair: token-pair) -> option<integer>;
+    // Liquidity
+    export deposit: func(
+        ctx: borrow<proc-context>, pair: token-pair,
+        input-a: integer, input-b: integer, min-lp-out: integer
+    ) -> result<integer, error>; // returns lp minted
+
+    export withdraw: func(
+        ctx: borrow<proc-context>, pair: token-pair,
+        lp-in: integer, min-a-out: integer, min-b-out: integer
+    ) -> result<withdraw-result, error>;
+
+    // Swaps
+    export swap-a: func(ctx: borrow<proc-context>, pair: token-pair, amount-in: integer, min-out: integer) -> result<integer, error>;
+    export swap-b: func(ctx: borrow<proc-context>, pair: token-pair, amount-in: integer, min-out: integer) -> result<integer, error>;
+
+    // Admin (authenticated by signer)
+    export admin-withdraw-fees: func(ctx: borrow<proc-context>, pair: token-pair, amount: integer) -> result<integer, error>;
+    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-bps: integer, admin-fee-pct: integer) -> result<_, error>;
+    
+    // LP Token management
+    export lp-balance: func(ctx: borrow<view-context>, pair: token-pair, owner: string) -> option<integer>;
+    export lp-total-supply: func(ctx: borrow<view-context>, pair: token-pair) -> option<integer>;
+    export transfer-lp: func(ctx: borrow<proc-context>, pair: token-pair, to: string, amount: integer) -> result<_, error>;
+    
+    // Admin info
+    export admin: func(ctx: borrow<view-context>) -> string;
+}
+
+

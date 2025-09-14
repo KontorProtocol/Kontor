@@ -7,7 +7,7 @@ use fastnum::{
     dec256,
     decimal::{self, Context, SignalsTraps},
 };
-use num::{BigInt, bigint::Sign};
+use num::{BigInt, bigint::Sign, Zero};
 
 use super::{Decimal, Error, Integer, NumericOrdering, NumericSign};
 
@@ -301,4 +301,67 @@ pub fn log10(a: Decimal) -> Result<Decimal> {
         return Err(Error::Overflow("invalid decimal number".to_string()).into());
     }
     Ok(res.into())
+}
+
+pub fn mul_div_down_integer(a: Integer, b: Integer, c: Integer) -> Result<Integer> {
+    let ai: BigInt = a.into();
+    let bi: BigInt = b.into();
+    let ci: BigInt = c.into();
+    if ci == BigInt::ZERO {
+        return Err(Error::DivByZero("integer divide by zero".to_string()).into());
+    }
+    Ok(((ai * bi) / ci).into())
+}
+
+pub fn mul_div_up_integer(a: Integer, b: Integer, c: Integer) -> Result<Integer> {
+    let ai: BigInt = a.into();
+    let bi: BigInt = b.into();
+    let ci: BigInt = c.into();
+    if ci == BigInt::ZERO {
+        return Err(Error::DivByZero("integer divide by zero".to_string()).into());
+    }
+    let prod = ai * bi;
+    let q = &prod / &ci;
+    let r = prod % &ci;
+    Ok(if r.is_zero() { q } else { q + 1 }.into())
+}
+
+pub fn sqrt_integer(a: Integer) -> Result<Integer> {
+    let ai: BigInt = a.into();
+    if ai.sign() == Sign::Minus {
+        return Err(Error::Overflow("sqrt of negative integer".to_string()).into());
+    }
+    // Integer sqrt via binary search on BigInt
+    let mut lo = BigInt::from(0);
+    let mut hi = ai.clone();
+    while &lo < &hi {
+        let mid = (&lo + &hi + 1) >> 1;
+        if &mid * &mid <= ai {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Ok(lo.into())
+}
+
+pub fn mul_sqrt_integer(a: Integer, b: Integer) -> Result<Integer> {
+    let ai: BigInt = a.into();
+    let bi: BigInt = b.into();
+    if ai.sign() == Sign::Minus || bi.sign() == Sign::Minus {
+        return Err(Error::Overflow("sqrt of negative product".to_string()).into());
+    }
+    let prod = ai * bi;
+    // integer sqrt
+    let mut lo = BigInt::from(0);
+    let mut hi = prod.clone();
+    while &lo < &hi {
+        let mid = (&lo + &hi + 1) >> 1;
+        if &mid * &mid <= prod {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Ok(lo.into())
 }

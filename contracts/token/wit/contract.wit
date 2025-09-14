@@ -10,6 +10,14 @@ world contract {
 
     export mint: func(ctx: borrow<proc-context>, n: integer);
     export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
+    
+    // ERC-20 style allowance functions
+    export approve: func(ctx: borrow<proc-context>, spender: string, amount: integer) -> result<_, error>;
+    export transfer-from: func(ctx: borrow<proc-context>, owner: string, to: string, amount: integer) -> result<_, error>;
+    export allowance: func(ctx: borrow<view-context>, owner: string, spender: string) -> option<integer>;
+    
     export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
+    export balance-or-zero: func(ctx: borrow<view-context>, acc: string) -> integer;
+    export total-supply: func(ctx: borrow<view-context>) -> integer;
     export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 }

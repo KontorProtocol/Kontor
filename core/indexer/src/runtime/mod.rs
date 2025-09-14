@@ -810,6 +810,22 @@ impl built_in::numbers::Host for Runtime {
         numerics::log10(a)
     }
 
+    async fn mul_div_down_integer(&mut self, a: Integer, b: Integer, c: Integer) -> Result<Integer> {
+        numerics::mul_div_down_integer(a, b, c)
+    }
+
+    async fn mul_div_up_integer(&mut self, a: Integer, b: Integer, c: Integer) -> Result<Integer> {
+        numerics::mul_div_up_integer(a, b, c)
+    }
+
+    async fn sqrt_integer(&mut self, a: Integer) -> Result<Integer> {
+        numerics::sqrt_integer(a)
+    }
+
+    async fn mul_sqrt_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
+        numerics::mul_sqrt_integer(a, b)
+    }
+
     async fn meta_force_generate_integer(&mut self, _i: built_in::numbers::Integer) -> Result<()> {
         unimplemented!()
     }
