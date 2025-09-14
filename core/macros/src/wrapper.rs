@@ -363,28 +363,37 @@ fn get_wrapper_ident(ty: &Type, span: Span) -> Result<Ident> {
 }
 
 fn get_option_inner_type(ty: &Type) -> Result<Type> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Option"
-        && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 1
-        && let GenericArgument::Type(inner_ty) = &args.args[0]
-    {
-        return Ok(inner_ty.clone());
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if args.args.len() == 1 {
+                        if let GenericArgument::Type(inner_ty) = &args.args[0] {
+                            return Ok(inner_ty.clone());
+                        }
+                    }
+                }
+            }
+        }
     }
     Err(Error::new(ty.span(), "Expected Option<T> type"))
 }
 
 fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Map"
-        && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 2
-        && let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
-            (&args.args[0], &args.args[1])
-    {
-        return Ok((k_ty.clone(), v_ty.clone()));
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Map" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if args.args.len() == 2 {
+                        if let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
+                            (&args.args[0], &args.args[1])
+                        {
+                            return Ok((k_ty.clone(), v_ty.clone()));
+                        }
+                    }
+                }
+            }
+        }
     }
     Err(Error::new(ty.span(), "Expected Map<K, V> type"))
 }

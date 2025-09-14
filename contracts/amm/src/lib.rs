@@ -2,6 +2,8 @@ use stdlib::*;
 
 contract!(name = "amm");
 
+interface!(name = "token_dyn", path = "token/wit");
+
 const BPS_IN_100_PCT: numbers::Integer = numbers::Integer {
     r0: 10_000,
     r1: 0,
@@ -10,7 +12,7 @@ const BPS_IN_100_PCT: numbers::Integer = numbers::Integer {
     sign: numbers::Sign::Plus,
 };
 
-#[derive(Clone, Default, Storage)]
+#[derive(Clone, Storage)]
 struct Pool {
     pub token_a: foreign::ContractAddress,
     pub token_b: foreign::ContractAddress,
@@ -21,6 +23,28 @@ struct Pool {
     pub lp_ledger: Map<String, numbers::Integer>, // owner -> lp balance
 }
 
+impl Default for Pool {
+    fn default() -> Self {
+        Self {
+            token_a: foreign::ContractAddress {
+                name: String::new(),
+                height: 0,
+                tx_index: 0,
+            },
+            token_b: foreign::ContractAddress {
+                name: String::new(),
+                height: 0,
+                tx_index: 0,
+            },
+            lp_fee_bps: 0.into(),
+            admin_fee_pct: 0.into(),
+            admin_fee_lp: 0.into(),
+            lp_total_supply: 0.into(),
+            lp_ledger: Map::default(),
+        }
+    }
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct AmmStorage {
     pub pools: Map<String, Pool>,
@@ -28,7 +52,7 @@ struct AmmStorage {
     pub pool_custody_address: String,  // The AMM's address for holding tokens
 }
 
-fn ensure_pair_sorted(pair: &contract::TokenPair) -> Result<(), error::Error> {
+fn ensure_pair_sorted(pair: &TokenPair) -> Result<(), error::Error> {
     // Validate that both tokens are properly specified
     if pair.token_a.name.is_empty() || pair.token_b.name.is_empty() {
         return Err(error::Error::Message("Token addresses must not be empty".to_string()));
@@ -55,7 +79,7 @@ fn ensure_pair_sorted(pair: &contract::TokenPair) -> Result<(), error::Error> {
     Ok(())
 }
 
-fn pair_id(pair: &contract::TokenPair) -> String {
+fn pair_id(pair: &TokenPair) -> String {
     let a_str = format!("{}_{}_{}",  pair.token_a.name, pair.token_a.height, pair.token_a.tx_index);
     let b_str = format!("{}_{}_{}",  pair.token_b.name, pair.token_b.height, pair.token_b.tx_index);
     format!("{}::{}", a_str, b_str)
@@ -66,14 +90,8 @@ fn get_pool_custody_address(ctx: &impl ReadContext) -> String {
     storage(ctx).pool_custody_address(ctx)
 }
 
-fn get_token_balance(signer: Option<&context::Signer>, token: &foreign::ContractAddress, account: &str) -> Result<numbers::Integer, error::Error> {
-    let result = foreign::call(
-        signer.cloned(),
-        token.clone(),
-        &format!("balance_or_zero(\"{}\")", account),
-    );
-    // Parse the integer result directly
-    Ok(numbers::string_to_integer(&result))
+fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::ContractAddress, account: &str) -> Result<numbers::Integer, error::Error> {
+    Ok(token_dyn::balance_or_zero(token, account))
 }
 
 fn calc_swap_result(
@@ -129,7 +147,7 @@ impl Guest for Amm {
 
     fn create(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         init_a: numbers::Integer,
         init_b: numbers::Integer,
         lp_fee_bps: numbers::Integer,
@@ -170,23 +188,13 @@ impl Guest for Amm {
         
         // Transfer initial liquidity from user to pool
         // User must have approved the AMM to spend their tokens first
-        let transfer_a_result = foreign::call(
-            Some(ctx.signer()),
-            pair.token_a.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, init_a),
-        );
-        if transfer_a_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token A: {}", transfer_a_result)));
-        }
+        // Ensure allowance for AMM to pull user's tokens
+        let spender = ctx.contract_signer().to_string();
+        token_dyn::approve(&pair.token_a, ctx.signer(), &spender, init_a)?;
+        token_dyn::transfer_from(&pair.token_a, ctx.contract_signer(), &user_address, &pool_address, init_a)?;
         
-        let transfer_b_result = foreign::call(
-            Some(ctx.signer()),
-            pair.token_b.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, init_b),
-        );
-        if transfer_b_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token B: {}", transfer_b_result)));
-        }
+        token_dyn::approve(&pair.token_b, ctx.signer(), &spender, init_b)?;
+        token_dyn::transfer_from(&pair.token_b, ctx.contract_signer(), &user_address, &pool_address, init_b)?;
 
         let lp_to_issue = numbers::mul_sqrt_integer(init_a, init_b);
         
@@ -213,47 +221,52 @@ impl Guest for Amm {
         Ok(lp_to_issue)
     }
 
-    fn values(ctx: &ViewContext, pair: contract::TokenPair) -> Option<contract::PoolValues> {
+    fn values(ctx: &ViewContext, pair: TokenPair) -> Option<PoolValues> {
         let id = pair_id(&pair);
         storage(ctx).pools().get(ctx, id).and_then(|p| {
+            let pool = p.load(ctx);
             let pool_address = get_pool_custody_address(ctx);
             
             // Get current balances from token contracts
-            let balance_a = get_token_balance(None, &p.token_a, &pool_address).ok()?;
-            let balance_b = get_token_balance(None, &p.token_b, &pool_address).ok()?;
+            let balance_a = get_token_balance(None, &pool.token_a, &pool_address).ok()?;
+            let balance_b = get_token_balance(None, &pool.token_b, &pool_address).ok()?;
             
-            Some(contract::PoolValues {
+            Some(PoolValues {
                 a: balance_a,
                 b: balance_b,
-                lp: p.lp_total_supply,
+                lp: pool.lp_total_supply,
             })
         })
     }
 
-    fn fees(ctx: &ViewContext, pair: contract::TokenPair) -> Option<contract::FeeInfo> {
+    fn fees(ctx: &ViewContext, pair: TokenPair) -> Option<FeeInfo> {
         let id = pair_id(&pair);
-        storage(ctx).pools().get(ctx, id).map(|p| contract::FeeInfo {
-            lp_fee_bps: p.lp_fee_bps,
-            admin_fee_pct: p.admin_fee_pct,
+        storage(ctx).pools().get(ctx, id).map(|p| {
+            let pool = p.load(ctx);
+            FeeInfo {
+                lp_fee_bps: pool.lp_fee_bps,
+                admin_fee_pct: pool.admin_fee_pct,
+            }
         })
     }
 
-    fn admin_fee_value(ctx: &ViewContext, pair: contract::TokenPair) -> Option<numbers::Integer> {
+    fn admin_fee_value(ctx: &ViewContext, pair: TokenPair) -> Option<numbers::Integer> {
         let id = pair_id(&pair);
-        storage(ctx).pools().get(ctx, id).map(|p| p.admin_fee_lp)
+        storage(ctx).pools().get(ctx, id).map(|p| p.load(ctx).admin_fee_lp)
     }
 
     fn deposit(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         input_a: numbers::Integer,
         input_b: numbers::Integer,
         min_lp_out: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
 
         if input_a == 0.into() || input_b == 0.into() {
             if min_lp_out != 0.into() {
@@ -298,27 +311,18 @@ impl Guest for Amm {
         }
 
         // Transfer tokens from user to pool
-        let transfer_a_result = foreign::call(
-            Some(ctx.signer()),
-            pool.token_a.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, deposit_a),
-        );
-        if transfer_a_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token A: {}", transfer_a_result)));
-        }
+        let spender = ctx.contract_signer().to_string();
+        token_dyn::approve(&pool.token_a, ctx.signer(), &spender, deposit_a)?;
+        token_dyn::transfer_from(&pool.token_a, ctx.contract_signer(), &user_address, &pool_address, deposit_a)?;
         
-        let transfer_b_result = foreign::call(
-            Some(ctx.signer()),
-            pool.token_b.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, deposit_b),
-        );
-        if transfer_b_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token B: {}", transfer_b_result)));
-        }
+        token_dyn::approve(&pool.token_b, ctx.signer(), &spender, deposit_b)?;
+        token_dyn::transfer_from(&pool.token_b, ctx.contract_signer(), &user_address, &pool_address, deposit_b)?;
 
-        // Update LP tokens
-        let current_lp = pool.lp_ledger.get(ctx, &user_address).unwrap_or_default();
-        pool.lp_ledger.set(ctx, user_address, numbers::add_integer(current_lp, lp_to_issue));
+        // Update LP tokens (use wrapper for map mutations)
+        let current_lp = pool_wrapper.lp_ledger().get(ctx, &user_address).unwrap_or_default();
+        pool_wrapper
+            .lp_ledger()
+            .set(ctx, user_address, numbers::add_integer(current_lp, lp_to_issue));
         pool.lp_total_supply = numbers::add_integer(pool.lp_total_supply, lp_to_issue);
         pools.set(ctx, id, pool);
 
@@ -329,25 +333,26 @@ impl Guest for Amm {
 
     fn withdraw(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         lp_in: numbers::Integer,
         min_a_out: numbers::Integer,
         min_b_out: numbers::Integer,
-    ) -> Result<contract::WithdrawResult, error::Error> {
+    ) -> Result<WithdrawResult, error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
 
         if lp_in == 0.into() {
-            return Ok((0.into(), 0.into()));
+            return Ok(WithdrawResult { a_out: 0.into(), b_out: 0.into() });
         }
 
         let user_address = ctx.signer().to_string();
         let pool_address = get_pool_custody_address(ctx);
         
         // Check LP balance
-        let user_lp = pool.lp_ledger.get(ctx, &user_address).unwrap_or_default();
+        let user_lp = pool_wrapper.lp_ledger().get(ctx, &user_address).unwrap_or_default();
         if user_lp < lp_in {
             return Err(error::Error::Message("Insufficient LP tokens".to_string()));
         }
@@ -364,44 +369,33 @@ impl Guest for Amm {
         }
 
         // Transfer tokens from pool to user
-        let transfer_a_result = foreign::call(
-            Some(ctx.contract_signer()),
-            pool.token_a.clone(),
-            &format!("transfer(\"{}\", {})", user_address, a_out),
-        );
-        if transfer_a_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token A: {}", transfer_a_result)));
-        }
+        token_dyn::transfer(&pool.token_a, ctx.contract_signer(), &user_address, a_out)?;
         
-        let transfer_b_result = foreign::call(
-            Some(ctx.contract_signer()),
-            pool.token_b.clone(),
-            &format!("transfer(\"{}\", {})", user_address, b_out),
-        );
-        if transfer_b_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer token B: {}", transfer_b_result)));
-        }
+        token_dyn::transfer(&pool.token_b, ctx.contract_signer(), &user_address, b_out)?;
 
         // Burn LP tokens
-        pool.lp_ledger.set(ctx, user_address, numbers::sub_integer(user_lp, lp_in));
+        pool_wrapper
+            .lp_ledger()
+            .set(ctx, user_address, numbers::sub_integer(user_lp, lp_in));
         pool.lp_total_supply = numbers::sub_integer(pool.lp_total_supply, lp_in);
         pools.set(ctx, id, pool);
         
         // EVENT: Withdraw { user: user_address, lp_burned: lp_in, token_a_amount: a_out, token_b_amount: b_out }
         
-        Ok(contract::WithdrawResult { a_out, b_out })
+        Ok(WithdrawResult { a_out, b_out })
     }
 
     fn swap_a(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         amount_in: numbers::Integer,
         min_out: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
             
         if amount_in == 0.into() {
             if min_out != 0.into() {
@@ -435,24 +429,12 @@ impl Guest for Amm {
         }
         
         // Transfer token A from user to pool
-        let transfer_in_result = foreign::call(
-            Some(ctx.signer()),
-            pool.token_a.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, amount_in),
-        );
-        if transfer_in_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer input token: {}", transfer_in_result)));
-        }
+        let spender = ctx.contract_signer().to_string();
+        token_dyn::approve(&pool.token_a, ctx.signer(), &spender, amount_in)?;
+        token_dyn::transfer_from(&pool.token_a, ctx.contract_signer(), &user_address, &pool_address, amount_in)?;
         
         // Transfer token B from pool to user
-        let transfer_out_result = foreign::call(
-            Some(ctx.contract_signer()),
-            pool.token_b.clone(),
-            &format!("transfer(\"{}\", {})", user_address, out_value),
-        );
-        if transfer_out_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer output token: {}", transfer_out_result)));
-        }
+        token_dyn::transfer(&pool.token_b, ctx.contract_signer(), &user_address, out_value)?;
         
         // Update admin fees
         pool.admin_fee_lp = numbers::add_integer(pool.admin_fee_lp, admin_fee_in_lp);
@@ -466,14 +448,15 @@ impl Guest for Amm {
 
     fn swap_b(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         amount_in: numbers::Integer,
         min_out: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
             
         if amount_in == 0.into() {
             if min_out != 0.into() {
@@ -507,24 +490,12 @@ impl Guest for Amm {
         }
         
         // Transfer token B from user to pool
-        let transfer_in_result = foreign::call(
-            Some(ctx.signer()),
-            pool.token_b.clone(),
-            &format!("transfer_from(\"{}\", \"{}\", {})", user_address, pool_address, amount_in),
-        );
-        if transfer_in_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer input token: {}", transfer_in_result)));
-        }
+        let spender = ctx.contract_signer().to_string();
+        token_dyn::approve(&pool.token_b, ctx.signer(), &spender, amount_in)?;
+        token_dyn::transfer_from(&pool.token_b, ctx.contract_signer(), &user_address, &pool_address, amount_in)?;
         
         // Transfer token A from pool to user
-        let transfer_out_result = foreign::call(
-            Some(ctx.contract_signer()),
-            pool.token_a.clone(),
-            &format!("transfer(\"{}\", {})", user_address, out_value),
-        );
-        if transfer_out_result != "()" {
-            return Err(error::Error::Message(format!("Failed to transfer output token: {}", transfer_out_result)));
-        }
+        token_dyn::transfer(&pool.token_a, ctx.contract_signer(), &user_address, out_value)?;
         
         // Update admin fees
         pool.admin_fee_lp = numbers::add_integer(pool.admin_fee_lp, admin_fee_in_lp);
@@ -538,13 +509,14 @@ impl Guest for Amm {
 
     fn admin_withdraw_fees(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         amount: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
             
         // Check admin authorization
         if ctx.signer().to_string() != storage(ctx).admin(ctx) {
@@ -562,8 +534,10 @@ impl Guest for Amm {
         
         // Credit admin with LP tokens
         let admin_address = ctx.signer().to_string();
-        let current_lp = pool.lp_ledger.get(ctx, &admin_address).unwrap_or_default();
-        pool.lp_ledger.set(ctx, admin_address, numbers::add_integer(current_lp, amount_int));
+        let current_lp = pool_wrapper.lp_ledger().get(ctx, &admin_address).unwrap_or_default();
+        pool_wrapper
+            .lp_ledger()
+            .set(ctx, admin_address, numbers::add_integer(current_lp, amount_int));
         
         pool.admin_fee_lp = numbers::sub_integer(pool.admin_fee_lp, amount_int);
         // Note: We don't reduce lp_total_supply here as the LP tokens already exist, just moving ownership
@@ -576,7 +550,7 @@ impl Guest for Amm {
 
     fn admin_set_fees(
         ctx: &ProcContext,
-        pair: contract::TokenPair,
+        pair: TokenPair,
         lp_fee_bps: numbers::Integer,
         admin_fee_pct: numbers::Integer,
     ) -> Result<(), error::Error> {
@@ -591,8 +565,9 @@ impl Guest for Amm {
         
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
             
         pool.lp_fee_bps = lp_fee_bps;
         pool.admin_fee_pct = admin_fee_pct;
@@ -604,34 +579,39 @@ impl Guest for Amm {
     }
     
     // LP Token management functions
-    fn lp_balance(ctx: &ViewContext, pair: contract::TokenPair, owner: String) -> Option<numbers::Integer> {
+    fn lp_balance(ctx: &ViewContext, pair: TokenPair, owner: String) -> Option<numbers::Integer> {
         let id = pair_id(&pair);
         storage(ctx).pools().get(ctx, id)
-            .and_then(|pool| pool.lp_ledger.get(ctx, owner))
+            .and_then(|pool| pool.lp_ledger().get(ctx, owner))
     }
     
-    fn lp_total_supply(ctx: &ViewContext, pair: contract::TokenPair) -> Option<numbers::Integer> {
+    fn lp_total_supply(ctx: &ViewContext, pair: TokenPair) -> Option<numbers::Integer> {
         let id = pair_id(&pair);
         storage(ctx).pools().get(ctx, id)
-            .map(|pool| pool.lp_total_supply)
+            .map(|pool| pool.lp_total_supply(ctx))
     }
     
-    fn transfer_lp(ctx: &ProcContext, pair: contract::TokenPair, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
+    fn transfer_lp(ctx: &ProcContext, pair: TokenPair, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
-        let mut pool = pools.get(ctx, &id)
+        let pool_wrapper = pools.get(ctx, &id)
             .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        let mut pool = pool_wrapper.load(ctx);
         
         let from = ctx.signer().to_string();
-        let from_balance = pool.lp_ledger.get(ctx, &from).unwrap_or_default();
+        let from_balance = pool_wrapper.lp_ledger().get(ctx, &from).unwrap_or_default();
         
         if from_balance < amount {
             return Err(error::Error::Message("Insufficient LP balance".to_string()));
         }
         
-        let to_balance = pool.lp_ledger.get(ctx, &to).unwrap_or_default();
-        pool.lp_ledger.set(ctx, from, numbers::sub_integer(from_balance, amount));
-        pool.lp_ledger.set(ctx, to, numbers::add_integer(to_balance, amount));
+        let to_balance = pool_wrapper.lp_ledger().get(ctx, &to).unwrap_or_default();
+        pool_wrapper
+            .lp_ledger()
+            .set(ctx, from, numbers::sub_integer(from_balance, amount));
+        pool_wrapper
+            .lp_ledger()
+            .set(ctx, to, numbers::add_integer(to_balance, amount));
         pools.set(ctx, id, pool);
         
         // EVENT: LPTransfer { from, to, amount }
