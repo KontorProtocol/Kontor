@@ -78,6 +78,7 @@ impl Runtime {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
+        config.consume_fuel(true);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
@@ -102,8 +103,10 @@ impl Runtime {
         self.storage = storage;
     }
 
-    pub fn make_store(&self) -> Store<Self> {
-        Store::new(&self.engine, self.clone())
+    pub fn make_store(&self) -> Result<Store<Self>> {
+        let mut s = Store::new(&self.engine, self.clone());
+        s.set_fuel(1000000)?;
+        Ok(s)
     }
 
     pub fn make_linker(&self) -> Result<Linker<Self>> {
@@ -148,10 +151,9 @@ impl Runtime {
             .contract_id(contract_address)
             .await?
             .ok_or(anyhow!("Contract not found"))?;
-        self.stack.push(contract_id).await?;
         let component = self.load_component(contract_id).await?;
         let linker = self.make_linker()?;
-        let mut store = self.make_store();
+        let mut store = self.make_store()?;
         let instance = linker.instantiate_async(&mut store, &component).await?;
         let fallback_name = "fallback";
         let fallback_expr = format!(
@@ -180,6 +182,11 @@ impl Runtime {
             _ => Err(anyhow!("Unsupported context type")),
         }?;
         {
+            if let Some(Signer::ContractId(id)) = signer
+                && self.stack.peek().await != Some(id)
+            {
+                return Err(anyhow!("Invalid contract id signer"));
+            }
             let mut table = self.table.lock().await;
             match (resource_type, signer) {
                 (t, Some(signer))
@@ -223,6 +230,7 @@ impl Runtime {
             }
         }
 
+        self.stack.push(contract_id).await?;
         let mut results = func
             .results(&store)
             .iter()

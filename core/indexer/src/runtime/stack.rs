@@ -14,7 +14,7 @@ pub struct Stack<T> {
     inner: Arc<Mutex<Vec<T>>>,
 }
 
-impl<T: Send + PartialEq + Debug> Stack<T> {
+impl<T: Send + PartialEq + Debug + Clone> Stack<T> {
     pub fn new() -> Self {
         Stack {
             inner: Arc::new(Mutex::new(Vec::new())),
@@ -35,5 +35,10 @@ impl<T: Send + PartialEq + Debug> Stack<T> {
     pub async fn pop(&self) -> Option<T> {
         let mut stack = self.inner.lock().await;
         stack.pop()
+    }
+
+    pub async fn peek(&self) -> Option<T> {
+        let stack = self.inner.lock().await;
+        stack.last().cloned()
     }
 }
