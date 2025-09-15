@@ -138,9 +138,7 @@ pub fn string_to_integer(s: &str) -> Result<Result<Integer, Error>> {
     let max_int = MAX_INT.clone();
     let i = s.parse::<BigInt>()?;
     if i > max_int || i < -max_int {
-        return Ok(Err(
-            Error::Overflow("result overflows Integer".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("result overflows Integer".to_string())));
     }
     Ok(Ok(i.into()))
 }
@@ -173,9 +171,7 @@ pub fn add_integer(a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
     let big_b: BigInt = b.into();
     let res = big_a + big_b;
     if res > max_int || res < -max_int {
-        return Ok(Err(
-            Error::Overflow("result overflows Integer".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("result overflows Integer".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -187,9 +183,7 @@ pub fn sub_integer(a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
     let big_b: BigInt = b.into();
     let res = big_a - big_b;
     if res > max_int || res < -max_int {
-        return Ok(Err(
-            Error::Overflow("result overflows Integer".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("result overflows Integer".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -201,9 +195,7 @@ pub fn mul_integer(a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
     let big_b: BigInt = b.into();
     let res = big_a * big_b;
     if res > max_int || res < -max_int {
-        return Ok(Err(
-            Error::Overflow("result overflows Integer".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("result overflows Integer".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -212,9 +204,7 @@ pub fn div_integer(a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
     let big_a: BigInt = a.into();
     let big_b: BigInt = b.into();
     if big_b == BigInt::ZERO {
-        return Ok(Err(
-            Error::DivByZero("integer divide by zero".to_string()).into()
-        ));
+        return Ok(Err(Error::DivByZero("integer divide by zero".to_string())));
     }
     Ok(Ok((big_a / big_b).into()))
 }
@@ -260,9 +250,7 @@ pub fn string_to_decimal(s: &str) -> Result<Result<Decimal, Error>> {
     let dec = s.parse::<D256>()?;
     let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        return Ok(Err(
-            Error::Overflow("invalid decimal number".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("invalid decimal number".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -304,9 +292,7 @@ pub fn add_decimal(a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
     let dec_b: D256 = b.into();
     let res = (dec_a + dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        return Ok(Err(
-            Error::Overflow("invalid decimal number".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("invalid decimal number".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -316,9 +302,7 @@ pub fn sub_decimal(a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
     let dec_b: D256 = b.into();
     let res = (dec_a - dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        return Ok(Err(
-            Error::Overflow("invalid decimal number".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("invalid decimal number".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -328,9 +312,7 @@ pub fn mul_decimal(a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
     let dec_b: D256 = b.into();
     let res = (dec_a * dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        return Ok(Err(
-            Error::Overflow("invalid decimal number".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("invalid decimal number".to_string())));
     }
     Ok(Ok(res.into()))
 }
@@ -339,15 +321,11 @@ pub fn div_decimal(a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
     let dec_a: D256 = a.into();
     let dec_b: D256 = b.into();
     if dec_b.is_zero() {
-        return Ok(Err(
-            Error::DivByZero("decimal divide by zero".to_string()).into()
-        ));
+        return Ok(Err(Error::DivByZero("decimal divide by zero".to_string())));
     }
     let res = (dec_a / dec_b).with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        return Ok(Err(
-            Error::Overflow("invalid decimal number".to_string()).into()
-        ));
+        return Ok(Err(Error::Overflow("invalid decimal number".to_string())));
     }
     Ok(Ok(res.into()))
 }
