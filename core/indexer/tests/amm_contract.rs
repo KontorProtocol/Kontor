@@ -290,10 +290,6 @@ async fn test_amm_lp_tokens() -> Result<()> {
     };
     runtime.execute(Some(alice), &amm_addr, "init()").await?;
     
-    // Set AMM contract as operator for token transfers
-    runtime.execute(Some(alice), &token_a_addr, "set-operator(\"__cid__7\", 1)").await?;
-    runtime.execute(Some(alice), &token_b_addr, "set-operator(\"__cid__7\", 1)").await?;
-    
     let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), 30.into(), 50.into()).await??;
     
     // Check Alice's LP balance

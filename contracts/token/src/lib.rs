@@ -49,7 +49,6 @@ pub trait Asset {
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<String, numbers::Integer>,
-    pub operators: Map<String, bool>, // "owner:operator" -> approved (flattened)
     pub total_supply: numbers::Integer,
     pub contract_addr: Option<foreign::ContractAddress>, // Store our own address
 }
@@ -134,46 +133,6 @@ impl Guest for Token {
         Ok(())
     }
 
-    fn set_operator(ctx: &ProcContext, operator: String, approved: u64) -> Result<(), error::Error> {
-        let owner = ctx.signer().to_string();
-        let operators = storage(ctx).operators();
-
-        let key = format!("{}:{}", owner, operator);
-        operators.set(ctx, key, approved != 0);
-
-        Ok(())
-    }
-
-    fn is_operator(ctx: &ViewContext, owner: String, operator: String) -> u64 {
-        let operators = storage(ctx).operators();
-        let key = format!("{}:{}", owner, operator);
-        if operators.get(ctx, key).unwrap_or(false) { 1 } else { 0 }
-    }
-
-    fn transfer_as_operator(ctx: &ProcContext, owner: String, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
-        let operator = ctx.signer().to_string();
-        let operators = storage(ctx).operators();
-        let ledger = storage(ctx).ledger();
-        
-        // Check operator permission
-        let operator_key = format!("{}:{}", owner, operator);
-        if !operators.get(ctx, &operator_key).unwrap_or(false) {
-            return Err(error::Error::Message("not an approved operator".to_string()));
-        }
-        
-        // Check balance
-        let owner_balance = ledger.get(ctx, &owner).unwrap_or_default();
-        if owner_balance < amount {
-            return Err(error::Error::Message("insufficient funds".to_string()));
-        }
-        
-        // Update balances
-        let to_balance = ledger.get(ctx, &to).unwrap_or_default();
-        ledger.set(ctx, owner, numbers::sub_integer(owner_balance, amount));
-        ledger.set(ctx, to, numbers::add_integer(to_balance, amount));
-        
-        Ok(())
-    }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<numbers::Integer> {
         let ledger = storage(ctx).ledger();

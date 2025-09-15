@@ -18,11 +18,6 @@ world contract {
     export mint: func(ctx: borrow<proc-context>, n: integer);
     export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
     
-    // Operator model - no allowances, just trusted contracts
-    export set-operator: func(ctx: borrow<proc-context>, operator: string, approved: u64) -> result<_, error>;  // 1 for true, 0 for false
-    export is-operator: func(ctx: borrow<view-context>, owner: string, operator: string) -> u64;  // 1 for true, 0 for false
-    export transfer-as-operator: func(ctx: borrow<proc-context>, owner: string, to: string, amount: integer) -> result<_, error>;
-    
     export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
     export balance-or-zero: func(ctx: borrow<view-context>, acc: string) -> integer;
     export total-supply: func(ctx: borrow<view-context>) -> integer;
