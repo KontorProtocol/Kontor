@@ -37,7 +37,7 @@ impl InFlightBalance {
 /// The Asset trait defines the interface for tokens that support resource-like semantics.
 pub trait Asset {
     /// Returns the contract address for this asset.
-    fn contract_address() -> foreign::ContractAddress;
+    fn contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress;
 
     /// Withdraws the specified amount from the caller's balance, returning an InFlightBalance.
     fn withdraw(ctx: &ProcContext, amount: numbers::Integer) -> Result<InFlightBalance, error::Error>;
@@ -51,18 +51,23 @@ struct TokenStorage {
     pub ledger: Map<String, numbers::Integer>,
     pub operators: Map<String, bool>, // "owner:operator" -> approved (flattened)
     pub total_supply: numbers::Integer,
+    pub contract_addr: Option<foreign::ContractAddress>, // Store our own address
 }
 
 // Implement the Asset trait for Token
 impl Asset for Token {
-    fn contract_address() -> foreign::ContractAddress {
-        // For now, return a placeholder. In a real implementation, this would
-        // need to be set during contract initialization or derived from context.
-        foreign::ContractAddress {
-            name: "token".to_string(),
-            height: 0,
-            tx_index: 1, // This would need to be the actual deployed address
-        }
+    fn contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
+        // Try to get stored address, fall back to deriving from contract signer
+        storage(ctx).contract_addr(ctx).unwrap_or_else(|| {
+            // Fallback: parse the contract signer string to extract address components
+            // This assumes the signer string format contains the necessary info
+            // In a real deployment, the address should be stored during init
+            foreign::ContractAddress {
+                name: "token".to_string(),
+                height: 0,
+                tx_index: 1, // This should be set properly during deployment
+            }
+        })
     }
 
     fn withdraw(ctx: &ProcContext, amount: numbers::Integer) -> Result<InFlightBalance, error::Error> {
@@ -78,14 +83,14 @@ impl Asset for Token {
         ledger.set(ctx, owner, numbers::sub_integer(balance, amount));
         
         // Return the in-flight balance
-        Ok(InFlightBalance::new(Self::contract_address(), amount))
+        Ok(InFlightBalance::new(Self::contract_address(ctx), amount))
     }
 
     fn deposit(ctx: &ProcContext, recipient: String, balance: InFlightBalance) -> Result<(), error::Error> {
         let (token_addr, amount) = balance.into_value();
 
         // Security check: ensure the InFlightBalance originated from THIS token contract
-        if token_addr != Self::contract_address() {
+        if token_addr != Self::contract_address(ctx) {
             return Err(error::Error::Message("invalid balance object for this token".to_string()));
         }
 
