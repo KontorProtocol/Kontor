@@ -67,18 +67,6 @@ async fn test_amm_basic_flow() -> Result<()> {
     };
     runtime.execute(Some(user), &amm_addr, "init()").await?;
     
-    // Set AMM contract as operator for token transfers (try __cid__7 based on loading order)
-    println!("Setting operator for token A...");
-    let result = runtime.execute(Some(user), &token_a_addr, "set-operator(\"__cid__7\", 1)").await;
-    println!("Token A set-operator result: {:?}", result);
-    result?;
-    
-    println!("Setting operator for token B...");
-    let result = runtime.execute(Some(user), &token_b_addr, "set-operator(\"__cid__7\", 1)").await;
-    println!("Token B set-operator result: {:?}", result);
-    result?;
-    
-    
     // Check balances
     let balance_a = runtime.execute(None, &token_a_addr, "balance(\"test_user\")").await?;
     println!("Token A balance: {}", balance_a);
@@ -210,10 +198,6 @@ async fn test_amm_admin_functions() -> Result<()> {
     
     runtime.execute(Some(admin), &token_a_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     runtime.execute(Some(admin), &token_b_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
-    
-    // Set AMM contract as operator for token transfers
-    runtime.execute(Some(admin), &token_a_addr, "set-operator(\"__cid__7\", 1)").await?;
-    runtime.execute(Some(admin), &token_b_addr, "set-operator(\"__cid__7\", 1)").await?;
     
     // Initialize AMM with test_admin as the admin
     let amm_addr = ContractAddress {

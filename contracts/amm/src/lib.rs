@@ -86,16 +86,18 @@ fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::Contract
     Ok(token_dyn::balance_or_zero(token, account))
 }
 
-// Helper function for token transfer from user to pool using operator model
+// Helper function for token transfer from user to pool using asset-based model
 fn transfer_token_from_user_to_pool(
     ctx: &ProcContext,
     token: &foreign::ContractAddress,
     amount: numbers::Integer,
     pool_address: &str,
 ) -> Result<(), error::Error> {
-    let user_address = ctx.signer().to_string();
-    // The AMM acts as an operator to transfer from user to pool
-    token_dyn::transfer_as_operator(token, ctx.contract_signer(), &user_address, pool_address, amount)
+    // 1. Withdraw funds from user's account (user's signer authorizes this)
+    let balance = token_dyn::withdraw(token, ctx.signer(), amount)?;
+    
+    // 2. Deposit funds into pool's account (contract's signer authorizes this)  
+    token_dyn::deposit(token, ctx.contract_signer(), pool_address, balance)
 }
 
 // Helper function to load a pool or return error
@@ -180,7 +182,7 @@ fn execute_swap(
     
     validate_min_output(out_value, min_out)?;
     
-    // Transfer token in from user to pool (requires operator approval)
+    // Transfer token in from user to pool using asset-based transfer
     transfer_token_from_user_to_pool(ctx, token_in, amount_in, &pool_address)?;
     
     // Transfer token out from pool to user
@@ -301,7 +303,7 @@ impl Guest for Amm {
         let user_address = ctx.signer().to_string();
         
         // Transfer initial liquidity from user to pool
-        // Note: User must have previously approved the AMM as an operator via token.set_operator(amm_address, true)
+        // Note: Uses asset-based transfer (withdraw from user, deposit to pool)
         transfer_token_from_user_to_pool(ctx, &pair.token_a, init_a, &pool_address)?;
         transfer_token_from_user_to_pool(ctx, &pair.token_b, init_b, &pool_address)?;
 
@@ -422,8 +424,7 @@ impl Guest for Amm {
 
         validate_min_output(lp_to_issue, min_lp_out)?;
 
-        // Transfer tokens from user to pool
-        // Note: User must have previously approved the AMM as an operator
+        // Transfer tokens from user to pool using asset-based transfers
         transfer_token_from_user_to_pool(ctx, &pool.token_a, deposit_a, &pool_address)?;
         transfer_token_from_user_to_pool(ctx, &pool.token_b, deposit_b, &pool_address)?;
 
