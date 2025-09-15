@@ -68,6 +68,30 @@ pub fn wit_type_to_unwrap_expr(
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
                     Ok(quote! { #value.into() })
                 }
+                TypeDefKind::Handle(Handle::Own(resource_id)) => {
+                    // For owned resource handles, we need to create the resource from the handle
+                    let resource_def = &resolve.types[*resource_id];
+                    let resource_name = resource_def
+                        .name
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("Unnamed resource types are not supported"))?
+                        .to_upper_camel_case();
+                    let ident = Ident::new(&resource_name, Span::call_site());
+                    // The handle is returned as a u32 from the runtime
+                    Ok(quote! { #ident::from_handle(#value.as_u32().unwrap()) })
+                }
+                TypeDefKind::Handle(Handle::Borrow(_)) => {
+                    // Borrowed handles shouldn't appear as return types in our use case
+                    bail!("Borrowed resource handles cannot be used as return types")
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    // Handle tuples by recursively unwrapping each element
+                    let elements = tuple.types.iter().enumerate().map(|(i, ty)| {
+                        let elem_value = quote! { #value.as_tuple().unwrap()[#i].clone() };
+                        wit_type_to_unwrap_expr(resolve, ty, elem_value)
+                    }).collect::<Result<Vec<_>, _>>()?;
+                    Ok(quote! { (#(#elements),*) })
+                }
                 _ => bail!("Unsupported WIT type definition kind: {:?}", ty_def.kind),
             }
         }
@@ -117,6 +141,17 @@ pub fn wit_type_to_rust_type(
                         .to_upper_camel_case();
                     let ident = Ident::new(&resource_name, Span::call_site());
                     Ok(quote! { &context::#ident })
+                }
+                TypeDefKind::Handle(Handle::Own(resource_id)) => {
+                    // Owned resource handle - these are move-only types
+                    let resource_def = &resolve.types[*resource_id];
+                    let resource_name = resource_def
+                        .name
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("Unnamed resource types are not supported"))?
+                        .to_upper_camel_case();
+                    let ident = Ident::new(&resource_name, Span::call_site());
+                    Ok(quote! { #ident })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
                     let name = ty_def
@@ -181,8 +216,10 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
                     let ident = Ident::new(&name, Span::call_site());
                     Ok(quote! { <#ident>::wave_type() })
                 }
-                TypeDefKind::Handle(_) => {
-                    bail!("Resource handles cannot be used as return types");
+                TypeDefKind::Handle(Handle::Own(_)) | TypeDefKind::Handle(Handle::Borrow(_)) => {
+                    // Resources are opaque handles - they can't be serialized to wave
+                    // For now, we'll treat them as opaque u32 handles in wave format
+                    Ok(quote! { "u32" })
                 }
                 _ => bail!("Unsupported return type kind: {:?}", ty_def.kind),
             }

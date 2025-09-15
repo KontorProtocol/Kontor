@@ -94,6 +94,15 @@ pub fn import(
             TypeDefKind::Record(record) => print_typedef_record(&resolve, name, record),
             TypeDefKind::Enum(enum_) => print_typedef_enum(name, enum_),
             TypeDefKind::Variant(variant) => print_typedef_variant(&resolve, name, variant),
+            TypeDefKind::Resource => print_typedef_resource(name),
+            TypeDefKind::Tuple(_) => {
+                // Tuples are handled inline in function signatures, skip them here
+                continue;
+            }
+            TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
+                // These are also handled inline
+                continue;
+            }
             _ => panic!("Unsupported type definition kind: {:?}", def.kind),
         }
         .expect("Failed to generate type");
@@ -348,6 +357,42 @@ pub fn print_typedef_variant(
         #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
         pub enum #enum_name {
             #(#variants),*
+        }
+    })
+}
+
+pub fn print_typedef_resource(name: &str) -> Result<TokenStream> {
+    let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
+    
+    // Resources are opaque handles in the import context
+    // They're move-only types that wrap a resource handle
+    Ok(quote! {
+        #[derive(Debug)]
+        pub struct #struct_name {
+            // Resources are opaque handles managed by the runtime
+            // They don't implement Clone or Copy, enforcing move semantics
+            handle: u32,
+            _phantom: std::marker::PhantomData<*const ()>, // Make it !Send and !Sync
+        }
+        
+        impl #struct_name {
+            /// Create a resource from a handle (internal use)
+            pub(crate) fn from_handle(handle: u32) -> Self {
+                Self {
+                    handle,
+                    _phantom: std::marker::PhantomData,
+                }
+            }
+            
+            /// Get the handle (internal use)
+            pub(crate) fn handle(&self) -> u32 {
+                self.handle
+            }
+            
+            /// Take the handle, consuming the resource
+            pub(crate) fn take_handle(self) -> u32 {
+                self.handle
+            }
         }
     })
 }

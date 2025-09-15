@@ -1,49 +1,82 @@
 use stdlib::*;
+use std::cell::RefCell;
 
 contract!(name = "token");
 
-// Asset management types and traits for this contract
-/// An InFlightBalance represents a quantity of this token that has been
-/// withdrawn from its ledger and is now "in-flight" for the duration of a transaction.
-#[derive(Debug)]
-#[must_use = "in-flight balances must be deposited or explicitly handled"]
-pub struct InFlightBalance {
+// Thread-local storage for balance resources
+// The WIT resource system needs us to manage resource instances
+thread_local! {
+    static BALANCE_TABLE: RefCell<Vec<Option<BalanceData>>> = RefCell::new(Vec::new());
+}
+
+// Data backing a Balance resource
+#[derive(Clone)]
+struct BalanceData {
     token_addr: foreign::ContractAddress,
     amount: numbers::Integer,
-    _private: (),
+    handle: String,  // Unique ID for linearity tracking
 }
 
-impl InFlightBalance {
-    /// Creates a new InFlightBalance. Only callable within this module.
-    fn new(token_addr: foreign::ContractAddress, amount: numbers::Integer) -> Self {
-        Self { 
-            token_addr, 
-            amount, 
-            _private: () 
+// Helper to create a unique handle for a balance
+fn create_handle(id: numbers::Integer) -> String {
+    format!("balance_{}", numbers::integer_to_string(id))
+}
+
+// The macro generates the Balance type but we need to implement the resource methods
+// Since WIT resources require host-side implementation, we'll provide the methods
+// through the Guest implementation
+fn allocate_balance_resource(data: BalanceData) -> u32 {
+    BALANCE_TABLE.with(|table| {
+        let mut table = table.borrow_mut();
+        // Find a free slot or add a new one
+        let index = table.iter().position(|slot| slot.is_none())
+            .unwrap_or_else(|| {
+                table.push(None);
+                table.len() - 1
+            });
+        table[index] = Some(data);
+        index as u32
+    })
+}
+
+fn take_balance_data(index: u32) -> Result<BalanceData, error::Error> {
+    BALANCE_TABLE.with(|table| {
+        let mut table = table.borrow_mut();
+        let idx = index as usize;
+        
+        if idx >= table.len() {
+            return Err(error::Error::Message("Invalid balance resource".to_string()));
         }
-    }
-
-    /// Consumes the InFlightBalance, returning its constituent parts.
-    pub fn into_value(self) -> (foreign::ContractAddress, numbers::Integer) {
-        (self.token_addr, self.amount)
-    }
-
-    /// Returns the amount without consuming the balance.
-    pub fn amount(&self) -> numbers::Integer {
-        self.amount
-    }
+        
+        table[idx].take()
+            .ok_or_else(|| error::Error::Message("Balance already consumed or invalid".to_string()))
+    })
 }
 
-/// The Asset trait defines the interface for tokens that support resource-like semantics.
-pub trait Asset {
-    /// Returns the contract address for this asset.
-    fn contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress;
+fn get_balance_data(index: u32) -> Result<BalanceData, error::Error> {
+    BALANCE_TABLE.with(|table| {
+        let table = table.borrow();
+        let idx = index as usize;
+        
+        if idx >= table.len() {
+            return Err(error::Error::Message("Invalid balance resource".to_string()));
+        }
+        
+        table[idx].clone()
+            .ok_or_else(|| error::Error::Message("Balance not found".to_string()))
+    })
+}
 
-    /// Withdraws the specified amount from the caller's balance, returning an InFlightBalance.
-    fn withdraw(ctx: &ProcContext, amount: numbers::Integer) -> Result<InFlightBalance, error::Error>;
-
-    /// Deposits an InFlightBalance into the specified recipient's account.
-    fn deposit(ctx: &ProcContext, recipient: String, balance: InFlightBalance) -> Result<(), error::Error>;
+// Helper function to get the token's contract address
+fn get_contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
+    storage(ctx).contract_addr(ctx).unwrap_or_else(|| {
+        // Fallback: This should be set during init
+        foreign::ContractAddress {
+            name: "token".to_string(),
+            height: 0,
+            tx_index: 1,
+        }
+    })
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -51,59 +84,116 @@ struct TokenStorage {
     pub ledger: Map<String, numbers::Integer>,
     pub total_supply: numbers::Integer,
     pub contract_addr: Option<foreign::ContractAddress>, // Store our own address
+    pub next_balance_id: numbers::Integer,  // Counter for unique balance IDs
+    pub inflight: Map<String, InFlightEntry>, // Track in-flight balances using string ID
 }
 
-// Implement the Asset trait for Token
-impl Asset for Token {
-    fn contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
-        // Try to get stored address, fall back to deriving from contract signer
-        storage(ctx).contract_addr(ctx).unwrap_or_else(|| {
-            // Fallback: parse the contract signer string to extract address components
-            // This assumes the signer string format contains the necessary info
-            // In a real deployment, the address should be stored during init
-            foreign::ContractAddress {
-                name: "token".to_string(),
+// Track in-flight balance data
+#[derive(Clone, Storage)]
+struct InFlightEntry {
+    pub owner: String,      // Original withdrawer for refund on drop
+    pub amount: numbers::Integer,
+    pub token_addr: foreign::ContractAddress,
+}
+
+impl Default for InFlightEntry {
+    fn default() -> Self {
+        Self {
+            owner: String::new(),
+            amount: 0.into(),
+            token_addr: foreign::ContractAddress {
+                name: String::new(),
                 height: 0,
-                tx_index: 1, // This should be set properly during deployment
-            }
-        })
-    }
-
-    fn withdraw(ctx: &ProcContext, amount: numbers::Integer) -> Result<InFlightBalance, error::Error> {
-        let owner = ctx.signer().to_string();
-        let ledger = storage(ctx).ledger();
-        let balance = ledger.get(ctx, &owner).unwrap_or_default();
-
-        if balance < amount {
-            return Err(error::Error::Message("insufficient funds".to_string()));
+                tx_index: 0,
+            },
         }
-
-        // Decrease ledger balance
-        ledger.set(ctx, owner, numbers::sub_integer(balance, amount));
-        
-        // Return the in-flight balance
-        Ok(InFlightBalance::new(Self::contract_address(ctx), amount))
     }
+}
 
-    fn deposit(ctx: &ProcContext, recipient: String, balance: InFlightBalance) -> Result<(), error::Error> {
-        let (token_addr, amount) = balance.into_value();
 
-        // Security check: ensure the InFlightBalance originated from THIS token contract
-        if token_addr != Self::contract_address(ctx) {
-            return Err(error::Error::Message("invalid balance object for this token".to_string()));
-        }
+// Helper to allocate a new balance and register it as in-flight
+fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer, owner: String) -> Balance {
+    let token_addr = get_contract_address(ctx);
+    
+    // Get next ID and increment counter
+    let id = storage(ctx).next_balance_id(ctx);
+    let one = numbers::u64_to_integer(1);
+    storage(ctx).set_next_balance_id(ctx, numbers::add_integer(id, one));
+    
+    // Register the in-flight balance
+    let entry = InFlightEntry {
+        owner: owner.clone(),
+        amount,
+        token_addr: token_addr.clone(),
+    };
+    let handle = create_handle(id);
+    storage(ctx).inflight().set(ctx, handle.clone(), entry);
+    
+    // Create the resource data
+    let data = BalanceData {
+        token_addr,
+        amount,
+        handle,
+    };
+    
+    // Allocate a resource handle
+    let index = allocate_balance_resource(data);
+    
+    // The macro should provide a way to create Balance from index
+    // For now, we'll use unsafe from_handle which the macro generates
+    unsafe { Balance::from_handle(index) }
+}
 
-        let ledger = storage(ctx).ledger();
-        let recipient_balance = ledger.get(ctx, &recipient).unwrap_or_default();
-        ledger.set(ctx, recipient, numbers::add_integer(recipient_balance, amount));
-
-        Ok(())
+// Helper to consume a balance
+fn consume_balance(ctx: &ProcContext, balance: Balance) -> Result<(numbers::Integer, String), error::Error> {
+    // Get the handle from the Balance resource
+    let index = balance.take_handle();
+    
+    // Take the balance data from the resource table (this consumes it)
+    let balance_data = take_balance_data(index)?;
+    
+    let inflight = storage(ctx).inflight();
+    
+    // Check if balance is still valid in storage
+    let entry = inflight.get(ctx, &balance_data.handle)
+        .ok_or_else(|| error::Error::Message("Invalid or already consumed balance".to_string()))?;
+    let entry_data = entry.load(ctx);
+    
+    // Check if it's already been consumed (amount would be 0)
+    let zero = numbers::u64_to_integer(0);
+    if entry_data.amount == zero {
+        return Err(error::Error::Message("Balance already consumed".to_string()));
     }
+    
+    // Verify amount and token matches (defensive check)
+    if entry_data.amount != balance_data.amount || entry_data.token_addr != balance_data.token_addr {
+        return Err(error::Error::Message("Balance data mismatch - possible tampering".to_string()));
+    }
+    
+    // Mark as consumed by setting amount to 0 (keep entry for audit trail)
+    let consumed_entry = InFlightEntry {
+        owner: entry_data.owner.clone(),
+        amount: zero,
+        token_addr: entry_data.token_addr,
+    };
+    inflight.set(ctx, balance_data.handle, consumed_entry);
+    
+    Ok((entry_data.amount, entry_data.owner))
 }
 
 impl Guest for Token {
     fn init(ctx: &ProcContext) {
-        TokenStorage::default().init(ctx);
+        // Store the contract's address on initialization
+        // In a real deployment, this would be set from deployment parameters
+        let contract_addr = foreign::ContractAddress {
+            name: "token".to_string(),
+            height: 0,  // Should be set from deployment context
+            tx_index: 1, // Should be set from deployment context
+        };
+        
+        let mut storage = TokenStorage::default();
+        storage.contract_addr = Some(contract_addr);
+        storage.init(ctx);
     }
 
     fn mint(ctx: &ProcContext, n: numbers::Integer) {
@@ -153,22 +243,65 @@ impl Guest for Token {
         ledger.get(ctx, acc).map(|i| numbers::log10(numbers::integer_to_decimal(i)))
     }
     
-    // Asset management functions - bridge between WIT and our Asset trait
+    // Resource-based asset management
     fn withdraw(ctx: &ProcContext, amount: numbers::Integer) -> Result<Balance, error::Error> {
-        let in_flight = <Token as Asset>::withdraw(ctx, amount)?;
-        let (token_addr, amount) = in_flight.into_value();
+        let owner = ctx.signer().to_string();
+        let ledger = storage(ctx).ledger();
+        let balance = ledger.get(ctx, &owner).unwrap_or_default();
+
+        if balance < amount {
+            return Err(error::Error::Message("insufficient funds".to_string()));
+        }
+
+        // Decrease ledger balance
+        ledger.set(ctx, owner.clone(), numbers::sub_integer(balance, amount));
         
-        // Convert InFlightBalance to WIT Balance
-        Ok(Balance {
-            token_addr,
-            amount,
-        })
+        // Create and return a balance resource
+        Ok(allocate_balance(ctx, amount, owner))
     }
     
-    fn deposit(ctx: &ProcContext, recipient: String, balance: Balance) -> Result<(), error::Error> {
-        // Convert WIT Balance to InFlightBalance
-        let in_flight = InFlightBalance::new(balance.token_addr, balance.amount);
+    fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
+        // Consume the balance (this moves it, enforcing linearity)
+        let (amount, _original_owner) = consume_balance(ctx, bal)?;
         
-        <Token as Asset>::deposit(ctx, recipient, in_flight)
+        // Credit the recipient
+        let ledger = storage(ctx).ledger();
+        let recipient_balance = ledger.get(ctx, &recipient).unwrap_or_default();
+        ledger.set(ctx, recipient, numbers::add_integer(recipient_balance, amount));
+        
+        Ok(())
+    }
+    
+    fn split(ctx: &ProcContext, bal: Balance, first_amount: numbers::Integer) -> Result<(Balance, Option<Balance>), error::Error> {
+        // Consume the original balance
+        let (total_amount, original_owner) = consume_balance(ctx, bal)?;
+        
+        if first_amount > total_amount {
+            return Err(error::Error::Message("Split amount exceeds balance".to_string()));
+        }
+        
+        // Create first balance
+        let first_balance = allocate_balance(ctx, first_amount, original_owner.clone());
+        
+        // Create remainder balance if any
+        let remainder = numbers::sub_integer(total_amount, first_amount);
+        let zero = numbers::u64_to_integer(0);
+        let second_balance = if remainder > zero {
+            Some(allocate_balance(ctx, remainder, original_owner))
+        } else {
+            None
+        };
+        
+        Ok((first_balance, second_balance))
+    }
+    
+    fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
+        // Consume both balances (they move, cannot be reused)
+        let (amount_a, owner_a) = consume_balance(ctx, a)?;
+        let (amount_b, _owner_b) = consume_balance(ctx, b)?;
+        
+        // Create merged balance
+        let merged_amount = numbers::add_integer(amount_a, amount_b);
+        Ok(allocate_balance(ctx, merged_amount, owner_a))
     }
 }

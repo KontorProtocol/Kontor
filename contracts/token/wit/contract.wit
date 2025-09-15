@@ -7,10 +7,11 @@ world contract {
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
 
-    // Asset management types
-    record balance {
-        token-addr: contract-address,
-        amount: integer,
+    // Balance is a resource - provides compile-time move semantics in Rust
+    resource balance {
+        // Non-consuming inspection methods
+        amount: func() -> integer;
+        token: func() -> contract-address;
     }
 
     export init: func(ctx: borrow<proc-context>);
@@ -23,7 +24,13 @@ world contract {
     export total-supply: func(ctx: borrow<view-context>) -> integer;
     export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
     
-    // Asset management functions
+    // Resource-based asset management - Balance moves, cannot be copied
     export withdraw: func(ctx: borrow<proc-context>, amount: integer) -> result<balance, error>;
-    export deposit: func(ctx: borrow<proc-context>, recipient: string, balance: balance) -> result<_, error>;
+    export deposit: func(ctx: borrow<proc-context>, recipient: string, bal: balance) -> result<_, error>;
+    
+    // Split and merge operations - consume and produce resources
+    export split: func(ctx: borrow<proc-context>, bal: balance, first-amount: integer) 
+        -> result<tuple<balance, option<balance>>, error>;
+    export merge: func(ctx: borrow<proc-context>, a: balance, b: balance) 
+        -> result<balance, error>;
 }
