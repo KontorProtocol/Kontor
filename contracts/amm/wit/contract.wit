@@ -11,7 +11,7 @@ world contract {
     record pool-creation-event { pool-id: string }
 
     record pool-values { a: integer, b: integer, lp: integer }
-    record fee-info { lp-fee-rate: decimal, admin-fee-rate: decimal }
+    record fee-info { lp-fee-bps: integer, admin-fee-pct: integer }
     record withdraw-result { a-out: integer, b-out: integer }
 
     // Token contract addresses
@@ -30,8 +30,8 @@ world contract {
         pair: token-pair,
         init-a: integer,
         init-b: integer,
-        lp-fee-rate: decimal,
-        admin-fee-rate: decimal,
+        lp-fee-bps: integer,
+        admin-fee-pct: integer,
     ) -> result<integer, error>; // returns initial lp minted
 
     export values: func(ctx: borrow<view-context>, pair: token-pair) -> option<pool-values>;
@@ -49,12 +49,11 @@ world contract {
     ) -> result<withdraw-result, error>;
 
     // Swaps
-    export swap-a: func(ctx: borrow<proc-context>, pair: token-pair, amount-in: integer, min-out: integer) -> result<integer, error>;
-    export swap-b: func(ctx: borrow<proc-context>, pair: token-pair, amount-in: integer, min-out: integer) -> result<integer, error>;
-
+    export swap: func(ctx: borrow<proc-context>, pair: token-pair, token-in: contract-address, amount-in: integer, min-out: integer) -> result<integer, error>;
+    
     // Admin (authenticated by signer)
     export admin-withdraw-fees: func(ctx: borrow<proc-context>, pair: token-pair, amount: integer) -> result<integer, error>;
-    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-rate: decimal, admin-fee-rate: decimal) -> result<_, error>;
+    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-bps: integer, admin-fee-pct: integer) -> result<_, error>;
     
     // LP Token management
     export lp-balance: func(ctx: borrow<view-context>, pair: token-pair, owner: string) -> option<integer>;
@@ -63,6 +62,11 @@ world contract {
     
     // Admin info
     export admin: func(ctx: borrow<view-context>) -> string;
+    
+    // Quoter views - preview operations without executing
+    export quote-swap: func(ctx: borrow<view-context>, pair: token-pair, token-in: contract-address, amount-in: integer) -> option<integer>;
+    export quote-deposit: func(ctx: borrow<view-context>, pair: token-pair, input-a: integer, input-b: integer) -> option<integer>;
+    export quote-withdraw: func(ctx: borrow<view-context>, pair: token-pair, lp-in: integer) -> option<withdraw-result>;
 }
 
 

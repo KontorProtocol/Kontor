@@ -1,4 +1,5 @@
 use testlib::*;
+use indexer::runtime::numerics as numbers;
 
 import!(
     name = "amm",
@@ -58,30 +59,56 @@ async fn test_amm_basic_flow() -> Result<()> {
     let mint_result_b = runtime.execute(Some("test_user"), &token_b_addr, "mint({r0: 100000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     println!("Token B mint result: {}", mint_result_b);
     
+    // Initialize AMM contract
+    let amm_addr = ContractAddress {
+        name: "amm".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    runtime.execute(Some(user), &amm_addr, "init()").await?;
+    
+    // Set AMM contract as operator for token transfers (try __cid__7 based on loading order)
+    println!("Setting operator for token A...");
+    let result = runtime.execute(Some(user), &token_a_addr, "set-operator(\"__cid__7\", 1)").await;
+    println!("Token A set-operator result: {:?}", result);
+    result?;
+    
+    println!("Setting operator for token B...");
+    let result = runtime.execute(Some(user), &token_b_addr, "set-operator(\"__cid__7\", 1)").await;
+    println!("Token B set-operator result: {:?}", result);
+    result?;
+    
+    
     // Check balances
     let balance_a = runtime.execute(None, &token_a_addr, "balance(\"test_user\")").await?;
     println!("Token A balance: {}", balance_a);
     let balance_b = runtime.execute(None, &token_b_addr, "balance(\"test_user\")").await?;
     println!("Token B balance: {}", balance_b);
     
-    // Test pool creation (0.3% LP fee, 50% admin fee)
-    let lp_tokens = amm::create(&runtime, user, token_pair.clone(), 1_000.into(), 2_000.into(), "0.003".into(), "0.5".into()).await??;
+    // Test pool creation (30 bps LP fee = 0.3%, 50% admin fee)
+    let lp_tokens = amm::create(&runtime, user, token_pair.clone(), 1_000.into(), 2_000.into(), 30.into(), 50.into()).await??;
     assert!(lp_tokens > 0.into());
     
     // Check pool values
     let vals = amm::values(&runtime, token_pair.clone()).await?.unwrap();
     assert_eq!(vals.a, 1_000.into());
     assert_eq!(vals.b, 2_000.into());
-    assert_eq!(vals.lp, lp_tokens);
+    // Total LP includes MINIMUM_LIQUIDITY (1000) that's permanently locked
+    assert_eq!(vals.lp, numbers::add_integer(lp_tokens, 1000.into())?);
     
     // Check fees
     let fees = amm::fees(&runtime, token_pair.clone()).await?.unwrap();
-    assert_eq!(fees.lp_fee_rate, "0.003".into());
-    assert_eq!(fees.admin_fee_rate, "0.5".into());
+    assert_eq!(fees.lp_fee_bps, 30.into());
+    assert_eq!(fees.admin_fee_pct, 50.into());
+    
+    // Test quoter views before deposit
+    let quote_deposit = amm::quote_deposit(&runtime, token_pair.clone(), 500.into(), 1_000.into()).await?.unwrap();
+    assert!(quote_deposit > 0.into());
     
     // Test deposit
     let additional_lp = amm::deposit(&runtime, user, token_pair.clone(), 500.into(), 1_000.into(), 0.into()).await??;
     assert!(additional_lp > 0.into());
+    assert_eq!(additional_lp, quote_deposit); // Quote should match actual
     
     // Test withdrawal
     let withdraw_amount = additional_lp / 2.into();
@@ -90,10 +117,10 @@ async fn test_amm_basic_flow() -> Result<()> {
     assert!(withdraw_result.b_out > 0.into());
     
     // Test swaps
-    let swap_out = amm::swap_a(&runtime, user, token_pair.clone(), 100.into(), 1.into()).await??;
+    let swap_out = amm::swap(&runtime, user, token_pair.clone(), token_pair.token_a.clone(), 100.into(), 1.into()).await??;
     assert!(swap_out > 0.into());
     
-    let swap_out = amm::swap_b(&runtime, user, token_pair.clone(), 100.into(), 1.into()).await??;
+    let swap_out = amm::swap(&runtime, user, token_pair.clone(), token_pair.token_b.clone(), 100.into(), 1.into()).await??;
     assert!(swap_out > 0.into());
     
     Ok(())
@@ -121,9 +148,9 @@ async fn test_amm_validation() -> Result<()> {
     };
     
     token::mint(&runtime, user, 10_000.into()).await?;
-    token::approve(&runtime, user, "amm_0_0", 10_000.into()).await??;
+    // Note: Would need to set operator here if using real token contract
     
-    let err = amm::create(&runtime, user, same_token_pair, 1_000.into(), 1_000.into(), "0.003".into(), "0.5".into()).await?;
+    let err = amm::create(&runtime, user, same_token_pair, 1_000.into(), 1_000.into(), 30.into(), 50.into()).await?;
     assert!(err.is_err());
     assert!(err.unwrap_err().to_string().contains("must not be equal"));
     
@@ -141,7 +168,7 @@ async fn test_amm_validation() -> Result<()> {
         }
     };
     
-    let err = amm::create(&runtime, user, reversed_pair, 1_000.into(), 1_000.into(), "0.003".into(), "0.5".into()).await?;
+    let err = amm::create(&runtime, user, reversed_pair, 1_000.into(), 1_000.into(), 30.into(), 50.into()).await?;
     assert!(err.is_err());
     assert!(err.unwrap_err().to_string().contains("must be ordered"));
     
@@ -184,6 +211,10 @@ async fn test_amm_admin_functions() -> Result<()> {
     runtime.execute(Some(admin), &token_a_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     runtime.execute(Some(admin), &token_b_addr, "mint({r0: 50000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     
+    // Set AMM contract as operator for token transfers
+    runtime.execute(Some(admin), &token_a_addr, "set-operator(\"__cid__7\", 1)").await?;
+    runtime.execute(Some(admin), &token_b_addr, "set-operator(\"__cid__7\", 1)").await?;
+    
     // Initialize AMM with test_admin as the admin
     let amm_addr = ContractAddress {
         name: "amm".to_string(),
@@ -192,30 +223,34 @@ async fn test_amm_admin_functions() -> Result<()> {
     };
     runtime.execute(Some(admin), &amm_addr, "init()").await?;
     
-    let _ = amm::create(&runtime, admin, token_pair.clone(), 10_000.into(), 10_000.into(), "0.003".into(), "0.5".into()).await??;
+    let _ = amm::create(&runtime, admin, token_pair.clone(), 10_000.into(), 10_000.into(), 30.into(), 50.into()).await??;
     
-    // Generate some fees through swaps
-    let swap_result = amm::swap_a(&runtime, admin, token_pair.clone(), 1_000.into(), 1.into()).await??;
-    println!("Swap result: {}", swap_result);
+    // Generate some fees through larger swaps
+    // With 30 bps fee and 50% admin share, we need larger swaps to accumulate meaningful fees
+    let swap_result1 = amm::swap(&runtime, admin, token_pair.clone(), token_pair.token_a.clone(), 5_000.into(), 1.into()).await??;
+    println!("Swap 1 result: {}", swap_result1);
+    
+    let swap_result2 = amm::swap(&runtime, admin, token_pair.clone(), token_pair.token_b.clone(), 3_000.into(), 1.into()).await??;
+    println!("Swap 2 result: {}", swap_result2);
     
     // Check admin
     let stored_admin = amm::admin(&runtime).await?;
     assert_eq!(stored_admin, admin);
     
-    // Check admin fees accumulated
+    // Check admin fees accumulated (should be non-zero after large swaps)
     let admin_fees = amm::admin_fee_value(&runtime, token_pair.clone()).await?.unwrap();
     println!("Admin fees accumulated: {}", admin_fees);
-    assert!(admin_fees > 0.into());
+    assert!(admin_fees > 0.into(), "Admin fees should be greater than 0 after large swaps");
     
     // Admin can withdraw fees
     let withdrawn = amm::admin_withdraw_fees(&runtime, admin, token_pair.clone(), 0.into()).await??;
     assert!(withdrawn > 0.into());
     
-    // Admin can set fees (0.1% LP fee, 25% admin fee)
-    amm::admin_set_fees(&runtime, admin, token_pair.clone(), "0.001".into(), "0.25".into()).await??;
+    // Admin can set fees (10 bps = 0.1% LP fee, 25% admin fee)
+    amm::admin_set_fees(&runtime, admin, token_pair.clone(), 10.into(), 25.into()).await??;
     let fees = amm::fees(&runtime, token_pair.clone()).await?.unwrap();
-    assert_eq!(fees.lp_fee_rate, "0.001".into());
-    assert_eq!(fees.admin_fee_rate, "0.25".into());
+    assert_eq!(fees.lp_fee_bps, 10.into());  // 10 bps = 0.1%
+    assert_eq!(fees.admin_fee_pct, 25.into());  // 25%
     
     // Non-admin cannot withdraw fees - mint tokens for user too
     runtime.execute(Some(user), &token_a_addr, "mint({r0: 1000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
@@ -263,7 +298,19 @@ async fn test_amm_lp_tokens() -> Result<()> {
     runtime.execute(Some(alice), &token_a_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     runtime.execute(Some(alice), &token_b_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     
-    let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), "0.003".into(), "0.5".into()).await??;
+    // Initialize AMM contract
+    let amm_addr = ContractAddress {
+        name: "amm".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    runtime.execute(Some(alice), &amm_addr, "init()").await?;
+    
+    // Set AMM contract as operator for token transfers
+    runtime.execute(Some(alice), &token_a_addr, "set-operator(\"__cid__7\", 1)").await?;
+    runtime.execute(Some(alice), &token_b_addr, "set-operator(\"__cid__7\", 1)").await?;
+    
+    let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), 30.into(), 50.into()).await??;
     
     // Check Alice's LP balance
     let alice_lp = amm::lp_balance(&runtime, token_pair.clone(), alice).await?.unwrap();
@@ -282,7 +329,7 @@ async fn test_amm_lp_tokens() -> Result<()> {
     
     // Check total supply remains the same
     let total_supply = amm::lp_total_supply(&runtime, token_pair).await?.unwrap();
-    assert_eq!(total_supply, lp_tokens);
+    assert_eq!(total_supply, numbers::add_integer(lp_tokens, 1000.into())?);
     
     Ok(())
 }

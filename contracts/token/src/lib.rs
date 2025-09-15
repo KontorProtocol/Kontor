@@ -5,7 +5,7 @@ contract!(name = "token");
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<String, numbers::Integer>,
-    pub allowances: Map<String, numbers::Integer>, // "owner:spender" -> amount (flattened)
+    pub operators: Map<String, bool>, // "owner:operator" -> approved (flattened)
     pub total_supply: numbers::Integer,
 }
 
@@ -41,27 +41,31 @@ impl Guest for Token {
         Ok(())
     }
 
-    fn approve(ctx: &ProcContext, spender: String, amount: numbers::Integer) -> Result<(), error::Error> {
+    fn set_operator(ctx: &ProcContext, operator: String, approved: u64) -> Result<(), error::Error> {
         let owner = ctx.signer().to_string();
-        let allowances = storage(ctx).allowances();
+        let operators = storage(ctx).operators();
 
-        let key = format!("{}:{}", owner, spender);
-        allowances.set(ctx, key, amount);
+        let key = format!("{}:{}", owner, operator);
+        operators.set(ctx, key, approved != 0);
 
         Ok(())
     }
 
-    fn transfer_from(ctx: &ProcContext, owner: String, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
-        let spender = ctx.signer().to_string();
+    fn is_operator(ctx: &ViewContext, owner: String, operator: String) -> u64 {
+        let operators = storage(ctx).operators();
+        let key = format!("{}:{}", owner, operator);
+        if operators.get(ctx, key).unwrap_or(false) { 1 } else { 0 }
+    }
+
+    fn transfer_as_operator(ctx: &ProcContext, owner: String, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
+        let operator = ctx.signer().to_string();
+        let operators = storage(ctx).operators();
         let ledger = storage(ctx).ledger();
-        let allowances = storage(ctx).allowances();
         
-        // Check allowance
-        let allow_key = format!("{}:{}", owner, spender);
-        let allowed = allowances.get(ctx, &allow_key).unwrap_or_default();
-        
-        if allowed < amount {
-            return Err(error::Error::Message("insufficient allowance".to_string()));
+        // Check operator permission
+        let operator_key = format!("{}:{}", owner, operator);
+        if !operators.get(ctx, &operator_key).unwrap_or(false) {
+            return Err(error::Error::Message("not an approved operator".to_string()));
         }
         
         // Check balance
@@ -72,18 +76,10 @@ impl Guest for Token {
         
         // Update balances
         let to_balance = ledger.get(ctx, &to).unwrap_or_default();
-        ledger.set(ctx, owner.clone(), numbers::sub_integer(owner_balance, amount));
+        ledger.set(ctx, owner, numbers::sub_integer(owner_balance, amount));
         ledger.set(ctx, to, numbers::add_integer(to_balance, amount));
         
-        // Update allowance
-        allowances.set(ctx, allow_key, numbers::sub_integer(allowed, amount));
-        
         Ok(())
-    }
-
-    fn allowance(ctx: &ViewContext, owner: String, spender: String) -> Option<numbers::Integer> {
-        let allowances = storage(ctx).allowances();
-        allowances.get(ctx, format!("{}:{}", owner, spender))
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<numbers::Integer> {

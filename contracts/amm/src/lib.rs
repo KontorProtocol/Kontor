@@ -8,8 +8,8 @@ interface!(name = "token_dyn", path = "token/wit");
 struct Pool {
     pub token_a: foreign::ContractAddress,
     pub token_b: foreign::ContractAddress,
-    pub lp_fee_rate: numbers::Decimal,    // Fee rate as decimal (e.g., 0.003 for 0.3%)
-    pub admin_fee_rate: numbers::Decimal,  // Admin's share of fees (e.g., 0.5 for 50% of LP fees)
+    pub lp_fee_bps: numbers::Integer,      // Fee rate in basis points (e.g., 30 for 0.3%)
+    pub admin_fee_pct: numbers::Integer,   // Admin's share as percentage of LP fees (e.g., 50 for 50%)
     pub admin_fee_lp: numbers::Integer,
     pub lp_total_supply: numbers::Integer,
     pub lp_ledger: Map<String, numbers::Integer>, // owner -> lp balance
@@ -28,8 +28,8 @@ impl Default for Pool {
                 height: 0,
                 tx_index: 0,
             },
-            lp_fee_rate: 0.into(),
-            admin_fee_rate: 0.into(),
+            lp_fee_bps: 0.into(),
+            admin_fee_pct: 0.into(),
             admin_fee_lp: 0.into(),
             lp_total_supply: 0.into(),
             lp_ledger: Map::default(),
@@ -86,7 +86,7 @@ fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::Contract
     Ok(token_dyn::balance_or_zero(token, account))
 }
 
-// Helper function for common token transfer pattern (approve + transfer_from)
+// Helper function for token transfer from user to pool using operator model
 fn transfer_token_from_user_to_pool(
     ctx: &ProcContext,
     token: &foreign::ContractAddress,
@@ -94,9 +94,8 @@ fn transfer_token_from_user_to_pool(
     pool_address: &str,
 ) -> Result<(), error::Error> {
     let user_address = ctx.signer().to_string();
-    let spender = ctx.contract_signer().to_string();
-    token_dyn::approve(token, ctx.signer(), &spender, amount)?;
-    token_dyn::transfer_from(token, ctx.contract_signer(), &user_address, pool_address, amount)
+    // The AMM acts as an operator to transfer from user to pool
+    token_dyn::transfer_as_operator(token, ctx.contract_signer(), &user_address, pool_address, amount)
 }
 
 // Helper function to load a pool or return error
@@ -175,13 +174,13 @@ fn execute_swap(
         balance_in,
         balance_out,
         pool.lp_total_supply,
-        pool.lp_fee_rate,
-        pool.admin_fee_rate,
+        pool.lp_fee_bps,
+        pool.admin_fee_pct,
     )?;
     
     validate_min_output(out_value, min_out)?;
     
-    // Transfer token in from user to pool
+    // Transfer token in from user to pool (requires operator approval)
     transfer_token_from_user_to_pool(ctx, token_in, amount_in, &pool_address)?;
     
     // Transfer token out from pool to user
@@ -194,42 +193,54 @@ fn execute_swap(
     Ok(out_value)
 }
 
+// Helper functions for constants (since we can't call functions in const)
+fn bps_in_100_pct() -> numbers::Integer {
+    numbers::u64_to_integer(10000) // 100% = 10000 basis points
+}
+
+fn pct_100() -> numbers::Integer {
+    numbers::u64_to_integer(100)
+}
+
+fn minimum_liquidity() -> numbers::Integer {
+    numbers::u64_to_integer(1000) // Permanently locked LP tokens to prevent edge cases
+}
+
 fn calc_swap_result(
     i_value: numbers::Integer,
     i_pool_value: numbers::Integer,
     o_pool_value: numbers::Integer,
     pool_lp_value: numbers::Integer,
-    lp_fee_rate: numbers::Decimal,
-    admin_fee_rate: numbers::Decimal,
+    lp_fee_bps: numbers::Integer,
+    admin_fee_pct: numbers::Integer,
 ) -> Result<(numbers::Integer, numbers::Integer), error::Error> {
-    // Convert to decimals
-    let i_value_dec: numbers::Decimal = i_value.into();
-    let i_pool_dec: numbers::Decimal = i_pool_value.into();
-    let o_pool_dec: numbers::Decimal = o_pool_value.into();
-    let pool_lp_dec: numbers::Decimal = pool_lp_value.into();
-    
-    // Calculate LP fee and amount after fee using normal operators
-    let lp_fee_value_dec = i_value_dec * lp_fee_rate;
-    let in_after_lp_fee_dec = i_value_dec - lp_fee_value_dec;
+    // Calculate LP fee (round up to ensure protocol always collects fee)
+    let lp_fee_value = numbers::mul_div_up_integer(i_value, lp_fee_bps, bps_in_100_pct());
+    let in_after_lp_fee = numbers::sub_integer(i_value, lp_fee_value);
     
     // Calculate output amount using constant product formula
     // out = (in_after_fee * out_pool) / (in_pool + in_after_fee)
-    let out_value_dec = (in_after_lp_fee_dec * o_pool_dec) / (i_pool_dec + in_after_lp_fee_dec);
+    let out_value = numbers::mul_div_down_integer(
+        in_after_lp_fee,
+        o_pool_value,
+        numbers::add_integer(i_pool_value, in_after_lp_fee)
+    );
     
-    // Calculate admin fee (as a portion of the LP fee)
-    let admin_fee_value_dec = lp_fee_value_dec * admin_fee_rate;
+    // Calculate admin fee value (as portion of LP fee)
+    let admin_fee_value = numbers::mul_div_down_integer(lp_fee_value, admin_fee_pct, pct_100());
     
     // Convert admin fee to LP tokens proportionally
-    let admin_fee_in_lp_dec = if pool_lp_value == 0.into() {
+    // Note: This is an approximation similar to Uniswap V2's approach
+    // admin_fee_in_lp ≈ (admin_fee_value * pool_lp) / (i_pool + i_value - admin_fee_value)
+    let admin_fee_in_lp = if pool_lp_value == 0.into() {
         0.into()
     } else {
-        // admin_fee_value * pool_lp / i_pool_value
-        (admin_fee_value_dec * pool_lp_dec) / i_pool_dec
+        let adjusted_pool = numbers::sub_integer(
+            numbers::add_integer(i_pool_value, i_value),
+            admin_fee_value
+        );
+        numbers::mul_div_down_integer(admin_fee_value, pool_lp_value, adjusted_pool)
     };
-    
-    // Convert back to integers with explicit rounding down (truncation)
-    let out_value = numbers::decimal_to_integer_floor(out_value_dec);
-    let admin_fee_in_lp = numbers::decimal_to_integer_floor(admin_fee_in_lp_dec);
     
     Ok((out_value, admin_fee_in_lp))
 }
@@ -252,8 +263,8 @@ impl Guest for Amm {
         pair: TokenPair,
         init_a: numbers::Integer,
         init_b: numbers::Integer,
-        lp_fee_rate: numbers::Decimal,
-        admin_fee_rate: numbers::Decimal,
+        lp_fee_bps: numbers::Integer,
+        admin_fee_pct: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
         ensure_pair_sorted(&pair)?;
         
@@ -262,14 +273,11 @@ impl Guest for Amm {
         }
         
         // Validate fees (lp_fee should be < 100%, admin_fee should be <= 100%)
-        if lp_fee_rate >= 1.into() {
-            return Err(error::Error::Message("Invalid lp fee rate".to_string()));
+        if lp_fee_bps >= bps_in_100_pct() {
+            return Err(error::Error::Message("Invalid lp fee bps".to_string()));
         }
-        if admin_fee_rate > 1.into() {
-            return Err(error::Error::Message("Invalid admin fee rate".to_string()));
-        }
-        if lp_fee_rate < 0.into() || admin_fee_rate < 0.into() {
-            return Err(error::Error::Message("Fee rates cannot be negative".to_string()));
+        if admin_fee_pct > pct_100() {
+            return Err(error::Error::Message("Invalid admin fee pct".to_string()));
         }
 
         let id = pair_id(&pair);
@@ -293,19 +301,25 @@ impl Guest for Amm {
         let user_address = ctx.signer().to_string();
         
         // Transfer initial liquidity from user to pool
+        // Note: User must have previously approved the AMM as an operator via token.set_operator(amm_address, true)
         transfer_token_from_user_to_pool(ctx, &pair.token_a, init_a, &pool_address)?;
         transfer_token_from_user_to_pool(ctx, &pair.token_b, init_b, &pool_address)?;
 
-        // Calculate initial LP tokens: sqrt(init_a * init_b) using clean Decimal math
-        let init_a_dec: numbers::Decimal = init_a.into();
-        let init_b_dec: numbers::Decimal = init_b.into();
-        let product_dec = init_a_dec * init_b_dec;
-        let product_int = numbers::decimal_to_integer_floor(product_dec);
-        let lp_to_issue = numbers::sqrt_integer(product_int);
+        // Calculate initial LP tokens: sqrt(init_a * init_b)
+        let total_lp = numbers::mul_sqrt_integer(init_a, init_b);
+        
+        // Lock MINIMUM_LIQUIDITY permanently on first pool creation
+        // This prevents divide-by-zero and makes shares more valuable
+        let min_liq = minimum_liquidity();
+        if total_lp <= min_liq {
+            return Err(error::Error::Message("Initial liquidity too small".to_string()));
+        }
+        let lp_to_issue = numbers::sub_integer(total_lp, min_liq);
         
         // Create pool with LP ledger
         let mut lp_ledger = Map::default();
         lp_ledger.entries.push((user_address, lp_to_issue));
+        // The minimum liquidity is permanently locked (not assigned to anyone)
         
         pools.set(
             ctx,
@@ -313,10 +327,10 @@ impl Guest for Amm {
             Pool {
                 token_a: pair.token_a,
                 token_b: pair.token_b,
-                lp_fee_rate,
-                admin_fee_rate,
+                lp_fee_bps,
+                admin_fee_pct,
                 admin_fee_lp: 0.into(),
-                lp_total_supply: lp_to_issue,
+                lp_total_supply: total_lp, // Total includes locked minimum
                 lp_ledger,
             },
         );
@@ -349,8 +363,8 @@ impl Guest for Amm {
         storage(ctx).pools().get(ctx, id).map(|p| {
             let pool = p.load(ctx);
             FeeInfo {
-                lp_fee_rate: pool.lp_fee_rate,
-                admin_fee_rate: pool.admin_fee_rate,
+                lp_fee_bps: pool.lp_fee_bps,
+                admin_fee_pct: pool.admin_fee_pct,
             }
         })
     }
@@ -381,49 +395,35 @@ impl Guest for Amm {
         // Get current pool balances
         let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
         
-        // Convert to decimals for elegant calculation
-        let input_a_dec: numbers::Decimal = input_a.into();
-        let input_b_dec: numbers::Decimal = input_b.into();
-        let balance_a_dec: numbers::Decimal = balance_a.into();
-        let balance_b_dec: numbers::Decimal = balance_b.into();
-        let lp_supply_dec: numbers::Decimal = pool.lp_total_supply.into();
-
-        // Calculate potential LP shares from each input independently
-        let lp_from_a_dec = if balance_a_dec > 0.into() {
-            (input_a_dec / balance_a_dec) * lp_supply_dec
-        } else {
-            0.into() // Edge case: no existing liquidity in token A
-        };
+        let lp_supply = pool.lp_total_supply;
         
-        let lp_from_b_dec = if balance_b_dec > 0.into() {
-            (input_b_dec / balance_b_dec) * lp_supply_dec
+        // Calculate LP to issue and actual deposit amounts
+        let (lp_to_issue, deposit_a, deposit_b) = if lp_supply == 0.into() {
+            // First deposit - use sqrt(a * b) for LP tokens
+            let lp = numbers::mul_sqrt_integer(input_a, input_b);
+            (lp, input_a, input_b)
+        } else if balance_a == 0.into() || balance_b == 0.into() {
+            // Edge case: pool has no liquidity
+            return Err(error::Error::Message("Pool has no liquidity".to_string()));
         } else {
-            0.into() // Edge case: no existing liquidity in token B
+            // Calculate potential LP shares from each input
+            let lp_from_a = numbers::mul_div_down_integer(input_a, lp_supply, balance_a);
+            let lp_from_b = numbers::mul_div_down_integer(input_b, lp_supply, balance_b);
+            
+            // The actual LP to issue is the minimum - this ensures proportional deposits
+            let lp_to_issue = if lp_from_a < lp_from_b { lp_from_a } else { lp_from_b };
+            
+            // Calculate the exact deposit amounts needed for this LP amount
+            let deposit_a = numbers::mul_div_up_integer(lp_to_issue, balance_a, lp_supply);
+            let deposit_b = numbers::mul_div_up_integer(lp_to_issue, balance_b, lp_supply);
+            
+            (lp_to_issue, deposit_a, deposit_b)
         };
-
-        // The actual LP to issue is the minimum - this ensures proportional deposits
-        let lp_to_issue_dec = if lp_from_a_dec < lp_from_b_dec { lp_from_a_dec } else { lp_from_b_dec };
-        let lp_to_issue = numbers::decimal_to_integer_floor(lp_to_issue_dec);
-        
-        // Calculate the exact deposit amounts needed for this LP amount
-        let deposit_a_dec = if lp_supply_dec > 0.into() {
-            (lp_to_issue_dec / lp_supply_dec) * balance_a_dec
-        } else {
-            input_a_dec // First deposit - use provided amount
-        };
-        
-        let deposit_b_dec = if lp_supply_dec > 0.into() {
-            (lp_to_issue_dec / lp_supply_dec) * balance_b_dec
-        } else {
-            input_b_dec // First deposit - use provided amount
-        };
-        
-        let deposit_a = numbers::decimal_to_integer_ceil(deposit_a_dec); // Round up to ensure sufficient funds
-        let deposit_b = numbers::decimal_to_integer_ceil(deposit_b_dec); // Round up to ensure sufficient funds
 
         validate_min_output(lp_to_issue, min_lp_out)?;
 
         // Transfer tokens from user to pool
+        // Note: User must have previously approved the AMM as an operator
         transfer_token_from_user_to_pool(ctx, &pool.token_a, deposit_a, &pool_address)?;
         transfer_token_from_user_to_pool(ctx, &pool.token_b, deposit_b, &pool_address)?;
 
@@ -463,18 +463,11 @@ impl Guest for Amm {
         // Get current pool balances
         let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
 
-        // Convert to decimals for clean calculation
-        let lp_in_dec: numbers::Decimal = lp_in.into();
-        let balance_a_dec: numbers::Decimal = balance_a.into();
-        let balance_b_dec: numbers::Decimal = balance_b.into();
-        let lp_supply_dec: numbers::Decimal = pool.lp_total_supply.into();
+        let lp_supply = pool.lp_total_supply;
 
-        // Calculate proportional withdrawal amounts
-        let a_out_dec = (lp_in_dec * balance_a_dec) / lp_supply_dec;
-        let b_out_dec = (lp_in_dec * balance_b_dec) / lp_supply_dec;
-        
-        let a_out = numbers::decimal_to_integer_floor(a_out_dec);
-        let b_out = numbers::decimal_to_integer_floor(b_out_dec);
+        // Calculate proportional withdrawal amounts (round down to be conservative)
+        let a_out = numbers::mul_div_down_integer(lp_in, balance_a, lp_supply);
+        let b_out = numbers::mul_div_down_integer(lp_in, balance_b, lp_supply);
         
         validate_min_output(a_out, min_a_out)?;
         validate_min_output(b_out, min_b_out)?;
@@ -493,9 +486,10 @@ impl Guest for Amm {
         Ok(WithdrawResult { a_out, b_out })
     }
 
-    fn swap_a(
+    fn swap(
         ctx: &ProcContext,
         pair: TokenPair,
+        token_in: foreign::ContractAddress,
         amount_in: numbers::Integer,
         min_out: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
@@ -509,66 +503,37 @@ impl Guest for Amm {
         
         let pool_address = get_pool_custody_address(ctx);
         
-        // Get current pool balances
-        let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
+        // Validate that token_in matches either token_a or token_b
+        let token_a = pool.token_a.clone();
+        let token_b = pool.token_b.clone();
         
-         let token_a = pool.token_a.clone();
-         let token_b = pool.token_b.clone();
-         let out_value = execute_swap(
-             ctx,
-             &mut pool,
-             &token_a,  // token in
-             &token_b,  // token out
-             amount_in,
-             balance_a,      // balance in
-             balance_b,      // balance out
-             min_out,
-         )?;
-         
-         // Save the updated pool
-         pools.set(ctx, id, pool);
+        let (actual_token_in, actual_token_out, balance_in, balance_out) = if token_in == token_a {
+            // Swapping A for B
+            let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
+            (token_a, token_b, balance_a, balance_b)
+        } else if token_in == token_b {
+            // Swapping B for A
+            let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
+            (token_b, token_a, balance_b, balance_a)
+        } else {
+            return Err(error::Error::Message("Invalid token_in: must match pool's token_a or token_b".to_string()));
+        };
         
-        // EVENT: Swap { user: user_address, token_in: pool.token_a, amount_in, token_out: pool.token_b, amount_out: out_value, fee: admin_fee_in_lp }
+        let out_value = execute_swap(
+            ctx,
+            &mut pool,
+            &actual_token_in,
+            &actual_token_out,
+            amount_in,
+            balance_in,
+            balance_out,
+            min_out,
+        )?;
         
-        Ok(out_value)
-    }
-
-    fn swap_b(
-        ctx: &ProcContext,
-        pair: TokenPair,
-        amount_in: numbers::Integer,
-        min_out: numbers::Integer,
-    ) -> Result<numbers::Integer, error::Error> {
-        let (id, _pool_wrapper, mut pool) = load_pool(ctx, &pair)?;
-        let pools = storage(ctx).pools();
-            
-        if amount_in == 0.into() {
-            validate_min_output(0.into(), min_out)?;
-            return Ok(0.into());
-        }
+        // Save the updated pool
+        pools.set(ctx, id, pool);
         
-        let pool_address = get_pool_custody_address(ctx);
-        
-        // Get current pool balances
-        let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
-        
-         let token_a = pool.token_a.clone();
-         let token_b = pool.token_b.clone();
-         let out_value = execute_swap(
-             ctx,
-             &mut pool,
-             &token_b,  // token in
-             &token_a,  // token out
-             amount_in,
-             balance_b,      // balance in
-             balance_a,      // balance out
-             min_out,
-         )?;
-         
-         // Save the updated pool
-         pools.set(ctx, id, pool);
-        
-        // EVENT: Swap { user: user_address, token_in: pool.token_b, amount_in, token_out: pool.token_a, amount_out: out_value, fee: admin_fee_in_lp }
+        // EVENT: Swap { user: user_address, token_in: actual_token_in, amount_in, token_out: actual_token_out, amount_out: out_value }
         
         Ok(out_value)
     }
@@ -609,25 +574,25 @@ impl Guest for Amm {
     fn admin_set_fees(
         ctx: &ProcContext,
         pair: TokenPair,
-        lp_fee_rate: numbers::Decimal,
-        admin_fee_rate: numbers::Decimal,
+        lp_fee_bps: numbers::Integer,
+        admin_fee_pct: numbers::Integer,
     ) -> Result<(), error::Error> {
         // Check admin authorization
         ensure_admin_auth(ctx)?;
         
         // Validate fee rates
-        if lp_fee_rate >= 1.into() || admin_fee_rate > 1.into() {
-            return Err(error::Error::Message("Invalid fee params".to_string()));
+        if lp_fee_bps >= bps_in_100_pct() {
+            return Err(error::Error::Message("Invalid lp fee bps".to_string()));
         }
-        if lp_fee_rate < 0.into() || admin_fee_rate < 0.into() {
-            return Err(error::Error::Message("Fee rates cannot be negative".to_string()));
+        if admin_fee_pct > pct_100() {
+            return Err(error::Error::Message("Invalid admin fee pct".to_string()));
         }
         
         let (id, _pool_wrapper, mut pool) = load_pool(ctx, &pair)?;
         let pools = storage(ctx).pools();
             
-        pool.lp_fee_rate = lp_fee_rate;
-        pool.admin_fee_rate = admin_fee_rate;
+        pool.lp_fee_bps = lp_fee_bps;
+        pool.admin_fee_pct = admin_fee_pct;
         pools.set(ctx, id, pool);
         
         // EVENT: FeesUpdated { pool_id: id, lp_fee_bps, admin_fee_pct }
@@ -670,5 +635,102 @@ impl Guest for Amm {
     
     fn admin(ctx: &ViewContext) -> String {
         storage(ctx).admin(ctx)
+    }
+    
+    // Quoter views - preview operations without state changes
+    
+    fn quote_swap(ctx: &ViewContext, pair: TokenPair, token_in: foreign::ContractAddress, amount_in: numbers::Integer) -> Option<numbers::Integer> {
+        let id = pair_id(&pair);
+        storage(ctx).pools().get(ctx, id).and_then(|p| {
+            let pool = p.load(ctx);
+            let pool_address = get_pool_custody_address(ctx);
+            
+            if amount_in == 0.into() {
+                return Some(0.into());
+            }
+            
+            // Determine which token is being swapped
+            let (balance_in, balance_out) = if token_in == pool.token_a {
+                get_pool_token_balances(&pool, &pool_address).ok()?
+            } else if token_in == pool.token_b {
+                let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address).ok()?;
+                (balance_b, balance_a)
+            } else {
+                return None; // Invalid token_in
+            };
+            
+            if balance_in == 0.into() || balance_out == 0.into() {
+                return None; // No liquidity
+            }
+            
+            // Calculate swap output
+            let (out_value, _) = calc_swap_result(
+                amount_in,
+                balance_in,
+                balance_out,
+                pool.lp_total_supply,
+                pool.lp_fee_bps,
+                pool.admin_fee_pct,
+            ).ok()?;
+            
+            Some(out_value)
+        })
+    }
+    
+    fn quote_deposit(ctx: &ViewContext, pair: TokenPair, input_a: numbers::Integer, input_b: numbers::Integer) -> Option<numbers::Integer> {
+        let id = pair_id(&pair);
+        storage(ctx).pools().get(ctx, id).and_then(|p| {
+            let pool = p.load(ctx);
+            let pool_address = get_pool_custody_address(ctx);
+            
+            if input_a == 0.into() || input_b == 0.into() {
+                return Some(0.into());
+            }
+            
+            let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address).ok()?;
+            let lp_supply = pool.lp_total_supply;
+            
+            // Calculate LP tokens that would be issued
+            let lp_to_issue = if lp_supply == 0.into() {
+                // This shouldn't happen after pool creation, but handle it
+                numbers::mul_sqrt_integer(input_a, input_b)
+            } else if balance_a == 0.into() || balance_b == 0.into() {
+                return None; // No liquidity
+            } else {
+                // Calculate potential LP shares from each input
+                let lp_from_a = numbers::mul_div_down_integer(input_a, lp_supply, balance_a);
+                let lp_from_b = numbers::mul_div_down_integer(input_b, lp_supply, balance_b);
+                
+                // The actual LP to issue is the minimum
+                if lp_from_a < lp_from_b { lp_from_a } else { lp_from_b }
+            };
+            
+            Some(lp_to_issue)
+        })
+    }
+    
+    fn quote_withdraw(ctx: &ViewContext, pair: TokenPair, lp_in: numbers::Integer) -> Option<WithdrawResult> {
+        let id = pair_id(&pair);
+        storage(ctx).pools().get(ctx, id).and_then(|p| {
+            let pool = p.load(ctx);
+            let pool_address = get_pool_custody_address(ctx);
+            
+            if lp_in == 0.into() {
+                return Some(WithdrawResult { a_out: 0.into(), b_out: 0.into() });
+            }
+            
+            let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address).ok()?;
+            let lp_supply = pool.lp_total_supply;
+            
+            if lp_supply == 0.into() {
+                return None; // No LP supply
+            }
+            
+            // Calculate proportional withdrawal amounts
+            let a_out = numbers::mul_div_down_integer(lp_in, balance_a, lp_supply);
+            let b_out = numbers::mul_div_down_integer(lp_in, balance_b, lp_supply);
+            
+            Some(WithdrawResult { a_out, b_out })
+        })
     }
 }
