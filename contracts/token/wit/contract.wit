@@ -5,6 +5,13 @@ world contract {
     use kontor:built-in/context.{view-context, proc-context, signer};
     use kontor:built-in/error.{error};
     use kontor:built-in/numbers.{integer, decimal};
+    use kontor:built-in/foreign.{contract-address};
+
+    // Asset management types
+    record balance {
+        token-addr: contract-address,
+        amount: integer,
+    }
 
     export init: func(ctx: borrow<proc-context>);
 
@@ -20,4 +27,8 @@ world contract {
     export balance-or-zero: func(ctx: borrow<view-context>, acc: string) -> integer;
     export total-supply: func(ctx: borrow<view-context>) -> integer;
     export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
+    
+    // Asset management functions
+    export withdraw: func(ctx: borrow<proc-context>, amount: integer) -> result<balance, error>;
+    export deposit: func(ctx: borrow<proc-context>, recipient: string, balance: balance) -> result<_, error>;
 }
