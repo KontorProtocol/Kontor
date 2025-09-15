@@ -30,11 +30,11 @@ async fn test_numerics() -> Result<()> {
     );
 
     assert_eq!(
-        numerics::decimal_to_integer(Decimal::from("1.999")).unwrap(),
+        numbers::decimal_to_integer(Decimal::from("1.999")),
         Integer::from("1")
     );
     assert_eq!(
-        numerics::decimal_to_integer(Decimal::from("-1.999")).unwrap(),
+        numbers::decimal_to_integer(Decimal::from("-1.999")),
         Integer::from("-1")
     );
 
@@ -99,43 +99,25 @@ async fn test_numerics_limits() -> Result<()> {
     assert!(catch_unwind(|| Integer::from(oversized_int)).is_err());
     assert!(catch_unwind(|| Decimal::from(oversized_dec)).is_err());
 
-    assert!(
-        numerics::add_integer(Integer::from(max_int), Integer::from(1))
-            .unwrap()
-            .is_err()
-    );
+    assert!(numbers::add_integer(Integer::from(max_int), Integer::from(1)).is_err());
     assert_eq!(
-        numerics::add_integer(Integer::from(max_int), Integer::from(-1))
-            .unwrap()
-            .unwrap(),
+        numbers::add_integer(Integer::from(max_int), Integer::from(-1)).unwrap(),
         Integer::from(
             "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
         ),
     );
 
-    assert!(
-        numerics::sub_integer(Integer::from(max_int), Integer::from(-1))
-            .unwrap()
-            .is_err()
-    );
+    assert!(numbers::sub_integer(Integer::from(max_int), Integer::from(-1)).is_err());
     assert_eq!(
-        numerics::sub_integer(Integer::from(max_int), Integer::from(1))
-            .unwrap()
-            .unwrap(),
+        numbers::sub_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
         Integer::from(
             "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
         ),
     );
 
-    assert!(
-        numerics::mul_integer(Integer::from(max_int), Integer::from(2))
-            .unwrap()
-            .is_err()
-    );
+    assert!(numbers::mul_integer(Integer::from(max_int), Integer::from(2)).is_err());
     assert_eq!(
-        numerics::mul_integer(Integer::from(max_int), Integer::from(1))
-            .unwrap()
-            .unwrap(),
+        numbers::mul_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
         Integer::from(max_int)
     );
 

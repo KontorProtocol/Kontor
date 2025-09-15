@@ -2203,7 +2203,6 @@ dependencies = [
  "futures-util",
  "hex",
  "indexmap 2.11.1",
- "lazy_static",
  "libsql",
  "lru",
  "num",

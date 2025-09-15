@@ -72,6 +72,7 @@ interface error {
         message(string),
         overflow(string),
         div-by-zero(string),
+        syntax-error(string),
     }
 
     meta-force-generate-error: func(e: error);

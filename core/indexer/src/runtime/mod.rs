@@ -703,99 +703,99 @@ impl built_in::context::HostFallContext for Runtime {
 
 impl built_in::numbers::Host for Runtime {
     async fn u64_to_integer(&mut self, i: u64) -> Result<Integer> {
-        numerics::u64_to_integer(i)
+        Ok(numerics::u64_to_integer(i))
     }
 
     async fn s64_to_integer(&mut self, i: i64) -> Result<Integer> {
-        numerics::s64_to_integer(i)
+        Ok(numerics::s64_to_integer(i))
     }
 
     async fn string_to_integer(&mut self, s: String) -> Result<Result<Integer, Error>> {
-        numerics::string_to_integer(&s)
+        Ok(numerics::string_to_integer(&s))
     }
 
     async fn integer_to_string(&mut self, i: Integer) -> Result<String> {
-        numerics::integer_to_string(i)
+        Ok(numerics::integer_to_string(i))
     }
 
     async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool> {
-        numerics::eq_integer(a, b)
+        Ok(numerics::eq_integer(a, b))
     }
 
     async fn cmp_integer(&mut self, a: Integer, b: Integer) -> Result<NumericOrdering> {
-        numerics::cmp_integer(a, b)
+        Ok(numerics::cmp_integer(a, b))
     }
 
     async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
-        numerics::add_integer(a, b)
+        Ok(numerics::add_integer(a, b))
     }
 
     async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
-        numerics::sub_integer(a, b)
+        Ok(numerics::sub_integer(a, b))
     }
 
     async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
-        numerics::mul_integer(a, b)
+        Ok(numerics::mul_integer(a, b))
     }
 
     async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
-        numerics::div_integer(a, b)
+        Ok(numerics::div_integer(a, b))
     }
 
     async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal> {
-        numerics::integer_to_decimal(i)
+        Ok(numerics::integer_to_decimal(i))
     }
 
     async fn decimal_to_integer(&mut self, d: Decimal) -> Result<Integer> {
-        numerics::decimal_to_integer(d)
+        Ok(numerics::decimal_to_integer(d))
     }
 
     async fn u64_to_decimal(&mut self, i: u64) -> Result<Decimal> {
-        numerics::u64_to_decimal(i)
+        Ok(numerics::u64_to_decimal(i))
     }
 
     async fn s64_to_decimal(&mut self, i: i64) -> Result<Decimal> {
-        numerics::s64_to_decimal(i)
+        Ok(numerics::s64_to_decimal(i))
     }
 
     async fn f64_to_decimal(&mut self, f: f64) -> Result<Decimal> {
-        numerics::f64_to_decimal(f)
+        Ok(numerics::f64_to_decimal(f))
     }
 
     async fn string_to_decimal(&mut self, s: String) -> Result<Result<Decimal, Error>> {
-        numerics::string_to_decimal(&s)
+        Ok(numerics::string_to_decimal(&s))
     }
 
     async fn decimal_to_string(&mut self, d: Decimal) -> Result<String> {
-        numerics::decimal_to_string(d)
+        Ok(numerics::decimal_to_string(d))
     }
 
     async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool> {
-        numerics::eq_decimal(a, b)
+        Ok(numerics::eq_decimal(a, b))
     }
 
     async fn cmp_decimal(&mut self, a: Decimal, b: Decimal) -> Result<NumericOrdering> {
-        numerics::cmp_decimal(a, b)
+        Ok(numerics::cmp_decimal(a, b))
     }
 
     async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
-        numerics::add_decimal(a, b)
+        Ok(numerics::add_decimal(a, b))
     }
 
     async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
-        numerics::sub_decimal(a, b)
+        Ok(numerics::sub_decimal(a, b))
     }
 
     async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
-        numerics::mul_decimal(a, b)
+        Ok(numerics::mul_decimal(a, b))
     }
 
     async fn div_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
-        numerics::div_decimal(a, b)
+        Ok(numerics::div_decimal(a, b))
     }
 
     async fn log10(&mut self, a: Decimal) -> Result<Decimal> {
-        numerics::log10(a)
+        Ok(numerics::log10(a))
     }
 
     async fn meta_force_generate_integer(&mut self, _i: built_in::numbers::Integer) -> Result<()> {
