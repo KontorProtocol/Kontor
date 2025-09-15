@@ -11,7 +11,7 @@ world contract {
     record pool-creation-event { pool-id: string }
 
     record pool-values { a: integer, b: integer, lp: integer }
-    record fee-info { lp-fee-bps: integer, admin-fee-pct: integer }
+    record fee-info { lp-fee-rate: decimal, admin-fee-rate: decimal }
     record withdraw-result { a-out: integer, b-out: integer }
 
     // Token contract addresses
@@ -30,8 +30,8 @@ world contract {
         pair: token-pair,
         init-a: integer,
         init-b: integer,
-        lp-fee-bps: integer,
-        admin-fee-pct: integer,
+        lp-fee-rate: decimal,
+        admin-fee-rate: decimal,
     ) -> result<integer, error>; // returns initial lp minted
 
     export values: func(ctx: borrow<view-context>, pair: token-pair) -> option<pool-values>;
@@ -54,7 +54,7 @@ world contract {
 
     // Admin (authenticated by signer)
     export admin-withdraw-fees: func(ctx: borrow<proc-context>, pair: token-pair, amount: integer) -> result<integer, error>;
-    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-bps: integer, admin-fee-pct: integer) -> result<_, error>;
+    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-rate: decimal, admin-fee-rate: decimal) -> result<_, error>;
     
     // LP Token management
     export lp-balance: func(ctx: borrow<view-context>, pair: token-pair, owner: string) -> option<integer>;

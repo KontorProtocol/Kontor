@@ -303,6 +303,55 @@ pub fn log10(a: Decimal) -> Result<Decimal> {
     Ok(res.into())
 }
 
+pub fn decimal_to_integer_floor(d: Decimal) -> Result<Integer> {
+    let dec: D256 = d.into();
+    
+    // For floor, we can use the decimal library's built-in truncation
+    // towards zero, then adjust for negative numbers with fractional parts
+    let truncated = dec.trunc();
+    
+    // Convert truncated to string, then to BigInt
+    let truncated_str = truncated.to_string();
+    // Remove any scientific notation by parsing the number
+    let big_int: BigInt = if truncated_str.contains('E') || truncated_str.contains('e') {
+        // For scientific notation, the truncated value should be parseable
+        truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
+    } else {
+        truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
+    };
+    
+    // If negative and there was a fractional part, go one more negative
+    if dec.is_sign_negative() && dec != truncated {
+        Ok((big_int - BigInt::from(1)).into())
+    } else {
+        Ok(big_int.into())
+    }
+}
+
+pub fn decimal_to_integer_ceil(d: Decimal) -> Result<Integer> {
+    let dec: D256 = d.into();
+    
+    // For ceil, we truncate and then add 1 if there was a positive fractional part
+    let truncated = dec.trunc();
+    
+    // Convert truncated to string, then to BigInt
+    let truncated_str = truncated.to_string();
+    // Remove any scientific notation by parsing the number
+    let big_int: BigInt = if truncated_str.contains('E') || truncated_str.contains('e') {
+        // For scientific notation, the truncated value should be parseable
+        truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
+    } else {
+        truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
+    };
+    
+    // If positive and there was a fractional part, go one more positive
+    if dec.is_sign_positive() && dec != truncated {
+        Ok((big_int + BigInt::from(1)).into())
+    } else {
+        Ok(big_int.into())
+    }
+}
+
 pub fn mul_div_down_integer(a: Integer, b: Integer, c: Integer) -> Result<Integer> {
     let ai: BigInt = a.into();
     let bi: BigInt = b.into();

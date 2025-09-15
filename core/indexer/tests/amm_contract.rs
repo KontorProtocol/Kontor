@@ -64,8 +64,8 @@ async fn test_amm_basic_flow() -> Result<()> {
     let balance_b = runtime.execute(None, &token_b_addr, "balance(\"test_user\")").await?;
     println!("Token B balance: {}", balance_b);
     
-    // Test pool creation
-    let lp_tokens = amm::create(&runtime, user, token_pair.clone(), 1_000.into(), 2_000.into(), 30.into(), 50.into()).await??;
+    // Test pool creation (0.3% LP fee, 50% admin fee)
+    let lp_tokens = amm::create(&runtime, user, token_pair.clone(), 1_000.into(), 2_000.into(), "0.003".into(), "0.5".into()).await??;
     assert!(lp_tokens > 0.into());
     
     // Check pool values
@@ -76,8 +76,8 @@ async fn test_amm_basic_flow() -> Result<()> {
     
     // Check fees
     let fees = amm::fees(&runtime, token_pair.clone()).await?.unwrap();
-    assert_eq!(fees.lp_fee_bps, 30.into());
-    assert_eq!(fees.admin_fee_pct, 50.into());
+    assert_eq!(fees.lp_fee_rate, "0.003".into());
+    assert_eq!(fees.admin_fee_rate, "0.5".into());
     
     // Test deposit
     let additional_lp = amm::deposit(&runtime, user, token_pair.clone(), 500.into(), 1_000.into(), 0.into()).await??;
@@ -123,7 +123,7 @@ async fn test_amm_validation() -> Result<()> {
     token::mint(&runtime, user, 10_000.into()).await?;
     token::approve(&runtime, user, "amm_0_0", 10_000.into()).await??;
     
-    let err = amm::create(&runtime, user, same_token_pair, 1_000.into(), 1_000.into(), 30.into(), 50.into()).await?;
+    let err = amm::create(&runtime, user, same_token_pair, 1_000.into(), 1_000.into(), "0.003".into(), "0.5".into()).await?;
     assert!(err.is_err());
     assert!(err.unwrap_err().to_string().contains("must not be equal"));
     
@@ -141,7 +141,7 @@ async fn test_amm_validation() -> Result<()> {
         }
     };
     
-    let err = amm::create(&runtime, user, reversed_pair, 1_000.into(), 1_000.into(), 30.into(), 50.into()).await?;
+    let err = amm::create(&runtime, user, reversed_pair, 1_000.into(), 1_000.into(), "0.003".into(), "0.5".into()).await?;
     assert!(err.is_err());
     assert!(err.unwrap_err().to_string().contains("must be ordered"));
     
@@ -192,7 +192,7 @@ async fn test_amm_admin_functions() -> Result<()> {
     };
     runtime.execute(Some(admin), &amm_addr, "init()").await?;
     
-    let _ = amm::create(&runtime, admin, token_pair.clone(), 10_000.into(), 10_000.into(), 30.into(), 50.into()).await??;
+    let _ = amm::create(&runtime, admin, token_pair.clone(), 10_000.into(), 10_000.into(), "0.003".into(), "0.5".into()).await??;
     
     // Generate some fees through swaps
     let swap_result = amm::swap_a(&runtime, admin, token_pair.clone(), 1_000.into(), 1.into()).await??;
@@ -211,11 +211,11 @@ async fn test_amm_admin_functions() -> Result<()> {
     let withdrawn = amm::admin_withdraw_fees(&runtime, admin, token_pair.clone(), 0.into()).await??;
     assert!(withdrawn > 0.into());
     
-    // Admin can set fees
-    amm::admin_set_fees(&runtime, admin, token_pair.clone(), 10.into(), 25.into()).await??;
+    // Admin can set fees (0.1% LP fee, 25% admin fee)
+    amm::admin_set_fees(&runtime, admin, token_pair.clone(), "0.001".into(), "0.25".into()).await??;
     let fees = amm::fees(&runtime, token_pair.clone()).await?.unwrap();
-    assert_eq!(fees.lp_fee_bps, 10.into());
-    assert_eq!(fees.admin_fee_pct, 25.into());
+    assert_eq!(fees.lp_fee_rate, "0.001".into());
+    assert_eq!(fees.admin_fee_rate, "0.25".into());
     
     // Non-admin cannot withdraw fees - mint tokens for user too
     runtime.execute(Some(user), &token_a_addr, "mint({r0: 1000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
@@ -263,7 +263,7 @@ async fn test_amm_lp_tokens() -> Result<()> {
     runtime.execute(Some(alice), &token_a_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     runtime.execute(Some(alice), &token_b_addr, "mint({r0: 20000, r1: 0, r2: 0, r3: 0, sign: plus})").await?;
     
-    let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), 30.into(), 50.into()).await??;
+    let lp_tokens = amm::create(&runtime, alice, token_pair.clone(), 5_000.into(), 5_000.into(), "0.003".into(), "0.5".into()).await??;
     
     // Check Alice's LP balance
     let alice_lp = amm::lp_balance(&runtime, token_pair.clone(), alice).await?.unwrap();

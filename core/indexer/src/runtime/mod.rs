@@ -810,6 +810,14 @@ impl built_in::numbers::Host for Runtime {
         numerics::log10(a)
     }
 
+    async fn decimal_to_integer_floor(&mut self, d: Decimal) -> Result<Integer> {
+        numerics::decimal_to_integer_floor(d)
+    }
+
+    async fn decimal_to_integer_ceil(&mut self, d: Decimal) -> Result<Integer> {
+        numerics::decimal_to_integer_ceil(d)
+    }
+
     async fn mul_div_down_integer(&mut self, a: Integer, b: Integer, c: Integer) -> Result<Integer> {
         numerics::mul_div_down_integer(a, b, c)
     }

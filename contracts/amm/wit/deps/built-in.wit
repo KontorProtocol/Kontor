@@ -132,6 +132,10 @@ interface numbers {
     div-decimal: func(a: decimal, b: decimal) -> decimal;
 
     log10: func(a: decimal) -> decimal;
+    
+    // Decimal to Integer conversion with explicit rounding
+    decimal-to-integer-floor: func(d: decimal) -> integer;  // Round down (towards negative infinity)
+    decimal-to-integer-ceil: func(d: decimal) -> integer;   // Round up (towards positive infinity)
 
     // Math helpers for Integer
     mul-div-down-integer: func(a: integer, b: integer, c: integer) -> integer;
