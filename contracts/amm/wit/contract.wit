@@ -7,14 +7,31 @@ world contract {
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
 
-    // Types
-    record pool-creation-event { pool-id: string }
+    // For now, we'll use a simpler approach and define Balance as a record
+    // until we can properly import resources across contracts
+    record token-balance {
+        token-addr: contract-address,
+        amount: integer,
+        handle: string,
+    }
+    
+    // LP Balance resource - represents AMM liquidity provider tokens
+    resource lp-balance {
+        amount: func() -> integer;
+        pair: func() -> token-pair;
+    }
 
+    // Types
     record pool-values { a: integer, b: integer, lp: integer }
     record fee-info { lp-fee-bps: integer, admin-fee-pct: integer }
-    record withdraw-result { a-out: integer, b-out: integer }
+    
+    // Withdraw result now returns actual token Balance resources
+    record withdraw-result { 
+        balance-a: token-balance,
+        balance-b: token-balance 
+    }
 
-    // Token contract addresses
+    // Token contract addresses  
     record token-pair { 
         token-a: contract-address,
         token-b: contract-address
@@ -24,46 +41,89 @@ world contract {
     // API
     export init: func(ctx: borrow<proc-context>);
 
-    // Pool lifecycle
+    // Pool lifecycle - now uses Balance resources for clean, safe transfers
     export create: func(
         ctx: borrow<proc-context>,
         pair: token-pair,
-        init-a: integer,
-        init-b: integer,
+        balance-a: token-balance,
+        balance-b: token-balance,
         lp-fee-bps: integer,
         admin-fee-pct: integer,
-    ) -> result<integer, error>; // returns initial lp minted
+    ) -> result<lp-balance, error>; // returns LP balance resource
 
     export values: func(ctx: borrow<view-context>, pair: token-pair) -> option<pool-values>;
     export fees: func(ctx: borrow<view-context>, pair: token-pair) -> option<fee-info>;
     export admin-fee-value: func(ctx: borrow<view-context>, pair: token-pair) -> option<integer>;
-    // Liquidity
+    
+    // Liquidity operations - Balance resources in, LP Balance resources out
     export deposit: func(
-        ctx: borrow<proc-context>, pair: token-pair,
-        input-a: integer, input-b: integer, min-lp-out: integer
-    ) -> result<integer, error>; // returns lp minted
+        ctx: borrow<proc-context>, 
+        pair: token-pair,
+        balance-a: token-balance, 
+        balance-b: token-balance, 
+        min-lp-out: integer
+    ) -> result<lp-balance, error>; // returns LP balance resource
 
     export withdraw: func(
-        ctx: borrow<proc-context>, pair: token-pair,
-        lp-in: integer, min-a-out: integer, min-b-out: integer
-    ) -> result<withdraw-result, error>;
+        ctx: borrow<proc-context>, 
+        pair: token-pair,
+        lp-balance: lp-balance, 
+        min-a-out: integer, 
+        min-b-out: integer
+    ) -> result<withdraw-result, error>; // returns token balance resources
 
-    // Swaps
-    export swap: func(ctx: borrow<proc-context>, pair: token-pair, token-in: contract-address, amount-in: integer, min-out: integer) -> result<integer, error>;
+    // Swaps - Balance resource in, Balance resource out
+    export swap: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        balance-in: token-balance, 
+        min-out: integer
+    ) -> result<token-balance, error>; // returns token balance resource
     
-    // Admin (authenticated by signer)
-    export admin-withdraw-fees: func(ctx: borrow<proc-context>, pair: token-pair, amount: integer) -> result<integer, error>;
-    export admin-set-fees: func(ctx: borrow<proc-context>, pair: token-pair, lp-fee-bps: integer, admin-fee-pct: integer) -> result<_, error>;
+    // Admin operations - now return Balance resources
+    export admin-withdraw-fees: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        amount: integer
+    ) -> result<lp-balance, error>; // returns LP balance resource
     
-    // LP Token management
+    export admin-set-fees: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        lp-fee-bps: integer, 
+        admin-fee-pct: integer
+    ) -> result<_, error>;
+    
+    // LP Token management - now uses LP Balance resources
     export lp-balance: func(ctx: borrow<view-context>, pair: token-pair, owner: string) -> option<integer>;
     export lp-total-supply: func(ctx: borrow<view-context>, pair: token-pair) -> option<integer>;
-    export transfer-lp: func(ctx: borrow<proc-context>, pair: token-pair, to: string, amount: integer) -> result<_, error>;
+    
+    // LP transfers now use Balance resources for safety
+    export transfer-lp: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        to: string, 
+        lp-balance: lp-balance
+    ) -> result<_, error>;
+    
+    // LP operations for composability
+    export withdraw-lp: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        amount: integer
+    ) -> result<lp-balance, error>; // withdraw LP tokens as a resource
+    
+    export deposit-lp: func(
+        ctx: borrow<proc-context>, 
+        pair: token-pair, 
+        recipient: string, 
+        lp-balance: lp-balance
+    ) -> result<_, error>; // deposit LP balance resource to recipient
     
     // Admin info
     export admin: func(ctx: borrow<view-context>) -> string;
     
-    // Quoter views - preview operations without executing
+    // Quoter views - preview operations without executing (still use integers for quotes)
     export quote-swap: func(ctx: borrow<view-context>, pair: token-pair, token-in: contract-address, amount-in: integer) -> option<integer>;
     export quote-deposit: func(ctx: borrow<view-context>, pair: token-pair, input-a: integer, input-b: integer) -> option<integer>;
     export quote-withdraw: func(ctx: borrow<view-context>, pair: token-pair, lp-in: integer) -> option<withdraw-result>;

@@ -165,6 +165,7 @@ pub fn wit_type_to_rust_type(
                 _ => bail!("Unsupported type definition kind: {:?}", ty_def.kind),
             }
         }
+        // Note: Tuples are handled through TypeDefKind::Tuple in Type::Id case above
         _ => bail!("Unsupported WIT type: {:?}", ty),
     }
 }
@@ -221,9 +222,17 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
                     // For now, we'll treat them as opaque u32 handles in wave format
                     Ok(quote! { "u32" })
                 }
+                TypeDefKind::Tuple(tuple) => {
+                    // Handle tuples in wave format
+                    let elements = tuple.types.iter().map(|ty| {
+                        wit_type_to_wave_type(resolve, ty)
+                    }).collect::<Result<Vec<_>, _>>()?;
+                    Ok(quote! { stdlib::wasm_wave::value::Type::tuple(vec![#(#elements),*]) })
+                }
                 _ => bail!("Unsupported return type kind: {:?}", ty_def.kind),
             }
         }
+        // Note: Tuples are handled through TypeDefKind::Tuple in Type::Id case above
         _ => bail!("Unsupported return type: {:?}", ty),
     }
 }

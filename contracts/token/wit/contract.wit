@@ -28,9 +28,9 @@ world contract {
     export withdraw: func(ctx: borrow<proc-context>, amount: integer) -> result<balance, error>;
     export deposit: func(ctx: borrow<proc-context>, recipient: string, bal: balance) -> result<_, error>;
     
-    // Split and merge operations - consume and produce resources
-    export split: func(ctx: borrow<proc-context>, bal: balance, first-amount: integer) 
-        -> result<tuple<balance, option<balance>>, error>;
-    export merge: func(ctx: borrow<proc-context>, a: balance, b: balance) 
-        -> result<balance, error>;
+    // TODO: Add split and merge operations once tuple support is complete
+    // export split: func(ctx: borrow<proc-context>, bal: balance, first-amount: integer) 
+    //     -> result<tuple<balance, option<balance>>, error>;
+    // export merge: func(ctx: borrow<proc-context>, a: balance, b: balance) 
+    //     -> result<balance, error>;
 }
