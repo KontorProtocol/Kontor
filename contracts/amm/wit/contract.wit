@@ -67,6 +67,9 @@ world contract {
     export quote-swap: func(ctx: borrow<view-context>, pair: token-pair, token-in: contract-address, amount-in: integer) -> option<integer>;
     export quote-deposit: func(ctx: borrow<view-context>, pair: token-pair, input-a: integer, input-b: integer) -> option<integer>;
     export quote-withdraw: func(ctx: borrow<view-context>, pair: token-pair, lp-in: integer) -> option<withdraw-result>;
+    
+    // Constants
+    export min-liquidity: func(ctx: borrow<view-context>) -> integer;
 }
 
 

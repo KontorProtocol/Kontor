@@ -4,12 +4,115 @@ contract!(name = "amm");
 
 interface!(name = "token_dyn", path = "token/wit");
 
+// # AMM Contract
+// 
+// This Automated Market Maker (AMM) contract implements a constant product formula
+// similar to Uniswap V2 with admin fees.
+
+// Typed canonical pair wrapper that sorts by tuple comparison
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalTokenPair {
+    token_a: foreign::ContractAddress,
+    token_b: foreign::ContractAddress,
+    id: String,
+}
+
+impl CanonicalTokenPair {
+    /// Creates a new canonical pair, automatically sorting A < B by (name, height, tx_index) tuple
+    pub fn new(
+        a: foreign::ContractAddress, 
+        b: foreign::ContractAddress
+    ) -> Result<Self, AmmError> {
+        // Validate that both tokens are properly specified
+        if a.name.is_empty() || b.name.is_empty() {
+            return Err(AmmError::InvalidPair);
+        }
+        
+        // Create tuples for proper sorting (lexicographic comparison)
+        let a_tuple = (&a.name, a.height, a.tx_index);
+        let b_tuple = (&b.name, b.height, b.tx_index);
+        
+        // Ensure tokens are different
+        if a_tuple == b_tuple {
+            return Err(AmmError::InvalidPair);
+        }
+        
+        // Sort to ensure canonical ordering
+        let (token_a, token_b) = if a_tuple < b_tuple {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        
+        // Generate the internal pair ID
+        let id = format!("{}_{}_{}::{}_{}_{}",
+            token_a.name, token_a.height, token_a.tx_index,
+            token_b.name, token_b.height, token_b.tx_index
+        );
+        
+        Ok(Self { token_a, token_b, id })
+    }
+    
+    /// Returns the canonical tuple representation by value (clones)
+    pub fn as_tuple(&self) -> (foreign::ContractAddress, foreign::ContractAddress) {
+        (self.token_a.clone(), self.token_b.clone())
+    }
+    
+    /// Returns references to the token addresses to avoid cloning
+    pub fn as_refs(&self) -> (&foreign::ContractAddress, &foreign::ContractAddress) {
+        (&self.token_a, &self.token_b)
+    }
+    
+    /// Returns the internal pair ID (for storage keys)
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    
+}
+
+// Typed error enum for better error handling
+#[derive(Debug, Clone)]
+pub enum AmmError {
+    PoolNotFound,
+    NotAdmin,
+    ExcessiveSlippage,
+    NoLiquidity,
+    InvalidPair,
+    InvalidFees,
+    InsufficientLpTokens,
+    InsufficientAdminFees,
+    InputBalanceZero,
+    InitialLiquidityTooSmall,
+    PoolAlreadyExists,
+    InvalidTokenIn,
+}
+
+impl From<AmmError> for error::Error {
+    fn from(err: AmmError) -> Self {
+        let message = match err {
+            AmmError::PoolNotFound => "Pool not found",
+            AmmError::NotAdmin => "Not authorized: admin only",
+            AmmError::ExcessiveSlippage => "Excessive slippage",
+            AmmError::NoLiquidity => "Pool has no liquidity",
+            AmmError::InvalidPair => "Invalid token pair",
+            AmmError::InvalidFees => "Invalid fee parameters",
+            AmmError::InsufficientLpTokens => "Insufficient LP tokens",
+            AmmError::InsufficientAdminFees => "Insufficient admin fees",
+            AmmError::InputBalanceZero => "Input balances cannot be zero",
+            AmmError::InitialLiquidityTooSmall => "Initial liquidity too small",
+            AmmError::PoolAlreadyExists => "Pool already exists",
+            AmmError::InvalidTokenIn => "Invalid token_in: must match pool's token_a or token_b",
+        };
+        error::Error::Message(message.to_string())
+    }
+}
+
 #[derive(Clone, Storage)]
 struct Pool {
     pub token_a: foreign::ContractAddress,
     pub token_b: foreign::ContractAddress,
-    pub lp_fee_bps: numbers::Integer,      // Fee rate in basis points (e.g., 30 for 0.3%)
-    pub admin_fee_pct: numbers::Integer,   // Admin's share as percentage of LP fees (e.g., 50 for 50%)
+    pub lp_fee_bps: numbers::Integer,
+    pub admin_fee_pct: numbers::Integer,
     pub admin_fee_lp: numbers::Integer,
     pub lp_total_supply: numbers::Integer,
     pub lp_ledger: Map<String, numbers::Integer>, // owner -> lp balance
@@ -41,45 +144,7 @@ impl Default for Pool {
 struct AmmStorage {
     pub pools: Map<String, Pool>,
     pub admin: String,  // Admin address (signer-based auth)
-    pub pool_custody_address: String,  // The AMM's address for holding tokens
-}
-
-fn ensure_pair_sorted(pair: &TokenPair) -> Result<(), error::Error> {
-    // Validate that both tokens are properly specified
-    if pair.token_a.name.is_empty() || pair.token_b.name.is_empty() {
-        return Err(error::Error::Message("Token addresses must not be empty".to_string()));
-    }
-    
-    // Create canonical string representations for comparison
-    let a_str = format!("{}_{}_{}",  pair.token_a.name, pair.token_a.height, pair.token_a.tx_index);
-    let b_str = format!("{}_{}_{}",  pair.token_b.name, pair.token_b.height, pair.token_b.tx_index);
-    
-    // Ensure tokens are different
-    if a_str == b_str {
-        return Err(error::Error::Message(
-            "Pool pair coin types must not be equal".to_string(),
-        ));
-    }
-    
-    // Ensure tokens are properly ordered (A < B)
-    if a_str > b_str {
-        return Err(error::Error::Message(
-            "Pool pair must be ordered A < B".to_string(),
-        ));
-    }
-    
-    Ok(())
-}
-
-fn pair_id(pair: &TokenPair) -> String {
-    let a_str = format!("{}_{}_{}",  pair.token_a.name, pair.token_a.height, pair.token_a.tx_index);
-    let b_str = format!("{}_{}_{}",  pair.token_b.name, pair.token_b.height, pair.token_b.tx_index);
-    format!("{}::{}", a_str, b_str)
-}
-
-fn get_pool_custody_address(ctx: &impl ReadContext) -> String {
-    // Get the stored custody address (computed once during init)
-    storage(ctx).pool_custody_address(ctx)
+    pub self_address: String,
 }
 
 fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::ContractAddress, account: &str) -> Result<numbers::Integer, error::Error> {
@@ -100,14 +165,24 @@ fn transfer_token_from_user_to_pool(
     token_dyn::deposit(token, ctx.contract_signer(), pool_address, balance)
 }
 
-// Helper function to load a pool or return error
-fn load_pool(ctx: &impl ReadContext, pair: &TokenPair) -> Result<(String, PoolWrapper, Pool), error::Error> {
-    let id = pair_id(pair);
+// Helper function to load a pool using canonical pair or return error
+fn load_pool(ctx: &impl ReadContext, pair: &TokenPair) -> Result<(String, PoolWrapper, Pool), AmmError> {
+    let canonical_pair = CanonicalTokenPair::new(pair.token_a.clone(), pair.token_b.clone())?;
+    let id = canonical_pair.id().to_string();
     let pools = storage(ctx).pools();
     let pool_wrapper = pools.get(ctx, &id)
-        .ok_or_else(|| error::Error::Message("Pool not found".to_string()))?;
+        .ok_or(AmmError::PoolNotFound)?;
     let pool = pool_wrapper.load(ctx);
     Ok((id, pool_wrapper, pool))
+}
+
+// Dedicated function for minting admin fees - the only place that touches admin_fee_lp and lp_total_supply for fees
+fn mint_admin_fee_lp(
+    pool: &mut Pool,
+    admin_fee_in_lp: numbers::Integer,
+) {
+    pool.admin_fee_lp = numbers::add_integer(pool.admin_fee_lp, admin_fee_in_lp);
+    pool.lp_total_supply = numbers::add_integer(pool.lp_total_supply, admin_fee_in_lp);
 }
 
 // Helper function to get both token balances for a pool
@@ -128,7 +203,8 @@ fn update_lp_balance(
     amount_change: numbers::Integer,
     is_addition: bool,
 ) {
-    let current_lp = pool_wrapper.lp_ledger().get(ctx, user_address).unwrap_or_default();
+    let current_lp = pool_wrapper.lp_ledger().get(ctx, user_address)
+        .unwrap_or_else(|| 0.into());
     let new_balance = if is_addition {
         numbers::add_integer(current_lp, amount_change)
     } else {
@@ -138,17 +214,17 @@ fn update_lp_balance(
 }
 
 // Helper function to check admin authorization
-fn ensure_admin_auth(ctx: &ProcContext) -> Result<(), error::Error> {
+fn ensure_admin_auth(ctx: &ProcContext) -> Result<(), AmmError> {
     if ctx.signer().to_string() != storage(ctx).admin(ctx) {
-        return Err(error::Error::Message("Not authorized: admin only".to_string()));
+        return Err(AmmError::NotAdmin);
     }
     Ok(())
 }
 
 // Helper function for slippage validation
-fn validate_min_output(actual: numbers::Integer, minimum: numbers::Integer) -> Result<(), error::Error> {
+fn validate_min_output(actual: numbers::Integer, minimum: numbers::Integer) -> Result<(), AmmError> {
     if actual < minimum {
-        return Err(error::Error::Message("Excessive slippage".to_string()));
+        return Err(AmmError::ExcessiveSlippage);
     }
     Ok(())
 }
@@ -163,12 +239,12 @@ fn execute_swap(
     balance_in: numbers::Integer,
     balance_out: numbers::Integer,
     min_out: numbers::Integer,
-) -> Result<numbers::Integer, error::Error> {
-    let pool_address = get_pool_custody_address(ctx);
+) -> Result<numbers::Integer, AmmError> {
+            let pool_address = ctx.contract_signer().to_string();
     let user_address = ctx.signer().to_string();
     
     if balance_in == 0.into() || balance_out == 0.into() {
-        return Err(error::Error::Message("Pool has no liquidity".to_string()));
+        return Err(AmmError::NoLiquidity);
     }
 
     let (out_value, admin_fee_in_lp) = calc_swap_result(
@@ -178,19 +254,20 @@ fn execute_swap(
         pool.lp_total_supply,
         pool.lp_fee_bps,
         pool.admin_fee_pct,
-    )?;
+    ).map_err(|_| AmmError::NoLiquidity)?;
     
     validate_min_output(out_value, min_out)?;
     
     // Transfer token in from user to pool using asset-based transfer
-    transfer_token_from_user_to_pool(ctx, token_in, amount_in, &pool_address)?;
+    transfer_token_from_user_to_pool(ctx, token_in, amount_in, &pool_address)
+        .map_err(|_| AmmError::NoLiquidity)?;
     
     // Transfer token out from pool to user
-    token_dyn::transfer(token_out, ctx.contract_signer(), &user_address, out_value)?;
+    token_dyn::transfer(token_out, ctx.contract_signer(), &user_address, out_value)
+        .map_err(|_| AmmError::NoLiquidity)?;
     
-    // Update admin fees
-    pool.admin_fee_lp = numbers::add_integer(pool.admin_fee_lp, admin_fee_in_lp);
-    pool.lp_total_supply = numbers::add_integer(pool.lp_total_supply, admin_fee_in_lp);
+    // Update admin fees using dedicated function
+    mint_admin_fee_lp(pool, admin_fee_in_lp);
     
     Ok(out_value)
 }
@@ -206,6 +283,11 @@ fn pct_100() -> numbers::Integer {
 
 fn minimum_liquidity() -> numbers::Integer {
     numbers::u64_to_integer(1000) // Permanently locked LP tokens to prevent edge cases
+}
+
+/// Public constant function for minimum liquidity (to be exposed via WIT)
+pub fn min_liquidity() -> numbers::Integer {
+    minimum_liquidity()
 }
 
 fn calc_swap_result(
@@ -250,12 +332,12 @@ fn calc_swap_result(
 impl Guest for Amm {
     fn init(ctx: &ProcContext) {
         let admin = ctx.signer().to_string();
-        let pool_custody_address = ctx.contract_signer().to_string();
+        let self_address = ctx.contract_signer().to_string();
         
         AmmStorage {
             pools: Map::default(),
             admin,
-            pool_custody_address,
+            self_address,
         }
         .init(ctx)
     }
@@ -268,85 +350,77 @@ impl Guest for Amm {
         lp_fee_bps: numbers::Integer,
         admin_fee_pct: numbers::Integer,
     ) -> Result<numbers::Integer, error::Error> {
-        ensure_pair_sorted(&pair)?;
+        // Create canonical pair and validate
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a.clone(), pair.token_b.clone())?;
         
         if init_a == 0.into() || init_b == 0.into() {
-            return Err(error::Error::Message("Input balances cannot be zero".to_string()));
+            return Err(AmmError::InputBalanceZero.into());
         }
         
-        // Validate fees (lp_fee should be < 100%, admin_fee should be <= 100%)
-        if lp_fee_bps >= bps_in_100_pct() {
-            return Err(error::Error::Message("Invalid lp fee bps".to_string()));
+        // Validate fee parameters
+        if lp_fee_bps >= bps_in_100_pct() || admin_fee_pct > pct_100() {
+            return Err(AmmError::InvalidFees.into());
         }
-        if admin_fee_pct > pct_100() {
-            return Err(error::Error::Message("Invalid admin fee pct".to_string()));
-        }
+        
+        // Store the provided fees directly as Integer
+        let lp_fee_bps_val = lp_fee_bps;
+        let admin_fee_pct_val = admin_fee_pct;
 
-        let id = pair_id(&pair);
+        let id = canonical_pair.id().to_string();
         let pools = storage(ctx).pools();
         
         // Check if pool already exists
         if pools.get(ctx, &id).is_some() {
-            return Err(error::Error::Message("Pool already exists".to_string()));
-        }
-        
-        // Also check for reversed pair (should never happen with proper sorting, but be defensive)
-        let reversed_id = format!("{}_{}_{}::{}_{}_{}",
-            pair.token_b.name, pair.token_b.height, pair.token_b.tx_index,
-            pair.token_a.name, pair.token_a.height, pair.token_a.tx_index
-        );
-        if pools.get(ctx, &reversed_id).is_some() {
-            return Err(error::Error::Message("Pool already exists (reversed pair found)".to_string()));
+            return Err(AmmError::PoolAlreadyExists.into());
         }
 
-        let pool_address = get_pool_custody_address(ctx);
+        let pool_address = ctx.contract_signer().to_string();
         let user_address = ctx.signer().to_string();
+        let (token_a, token_b) = canonical_pair.as_tuple();
         
         // Transfer initial liquidity from user to pool
-        // Note: Uses asset-based transfer (withdraw from user, deposit to pool)
-        transfer_token_from_user_to_pool(ctx, &pair.token_a, init_a, &pool_address)?;
-        transfer_token_from_user_to_pool(ctx, &pair.token_b, init_b, &pool_address)?;
+        transfer_token_from_user_to_pool(ctx, &token_a, init_a, &pool_address)?;
+        transfer_token_from_user_to_pool(ctx, &token_b, init_b, &pool_address)?;
 
         // Calculate initial LP tokens: sqrt(init_a * init_b)
         let total_lp = numbers::mul_sqrt_integer(init_a, init_b);
         
         // Lock MINIMUM_LIQUIDITY permanently on first pool creation
-        // This prevents divide-by-zero and makes shares more valuable
         let min_liq = minimum_liquidity();
         if total_lp <= min_liq {
-            return Err(error::Error::Message("Initial liquidity too small".to_string()));
+            return Err(AmmError::InitialLiquidityTooSmall.into());
         }
         let lp_to_issue = numbers::sub_integer(total_lp, min_liq);
         
-        // Create pool with LP ledger
+        // Create pool with LP ledger using basic types
         let mut lp_ledger = Map::default();
         lp_ledger.entries.push((user_address, lp_to_issue));
-        // The minimum liquidity is permanently locked (not assigned to anyone)
         
         pools.set(
             ctx,
             id,
             Pool {
-                token_a: pair.token_a,
-                token_b: pair.token_b,
-                lp_fee_bps,
-                admin_fee_pct,
+                token_a,
+                token_b,
+                lp_fee_bps: lp_fee_bps_val,
+                admin_fee_pct: admin_fee_pct_val,
                 admin_fee_lp: 0.into(),
-                lp_total_supply: total_lp, // Total includes locked minimum
+                lp_total_supply: total_lp,
                 lp_ledger,
             },
         );
 
-        // EVENT: PoolCreated { pool_id: id, token_a: pair.token_a, token_b: pair.token_b, initial_lp: lp_to_issue }
+        // EVENT: PoolCreated { pool_id: id, initial_lp: lp_to_issue }
         
         Ok(lp_to_issue)
     }
 
     fn values(ctx: &ViewContext, pair: TokenPair) -> Option<PoolValues> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).and_then(|p| {
             let pool = p.load(ctx);
-            let pool_address = get_pool_custody_address(ctx);
+            let pool_address = storage(ctx).self_address(ctx);
             
             // Get current balances from token contracts
             let balance_a = get_token_balance(None, &pool.token_a, &pool_address).ok()?;
@@ -361,7 +435,8 @@ impl Guest for Amm {
     }
 
     fn fees(ctx: &ViewContext, pair: TokenPair) -> Option<FeeInfo> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).map(|p| {
             let pool = p.load(ctx);
             FeeInfo {
@@ -372,7 +447,8 @@ impl Guest for Amm {
     }
 
     fn admin_fee_value(ctx: &ViewContext, pair: TokenPair) -> Option<numbers::Integer> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).map(|p| p.load(ctx).admin_fee_lp)
     }
 
@@ -391,7 +467,7 @@ impl Guest for Amm {
             return Ok(0.into());
         }
 
-        let pool_address = get_pool_custody_address(ctx);
+        let pool_address = ctx.contract_signer().to_string();
         let user_address = ctx.signer().to_string();
         
         // Get current pool balances
@@ -406,7 +482,7 @@ impl Guest for Amm {
             (lp, input_a, input_b)
         } else if balance_a == 0.into() || balance_b == 0.into() {
             // Edge case: pool has no liquidity
-            return Err(error::Error::Message("Pool has no liquidity".to_string()));
+            return Err(AmmError::NoLiquidity.into());
         } else {
             // Calculate potential LP shares from each input
             let lp_from_a = numbers::mul_div_down_integer(input_a, lp_supply, balance_a);
@@ -453,12 +529,13 @@ impl Guest for Amm {
         }
 
         let user_address = ctx.signer().to_string();
-        let pool_address = get_pool_custody_address(ctx);
+        let pool_address = ctx.contract_signer().to_string();
         
         // Check LP balance
-        let user_lp = pool_wrapper.lp_ledger().get(ctx, &user_address).unwrap_or_default();
+        let user_lp = pool_wrapper.lp_ledger().get(ctx, &user_address)
+            .unwrap_or_else(|| 0.into());
         if user_lp < lp_in {
-            return Err(error::Error::Message("Insufficient LP tokens".to_string()));
+            return Err(AmmError::InsufficientLpTokens.into());
         }
         
         // Get current pool balances
@@ -470,8 +547,10 @@ impl Guest for Amm {
         let a_out = numbers::mul_div_down_integer(lp_in, balance_a, lp_supply);
         let b_out = numbers::mul_div_down_integer(lp_in, balance_b, lp_supply);
         
-        validate_min_output(a_out, min_a_out)?;
-        validate_min_output(b_out, min_b_out)?;
+        validate_min_output(a_out, min_a_out)
+            ?;
+        validate_min_output(b_out, min_b_out)
+            ?;
 
         // Transfer tokens from pool to user
         token_dyn::transfer(&pool.token_a, ctx.contract_signer(), &user_address, a_out)?;
@@ -502,7 +581,7 @@ impl Guest for Amm {
             return Ok(0.into());
         }
         
-        let pool_address = get_pool_custody_address(ctx);
+        let pool_address = ctx.contract_signer().to_string();
         
         // Validate that token_in matches either token_a or token_b
         let token_a = pool.token_a.clone();
@@ -517,7 +596,7 @@ impl Guest for Amm {
             let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
             (token_b, token_a, balance_b, balance_a)
         } else {
-            return Err(error::Error::Message("Invalid token_in: must match pool's token_a or token_b".to_string()));
+            return Err(AmmError::InvalidTokenIn.into());
         };
         
         let out_value = execute_swap(
@@ -554,7 +633,7 @@ impl Guest for Amm {
             pool.admin_fee_lp
         } else {
             if amount > pool.admin_fee_lp {
-                return Err(error::Error::Message("Insufficient admin fees".to_string()));
+                return Err(AmmError::InsufficientAdminFees.into());
             }
             amount
         };
@@ -581,19 +660,23 @@ impl Guest for Amm {
         // Check admin authorization
         ensure_admin_auth(ctx)?;
         
-        // Validate fee rates
+        // Validate fee parameters first using Integer comparison
         if lp_fee_bps >= bps_in_100_pct() {
-            return Err(error::Error::Message("Invalid lp fee bps".to_string()));
+            return Err(AmmError::InvalidFees.into());
         }
         if admin_fee_pct > pct_100() {
-            return Err(error::Error::Message("Invalid admin fee pct".to_string()));
+            return Err(AmmError::InvalidFees.into());
         }
+        
+        // Store the provided fees directly as Integer
+        let lp_fee_bps_val = lp_fee_bps;
+        let admin_fee_pct_val = admin_fee_pct;
         
         let (id, _pool_wrapper, mut pool) = load_pool(ctx, &pair)?;
         let pools = storage(ctx).pools();
             
-        pool.lp_fee_bps = lp_fee_bps;
-        pool.admin_fee_pct = admin_fee_pct;
+        pool.lp_fee_bps = lp_fee_bps_val;
+        pool.admin_fee_pct = admin_fee_pct_val;
         pools.set(ctx, id, pool);
         
         // EVENT: FeesUpdated { pool_id: id, lp_fee_bps, admin_fee_pct }
@@ -603,26 +686,30 @@ impl Guest for Amm {
     
     // LP Token management functions
     fn lp_balance(ctx: &ViewContext, pair: TokenPair, owner: String) -> Option<numbers::Integer> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id)
             .and_then(|pool| pool.lp_ledger().get(ctx, owner))
     }
     
     fn lp_total_supply(ctx: &ViewContext, pair: TokenPair) -> Option<numbers::Integer> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id)
             .map(|pool| pool.lp_total_supply(ctx))
     }
     
     fn transfer_lp(ctx: &ProcContext, pair: TokenPair, to: String, amount: numbers::Integer) -> Result<(), error::Error> {
-        let (id, pool_wrapper, pool) = load_pool(ctx, &pair)?;
+        let (id, pool_wrapper, pool) = load_pool(ctx, &pair)
+            ?;
         let pools = storage(ctx).pools();
         
         let from = ctx.signer().to_string();
-        let from_balance = pool_wrapper.lp_ledger().get(ctx, &from).unwrap_or_default();
+        let from_balance = pool_wrapper.lp_ledger().get(ctx, &from)
+            .unwrap_or_else(|| 0.into());
         
         if from_balance < amount {
-            return Err(error::Error::Message("Insufficient LP balance".to_string()));
+            return Err(AmmError::InsufficientLpTokens.into());
         }
         
         update_lp_balance(ctx, &pool_wrapper, &from, amount, false);
@@ -641,10 +728,11 @@ impl Guest for Amm {
     // Quoter views - preview operations without state changes
     
     fn quote_swap(ctx: &ViewContext, pair: TokenPair, token_in: foreign::ContractAddress, amount_in: numbers::Integer) -> Option<numbers::Integer> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).and_then(|p| {
             let pool = p.load(ctx);
-            let pool_address = get_pool_custody_address(ctx);
+            let pool_address = storage(ctx).self_address(ctx);
             
             if amount_in == 0.into() {
                 return Some(0.into());
@@ -679,10 +767,11 @@ impl Guest for Amm {
     }
     
     fn quote_deposit(ctx: &ViewContext, pair: TokenPair, input_a: numbers::Integer, input_b: numbers::Integer) -> Option<numbers::Integer> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).and_then(|p| {
             let pool = p.load(ctx);
-            let pool_address = get_pool_custody_address(ctx);
+            let pool_address = storage(ctx).self_address(ctx);
             
             if input_a == 0.into() || input_b == 0.into() {
                 return Some(0.into());
@@ -711,10 +800,11 @@ impl Guest for Amm {
     }
     
     fn quote_withdraw(ctx: &ViewContext, pair: TokenPair, lp_in: numbers::Integer) -> Option<WithdrawResult> {
-        let id = pair_id(&pair);
+        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
+        let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).and_then(|p| {
             let pool = p.load(ctx);
-            let pool_address = get_pool_custody_address(ctx);
+            let pool_address = "amm_contract_address";
             
             if lp_in == 0.into() {
                 return Some(WithdrawResult { a_out: 0.into(), b_out: 0.into() });
@@ -733,5 +823,10 @@ impl Guest for Amm {
             
             Some(WithdrawResult { a_out, b_out })
         })
+    }
+
+    // Constants view
+    fn min_liquidity(_ctx: &ViewContext) -> numbers::Integer {
+        min_liquidity()
     }
 }
