@@ -1,6 +1,7 @@
 use std::{env::current_dir, path::Path};
 
 use bon::Builder;
+pub use indexer::runtime::numerics as numbers;
 pub use indexer::runtime::wit::kontor::built_in::{
     error::Error,
     foreign::ContractAddress,

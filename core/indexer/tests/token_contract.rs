@@ -52,7 +52,7 @@ async fn test_token_contract_large_numbers() -> Result<()> {
     token::mint(
         &runtime,
         minter,
-        "1000000000000000000000000000000000000000000000000000000000000000".into(),
+        "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000".into(),
     )
     .await?;
     token::mint(&runtime, minter, 100.into()).await?;
@@ -60,7 +60,10 @@ async fn test_token_contract_large_numbers() -> Result<()> {
     let result = token::balance(&runtime, minter).await?;
     assert_eq!(
         result,
-        Some("1000000000000000000000000000000000000000000000000000000000000100".into())
+        Some(
+            "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_100"
+                .into()
+        )
     );
 
     token::transfer(
@@ -80,11 +83,13 @@ async fn test_token_contract_large_numbers() -> Result<()> {
     let result = token::balance(&runtime, minter).await?;
     assert_eq!(
         result,
-        Some("999999999999999999999999999999999000000000000000000000000000100".into())
+        Some(
+            "99_999_999_999_999_999_999_999_999_999_000_000_000_000_000_000_000_000_000_100".into()
+        )
     );
 
-    // balance is too large to convert into decimal
-    assert!(token::balance_log10(&runtime, minter).await.is_err());
+    let result = token::balance_log10(&runtime, minter).await?;
+    assert_eq!(result, Some("59.000_000_000_000_000_000".into()));
 
     let result = token::balance_log10(&runtime, holder).await?;
     assert_eq!(result, Some("30.000_000_000_000_000_000".into()));

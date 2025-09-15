@@ -72,6 +72,7 @@ interface error {
         message(string),
         overflow(string),
         div-by-zero(string),
+        syntax-error(string),
     }
 
     meta-force-generate-error: func(e: error);
@@ -109,27 +110,28 @@ interface numbers {
 
     u64-to-integer: func(i: u64) -> integer;
     s64-to-integer: func(i: s64) -> integer;
-    string-to-integer: func(s: string) -> integer;
+    string-to-integer: func(s: string) -> result<integer, error>;
     integer-to-string: func(i: integer) -> string;
     eq-integer: func(a: integer, b: integer) -> bool;
     cmp-integer: func(a: integer, b: integer) -> ordering;
-    add-integer: func(a: integer, b: integer) -> integer;
-    sub-integer: func(a: integer, b: integer) -> integer;
-    mul-integer: func(a: integer, b: integer) -> integer;
-    div-integer: func(a: integer, b: integer) -> integer;
+    add-integer: func(a: integer, b: integer) -> result<integer, error>;
+    sub-integer: func(a: integer, b: integer) -> result<integer, error>;
+    mul-integer: func(a: integer, b: integer) -> result<integer, error>;
+    div-integer: func(a: integer, b: integer) -> result<integer, error>;
 
     integer-to-decimal: func(i: integer) -> decimal;
+    decimal-to-integer: func(d: decimal) -> integer;
     u64-to-decimal: func(i: u64) -> decimal;
     s64-to-decimal: func(i: s64) -> decimal;
     f64-to-decimal: func(f: f64) -> decimal;
-    string-to-decimal: func(s: string) -> decimal;
+    string-to-decimal: func(s: string) -> result<decimal, error>;
     decimal-to-string: func(d: decimal) -> string;
     eq-decimal: func(a: decimal, b: decimal) -> bool;
     cmp-decimal: func(a: decimal, b: decimal) -> ordering;
-    add-decimal: func(a: decimal, b: decimal) -> decimal;
-    sub-decimal: func(a: decimal, b: decimal) -> decimal;
-    mul-decimal: func(a: decimal, b: decimal) -> decimal;
-    div-decimal: func(a: decimal, b: decimal) -> decimal;
+    add-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    sub-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    mul-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    div-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
 
     log10: func(a: decimal) -> decimal;
 

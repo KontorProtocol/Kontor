@@ -29,6 +29,15 @@ async fn test_numerics() -> Result<()> {
         "12.3".into()
     );
 
+    assert_eq!(
+        numbers::decimal_to_integer(Decimal::from("1.999")),
+        Integer::from("1")
+    );
+    assert_eq!(
+        numbers::decimal_to_integer(Decimal::from("-1.999")),
+        Integer::from("-1")
+    );
+
     Ok(())
 }
 
@@ -63,6 +72,53 @@ async fn test_runtime_decimal_operations() -> Result<()> {
     assert_eq!(
         Decimal::from("-100000000000000000000000000000000000000000000.000001") / (-2).into(),
         ("50000000000000000000000000000000000000000000.0000005").into()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_numerics_limits() -> Result<()> {
+    let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    let min_int =
+        "-115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    let oversized_int =
+        "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_458";
+    let oversized_dec =
+        "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457.585";
+
+    assert_eq!(
+        Decimal::from(Integer::from(max_int)),
+        Decimal::from(max_int)
+    );
+    assert_eq!(
+        Decimal::from(Integer::from(min_int)),
+        Decimal::from(min_int)
+    );
+
+    assert!(catch_unwind(|| Integer::from(oversized_int)).is_err());
+    assert!(catch_unwind(|| Decimal::from(oversized_dec)).is_err());
+
+    assert!(numbers::add_integer(Integer::from(max_int), Integer::from(1)).is_err());
+    assert_eq!(
+        numbers::add_integer(Integer::from(max_int), Integer::from(-1)).unwrap(),
+        Integer::from(
+            "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
+        ),
+    );
+
+    assert!(numbers::sub_integer(Integer::from(max_int), Integer::from(-1)).is_err());
+    assert_eq!(
+        numbers::sub_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
+        Integer::from(
+            "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
+        ),
+    );
+
+    assert!(numbers::mul_integer(Integer::from(max_int), Integer::from(2)).is_err());
+    assert_eq!(
+        numbers::mul_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
+        Integer::from(max_int)
     );
 
     Ok(())
