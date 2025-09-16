@@ -37,7 +37,7 @@ use anyhow::{Result, anyhow};
 use wasmtime::{
     Engine, Store,
     component::{
-        Component, HasSelf, Linker, Resource, ResourceTable,
+        Accessor, Component, HasData, Linker, Resource, ResourceTable,
         wasm_wave::{
             parser::Parser as WaveParser, to_string as to_wave_string, value::Value as WaveValue,
         },
@@ -111,7 +111,7 @@ impl Runtime {
 
     pub fn make_linker(&self) -> Result<Linker<Self>> {
         let mut linker = Linker::new(&self.engine);
-        Contract::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+        Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
         Ok(linker)
     }
 
@@ -361,22 +361,36 @@ impl Runtime {
     }
 }
 
+impl HasData for Runtime {
+    type Data<'a> = &'a mut Runtime;
+}
+
 impl built_in::error::Host for Runtime {
     async fn meta_force_generate_error(&mut self, _e: built_in::error::Error) -> Result<()> {
         unimplemented!()
     }
 }
 
-impl built_in::crypto::Host for Runtime {
-    async fn hash(&mut self, input: String) -> Result<(String, Vec<u8>)> {
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        let bs = hasher.finalize().to_vec();
-        let s = hex::encode(&bs);
-        Ok((s, bs))
+fn _hash(input: String) -> Result<(String, Vec<u8>)> {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let bs = hasher.finalize().to_vec();
+    let s = hex::encode(&bs);
+    Ok((s, bs))
+}
+
+impl built_in::crypto::Host for Runtime {}
+
+impl built_in::crypto::HostWithStore for Runtime {
+    async fn hash<T>(_: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {
+        _hash(input)
     }
 
-    async fn hash_with_salt(&mut self, input: String, salt: String) -> Result<(String, Vec<u8>)> {
+    async fn hash_with_salt<T>(
+        _: &Accessor<T, Self>,
+        input: String,
+        salt: String,
+    ) -> Result<(String, Vec<u8>)> {
         let mut hasher = Sha256::new();
         hasher.update(input.as_bytes());
         hasher.update(salt.as_bytes());
@@ -385,15 +399,19 @@ impl built_in::crypto::Host for Runtime {
         Ok((s, bs))
     }
 
-    async fn generate_id(&mut self) -> Result<String> {
-        let s = format!(
-            "{}-{}-{}",
-            self.storage.height,
-            self.storage.tx_id,
-            self.id_generation_counter.get().await
-        );
-        self.id_generation_counter.increment().await;
-        self.hash(s).await.map(|(s, _)| s)
+    async fn generate_id<T>(accessor: &Accessor<T, Self>) -> Result<String> {
+        let (height, tx_id, counter) = accessor.with(|mut access| {
+            let _self = access.get();
+            (
+                _self.storage.height,
+                _self.storage.tx_id,
+                _self.id_generation_counter.clone(),
+            )
+        });
+        let count = counter.get().await;
+        counter.increment().await;
+        let s = format!("{}-{}-{}", height, tx_id, count);
+        _hash(s).map(|(s, _)| s)
     }
 }
 

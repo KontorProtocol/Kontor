@@ -8,7 +8,7 @@ uninlined_format_args = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wasmtime = { version = "=36.0.2", features = ["wave"] }
+wasmtime = { version = "=36.0.2", features = ["wave", "component-model-async"] }
 wit-component = "=0.239.0"
 wit-parser = "=0.239.0"
 wasm-wave = "=0.239.0"
