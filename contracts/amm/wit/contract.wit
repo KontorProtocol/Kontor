@@ -6,13 +6,10 @@ world contract {
     use kontor:built-in/error.{error};
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
-
-    // Import the Balance resource from the token contract
-    // This provides compile-time move semantics for safe asset handling
-    resource balance {
-        amount: func() -> integer;
-        token: func() -> contract-address;
-    }
+    
+    // Use the shared Balance resource from kontor:assets
+    // This enables true cross-contract resource transfers with compile-time safety
+    use kontor:assets/balance.{balance};
     
     // LP Balance resource - represents AMM liquidity provider tokens
     resource lp-balance {

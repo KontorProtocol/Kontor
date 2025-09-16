@@ -6,13 +6,9 @@ world contract {
     use kontor:built-in/error.{error};
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
-
-    // Balance is a resource - provides compile-time move semantics in Rust
-    resource balance {
-        // Non-consuming inspection methods
-        amount: func() -> integer;
-        token: func() -> contract-address;
-    }
+    
+    // Use the shared Balance resource from kontor:assets
+    use kontor:assets/balance.{balance, split-result};
 
     export init: func(ctx: borrow<proc-context>);
 
@@ -29,7 +25,7 @@ world contract {
     export deposit: func(ctx: borrow<proc-context>, recipient: string, bal: balance) -> result<_, error>;
     
     // Split and merge operations - consume and produce resources
-    // Note: split returns only the split-off amount; remainder stays with caller
-    export split: func(ctx: borrow<proc-context>, bal: balance, split-amount: integer) -> result<balance, error>;
+    // Returns both the split amount and any remainder as a split-result record
+    export split: func(ctx: borrow<proc-context>, bal: balance, split-amount: integer) -> result<split-result, error>;
     export merge: func(ctx: borrow<proc-context>, a: balance, b: balance) -> result<balance, error>;
 }

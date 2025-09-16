@@ -105,6 +105,10 @@ pub fn import(
                 // These are also handled inline
                 continue;
             }
+            TypeDefKind::Type(_) => {
+                // Type aliases are handled inline, skip them here
+                continue;
+            }
             _ => panic!("Unsupported type definition kind: {:?}", def.kind),
         }
         .expect("Failed to generate type");

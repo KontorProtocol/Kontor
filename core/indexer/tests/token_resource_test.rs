@@ -62,12 +62,12 @@ async fn test_split_balance() -> Result<()> {
     // Withdraw a balance
     let balance = token::withdraw(&runtime, alice, 100.into()).await??;
     
-    // Split returns only the split amount (60), remainder stays with alice
-    let split_balance = token::split(&runtime, alice, balance, 60.into()).await??;
+    // Split returns a SplitResult with both the split amount and remainder
+    let split_result = token::split(&runtime, alice, balance, 60.into()).await??;
     
-    // Alice now has 900 + 40 (remainder from split) = 940
-    // Withdraw the remainder for charlie
-    let remainder_balance = token::withdraw(&runtime, alice, 40.into()).await??;
+    // Extract the split balance and remainder from the result
+    let split_balance = split_result.split;
+    let remainder_balance = split_result.remainder.expect("Should have remainder");
     
     // Deposit the split balances to different recipients
     token::deposit(&runtime, alice, bob, split_balance).await??;
