@@ -1,13 +1,9 @@
 use stdlib::*;
-use std::cell::RefCell;
 
 contract!(name = "token");
 
-// Thread-local storage for balance resources
-// The WIT resource system needs us to manage resource instances
-thread_local! {
-    static BALANCE_TABLE: RefCell<Vec<Option<BalanceData>>> = RefCell::new(Vec::new());
-}
+// Thread-local storage for balance resources using the generic ResourceTable
+resource_table!(BALANCE_TABLE, BalanceData);
 
 // Data backing a Balance resource
 #[derive(Clone)]
@@ -22,50 +18,7 @@ fn create_handle(id: numbers::Integer) -> String {
     format!("balance_{}", numbers::integer_to_string(id))
 }
 
-// The macro generates the Balance type but we need to implement the resource methods
-// Since WIT resources require host-side implementation, we'll provide the methods
-// through the Guest implementation
-fn allocate_balance_resource(data: BalanceData) -> u32 {
-    BALANCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        // Find a free slot or add a new one
-        let index = table.iter().position(|slot| slot.is_none())
-            .unwrap_or_else(|| {
-                table.push(None);
-                table.len() - 1
-            });
-        table[index] = Some(data);
-        index as u32
-    })
-}
-
-fn take_balance_data(index: u32) -> Result<BalanceData, error::Error> {
-    BALANCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        let idx = index as usize;
-        
-        if idx >= table.len() {
-            return Err(error::Error::Message("Invalid balance resource".to_string()));
-        }
-        
-        table[idx].take()
-            .ok_or_else(|| error::Error::Message("Balance already consumed or invalid".to_string()))
-    })
-}
-
-fn get_balance_data(index: u32) -> Result<BalanceData, error::Error> {
-    BALANCE_TABLE.with(|table| {
-        let table = table.borrow();
-        let idx = index as usize;
-        
-        if idx >= table.len() {
-            return Err(error::Error::Message("Invalid balance resource".to_string()));
-        }
-        
-        table[idx].clone()
-            .ok_or_else(|| error::Error::Message("Balance not found".to_string()))
-    })
-}
+// Resource management is now handled by the generic ResourceTable
 
 // Helper function to get the token's contract address
 fn get_contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
@@ -85,34 +38,10 @@ struct TokenStorage {
     pub total_supply: numbers::Integer,
     pub contract_addr: Option<foreign::ContractAddress>, // Store our own address
     pub next_balance_id: numbers::Integer,  // Counter for unique balance IDs
-    pub inflight: Map<String, InFlightEntry>, // Track in-flight balances using string ID
 }
 
-// Track in-flight balance data
-#[derive(Clone, Storage)]
-struct InFlightEntry {
-    pub owner: String,      // Original withdrawer for refund on drop
-    pub amount: numbers::Integer,
-    pub token_addr: foreign::ContractAddress,
-}
-
-impl Default for InFlightEntry {
-    fn default() -> Self {
-        Self {
-            owner: String::new(),
-            amount: 0.into(),
-            token_addr: foreign::ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-        }
-    }
-}
-
-
-// Helper to allocate a new balance and register it as in-flight
-fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer, owner: String) -> Balance {
+// Helper to allocate a new balance
+fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer) -> Balance {
     let token_addr = get_contract_address(ctx);
     
     // Get next ID and increment counter
@@ -120,14 +49,7 @@ fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer, owner: String) 
     let one = numbers::u64_to_integer(1);
     storage(ctx).set_next_balance_id(ctx, numbers::add_integer(id, one));
     
-    // Register the in-flight balance
-    let entry = InFlightEntry {
-        owner: owner.clone(),
-        amount,
-        token_addr: token_addr.clone(),
-    };
     let handle = create_handle(id);
-    storage(ctx).inflight().set(ctx, handle.clone(), entry);
     
     // Create the resource data
     let data = BalanceData {
@@ -136,8 +58,8 @@ fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer, owner: String) 
         handle,
     };
     
-    // Allocate a resource handle
-    let index = allocate_balance_resource(data);
+    // Allocate a resource handle using the generic ResourceTable
+    let index = BALANCE_TABLE.with(|table| table.allocate(data));
     
     // The macro should provide a way to create Balance from index
     // For now, we'll use unsafe from_handle which the macro generates
@@ -145,40 +67,15 @@ fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer, owner: String) 
 }
 
 // Helper to consume a balance
-fn consume_balance(ctx: &ProcContext, balance: Balance) -> Result<(numbers::Integer, String), error::Error> {
+fn consume_balance(balance: Balance) -> Result<numbers::Integer, error::Error> {
     // Get the handle from the Balance resource
     let index = balance.take_handle();
     
     // Take the balance data from the resource table (this consumes it)
-    let balance_data = take_balance_data(index)?;
+    let balance_data = BALANCE_TABLE.with(|table| table.take(index))
+        .map_err(|msg| error::Error::Message(msg))?;
     
-    let inflight = storage(ctx).inflight();
-    
-    // Check if balance is still valid in storage
-    let entry = inflight.get(ctx, &balance_data.handle)
-        .ok_or_else(|| error::Error::Message("Invalid or already consumed balance".to_string()))?;
-    let entry_data = entry.load(ctx);
-    
-    // Check if it's already been consumed (amount would be 0)
-    let zero = numbers::u64_to_integer(0);
-    if entry_data.amount == zero {
-        return Err(error::Error::Message("Balance already consumed".to_string()));
-    }
-    
-    // Verify amount and token matches (defensive check)
-    if entry_data.amount != balance_data.amount || entry_data.token_addr != balance_data.token_addr {
-        return Err(error::Error::Message("Balance data mismatch - possible tampering".to_string()));
-    }
-    
-    // Mark as consumed by setting amount to 0 (keep entry for audit trail)
-    let consumed_entry = InFlightEntry {
-        owner: entry_data.owner.clone(),
-        amount: zero,
-        token_addr: entry_data.token_addr,
-    };
-    inflight.set(ctx, balance_data.handle, consumed_entry);
-    
-    Ok((entry_data.amount, entry_data.owner))
+    Ok(balance_data.amount)
 }
 
 impl Guest for Token {
@@ -257,12 +154,12 @@ impl Guest for Token {
         ledger.set(ctx, owner.clone(), numbers::sub_integer(balance, amount));
         
         // Create and return a balance resource
-        Ok(allocate_balance(ctx, amount, owner))
+        Ok(allocate_balance(ctx, amount))
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
         // Consume the balance (this moves it, enforcing linearity)
-        let (amount, _original_owner) = consume_balance(ctx, bal)?;
+        let amount = consume_balance(bal)?;
         
         // Credit the recipient
         let ledger = storage(ctx).ledger();
@@ -274,20 +171,20 @@ impl Guest for Token {
     
     fn split(ctx: &ProcContext, bal: Balance, split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
         // Consume the original balance
-        let (total_amount, original_owner) = consume_balance(ctx, bal)?;
+        let total_amount = consume_balance(bal)?;
         
         if split_amount > total_amount {
             return Err(error::Error::Message("Split amount exceeds balance".to_string()));
         }
         
         // Create split balance
-        let split_balance = allocate_balance(ctx, split_amount, original_owner.clone());
+        let split_balance = allocate_balance(ctx, split_amount);
         
         // Create remainder balance if any
         let remainder_amount = numbers::sub_integer(total_amount, split_amount);
         let zero = numbers::u64_to_integer(0);
         let remainder_balance = if remainder_amount > zero {
-            Some(allocate_balance(ctx, remainder_amount, original_owner))
+            Some(allocate_balance(ctx, remainder_amount))
         } else {
             None
         };
@@ -300,11 +197,11 @@ impl Guest for Token {
     
     fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
         // Consume both balances (they move, cannot be reused)
-        let (amount_a, owner_a) = consume_balance(ctx, a)?;
-        let (amount_b, _owner_b) = consume_balance(ctx, b)?;
+        let amount_a = consume_balance(a)?;
+        let amount_b = consume_balance(b)?;
         
         // Create merged balance
         let merged_amount = numbers::add_integer(amount_a, amount_b);
-        Ok(allocate_balance(ctx, merged_amount, owner_a))
+        Ok(allocate_balance(ctx, merged_amount))
     }
 }

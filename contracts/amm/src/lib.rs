@@ -1,15 +1,11 @@
 use stdlib::*;
-use std::cell::RefCell;
 
 contract!(name = "amm");
 
 interface!(name = "token_dyn", path = "token/wit");
 
-// Thread-local storage for LP balance resources
-// Similar to the token contract's balance table
-thread_local! {
-    static LP_BALANCE_TABLE: RefCell<Vec<Option<LpBalanceData>>> = RefCell::new(Vec::new());
-}
+// Thread-local storage for LP balance resources using the generic ResourceTable
+resource_table!(LP_BALANCE_TABLE, LpBalanceData);
 
 // Data backing an LP Balance resource
 #[derive(Clone)]
@@ -19,55 +15,22 @@ struct LpBalanceData {
     handle: String,  // Unique ID for linearity tracking
 }
 
-// Helper to allocate an LP Balance resource handle
-fn allocate_lp_balance_resource(data: LpBalanceData) -> u32 {
-    LP_BALANCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        // Find a free slot or add a new one
-        let index = table.iter().position(|slot| slot.is_none())
-            .unwrap_or_else(|| {
-                table.push(None);
-                table.len() - 1
-            });
-        table[index] = Some(data);
-        index as u32
-    })
-}
+// Resource management is now handled by the generic ResourceTable
 
-// Helper to consume an LP Balance resource and get its data
-fn take_lp_balance_data(index: u32) -> Result<LpBalanceData, error::Error> {
-    LP_BALANCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        let idx = index as usize;
-        
-        if idx >= table.len() {
-            return Err(error::Error::Message("Invalid LP balance resource".to_string()));
-        }
-        
-        table[idx].take()
-            .ok_or_else(|| error::Error::Message("LP balance already consumed or invalid".to_string()))
-    })
-}
-
-// Helper to get LP Balance data without consuming it
-fn get_lp_balance_data(index: u32) -> Result<LpBalanceData, error::Error> {
-    LP_BALANCE_TABLE.with(|table| {
-        let table = table.borrow();
-        let idx = index as usize;
-        
-        if idx >= table.len() {
-            return Err(error::Error::Message("Invalid LP balance resource".to_string()));
-        }
-        
-        table[idx].clone()
-            .ok_or_else(|| error::Error::Message("LP balance not found".to_string()))
-    })
-}
-
-// # AMM Contract
+// # Pure Resource AMM Contract
 // 
 // This Automated Market Maker (AMM) contract implements a constant product formula
 // similar to Uniswap V2 with admin fees.
+//
+// ## Core Design Principle
+// 
+// This AMM operates on a **pure resource model**. Ownership of liquidity is represented 
+// *solely* by holding an `LpBalance` resource, not by an internal ledger. This eliminates
+// complexity, ensures perfect linearity, and makes the contract much more secure and
+// composable.
+// 
+// The contract transforms resources: `(Balance, Balance) -> LpBalance` for deposits,
+// `LpBalance -> (Balance, Balance)` for withdrawals, and `Balance -> Balance` for swaps.
 
 // Typed canonical pair wrapper that sorts by tuple comparison
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,7 +138,6 @@ struct Pool {
     pub admin_fee_pct: numbers::Integer,
     pub admin_fee_lp: numbers::Integer,
     pub lp_total_supply: numbers::Integer,
-    pub lp_ledger: Map<String, numbers::Integer>, // owner -> lp balance
 }
 
 impl Default for Pool {
@@ -195,7 +157,6 @@ impl Default for Pool {
             admin_fee_pct: 0.into(),
             admin_fee_lp: 0.into(),
             lp_total_supply: 0.into(),
-            lp_ledger: Map::default(),
         }
     }
 }
@@ -258,7 +219,7 @@ fn create_lp_balance(
         handle,
     };
     
-    let index = allocate_lp_balance_resource(data);
+    let index = LP_BALANCE_TABLE.with(|table| table.allocate(data));
     unsafe { LpBalance::from_handle(index) }
 }
 
@@ -268,7 +229,8 @@ fn consume_lp_balance(
     lp_balance: LpBalance,
 ) -> Result<(TokenPair, numbers::Integer), error::Error> {
     let index = lp_balance.take_handle();
-    let data = take_lp_balance_data(index)?;
+    let data = LP_BALANCE_TABLE.with(|table| table.take(index))
+        .map_err(|msg| error::Error::Message(msg))?;
     Ok((data.pair, data.amount))
 }
 
@@ -302,23 +264,7 @@ fn get_pool_token_balances(
     Ok((balance_a, balance_b))
 }
 
-// Helper function to update LP ledger balance
-fn update_lp_balance(
-    ctx: &ProcContext,
-    pool_wrapper: &PoolWrapper,
-    user_address: &str,
-    amount_change: numbers::Integer,
-    is_addition: bool,
-) {
-    let current_lp = pool_wrapper.lp_ledger().get(ctx, user_address)
-        .unwrap_or_else(|| 0.into());
-    let new_balance = if is_addition {
-        numbers::add_integer(current_lp, amount_change)
-    } else {
-        numbers::sub_integer(current_lp, amount_change)
-    };
-    pool_wrapper.lp_ledger().set(ctx, user_address.to_string(), new_balance);
-}
+// update_lp_balance removed - LP ownership is now tracked solely via LpBalance resources!
 
 // Helper function to check admin authorization
 fn ensure_admin_auth(ctx: &ProcContext) -> Result<(), AmmError> {
@@ -505,10 +451,7 @@ impl Guest for Amm {
         }
         let lp_to_issue = numbers::sub_integer(total_lp, min_liq);
         
-        // Create pool with LP ledger
-        let mut lp_ledger = Map::default();
-        lp_ledger.entries.push((user_address, lp_to_issue));
-        
+        // Create pool - no ledger needed, LP ownership is tracked via resources!
         pools.set(
             ctx,
             id,
@@ -519,7 +462,6 @@ impl Guest for Amm {
                 admin_fee_pct,
                 admin_fee_lp: 0.into(),
                 lp_total_supply: total_lp,
-                lp_ledger,
             },
         );
 
@@ -656,8 +598,7 @@ impl Guest for Amm {
             token_dyn::deposit(&token_b, ctx.contract_signer(), &user_address, excess)?;
         }
 
-        // Update LP tokens (use wrapper for map mutations)
-        update_lp_balance(ctx, &pool_wrapper, &user_address, lp_to_issue, true);
+        // Update total supply - no ledger manipulation needed!
         pool.lp_total_supply = numbers::add_integer(pool.lp_total_supply, lp_to_issue);
         pools.set(ctx, id, pool);
 
@@ -695,12 +636,7 @@ impl Guest for Amm {
         let user_address = ctx.signer().to_string();
         let pool_address = ctx.contract_signer().to_string();
         
-        // Check LP balance in ledger (defensive check - should match the resource)
-        let user_lp = pool_wrapper.lp_ledger().get(ctx, &user_address)
-            .unwrap_or_else(|| 0.into());
-        if user_lp < lp_in {
-            return Err(AmmError::InsufficientLpTokens.into());
-        }
+        // No ledger check needed - the LpBalance resource itself is the proof of ownership!
         
         // Get current pool balances
         let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
@@ -718,8 +654,7 @@ impl Guest for Amm {
         let balance_a_out = create_token_balance_from_pool(ctx, &pool.token_a, a_out, &user_address)?;
         let balance_b_out = create_token_balance_from_pool(ctx, &pool.token_b, b_out, &user_address)?;
 
-        // Burn LP tokens from ledger
-        update_lp_balance(ctx, &pool_wrapper, &user_address, lp_in, false);
+        // Burn LP tokens from total supply - resource consumption handles the rest!
         pool.lp_total_supply = numbers::sub_integer(pool.lp_total_supply, lp_in);
         pools.set(ctx, id, pool);
         
@@ -830,12 +765,9 @@ impl Guest for Amm {
             amount
         };
         
-        // Credit admin with LP tokens
-        let admin_address = ctx.signer().to_string();
-        update_lp_balance(ctx, &pool_wrapper, &admin_address, amount_int, true);
-        
+        // Simply mint new LP tokens and return them to admin - much cleaner!
         pool.admin_fee_lp = numbers::sub_integer(pool.admin_fee_lp, amount_int);
-        // Note: We don't reduce lp_total_supply here as the LP tokens already exist, just moving ownership
+        // Note: We don't reduce lp_total_supply here as the LP tokens already exist as admin fees
         pools.set(ctx, id, pool);
         
         // EVENT: AdminWithdrawFees { admin: admin_address, amount: amount_int }
@@ -877,79 +809,11 @@ impl Guest for Amm {
         Ok(())
     }
     
-    // LP Token management functions
-    fn lp_balance(ctx: &ViewContext, pair: TokenPair, owner: String) -> Option<numbers::Integer> {
-        let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
-        let id = canonical_pair.id();
-        storage(ctx).pools().get(ctx, id)
-            .and_then(|pool| pool.lp_ledger().get(ctx, owner))
-    }
-    
     fn lp_total_supply(ctx: &ViewContext, pair: TokenPair) -> Option<numbers::Integer> {
         let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
         let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id)
             .map(|pool| pool.lp_total_supply(ctx))
-    }
-    
-    // LP Token operations using Balance resources
-    fn withdraw_lp(
-        ctx: &ProcContext,
-        pair: TokenPair,
-        amount: numbers::Integer,
-    ) -> Result<LpBalance, error::Error> {
-        let (id, pool_wrapper, pool) = load_pool(ctx, &pair)?;
-        let pools = storage(ctx).pools();
-        
-        let user_address = ctx.signer().to_string();
-        let user_lp = pool_wrapper.lp_ledger().get(ctx, &user_address)
-            .unwrap_or_else(|| 0.into());
-        
-        if user_lp < amount {
-            return Err(AmmError::InsufficientLpTokens.into());
-        }
-        
-        // Debit user's LP balance
-        update_lp_balance(ctx, &pool_wrapper, &user_address, amount, false);
-        pools.set(ctx, id, pool);
-        
-        // Return LP Balance resource
-        Ok(create_lp_balance(ctx, pair, amount))
-    }
-    
-    fn deposit_lp(
-        ctx: &ProcContext,
-        pair: TokenPair,
-        recipient: String,
-        lp_balance: LpBalance,
-    ) -> Result<(), error::Error> {
-        let (id, pool_wrapper, pool) = load_pool(ctx, &pair)?;
-        let pools = storage(ctx).pools();
-        
-        // Consume the LP Balance resource
-        let (lp_pair, amount) = consume_lp_balance(ctx, lp_balance)?;
-        
-        // Validate pair matches
-        if lp_pair != pair {
-            return Err(AmmError::InvalidPair.into());
-        }
-        
-        // Credit recipient's LP balance
-        update_lp_balance(ctx, &pool_wrapper, &recipient, amount, true);
-        pools.set(ctx, id, pool);
-        
-        Ok(())
-    }
-    
-    fn transfer_lp(
-        ctx: &ProcContext,
-        pair: TokenPair,
-        to: String,
-        lp_balance: LpBalance,
-    ) -> Result<(), error::Error> {
-        // Transfer is just deposit with resources!
-        // The resource system ensures the LP tokens move atomically
-        Self::deposit_lp(ctx, pair, to, lp_balance)
     }
     
     fn admin(ctx: &ViewContext) -> String {
@@ -1030,15 +894,15 @@ impl Guest for Amm {
         })
     }
     
-    fn quote_withdraw(ctx: &ViewContext, pair: TokenPair, lp_in: numbers::Integer) -> Option<WithdrawResult> {
+    fn quote_withdraw(ctx: &ViewContext, pair: TokenPair, lp_in: numbers::Integer) -> Option<QuoteWithdrawResult> {
         let canonical_pair = CanonicalTokenPair::new(pair.token_a, pair.token_b).ok()?;
         let id = canonical_pair.id();
         storage(ctx).pools().get(ctx, id).and_then(|p| {
             let pool = p.load(ctx);
-            let pool_address = "amm_contract_address";
+            let pool_address = storage(ctx).self_address(ctx);
             
             if lp_in == 0.into() {
-                return Some(WithdrawResult { a_out: 0.into(), b_out: 0.into() });
+                return Some(QuoteWithdrawResult { a_out: 0.into(), b_out: 0.into() });
             }
             
             let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address).ok()?;
@@ -1052,7 +916,7 @@ impl Guest for Amm {
             let a_out = numbers::mul_div_down_integer(lp_in, balance_a, lp_supply);
             let b_out = numbers::mul_div_down_integer(lp_in, balance_b, lp_supply);
             
-            Some(WithdrawResult { a_out, b_out })
+            Some(QuoteWithdrawResult { a_out, b_out })
         })
     }
 

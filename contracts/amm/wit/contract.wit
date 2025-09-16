@@ -26,6 +26,12 @@ world contract {
         balance-a: balance,
         balance-b: balance 
     }
+    
+    // Quote result returns raw integers for previews
+    record quote-withdraw-result {
+        a-out: integer,
+        b-out: integer
+    }
 
     // Token contract addresses  
     record token-pair { 
@@ -90,31 +96,10 @@ world contract {
         admin-fee-pct: integer
     ) -> result<_, error>;
     
-    // LP Token management - now uses LP Balance resources
-    export lp-balance: func(ctx: borrow<view-context>, pair: token-pair, owner: string) -> option<integer>;
+    // Pure resource model: LP ownership tracked only via LpBalance resources!
+    // lp-balance view removed - no ledger to query
+    // transfer-lp, withdraw-lp, deposit-lp removed - handled by runtime resource system
     export lp-total-supply: func(ctx: borrow<view-context>, pair: token-pair) -> option<integer>;
-    
-    // LP transfers now use Balance resources for safety
-    export transfer-lp: func(
-        ctx: borrow<proc-context>, 
-        pair: token-pair, 
-        to: string, 
-        lp-balance: lp-balance
-    ) -> result<_, error>;
-    
-    // LP operations for composability
-    export withdraw-lp: func(
-        ctx: borrow<proc-context>, 
-        pair: token-pair, 
-        amount: integer
-    ) -> result<lp-balance, error>; // withdraw LP tokens as a resource
-    
-    export deposit-lp: func(
-        ctx: borrow<proc-context>, 
-        pair: token-pair, 
-        recipient: string, 
-        lp-balance: lp-balance
-    ) -> result<_, error>; // deposit LP balance resource to recipient
     
     // Admin info
     export admin: func(ctx: borrow<view-context>) -> string;
@@ -122,7 +107,7 @@ world contract {
     // Quoter views - preview operations without executing (still use integers for quotes)
     export quote-swap: func(ctx: borrow<view-context>, pair: token-pair, token-in: contract-address, amount-in: integer) -> option<integer>;
     export quote-deposit: func(ctx: borrow<view-context>, pair: token-pair, input-a: integer, input-b: integer) -> option<integer>;
-    export quote-withdraw: func(ctx: borrow<view-context>, pair: token-pair, lp-in: integer) -> option<withdraw-result>;
+    export quote-withdraw: func(ctx: borrow<view-context>, pair: token-pair, lp-in: integer) -> option<quote-withdraw-result>;
     
     // Constants
     export min-liquidity: func(ctx: borrow<view-context>) -> integer;
