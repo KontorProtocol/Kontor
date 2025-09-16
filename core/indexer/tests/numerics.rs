@@ -1,7 +1,6 @@
 use std::panic::catch_unwind;
 
 use testlib::*;
-
 #[tokio::test]
 async fn test_numerics() -> Result<()> {
     assert!(Integer::from(123) == 123.into());
@@ -11,6 +10,7 @@ async fn test_numerics() -> Result<()> {
     );
 
     assert_eq!(Integer::from(123) + 123.into(), 246.into());
+    assert_eq!(Integer::from(123).add(123.into()).unwrap(), 246.into());
 
     assert_eq!(Integer::from(123) - 21.into(), 102.into());
 
@@ -51,6 +51,7 @@ async fn test_runtime_decimal_operations() -> Result<()> {
     assert_eq!(Decimal::from(123.0) + "123.0".into(), "246.0".into());
 
     assert_eq!(Decimal::from(123.0) - 21.0.into(), 102.0.into());
+    assert_eq!(Decimal::from(123.0).sub(21.0.into()).unwrap(), 102.0.into());
 
     assert_eq!(Decimal::from(-123.0) * 0.5.into(), (-61.5).into());
 

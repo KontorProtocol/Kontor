@@ -17,7 +17,7 @@ impl Guest for Token {
         let ledger = storage(ctx).ledger();
 
         let balance = ledger.get(ctx, &to).unwrap_or_default();
-        ledger.set(ctx, to, balance + n);
+        ledger.set(ctx, to, balance.add(n).unwrap());
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
