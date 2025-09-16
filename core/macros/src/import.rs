@@ -402,6 +402,12 @@ fn generate_functions(
 
 pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> Result<TokenStream> {
     let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
+    
+    // Check if any field is a resource or contains a resource
+    let has_resource = record.fields.iter().any(|field| {
+        is_resource_type(resolve, &field.ty)
+    });
+    
     let fields = record
         .fields
         .iter()
@@ -412,12 +418,42 @@ pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> R
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Only derive Clone, Wavey, PartialEq, Eq if the record doesn't contain resources
+    let derives = if has_resource {
+        quote! { #[derive(Debug)] }
+    } else {
+        quote! { #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)] }
+    };
+
     Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
+        #derives
         pub struct #struct_name {
             #(#fields),*
         }
     })
+}
+
+// Helper function to check if a type is or contains a resource
+fn is_resource_type(resolve: &Resolve, ty: &Type) -> bool {
+    match ty {
+        Type::Id(id) => {
+            let ty_def = &resolve.types[*id];
+            match &ty_def.kind {
+                TypeDefKind::Resource => true,
+                TypeDefKind::Option(inner) => is_resource_type(resolve, inner),
+                TypeDefKind::Result(result) => {
+                    result.ok.as_ref().map_or(false, |t| is_resource_type(resolve, t)) ||
+                    result.err.as_ref().map_or(false, |t| is_resource_type(resolve, t))
+                }
+                TypeDefKind::List(inner) => is_resource_type(resolve, inner),
+                TypeDefKind::Record(record) => {
+                    record.fields.iter().any(|f| is_resource_type(resolve, &f.ty))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 pub fn print_typedef_enum(name: &str, enum_: &Enum) -> Result<TokenStream> {
@@ -441,6 +477,12 @@ pub fn print_typedef_variant(
     variant: &Variant,
 ) -> Result<TokenStream> {
     let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
+    
+    // Check if any variant case contains a resource
+    let has_resource = variant.cases.iter().any(|case| {
+        case.ty.as_ref().map_or(false, |ty| is_resource_type(resolve, ty))
+    });
+    
     let variants = variant
         .cases
         .iter()
@@ -456,8 +498,15 @@ pub fn print_typedef_variant(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Only derive Clone, Wavey, PartialEq, Eq if the variant doesn't contain resources
+    let derives = if has_resource {
+        quote! { #[derive(Debug)] }
+    } else {
+        quote! { #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)] }
+    };
+
     Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
+        #derives
         pub enum #enum_name {
             #(#variants),*
         }

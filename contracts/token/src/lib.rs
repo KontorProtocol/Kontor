@@ -272,27 +272,30 @@ impl Guest for Token {
         Ok(())
     }
     
-    fn split(ctx: &ProcContext, bal: Balance, first_amount: numbers::Integer) -> Result<(Balance, Option<Balance>), error::Error> {
+    fn split(ctx: &ProcContext, bal: Balance, split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
         // Consume the original balance
         let (total_amount, original_owner) = consume_balance(ctx, bal)?;
         
-        if first_amount > total_amount {
+        if split_amount > total_amount {
             return Err(error::Error::Message("Split amount exceeds balance".to_string()));
         }
         
-        // Create first balance
-        let first_balance = allocate_balance(ctx, first_amount, original_owner.clone());
+        // Create split balance
+        let split_balance = allocate_balance(ctx, split_amount, original_owner.clone());
         
         // Create remainder balance if any
-        let remainder = numbers::sub_integer(total_amount, first_amount);
+        let remainder_amount = numbers::sub_integer(total_amount, split_amount);
         let zero = numbers::u64_to_integer(0);
-        let second_balance = if remainder > zero {
-            Some(allocate_balance(ctx, remainder, original_owner))
+        let remainder_balance = if remainder_amount > zero {
+            Some(allocate_balance(ctx, remainder_amount, original_owner))
         } else {
             None
         };
         
-        Ok((first_balance, second_balance))
+        Ok(SplitResult {
+            split: split_balance,
+            remainder: remainder_balance,
+        })
     }
     
     fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
