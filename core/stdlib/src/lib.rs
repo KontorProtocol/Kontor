@@ -1,5 +1,6 @@
 mod asset;
 mod dot_path_buf;
+mod resource_table;
 mod storage_interface;
 
 pub use asset::*;
@@ -7,6 +8,7 @@ pub use dot_path_buf::*;
 pub use macros::{
     Root, Storage, StorageRoot, Store, Wavey, Wrapper, contract, impls, import, interface,
 };
+pub use resource_table::*;
 pub use storage_interface::*;
 pub use wasm_wave;
 
