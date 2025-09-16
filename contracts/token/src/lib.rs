@@ -20,6 +20,15 @@ impl Guest for Token {
         ledger.set(ctx, to, balance + n);
     }
 
+    fn mint_checked(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
+        let to = ctx.signer().to_string();
+        let ledger = storage(ctx).ledger();
+
+        let balance = ledger.get(ctx, &to).unwrap_or_default();
+        ledger.set(ctx, to, balance.add(n)?);
+        Ok(())
+    }
+
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
         let from = ctx.signer().to_string();
         let ledger = storage(ctx).ledger();

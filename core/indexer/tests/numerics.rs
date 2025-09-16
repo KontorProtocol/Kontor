@@ -1,7 +1,6 @@
 use std::panic::catch_unwind;
 
 use testlib::*;
-
 #[tokio::test]
 async fn test_numerics() -> Result<()> {
     assert!(Integer::from(123) == 123.into());
@@ -11,12 +10,16 @@ async fn test_numerics() -> Result<()> {
     );
 
     assert_eq!(Integer::from(123) + 123.into(), 246.into());
+    assert_eq!(Integer::from(123).add(123.into()).unwrap(), 246.into());
 
     assert_eq!(Integer::from(123) - 21.into(), 102.into());
+    assert_eq!(Integer::from(123).sub(21.into()).unwrap(), 102.into());
 
     assert_eq!(Integer::from(5) * 6.into(), 30.into());
+    assert_eq!(Integer::from(5).mul(6.into()).unwrap(), 30.into());
 
     assert_eq!(Integer::from(5) / 2.into(), 2.into());
+    assert_eq!(Integer::from(5).div(2.into()).unwrap(), 2.into());
 
     assert_eq!(Integer::from(-5) / 2.into(), (-2).into());
     assert_eq!(
@@ -49,10 +52,19 @@ async fn test_runtime_decimal_operations() -> Result<()> {
     );
 
     assert_eq!(Decimal::from(123.0) + "123.0".into(), "246.0".into());
+    assert_eq!(
+        Decimal::from(123.0).add(123.0.into()).unwrap(),
+        246.0.into()
+    );
 
     assert_eq!(Decimal::from(123.0) - 21.0.into(), 102.0.into());
+    assert_eq!(Decimal::from(123.0).sub(21.0.into()).unwrap(), 102.0.into());
 
     assert_eq!(Decimal::from(-123.0) * 0.5.into(), (-61.5).into());
+    assert_eq!(
+        Decimal::from(-123.0).mul(0.5.into()).unwrap(),
+        (-61.5).into()
+    );
 
     assert!(
         catch_unwind(|| Decimal::from("1000000000000000000000000000000000000")
@@ -61,6 +73,10 @@ async fn test_runtime_decimal_operations() -> Result<()> {
     );
 
     assert_eq!(Decimal::from(-123.0) / 2.0.into(), (-61.5).into());
+    assert_eq!(
+        Decimal::from(-123.0).div(2.0.into()).unwrap(),
+        (-61.5).into()
+    );
 
     assert!(catch_unwind(|| Decimal::from(10.0) / 0.0.into()).is_err());
 

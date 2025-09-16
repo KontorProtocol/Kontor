@@ -55,7 +55,8 @@ async fn test_token_contract_large_numbers() -> Result<()> {
         "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000".into(),
     )
     .await?;
-    token::mint(&runtime, minter, 100.into()).await?;
+
+    token::mint_checked(&runtime, minter, 100.into()).await??;
 
     let result = token::balance(&runtime, minter).await?;
     assert_eq!(
@@ -64,6 +65,13 @@ async fn test_token_contract_large_numbers() -> Result<()> {
             "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_100"
                 .into()
         )
+    );
+
+    let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    assert!(
+        token::mint_checked(&runtime, minter, max_int.into())
+            .await?
+            .is_err()
     );
 
     token::transfer(

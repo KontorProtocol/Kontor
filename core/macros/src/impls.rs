@@ -105,6 +105,50 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         #[automatically_derived]
+        pub trait CheckedArithmetics<Other = Self> {
+            type Output;
+
+            fn add(self, other: Other) -> Result<Self::Output, kontor::built_in::error::Error>;
+            fn sub(self, other: Other) -> Result<Self::Output, kontor::built_in::error::Error>;
+            fn mul(self, other: Other) -> Result<Self::Output, kontor::built_in::error::Error>;
+            fn div(self, other: Other) -> Result<Self::Output, kontor::built_in::error::Error>;
+        }
+
+        #[automatically_derived]
+        impl CheckedArithmetics for kontor::built_in::numbers::Integer {
+            type Output = Self;
+            fn add(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::add_integer(self, other)
+            }
+            fn sub(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::sub_integer(self, other)
+            }
+            fn mul(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::mul_integer(self, other)
+            }
+            fn div(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::div_integer(self, other)
+            }
+        }
+
+        #[automatically_derived]
+        impl CheckedArithmetics for kontor::built_in::numbers::Decimal {
+            type Output = Self;
+            fn add(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::add_decimal(self, other)
+            }
+            fn sub(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::sub_decimal(self, other)
+            }
+            fn mul(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::mul_decimal(self, other)
+            }
+            fn div(self, other: Self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::div_decimal(self, other)
+            }
+        }
+
+        #[automatically_derived]
         impl std::ops::Add for kontor::built_in::numbers::Integer {
             type Output = Self;
 
