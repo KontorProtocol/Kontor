@@ -153,15 +153,11 @@ impl Runtime {
         })
     }
 
-    pub async fn execute(
-        &self,
-        signer: Option<Signer>,
-        contract_address: &ContractAddress,
-        expr: &str,
-    ) -> Result<String> {
+    pub async fn execute(&self, signer: Option<String>, addr: &ContractAddress, expr: String) -> Result<String, anyhow::Error> {
+        let signer = signer.map(|s| Signer::XOnlyPubKey(s));
         let contract_id = self
             .storage
-            .contract_id(contract_address)
+            .contract_id(addr)
             .await?
             .ok_or(anyhow!("Contract not found"))?;
         self.stack.push(contract_id).await?;
@@ -173,10 +169,9 @@ impl Runtime {
         let fallback_expr = format!(
             "{}({})",
             fallback_name,
-            to_wave_string(&WaveValue::from(expr))?
+            to_wave_string(&WaveValue::from(expr.clone()))?
         );
-
-        let call = WaveParser::new(expr).parse_raw_func_call()?;
+        let call = WaveParser::new(&expr).parse_raw_func_call()?;
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
@@ -184,7 +179,6 @@ impl Runtime {
         } else {
             return Err(anyhow!("Expression does not refer to any known function"));
         };
-
         let func_params = func.params(&store);
         let func_param_types = func_params.iter().map(|(_, t)| t).collect::<Vec<_>>();
         let (func_ctx_param_type, func_param_types) = func_param_types
@@ -197,23 +191,21 @@ impl Runtime {
         }?;
         {
             let mut table = self.table.lock().await;
-            match (resource_type, signer) {
-                (t, Some(signer))
-                    if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
-                {
+            match resource_type {
+                t if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) => {
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
                             table
                                 .push(ProcContext {
-                                    signer,
+                                    signer: signer.ok_or(anyhow!("ProcContext requires signer"))?,
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
                         ),
                     )
                 }
-                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
+                t if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
                     .insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -222,7 +214,7 @@ impl Runtime {
                                 .try_into_resource_any(&mut store)?,
                         ),
                     ),
-                (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
+                t if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -250,7 +242,6 @@ impl Runtime {
         if results.is_empty() {
             return Ok("()".to_string());
         }
-
         if results.len() == 1 {
             let result = results.remove(0);
             return if call.name() == fallback_name {
@@ -263,10 +254,13 @@ impl Runtime {
                 result.to_wave()
             };
         }
-
         Err(anyhow!(
             "Functions with multiple return values are not supported"
         ))
+    }
+
+    pub async fn execute_owned(&self, signer: Option<&str>, addr: ContractAddress, expr: String) -> Result<String, anyhow::Error> {
+        self.execute(signer.map(|s| s.to_string()), &addr, expr).await
     }
 
     async fn _get_primitive<T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -433,11 +427,11 @@ impl built_in::foreign::Host for Runtime {
         let signer = if let Some(resource) = signer {
             let table = self.table.lock().await;
             let _self = table.get(&resource)?;
-            Some(_self.clone())
+            Some(_self.to_string())
         } else {
             None
         };
-        self.execute(signer, &contract_address, &expr).await
+        self.execute(signer, &contract_address, expr).await
     }
 }
 

@@ -18,7 +18,11 @@ pub fn generate_struct_wave_type(data: &DataStruct) -> Result<TokenStream> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(quote! {
-                stdlib::wasm_wave::value::Type::record([#(#field_types),*]).unwrap()
+                {
+                    let mut __record_vec = Vec::new();
+                    #(__record_vec.push(#field_types);)*
+                    stdlib::wasm_wave::value::Type::record(__record_vec).unwrap()
+                }
             })
         }
         _ => Err(Error::new(
@@ -49,7 +53,11 @@ pub fn generate_enum_wave_type(data: &DataEnum) -> Result<TokenStream> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(quote! {
-        stdlib::wasm_wave::value::Type::variant([#(#variant_types),*]).unwrap()
+        {
+            let mut __variant_vec = Vec::new();
+            #(__variant_vec.push(#variant_types);)*
+            stdlib::wasm_wave::value::Type::variant(__variant_vec).unwrap()
+        }
     })
 }
 

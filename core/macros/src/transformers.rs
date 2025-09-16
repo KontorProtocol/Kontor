@@ -78,19 +78,46 @@ pub fn wit_type_to_unwrap_expr(
                         .to_upper_camel_case();
                     let ident = Ident::new(&resource_name, Span::call_site());
                     // The handle is returned as a u32 from the runtime
-                    Ok(quote! { #ident::from_handle(#value.as_u32().unwrap()) })
+                    Ok(quote! { #ident::from_handle(stdlib::wasm_wave::wasm::WasmValue::unwrap_u32(&#value)) })
                 }
                 TypeDefKind::Handle(Handle::Borrow(_)) => {
                     // Borrowed handles shouldn't appear as return types in our use case
                     bail!("Borrowed resource handles cannot be used as return types")
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    // Handle tuples by recursively unwrapping each element
-                    let elements = tuple.types.iter().enumerate().map(|(i, ty)| {
-                        let elem_value = quote! { #value.as_tuple().unwrap()[#i].clone() };
-                        wit_type_to_unwrap_expr(resolve, ty, elem_value)
-                    }).collect::<Result<Vec<_>, _>>()?;
-                    Ok(quote! { (#(#elements),*) })
+                    // Build per-element unwrap blocks that pull from a single iterator
+                    let element_exprs = tuple
+                        .types
+                        .iter()
+                        .map(|elt_ty| {
+                            let inner = wit_type_to_unwrap_expr(
+                                resolve,
+                                elt_ty,
+                                quote! { __v } // we'll bind __v to each element's Value
+                            )?;
+                            Ok(quote! {{
+                                let __v = __iter.next()
+                                    .expect("tuple length mismatch")
+                                    .into_owned();
+                                #inner
+                            }})
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    // 1-tuple requires a trailing comma to be a tuple in Rust
+                    if tuple.types.len() == 1 {
+                        Ok(quote! {{
+                            let mut __iter =
+                                stdlib::wasm_wave::wasm::WasmValue::unwrap_tuple(&#value);
+                            (#(#element_exprs),*,)
+                        }})
+                    } else {
+                        Ok(quote! {{
+                            let mut __iter =
+                                stdlib::wasm_wave::wasm::WasmValue::unwrap_tuple(&#value);
+                            (#(#element_exprs),*)
+                        }})
+                    }
                 }
                 _ => bail!("Unsupported WIT type definition kind: {:?}", ty_def.kind),
             }
@@ -162,6 +189,13 @@ pub fn wit_type_to_rust_type(
                     let ident = Ident::new(&name, Span::call_site());
                     Ok(quote! { #ident })
                 }
+                TypeDefKind::Tuple(tuple) => {
+                    // Handle tuples by recursively converting each element
+                    let elements = tuple.types.iter().map(|ty| {
+                        wit_type_to_rust_type(resolve, ty, use_str)
+                    }).collect::<Result<Vec<_>, _>>()?;
+                    Ok(quote! { (#(#elements),*) })
+                }
                 _ => bail!("Unsupported type definition kind: {:?}", ty_def.kind),
             }
         }
@@ -178,66 +212,128 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];
             match &ty_def.kind {
-                TypeDefKind::Type(inner) => Ok(wit_type_to_wave_type(resolve, inner)?),
+                TypeDefKind::Type(inner) => wit_type_to_wave_type(resolve, inner),
                 TypeDefKind::Option(inner) => {
                     let inner_ty = wit_type_to_wave_type(resolve, inner)?;
-                    Ok(quote! { stdlib::wasm_wave::value::Type::option(#inner_ty) })
+                    Ok(quote! { 
+                        {
+                            let __inner_ty = #inner_ty;
+                            stdlib::wasm_wave::value::Type::option(__inner_ty)
+                        }
+                    })
                 }
                 TypeDefKind::List(inner) => {
                     let inner_ty = wit_type_to_wave_type(resolve, inner)?;
-                    Ok(quote! { stdlib::wasm_wave::value::Type::list(#inner_ty) })
+                    Ok(quote! { 
+                        {
+                            let __inner_ty = #inner_ty;
+                            stdlib::wasm_wave::value::Type::list(__inner_ty)
+                        }
+                    })
                 }
                 TypeDefKind::Result(result) => {
                     let ok_ty = match result.ok {
                         Some(ty) => {
                             let value_type_ = wit_type_to_wave_type(resolve, &ty)?;
-                            quote! { Some(#value_type_) }
+                            quote! { 
+                                {
+                                    let __ok_inner = #value_type_;
+                                    Some(__ok_inner)
+                                }
+                            }
                         }
-                        None => {
-                            quote! { None }
-                        }
+                        None => quote! { None },
                     };
                     let err_ty = match result.err {
                         Some(ty) => {
                             let value_type_ = wit_type_to_wave_type(resolve, &ty)?;
-                            quote! { Some(#value_type_) }
+                            quote! { 
+                                {
+                                    let __err_inner = #value_type_;
+                                    Some(__err_inner)
+                                }
+                            }
                         }
-                        None => {
-                            quote! { None }
-                        }
+                        None => quote! { None },
                     };
-                    Ok(quote! { stdlib::wasm_wave::value::Type::result(#ok_ty, #err_ty) })
+                    Ok(quote! { 
+                        {
+                            let __ok_ty = #ok_ty;
+                            let __err_ty = #err_ty;
+                            stdlib::wasm_wave::value::Type::result(__ok_ty, __err_ty)
+                        }
+                    })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
-                    let name = ty_def
-                        .name
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("Unnamed return types are not supported"))?
-                        .to_upper_camel_case();
+                    let name = ty_def.name.as_ref().ok_or_else(|| anyhow::anyhow!("Unnamed return types are not supported"))?.to_upper_camel_case();
                     let ident = Ident::new(&name, Span::call_site());
                     Ok(quote! { <#ident>::wave_type() })
                 }
                 TypeDefKind::Handle(Handle::Own(_)) | TypeDefKind::Handle(Handle::Borrow(_)) => {
-                    // Resources are opaque handles - they can't be serialized to wave
-                    // For now, we'll treat them as opaque u32 handles in wave format
-                    Ok(quote! { "u32" })
+                    Ok(quote! { stdlib::wasm_wave::value::Type::U32 })
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    // Handle tuples in wave format
-                    let elements = tuple.types.iter().map(|ty| {
-                        wit_type_to_wave_type(resolve, ty)
-                    }).collect::<Result<Vec<_>, _>>()?;
-                    Ok(quote! { stdlib::wasm_wave::value::Type::tuple(vec![#(#elements),*]) })
+                    let mut elem_bindings = Vec::new();
+                    let mut elem_pushes = Vec::new();
+                    for (i, t) in tuple.types.iter().enumerate() {
+                        let elem_ty = wit_type_to_wave_type(resolve, t)?;
+                        let var = Ident::new(&format!("__elem{}", i), Span::call_site());
+                        elem_bindings.push(quote! { let #var = #elem_ty; });
+                        elem_pushes.push(quote! { __tuple_vec.push(#var); });
+                    }
+                    Ok(quote! {
+                        {
+                            #(#elem_bindings)*
+                            let mut __tuple_vec = Vec::new();
+                            #(#elem_pushes)*
+                            stdlib::wasm_wave::value::Type::tuple(__tuple_vec).unwrap()
+                        }
+                    })
                 }
                 _ => bail!("Unsupported return type kind: {:?}", ty_def.kind),
             }
         }
-        // Note: Tuples are handled through TypeDefKind::Tuple in Type::Id case above
         _ => bail!("Unsupported return type: {:?}", ty),
     }
 }
 
 pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
+    // Handle tuple types
+    if let SynType::Tuple(tup) = ty {
+        if tup.elems.is_empty() {
+            return Ok(quote! {
+                stdlib::wasm_wave::value::Type::tuple(Vec::new()).unwrap()
+            });
+        }
+        
+        let elem_vars = tup.elems.iter().enumerate().map(|(i, _)| {
+            let var_name = format!("__syn_elem_type_{}", i);
+            Ident::new(&var_name, Span::call_site())
+        }).collect::<Vec<_>>();
+        
+        let elem_types = tup.elems
+            .iter()
+            .map(syn_type_to_wave_type)
+            .collect::<syn::Result<Vec<_>>>()?;
+        
+        let elem_bindings = elem_vars.iter().zip(elem_types.iter()).map(|(var, ty)| {
+            quote! { let #var = #ty; }
+        });
+        
+        let elem_pushes = elem_vars.iter().map(|var| {
+            quote! { __syn_tuple_vec.push(#var); }
+        });
+        
+        return Ok(quote! {
+            {
+                #(#elem_bindings)*
+                let mut __syn_tuple_vec = Vec::new();
+                #(#elem_pushes)*
+                stdlib::wasm_wave::value::Type::tuple(__syn_tuple_vec).unwrap()
+            }
+        });
+    }
+
     if let SynType::Path(TypePath { qself: None, path }) = ty {
         if let Some(segment) = &path.segments.last() {
             if segment.arguments == PathArguments::None {

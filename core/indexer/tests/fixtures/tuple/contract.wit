@@ -1,0 +1,15 @@
+package tupletest:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+    use kontor:built-in/numbers.{integer};
+
+    // Simple view function that returns a tuple
+    export ret-tuple: func(ctx: borrow<view-context>) -> tuple<integer, integer>;
+    
+    // Simple view function that returns an integer for comparison
+    export ret-integer: func(ctx: borrow<view-context>) -> integer;
+}
+
+

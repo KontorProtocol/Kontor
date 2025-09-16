@@ -7,12 +7,11 @@ world contract {
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
 
-    // For now, we'll use a simpler approach and define Balance as a record
-    // until we can properly import resources across contracts
-    record token-balance {
-        token-addr: contract-address,
-        amount: integer,
-        handle: string,
+    // Import the Balance resource from the token contract
+    // This provides compile-time move semantics for safe asset handling
+    resource balance {
+        amount: func() -> integer;
+        token: func() -> contract-address;
     }
     
     // LP Balance resource - represents AMM liquidity provider tokens
@@ -25,10 +24,10 @@ world contract {
     record pool-values { a: integer, b: integer, lp: integer }
     record fee-info { lp-fee-bps: integer, admin-fee-pct: integer }
     
-    // Withdraw result now returns actual token Balance resources
+    // Withdraw result now returns actual Balance resources
     record withdraw-result { 
-        balance-a: token-balance,
-        balance-b: token-balance 
+        balance-a: balance,
+        balance-b: balance 
     }
 
     // Token contract addresses  
@@ -45,8 +44,8 @@ world contract {
     export create: func(
         ctx: borrow<proc-context>,
         pair: token-pair,
-        balance-a: token-balance,
-        balance-b: token-balance,
+        balance-a: balance,
+        balance-b: balance,
         lp-fee-bps: integer,
         admin-fee-pct: integer,
     ) -> result<lp-balance, error>; // returns LP balance resource
@@ -59,8 +58,8 @@ world contract {
     export deposit: func(
         ctx: borrow<proc-context>, 
         pair: token-pair,
-        balance-a: token-balance, 
-        balance-b: token-balance, 
+        balance-a: balance, 
+        balance-b: balance, 
         min-lp-out: integer
     ) -> result<lp-balance, error>; // returns LP balance resource
 
@@ -76,9 +75,9 @@ world contract {
     export swap: func(
         ctx: borrow<proc-context>, 
         pair: token-pair, 
-        balance-in: token-balance, 
+        balance-in: balance, 
         min-out: integer
-    ) -> result<token-balance, error>; // returns token balance resource
+    ) -> result<balance, error>; // returns token balance resource
     
     // Admin operations - now return Balance resources
     export admin-withdraw-fees: func(

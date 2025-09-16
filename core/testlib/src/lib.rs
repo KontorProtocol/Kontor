@@ -11,7 +11,6 @@ use indexer::{
     database::{queries::insert_block, types::BlockRow},
     runtime::{
         ComponentCache, Runtime as IndexerRuntime, Storage, load_contracts, load_native_contracts,
-        wit::Signer,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
@@ -141,19 +140,12 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn execute(
-        &self,
-        signer: Option<&str>,
-        contract_address: &ContractAddress,
-        expr: &str,
-    ) -> Result<String> {
-        self.runtime
-            .execute(
-                signer.map(|s| Signer::XOnlyPubKey(s.to_string())),
-                contract_address,
-                expr,
-            )
-            .await
+    pub async fn execute(&self, signer: Option<&str>, addr: &ContractAddress, expr: &str) -> Result<String, AnyhowError> {
+        self.runtime.execute(signer.map(|s| s.to_string()), addr, expr.to_string()).await
+    }
+
+    pub async fn execute_owned(&self, signer: Option<&str>, addr: ContractAddress, expr: String) -> Result<String, AnyhowError> {
+        self.runtime.execute(signer.map(|s| s.to_string()), &addr, expr).await
     }
 }
 
@@ -161,7 +153,7 @@ impl Runtime {
 pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
     use indexer::{
         database::{queries::{insert_contract, contract_has_state}, types::ContractRow},
-        runtime::{ContractAddress, wit::Signer},
+        runtime::ContractAddress,
     };
     
     const TOKEN: &[u8] = include_bytes!("../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
@@ -185,13 +177,13 @@ pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
         if !contract_has_state(&conn, contract_id).await? {
             runtime.runtime
                 .execute(
-                    Some(Signer::XOnlyPubKey("kontor".to_string())),
+                    Some("kontor".to_string()),
                     &ContractAddress {
                         name: "token".to_string(),
                         height,
                         tx_index,
                     },
-                    "init()",
+                    "init()".to_string(),
                 )
                 .await?;
         }

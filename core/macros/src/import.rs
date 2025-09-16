@@ -35,7 +35,7 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
         path,
         module_name,
         world_name,
-        Some((&name, height, tx_index)),
+        Some((name, height, tx_index)),
         test,
     )
 }
@@ -44,10 +44,12 @@ pub fn import(
     path: String,
     module_name: Ident,
     world_name: String,
-    contract_id: Option<(&str, i64, i64)>,
+    contract_id: Option<(String, i64, i64)>,
     test: bool,
 ) -> TokenStream {
-    assert!(fs::metadata(&path).is_ok());
+    if !fs::metadata(&path).is_ok() {
+        panic!("Path does not exist: {}", path);
+    }
     let mut resolve = Resolve::new();
     resolve.push_dir(&path).unwrap();
 
@@ -111,10 +113,10 @@ pub fn import(
 
     let mut func_streams = Vec::new();
     for export in exports {
-        func_streams.push(
-            generate_functions(&resolve, test, export, contract_id)
-                .expect("Function didn't generate"),
-        )
+        match generate_functions(&resolve, test, export, contract_id.clone()) {
+            Ok(stream) => func_streams.push(stream),
+            Err(e) => panic!("Failed to generate function {}: {}", export.name, e),
+        }
     }
 
     let supers = if test {
@@ -145,11 +147,11 @@ pub fn import(
     }
 }
 
-pub fn generate_functions(
+fn generate_functions(
     resolve: &Resolve,
     test: bool,
     export: &Function,
-    contract_id: Option<(&str, i64, i64)>,
+    contract_id: Option<(String, i64, i64)>,
 ) -> Result<TokenStream> {
     let fn_name = Ident::new(&export.name.to_snake_case(), Span::call_site());
     let mut params = export
@@ -183,20 +185,27 @@ pub fn generate_functions(
         params.remove(0);
     }
 
-    let contract_arg = if let Some((name, height, tx_index)) = contract_id {
-        quote! {
-            &ContractAddress {
-                name: #name.to_string(),
-                height: #height,
-                tx_index: #tx_index,
-            }
-        }
+    // Prepare how we provide the contract address to the call site.
+    // In async test wrappers, we must not take a reference to a temporary across `.await`.
+    // So when `contract_id` is provided, we bind a local first and then pass `&local`.
+    let (contract_prelude, contract_arg) = if let Some((name, height, tx_index)) = contract_id.as_ref() {
+        let addr_ident = Ident::new("__contract_address", Span::call_site());
+        (
+            quote! {
+                let #addr_ident = ContractAddress {
+                    name: #name.to_string(),
+                    height: #height,
+                    tx_index: #tx_index,
+                };
+            },
+            quote! { #addr_ident },
+        )
     } else {
         params.insert(
             if test { 1 } else { 0 },
             quote! { contract_address: &ContractAddress },
         );
-        quote! { contract_address }
+        (quote! {}, quote! { contract_address })
     };
 
     let mut ret_ty = match &export.result {
@@ -217,15 +226,32 @@ pub fn generate_functions(
             let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
             Ok(match ty {
                 Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
-                    let _inner_ty = match resolve.types[*id].kind {
-                        TypeDefKind::Option(inner) => transformers::wit_type_to_rust_type(resolve, &inner, false)?,
-                        _ => unreachable!(),
+                    let inner_is_resource = match &resolve.types[*id].kind {
+                        TypeDefKind::Option(inner) => matches!(inner, Type::Id(inner_id) if matches!(resolve.types[*inner_id].kind, TypeDefKind::Handle(_))),
+                        _ => false,
                     };
-                    quote! {
-                        match #param_name {
-                            Some(val) => stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(val)).unwrap(),
-                            None => "null".to_string(),
+                    
+                    if inner_is_resource {
+                        // Option<Resource> needs special handling
+                        quote! {
+                            match #param_name {
+                                Some(val) => stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(val.take_handle())).unwrap(),
+                                None => "null".to_string(),
+                            }
                         }
+                    } else {
+                        quote! {
+                            match #param_name {
+                                Some(val) => stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(val)).unwrap(),
+                                None => "null".to_string(),
+                            }
+                        }
+                    }
+                }
+                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Handle(_)) => {
+                    // Resources are passed as handles (u32)
+                    quote! {
+                        stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(#param_name.take_handle())).unwrap()
                     }
                 }
                 _ => quote! {
@@ -239,25 +265,16 @@ pub fn generate_functions(
     let expr = if expr_parts.is_empty() {
         quote! { format!("{}()", #fn_name_kebab) }
     } else {
-        quote! { format!("{}({})", #fn_name_kebab, [#(#expr_parts),*].join(", ")) }
+        quote! { format!("{}({})", #fn_name_kebab, {
+            let mut __args = Vec::new();
+            #(__args.push(#expr_parts);)*
+            __args.join(", ")
+        }) }
     };
 
-    let mut ret_expr = match &export.result {
-        Some(ty) => {
-            let wave_ty = transformers::wit_type_to_wave_type(resolve, ty)?;
-            transformers::wit_type_to_unwrap_expr(
-                resolve,
-                ty,
-                quote! {
-                    stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&#wave_ty, &ret).unwrap()
-                },
-            )?
-        }
-        None => quote! { () },
-    };
-    if test {
-        ret_expr = quote! { Ok(#ret_expr) };
-    }
+    let _awaited = quote! {};
+
+    let expr_arg = quote! { expr };
 
     let ctx_signer = if is_proc_context {
         quote! { Some(signer) }
@@ -266,7 +283,7 @@ pub fn generate_functions(
     };
 
     let execute = if test {
-        quote! { runtime.execute }
+        quote! { runtime.execute_owned }
     } else {
         quote! { foreign::call }
     };
@@ -277,24 +294,106 @@ pub fn generate_functions(
         quote! { pub fn }
     };
 
-    let awaited = if test {
-        quote! { .await? }
-    } else {
-        quote! {}
-    };
-
-    Ok(quote! {
-        #[allow(clippy::unused_unit)]
-        #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
-            let expr = #expr;
+    let ret_stmt = if test {
+        quote! {
             let ret = #execute(
                 #ctx_signer,
                 #contract_arg,
-                expr.as_str(),
-            )#awaited;
-            #ret_expr
+                expr_str.clone(),
+            ).await?;
         }
-    })
+    } else {
+        quote! {
+            let ret = #execute(
+                #ctx_signer,
+                #contract_arg,
+                #expr_arg,
+            );
+        }
+    };
+
+    let wave_ty = if let Some(ty) = &export.result {
+        transformers::wit_type_to_wave_type(resolve, ty)?
+    } else {
+        quote! { () }
+    };
+
+    let unwrap_expr = if let Some(ty) = &export.result {
+        transformers::wit_type_to_unwrap_expr(
+            resolve,
+            ty,
+            quote! { __parsed_value },
+        )?
+    } else {
+        quote! { () }
+    };
+
+
+    let ret_expr_base = if export.result.is_some() {
+        if test {
+            // For test mode, call the separate wave type function
+            let wave_fn_name = Ident::new(&format!("{}_wave_type", fn_name), Span::call_site());
+            quote! {
+                {
+                    let __wave_type = #wave_fn_name();
+                    let __parsed_value = stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&__wave_type, &ret).unwrap();
+                    #unwrap_expr
+                }
+            }
+        } else {
+            quote! {
+                {
+                    let __wave_type = #wave_ty;
+                    let __parsed_value = stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(&__wave_type, &ret).unwrap();
+                    #unwrap_expr
+                }
+            }
+        }
+    } else {
+        quote! { () }
+    };
+
+    let mut ret_expr = ret_expr_base;
+
+    if test {
+        ret_expr = quote! { Ok(#ret_expr) };
+    }
+
+    let expr_str_binding = if test {
+        quote! { let expr_str = expr.to_string(); }
+    } else {
+        quote! {}
+    };
+    
+    let function_body = quote! {
+        let expr = #expr;
+        #contract_prelude
+        #expr_str_binding
+        #ret_stmt
+        #ret_expr
+    };
+
+    if test && export.result.is_some() {
+        // Generate a separate function for the wave type to avoid temporaries in async context
+        let wave_fn_name = Ident::new(&format!("{}_wave_type", fn_name), Span::call_site());
+        Ok(quote! {
+            fn #wave_fn_name() -> stdlib::wasm_wave::value::Type {
+                #wave_ty
+            }
+            
+            #[allow(clippy::unused_unit)]
+            #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
+                #function_body
+            }
+        })
+    } else {
+        Ok(quote! {
+            #[allow(clippy::unused_unit)]
+            #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
+                #function_body
+            }
+        })
+    }
 }
 
 pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> Result<TokenStream> {

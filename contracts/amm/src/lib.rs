@@ -214,14 +214,15 @@ fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::Contract
 // Helper function to consume a token Balance and deposit it to the pool
 fn consume_token_balance_to_pool(
     ctx: &ProcContext,
-    balance: TokenBalance,
+    balance: Balance,
     pool_address: &str,
 ) -> Result<numbers::Integer, error::Error> {
-    // Get the amount from the balance before consuming it
-    let amount = balance.amount;
+    // Get the amount and token from the balance before consuming it
+    let amount = balance.amount();
+    let token = balance.token();
     
     // Deposit the balance into the pool's account using the token contract
-    token_dyn::deposit(&balance.token_addr, ctx.contract_signer(), pool_address.to_string(), balance)?;
+    token_dyn::deposit(&token, ctx.contract_signer(), pool_address.to_string(), balance)?;
     
     Ok(amount)
 }
@@ -232,7 +233,7 @@ fn create_token_balance_from_pool(
     token: &foreign::ContractAddress,
     amount: numbers::Integer,
     recipient: &str,
-) -> Result<TokenBalance, error::Error> {
+) -> Result<Balance, error::Error> {
     // Withdraw from the pool (using contract signer) and return the Balance
     token_dyn::withdraw(token, ctx.contract_signer(), amount)
 }
@@ -451,8 +452,8 @@ impl Guest for Amm {
     fn create(
         ctx: &ProcContext,
         pair: TokenPair,
-        balance_a: TokenBalance,
-        balance_b: TokenBalance,
+        balance_a: Balance,
+        balance_b: Balance,
         lp_fee_bps: numbers::Integer,
         admin_fee_pct: numbers::Integer,
     ) -> Result<LpBalance, error::Error> {
@@ -460,8 +461,8 @@ impl Guest for Amm {
         let canonical_pair = CanonicalTokenPair::new(pair.token_a.clone(), pair.token_b.clone())?;
         
         // Get amounts from the balance records
-        let init_a = balance_a.amount;
-        let init_b = balance_b.amount;
+        let init_a = balance_a.amount();
+        let init_b = balance_b.amount();
         
         if init_a == 0.into() || init_b == 0.into() {
             return Err(AmmError::InputBalanceZero.into());
@@ -469,7 +470,7 @@ impl Guest for Amm {
         
         // Validate that the balance records match the pair tokens
         let (token_a, token_b) = canonical_pair.as_tuple();
-        if balance_a.token_addr != token_a || balance_b.token_addr != token_b {
+        if balance_a.token() != token_a || balance_b.token() != token_b {
             return Err(AmmError::InvalidPair.into());
         }
         
@@ -568,16 +569,16 @@ impl Guest for Amm {
     fn deposit(
         ctx: &ProcContext,
         pair: TokenPair,
-        balance_a: TokenBalance,
-        balance_b: TokenBalance,
+        balance_a: Balance,
+        balance_b: Balance,
         min_lp_out: numbers::Integer,
     ) -> Result<LpBalance, error::Error> {
         let (id, pool_wrapper, mut pool) = load_pool(ctx, &pair)?;
         let pools = storage(ctx).pools();
 
         // Get amounts from balance records
-        let input_a = balance_a.amount;
-        let input_b = balance_b.amount;
+        let input_a = balance_a.amount();
+        let input_b = balance_b.amount();
 
         if input_a == 0.into() || input_b == 0.into() {
             validate_min_output(0.into(), min_lp_out)?;
@@ -590,7 +591,7 @@ impl Guest for Amm {
 
         // Validate that balance records match the pair tokens
         let (token_a, token_b) = (pool.token_a.clone(), pool.token_b.clone());
-        if balance_a.token_addr != token_a || balance_b.token_addr != token_b {
+        if balance_a.token() != token_a || balance_b.token() != token_b {
             return Err(AmmError::InvalidPair.into());
         }
 
@@ -734,15 +735,15 @@ impl Guest for Amm {
     fn swap(
         ctx: &ProcContext,
         pair: TokenPair,
-        balance_in: TokenBalance,
+        balance_in: Balance,
         min_out: numbers::Integer,
-    ) -> Result<TokenBalance, error::Error> {
+    ) -> Result<Balance, error::Error> {
         let (id, _pool_wrapper, mut pool) = load_pool(ctx, &pair)?;
         let pools = storage(ctx).pools();
         
         // Get amount and token from the balance record
-        let amount_in = balance_in.amount;
-        let token_in = balance_in.token_addr;
+        let amount_in = balance_in.amount();
+        let token_in = balance_in.token();
             
         if amount_in == 0.into() {
             validate_min_output(0.into(), min_out)?;

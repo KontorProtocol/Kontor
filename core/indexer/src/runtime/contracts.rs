@@ -5,7 +5,7 @@ use crate::{
         queries::{contract_has_state, insert_block, insert_contract},
         types::{BlockRow, ContractRow},
     },
-    runtime::{ContractAddress, Runtime, wit::Signer},
+    runtime::{ContractAddress, Runtime},
     test_utils::new_mock_block_hash,
 };
 
@@ -57,13 +57,13 @@ pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> R
         if !contract_has_state(&conn, contract_id).await? {
             runtime
                 .execute(
-                    Some(Signer::XOnlyPubKey("kontor".to_string())),
+                    Some("kontor".to_string()),
                     &ContractAddress {
                         name: name.to_string(),
                         height,
                         tx_index,
                     },
-                    "init()",
+                    "init()".to_string(),
                 )
                 .await?;
         }

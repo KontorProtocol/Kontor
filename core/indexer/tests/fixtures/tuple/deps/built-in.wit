@@ -1,0 +1,156 @@
+package kontor:built-in;
+
+interface context {
+    resource signer {
+        to-string: func() -> string;
+    }
+
+    resource keys {
+        next: func() -> option<string>;
+    }
+
+    resource view-context {
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
+        get-keys: func(path: string) -> keys;
+        is-void: func(path: string) -> bool;
+        exists: func(path: string) -> bool;
+        matching-path: func(regexp: string) -> option<string>;
+    }
+
+    resource proc-context {
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
+        get-keys: func(path: string) -> keys;
+        is-void: func(path: string) -> bool;
+        exists: func(path: string) -> bool;
+        matching-path: func(regexp: string) -> option<string>;
+
+        set-str: func(path: string, value: string);
+        set-u64: func(path: string, value: u64);
+        set-s64: func(path: string, value: s64);
+        set-bool: func(path: string, value: bool);
+        set-void: func(path: string);
+        delete-matching-paths: func(regexp: string) -> u64;
+
+        signer: func() -> signer;
+        contract-signer: func() -> signer;
+        view-context: func() -> view-context;
+    }
+
+    resource fall-context {
+        signer: func() -> option<signer>;
+        proc-context: func() -> option<proc-context>;
+        view-context: func() -> view-context;
+    }
+}
+
+interface foreign {
+    use context.{signer};
+
+    record contract-address {
+        name: string,
+        height: s64,
+        tx-index: s64,
+    }
+
+    call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+}
+
+interface crypto {
+    hash: func(input: string) -> tuple<string, list<u8>>;
+    hash-with-salt: func(input: string, salt: string) -> tuple<string, list<u8>>;
+    generate-id: func() -> string;
+}
+
+interface error {
+    variant error {
+        message(string),
+        overflow(string),
+        div-by-zero(string),
+    }
+
+    meta-force-generate-error: func(e: error);
+}
+
+interface numbers {
+    use error.{error};
+
+    enum sign {
+        plus,
+        minus
+    }
+
+    record integer {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    record decimal {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    enum ordering {
+        less,
+        equal,
+        greater
+    }
+
+    u64-to-integer: func(i: u64) -> integer;
+    s64-to-integer: func(i: s64) -> integer;
+    string-to-integer: func(s: string) -> integer;
+    integer-to-string: func(i: integer) -> string;
+    eq-integer: func(a: integer, b: integer) -> bool;
+    cmp-integer: func(a: integer, b: integer) -> ordering;
+    add-integer: func(a: integer, b: integer) -> integer;
+    sub-integer: func(a: integer, b: integer) -> integer;
+    mul-integer: func(a: integer, b: integer) -> integer;
+    div-integer: func(a: integer, b: integer) -> integer;
+
+    integer-to-decimal: func(i: integer) -> decimal;
+    u64-to-decimal: func(i: u64) -> decimal;
+    s64-to-decimal: func(i: s64) -> decimal;
+    f64-to-decimal: func(f: f64) -> decimal;
+    string-to-decimal: func(s: string) -> decimal;
+    decimal-to-string: func(d: decimal) -> string;
+    eq-decimal: func(a: decimal, b: decimal) -> bool;
+    cmp-decimal: func(a: decimal, b: decimal) -> ordering;
+    add-decimal: func(a: decimal, b: decimal) -> decimal;
+    sub-decimal: func(a: decimal, b: decimal) -> decimal;
+    mul-decimal: func(a: decimal, b: decimal) -> decimal;
+    div-decimal: func(a: decimal, b: decimal) -> decimal;
+
+    log10: func(a: decimal) -> decimal;
+    
+    // Decimal to Integer conversion with explicit rounding
+    decimal-to-integer-floor: func(d: decimal) -> integer;  // Round down (towards negative infinity)
+    decimal-to-integer-ceil: func(d: decimal) -> integer;   // Round up (towards positive infinity)
+
+    // Math helpers for Integer
+    mul-div-down-integer: func(a: integer, b: integer, c: integer) -> integer;
+    mul-div-up-integer: func(a: integer, b: integer, c: integer) -> integer;
+    sqrt-integer: func(a: integer) -> integer;
+    mul-sqrt-integer: func(a: integer, b: integer) -> integer;
+
+    meta-force-generate-integer: func(i: integer);
+    meta-force-generate-decimal: func(d: decimal);
+}
+
+world built-in {
+    import context;
+    import foreign;
+    import crypto;
+    import error;
+    import numbers;
+}
