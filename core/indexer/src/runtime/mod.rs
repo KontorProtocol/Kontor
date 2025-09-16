@@ -35,7 +35,7 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use wasmtime::{
-    Engine, Store,
+    AsContext, AsContextMut, Engine, Store,
     component::{
         Accessor, Component, HasData, Linker, Resource, ResourceTable,
         wasm_wave::{
@@ -61,6 +61,47 @@ pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 
 pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
     Ok(ciborium::from_reader(&mut Cursor::new(buffer))?)
+}
+
+async fn load_component(
+    engine: &Engine,
+    component_cache: &ComponentCache,
+    storage: &Storage,
+    contract_id: i64,
+) -> Result<Component> {
+    Ok(match component_cache.get(&contract_id) {
+        Some(component) => component,
+        None => {
+            let compressed_bytes = storage
+                .contract_bytes(contract_id)
+                .await?
+                .ok_or(anyhow!("Contract not found"))?;
+            let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
+            let mut module_bytes = Vec::new();
+            decompressor.read_to_end(&mut module_bytes)?;
+
+            let component_bytes = ComponentEncoder::default()
+                .module(&module_bytes)?
+                .validate(true)
+                .encode()?;
+
+            let component = Component::from_binary(engine, &component_bytes)?;
+            component_cache.put(contract_id, component.clone());
+            component
+        }
+    })
+}
+
+pub fn make_linker(engine: &Engine) -> Result<Linker<Runtime>> {
+    let mut linker = Linker::new(engine);
+    Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
+    Ok(linker)
+}
+
+pub fn make_store(engine: &Engine, runtime: &Runtime, fuel: u64) -> Result<Store<Runtime>> {
+    let mut s = Store::new(engine, runtime.clone());
+    s.set_fuel(fuel)?;
+    Ok(s)
 }
 
 #[derive(Clone)]
@@ -415,21 +456,157 @@ impl built_in::crypto::HostWithStore for Runtime {
     }
 }
 
-impl built_in::foreign::Host for Runtime {
-    async fn call(
-        &mut self,
+impl built_in::foreign::Host for Runtime {}
+
+impl built_in::foreign::HostWithStore for Runtime {
+    async fn call<T>(
+        accessor: &Accessor<T, Self>,
         signer: Option<Resource<Signer>>,
         contract_address: ContractAddress,
         expr: String,
     ) -> Result<String> {
+        let (runtime, engine, component_cache, storage, stack, resource_table) =
+            accessor.with(|mut access| {
+                let runtime = access.get();
+                (
+                    runtime.clone(),
+                    runtime.engine.clone(),
+                    runtime.component_cache.clone(),
+                    runtime.storage.clone(),
+                    runtime.stack.clone(),
+                    runtime.table.clone(),
+                )
+            });
+
         let signer = if let Some(resource) = signer {
-            let table = self.table.lock().await;
-            let _self = table.get(&resource)?;
-            Some(_self.clone())
+            let _self = resource_table.lock().await.get(&resource)?.clone();
+            Some(_self)
         } else {
             None
         };
-        self.execute(signer, &contract_address, &expr).await
+
+        let contract_id = storage
+            .contract_id(&contract_address)
+            .await?
+            .ok_or(anyhow!("Contract not found"))?;
+        let component = load_component(&engine, &component_cache, &storage, contract_id).await?;
+        let linker = make_linker(&engine)?;
+        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let mut store = make_store(&engine, &runtime, fuel)?;
+        let instance = linker.instantiate_async(&mut store, &component).await?;
+        let fallback_name = "fallback";
+        let fallback_expr = format!(
+            "{}({})",
+            fallback_name,
+            to_wave_string(&WaveValue::from(expr.clone()))?
+        );
+
+        let call = WaveParser::new(&expr).parse_raw_func_call()?;
+        let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
+            (call, func)
+        } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
+            (WaveParser::new(&fallback_expr).parse_raw_func_call()?, func)
+        } else {
+            return Err(anyhow!("Expression does not refer to any known function"));
+        };
+
+        let func_params = func.params(&store);
+        let func_param_types = func_params.iter().map(|(_, t)| t).collect::<Vec<_>>();
+        let (func_ctx_param_type, func_param_types) = func_param_types
+            .split_first()
+            .ok_or(anyhow!("Context/signer parameter not found"))?;
+        let mut params = call.to_wasm_params(func_param_types.to_vec())?;
+        let resource_type = match func_ctx_param_type {
+            wasmtime::component::Type::Borrow(t) => Ok(*t),
+            _ => Err(anyhow!("Unsupported context type")),
+        }?;
+        {
+            if let Some(Signer::ContractId(id)) = signer
+                && stack.peek().await != Some(id)
+            {
+                return Err(anyhow!("Invalid contract id signer"));
+            }
+            let mut table = resource_table.lock().await;
+            match (resource_type, signer) {
+                (t, Some(signer))
+                    if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
+                {
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ProcContext {
+                                    signer,
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
+                    .insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ViewContext { contract_id })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    ),
+                (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(FallContext {
+                                    signer,
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                _ => return Err(anyhow!("Unsupported context/signer type")),
+            }
+        }
+
+        stack.push(contract_id).await?;
+        let mut results = func
+            .results(&store)
+            .iter()
+            .map(default_val_for_type)
+            .collect::<Vec<_>>();
+        let (call_result, mut results, fuel_result) = tokio::spawn({
+            let mut store = store; // Move store into the task
+            async move {
+                let call_result = func.call_async(&mut store, &params, &mut results).await;
+                (call_result, results, store.get_fuel())
+            }
+        })
+        .await?;
+        stack.pop().await;
+        let remaining_fuel = fuel_result?;
+        accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
+        call_result?;
+        if results.is_empty() {
+            return Ok("()".to_string());
+        }
+
+        if results.len() == 1 {
+            let result = results.remove(0);
+            return if call.name() == fallback_name {
+                if let wasmtime::component::Val::String(return_expr) = result {
+                    Ok(return_expr)
+                } else {
+                    Err(anyhow!("{fallback_name} did not return a string"))
+                }
+            } else {
+                result.to_wave()
+            };
+        }
+
+        Err(anyhow!(
+            "Functions with multiple return values are not supported"
+        ))
     }
 }
 
