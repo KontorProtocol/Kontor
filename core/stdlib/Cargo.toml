@@ -8,7 +8,7 @@ workspace = true
 
 [dependencies]
 macros = { path = "../macros" }
-wasm-wave = { version = "0.238.1"}
+wasm-wave = { version = "0.239.0"}
 
 [dev-dependencies]
 macrotest = "=1.2.0"

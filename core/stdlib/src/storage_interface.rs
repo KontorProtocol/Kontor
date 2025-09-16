@@ -9,13 +9,11 @@ pub trait ReadContext {
     fn __get_u64(&self, path: &str) -> Option<u64>;
     fn __get_s64(&self, path: &str) -> Option<i64>;
     fn __get_bool(&self, path: &str) -> Option<bool>;
-    fn __get_void(&self, path: &str) -> Option<()>;
     fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(
         &self,
         path: &'a str,
     ) -> impl Iterator<Item = T> + 'a;
     fn __exists(&self, path: &str) -> bool;
-    fn __is_void(&self, path: &str) -> bool;
     fn __matching_path(&self, regexp: &str) -> Option<String>;
     fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T>;
 }

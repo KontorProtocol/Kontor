@@ -51,22 +51,6 @@ use crate::runtime::{
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
 
-impl std::fmt::Display for kontor::built_in::error::Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            kontor::built_in::error::Error::Message(msg) => write!(f, "Error: {}", msg),
-            kontor::built_in::error::Error::Overflow(msg) => write!(f, "Overflow Error: {}", msg),
-            kontor::built_in::error::Error::DivByZero(msg) => write!(f, "DivByZero Error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for kontor::built_in::error::Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
-
 impls!(host = true);
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
@@ -277,7 +261,7 @@ impl Runtime {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         self.storage
-            .get(_self.get_contract_id(), &path)
+            .get(1000000, _self.get_contract_id(), &path)
             .await?
             .map(|bs| deserialize_cbor(&bs))
             .transpose()
@@ -332,24 +316,6 @@ impl Runtime {
         let contract_id = table.get(&resource)?.get_contract_id();
         let stream = Box::pin(self.storage.keys(contract_id, path.clone()).await?);
         Ok(table.push(Keys { stream })?)
-    }
-
-    async fn _is_void<T: HasContractId>(
-        &mut self,
-        resource: Resource<T>,
-        path: String,
-    ) -> Result<bool> {
-        let table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        let contract_id = _self.get_contract_id();
-        let bs = self.storage.get(contract_id, &path).await?;
-        Ok(if let Some(bs) = bs {
-            bs.is_empty()
-        } else if self.storage.exists(contract_id, &path).await? {
-            false
-        } else {
-            panic!("Key not found in is_void check")
-        })
     }
 
     async fn _exists<T: HasContractId>(
@@ -484,10 +450,6 @@ impl built_in::context::HostViewContext for Runtime {
         self._get_keys(resource, path).await
     }
 
-    async fn is_void(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
-        self._is_void(resource, path).await
-    }
-
     async fn exists(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
         self._exists(resource, path).await
     }
@@ -597,10 +559,6 @@ impl built_in::context::HostProcContext for Runtime {
     async fn set_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<()> {
         let contract_id = self.table.lock().await.get(&resource)?.contract_id;
         self.storage.set(contract_id, &path, &[]).await
-    }
-
-    async fn is_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<bool> {
-        self._is_void(resource, path).await
     }
 
     async fn exists(&mut self, resource: Resource<ProcContext>, path: String) -> Result<bool> {
@@ -719,91 +677,99 @@ impl built_in::context::HostFallContext for Runtime {
 
 impl built_in::numbers::Host for Runtime {
     async fn u64_to_integer(&mut self, i: u64) -> Result<Integer> {
-        numerics::u64_to_integer(i)
+        Ok(numerics::u64_to_integer(i))
     }
 
     async fn s64_to_integer(&mut self, i: i64) -> Result<Integer> {
-        numerics::s64_to_integer(i)
+        Ok(numerics::s64_to_integer(i))
     }
 
-    async fn string_to_integer(&mut self, s: String) -> Result<Integer> {
-        numerics::string_to_integer(&s)
+    async fn string_to_integer(&mut self, s: String) -> Result<Result<Integer, Error>> {
+        Ok(numerics::string_to_integer(&s))
     }
 
     async fn integer_to_string(&mut self, i: Integer) -> Result<String> {
-        numerics::integer_to_string(i)
+        Ok(numerics::integer_to_string(i))
     }
 
     async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool> {
-        numerics::eq_integer(a, b)
+        Ok(numerics::eq_integer(a, b))
     }
 
     async fn cmp_integer(&mut self, a: Integer, b: Integer) -> Result<NumericOrdering> {
-        numerics::cmp_integer(a, b)
+        Ok(numerics::cmp_integer(a, b))
     }
 
-    async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::add_integer(a, b)
+    async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+        Ok(numerics::add_integer(a, b))
     }
 
-    async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::sub_integer(a, b)
+    async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+        Ok(numerics::sub_integer(a, b))
     }
 
-    async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::mul_integer(a, b)
+    async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+        Ok(numerics::mul_integer(a, b))
     }
 
-    async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Integer> {
-        numerics::div_integer(a, b)
+    async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+        Ok(numerics::div_integer(a, b))
     }
 
     async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal> {
-        numerics::integer_to_decimal(i)
+        Ok(numerics::integer_to_decimal(i))
+    }
+
+    async fn decimal_to_integer(&mut self, d: Decimal) -> Result<Integer> {
+        Ok(numerics::decimal_to_integer(d))
     }
 
     async fn u64_to_decimal(&mut self, i: u64) -> Result<Decimal> {
-        numerics::u64_to_decimal(i)
+        Ok(numerics::u64_to_decimal(i))
     }
 
     async fn s64_to_decimal(&mut self, i: i64) -> Result<Decimal> {
-        numerics::s64_to_decimal(i)
+        Ok(numerics::s64_to_decimal(i))
     }
 
     async fn f64_to_decimal(&mut self, f: f64) -> Result<Decimal> {
-        numerics::f64_to_decimal(f)
+        Ok(numerics::f64_to_decimal(f))
     }
 
-    async fn string_to_decimal(&mut self, s: String) -> Result<Decimal> {
-        numerics::string_to_decimal(&s)
+    async fn string_to_decimal(&mut self, s: String) -> Result<Result<Decimal, Error>> {
+        Ok(numerics::string_to_decimal(&s))
+    }
+
+    async fn decimal_to_string(&mut self, d: Decimal) -> Result<String> {
+        Ok(numerics::decimal_to_string(d))
     }
 
     async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool> {
-        numerics::eq_decimal(&a, &b)
+        Ok(numerics::eq_decimal(a, b))
     }
 
     async fn cmp_decimal(&mut self, a: Decimal, b: Decimal) -> Result<NumericOrdering> {
-        numerics::cmp_decimal(&a, &b)
+        Ok(numerics::cmp_decimal(a, b))
     }
 
-    async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal> {
-        numerics::add_decimal(&a, &b)
+    async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+        Ok(numerics::add_decimal(a, b))
     }
 
-    async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal> {
-        numerics::sub_decimal(&a, &b)
+    async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+        Ok(numerics::sub_decimal(a, b))
     }
 
-    async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal> {
-        numerics::mul_decimal(&a, &b)
+    async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+        Ok(numerics::mul_decimal(a, b))
     }
 
-    async fn div_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Decimal> {
-        numerics::div_decimal(&a, &b)
+    async fn div_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+        Ok(numerics::div_decimal(a, b))
     }
 
     async fn log10(&mut self, a: Decimal) -> Result<Decimal> {
-        numerics::log10(&a)
+        Ok(numerics::log10(a))
     }
 
     async fn meta_force_generate_integer(&mut self, _i: built_in::numbers::Integer) -> Result<()> {

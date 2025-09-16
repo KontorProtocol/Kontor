@@ -26,8 +26,8 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub async fn get(&self, contract_id: i64, path: &str) -> Result<Option<Vec<u8>>> {
-        Ok(get_latest_contract_state_value(&self.conn, contract_id, path).await?)
+    pub async fn get(&self, fuel: u64, contract_id: i64, path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
     pub async fn set(&self, contract_id: i64, path: &str, value: &[u8]) -> Result<()> {

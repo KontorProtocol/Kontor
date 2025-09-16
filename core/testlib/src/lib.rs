@@ -1,6 +1,7 @@
 use std::{env::current_dir, path::Path};
 
 use bon::Builder;
+pub use indexer::runtime::numerics as numbers;
 pub use indexer::runtime::wit::kontor::built_in::{
     error::Error,
     foreign::ContractAddress,
@@ -16,7 +17,7 @@ use indexer::{
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::Connection;
-pub use stdlib::{import, interface};
+pub use macros::{import_test as import, interface_test as interface};
 
 use anyhow::anyhow;
 pub use anyhow::{Error as AnyhowError, Result};

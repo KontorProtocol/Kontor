@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS contracts (
   name TEXT NOT NULL,
   height INTEGER NOT NULL,
   tx_index INTEGER NOT NULL,
+  size INTEGER NOT NULL,
   bytes BLOB NOT NULL,
   UNIQUE (name, height, tx_index),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS contract_state (
   contract_id INTEGER NOT NULL,
   tx_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  size INTEGER NOT NULL,
   path TEXT NOT NULL,
   value BLOB NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT 0,

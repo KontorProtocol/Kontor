@@ -108,9 +108,3 @@ impl Retrieve for bool {
         ctx.__get_bool(&path)
     }
 }
-
-impl Retrieve for () {
-    fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
-        ctx.__get_void(&path)
-    }
-}

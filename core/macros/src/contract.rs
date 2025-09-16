@@ -66,24 +66,12 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_bool(path)
             }
 
-            fn __get_void(&self, path: &str) -> Option<()> {
-                if self.is_void(path) {
-                    Some(())
-                } else {
-                    None
-                }
-            }
-
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a {
                 make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(&self, path: &str) -> bool {
                 self.exists(path)
-            }
-
-            fn __is_void(&self, path: &str) -> bool {
-                self.is_void(path)
             }
 
             fn __matching_path(&self, regexp: &str) -> Option<String> {
@@ -113,24 +101,12 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_bool(path)
             }
 
-            fn __get_void(&self, path: &str) -> Option<()> {
-                if self.is_void(path) {
-                    Some(())
-                } else {
-                    None
-                }
-            }
-
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a{
                 make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(&self, path: &str) -> bool {
                 self.exists(path)
-            }
-
-            fn __is_void(&self, path: &str) -> bool {
-                self.is_void(path)
             }
 
             fn __matching_path(&self, regexp: &str) -> Option<String> {

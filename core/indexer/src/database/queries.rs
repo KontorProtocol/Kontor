@@ -19,6 +19,8 @@ pub enum Error {
     RowDeserialization(#[from] serde::de::value::Error),
     #[error("Invalid cursor format")]
     InvalidCursor,
+    #[error("Out of fuel")]
+    OutOfFuel,
 }
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -94,15 +96,17 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 contract_id,
                 tx_id,
                 height,
+                size,
                 path,
                 value,
                 deleted
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
         params![
             row.contract_id,
             row.tx_id,
             row.height,
+            row.size(),
             row.path,
             row.value,
             row.deleted
@@ -152,6 +156,7 @@ pub async fn get_latest_contract_state(
 
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
+    fuel: u64,
     contract_id: i64,
     path: &str,
 ) -> Result<Option<Vec<u8>>, Error> {
@@ -159,16 +164,31 @@ pub async fn get_latest_contract_state_value(
         .query(
             &format!(
                 r#"
-                SELECT value
+                SELECT
+                  CASE
+                    WHEN size <= :fuel THEN value
+                    ELSE null
+                  END AS value
                 {}
                 "#,
                 base_contract_state_query()
             ),
-            ((":contract_id", contract_id), (":path", path)),
+            (
+                (":contract_id", contract_id),
+                (":path", path),
+                (":fuel", fuel),
+            ),
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+    let row = rows.next().await?;
+    if let Some(row) = row {
+        return match row.get::<Option<Vec<u8>>>(0)? {
+            Some(v) => Ok(Some(v)),
+            None => Err(Error::OutOfFuel),
+        };
+    }
+    Ok(None)
 }
 
 pub async fn delete_contract_state(
@@ -208,7 +228,7 @@ pub async fn exists_contract_state(
         .query(
             &format!(
                 r#"
-                SELECT value
+                SELECT 1
                 {}
                 "#,
                 base_exists_contract_state_query()
@@ -313,8 +333,8 @@ pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<b
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT OR IGNORE INTO contracts (name, height, tx_index, bytes) VALUES (?, ?, ?, ?)",
-        params![row.name.clone(), row.height, row.tx_index, row.bytes],
+        "INSERT OR IGNORE INTO contracts (name, height, tx_index, size, bytes) VALUES (?, ?, ?, ?, ?)",
+        params![row.name.clone(), row.height, row.tx_index, row.size(), row.bytes],
     )
     .await?;
     Ok(get_contract_id_from_address(

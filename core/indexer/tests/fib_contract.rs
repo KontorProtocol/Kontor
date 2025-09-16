@@ -5,7 +5,6 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/arith/wit",
-    test = true,
 );
 
 import!(
@@ -13,7 +12,6 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/fib/wit",
-    test = true,
 );
 
 import!(
@@ -21,7 +19,6 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/proxy/wit",
-    test = true,
 );
 
 import!(
@@ -30,7 +27,6 @@ import!(
     tx_index = 0,
     mod_name = "fib_proxied",
     path = "../contracts/fib/wit",
-    test = true,
 );
 
 import!(
@@ -39,7 +35,6 @@ import!(
     tx_index = 0,
     mod_name = "arith_proxied",
     path = "../contracts/arith/wit",
-    test = true,
 );
 
 #[tokio::test]

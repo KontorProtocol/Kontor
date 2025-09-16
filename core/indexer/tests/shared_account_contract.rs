@@ -5,7 +5,6 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/token/wit",
-    test = true,
 );
 
 import!(
@@ -13,14 +12,9 @@ import!(
     height = 0,
     tx_index = 0,
     path = "../contracts/shared-account/wit",
-    test = true,
 );
 
-interface!(
-    name = "token-dyn",
-    path = "../contracts/token/wit",
-    test = true
-);
+interface!(name = "token-dyn", path = "../contracts/token/wit");
 
 #[tokio::test]
 async fn test_shared_account_contract() -> Result<()> {

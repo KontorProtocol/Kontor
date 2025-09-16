@@ -34,14 +34,28 @@ pub fn impls(input: TokenStream) -> TokenStream {
 pub fn import(input: TokenStream) -> TokenStream {
     let attr_args = NestedMeta::parse_meta_list(input.clone().into()).unwrap();
     let config = import::Config::from_list(&attr_args).unwrap();
-    import::generate(config).into()
+    import::generate(config, false).into()
+}
+
+#[proc_macro]
+pub fn import_test(input: TokenStream) -> TokenStream {
+    let attr_args = NestedMeta::parse_meta_list(input.clone().into()).unwrap();
+    let config = import::Config::from_list(&attr_args).unwrap();
+    import::generate(config, true).into()
 }
 
 #[proc_macro]
 pub fn interface(input: TokenStream) -> TokenStream {
     let attr_args = NestedMeta::parse_meta_list(input.clone().into()).unwrap();
     let config = interface::Config::from_list(&attr_args).unwrap();
-    interface::generate(config).into()
+    interface::generate(config, false).into()
+}
+
+#[proc_macro]
+pub fn interface_test(input: TokenStream) -> TokenStream {
+    let attr_args = NestedMeta::parse_meta_list(input.clone().into()).unwrap();
+    let config = interface::Config::from_list(&attr_args).unwrap();
+    interface::generate(config, true).into()
 }
 
 #[proc_macro_derive(Store)]

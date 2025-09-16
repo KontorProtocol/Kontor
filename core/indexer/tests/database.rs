@@ -138,7 +138,8 @@ async fn test_contract_state_operations() -> Result<()> {
     );
 
     // Get latest contract state value
-    let retrieved_value = get_latest_contract_state_value(&conn, contract_id, path).await?;
+    let fuel = 1000;
+    let retrieved_value = get_latest_contract_state_value(&conn, 1000, contract_id, path).await?;
     assert!(
         retrieved_value.is_some(),
         "Contract state value should be retrieved"
@@ -184,7 +185,7 @@ async fn test_contract_state_operations() -> Result<()> {
     let latest_state = get_latest_contract_state(&conn, contract_id, path)
         .await?
         .unwrap();
-    let latest_value = get_latest_contract_state_value(&conn, contract_id, path)
+    let latest_value = get_latest_contract_state_value(&conn, fuel, contract_id, path)
         .await?
         .unwrap();
     assert_eq!(latest_state.height, height2);
