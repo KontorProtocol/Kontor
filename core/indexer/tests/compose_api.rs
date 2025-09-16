@@ -8,13 +8,16 @@ use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, Amount, KnownHrp, TapSighashType, TxOut};
+use bitcoin::{Address, Amount, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut, Txid};
 use bitcoin::{
     consensus::encode::serialize as serialize_tx,
     key::{Keypair, Secp256k1},
 };
 use clap::Parser;
-use indexer::api::compose::{ComposeAddressQuery, ComposeOutputs};
+use indexer::api::compose::{
+    ComposeAddressInputs, ComposeAddressQuery, ComposeInputs, ComposeOutputs, RevealInputs,
+    RevealParticipantInputs, compose, compose_reveal,
+};
 use indexer::legacy_test_utils;
 use indexer::reactor::events::EventSubscriber;
 use indexer::witness_data::{TokenBalance, WitnessData};
@@ -29,6 +32,7 @@ use indexer::{
     test_utils::new_test_db,
 };
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 use tokio_util::sync::CancellationToken;
 
@@ -431,6 +435,245 @@ async fn test_compose_missing_params() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
+
+    let app = create_test_app(bitcoin_client.clone()).await?;
+    let config = TestConfig::try_parse()?;
+    let secp = Secp256k1::new();
+
+    let (addr, child_key, _) =
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
+    let (internal_key, _parity) = keypair.x_only_public_key();
+
+    let token_data_base64 = test_utils::base64_serialize(&WitnessData::Attach {
+        output_index: 0,
+        token_balance: TokenBalance {
+            value: 1,
+            name: "T".to_string(),
+        },
+    });
+
+    let server = TestServer::new(app)?;
+
+    // duplicate address provided twice
+    let addresses_vec = vec![
+        ComposeAddressQuery {
+            address: addr.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
+                .to_string(),
+        },
+        ComposeAddressQuery {
+            address: addr.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
+                .to_string(),
+        },
+    ];
+    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+
+    let response: TestResponse = server
+        .get(&format!(
+            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            urlencoding::encode(&addresses_b64),
+            urlencoding::encode(&token_data_base64),
+        ))
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    let error_body = response.text();
+    assert!(error_body.contains("duplicate address provided"));
+
+    // duplicate utxo within a participant
+    let addresses_vec2 = vec![ComposeAddressQuery {
+        address: addr.to_string(),
+        x_only_public_key: internal_key.to_string(),
+        funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0,01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0".to_string(),
+    }];
+    let addresses_b64_2 = base64_engine.encode(serde_json::to_vec(&addresses_vec2)?);
+
+    let response2: TestResponse = server
+        .get(&format!(
+            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            urlencoding::encode(&addresses_b64_2),
+            urlencoding::encode(&token_data_base64),
+        ))
+        .await;
+
+    assert_eq!(response2.status_code(), StatusCode::BAD_REQUEST);
+    let error_body2 = response2.text();
+    assert!(error_body2.contains("duplicate funding outpoint provided for participant"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
+    let app = create_test_app(bitcoin_client.clone()).await?;
+    let config = TestConfig::try_parse()?;
+    let secp = Secp256k1::new();
+
+    let (addr, child_key, _) =
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
+    let (internal_key, _parity) = keypair.x_only_public_key();
+
+    let server = TestServer::new(app)?;
+
+    // Oversized script_data
+    let oversized = vec![0u8; 16 * 1024 + 1];
+    let oversized_b64 = test_utils::base64_serialize(&oversized);
+    let addresses_vec = vec![ComposeAddressQuery {
+        address: addr.to_string(),
+        x_only_public_key: internal_key.to_string(),
+        funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
+            .to_string(),
+    }];
+    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+
+    let resp: TestResponse = server
+        .get(&format!(
+            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            urlencoding::encode(&addresses_b64),
+            urlencoding::encode(&oversized_b64),
+        ))
+        .await;
+    assert_eq!(resp.status_code(), StatusCode::BAD_REQUEST);
+    assert!(resp.text().contains("script data size invalid"));
+
+    // Oversized chained_script_data
+    let chained_oversized_b64 = test_utils::base64_serialize(&vec![0u8; 16 * 1024 + 1]);
+    let token_data_b64 = test_utils::base64_serialize(&b"x".to_vec());
+    let resp2: TestResponse = server
+        .get(&format!(
+            "/compose?addresses={}&script_data={}&chained_script_data={}&sat_per_vbyte=2",
+            urlencoding::encode(&addresses_b64),
+            urlencoding::encode(&token_data_b64),
+            urlencoding::encode(&chained_oversized_b64),
+        ))
+        .await;
+    assert_eq!(resp2.status_code(), StatusCode::BAD_REQUEST);
+    assert!(resp2.text().contains("chained script data size invalid"));
+
+    // Invalid fee rate (0)
+    let resp3: TestResponse = server
+        .get(&format!(
+            "/compose?addresses={}&script_data={}&sat_per_vbyte=0",
+            urlencoding::encode(&addresses_b64),
+            urlencoding::encode(&token_data_b64),
+        ))
+        .await;
+    assert_eq!(resp3.status_code(), StatusCode::BAD_REQUEST);
+    assert!(resp3.text().contains("Invalid fee rate"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reveal_with_op_return_mempool_accept() -> Result<()> {
+    let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
+    let config = TestConfig::try_parse()?;
+    let secp = Secp256k1::new();
+
+    let (seller_address, seller_child_key, _) =
+        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
+    let (internal_key, _parity) = keypair.x_only_public_key();
+
+    // Build compose with small script and one UTXO
+    let out_point = OutPoint {
+        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
+        vout: 0,
+    };
+    let utxo_for_output = TxOut {
+        value: Amount::from_sat(9000),
+        script_pubkey: seller_address.script_pubkey(),
+    };
+
+    let compose_params = ComposeInputs::builder()
+        .addresses(vec![ComposeAddressInputs {
+            address: seller_address.clone(),
+            x_only_public_key: internal_key,
+            funding_utxos: vec![(out_point, utxo_for_output.clone())],
+        }])
+        .script_data(b"Hello, world!".to_vec())
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .envelope(546)
+        .build();
+
+    let compose_outputs = compose(compose_params)?;
+
+    let mut commit_tx = compose_outputs.commit_transaction;
+    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    // Initial reveal tx (unused after recomposition with OP_RETURN)
+    let _initial_reveal_tx = compose_outputs.reveal_transaction;
+
+    // Add OP_RETURN data (within 77 bytes total payload minus tag)
+    let inputs = RevealInputs::builder()
+        .commit_txid(commit_tx.compute_txid())
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .participants(vec![RevealParticipantInputs {
+            address: seller_address.clone(),
+            x_only_public_key: internal_key,
+            commit_outpoint: OutPoint {
+                txid: commit_tx.compute_txid(),
+                vout: 0,
+            },
+            commit_prevout: commit_tx.output[0].clone(),
+            commit_script_data: compose_outputs.per_participant[0]
+                .commit
+                .script_data_chunk
+                .clone(),
+        }])
+        .op_return_data(vec![0xAB; 10])
+        .envelope(546)
+        .build();
+
+    let reveal_outputs = compose_reveal(inputs)?;
+
+    // Sign commit
+    test_utils::sign_key_spend(
+        &secp,
+        &mut commit_tx,
+        &[utxo_for_output],
+        &keypair,
+        0,
+        Some(TapSighashType::All),
+    )?;
+
+    // Sign reveal
+    let taproot_spend_info = TaprootBuilder::new()
+        .add_leaf(0, tap_script.clone())
+        .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
+        .finalize(&secp, internal_key)
+        .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
+    let mut reveal_tx_signed = reveal_outputs.transaction.clone();
+    test_utils::sign_script_spend(
+        &secp,
+        &taproot_spend_info,
+        &tap_script,
+        &mut reveal_tx_signed,
+        &[commit_tx.output[0].clone()],
+        &keypair,
+        0,
+    )?;
+
+    let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
+    let reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx_signed));
+
+    let result = bitcoin_client
+        .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex])
+        .await?;
+    assert_eq!(result.len(), 2);
+    assert!(result[0].allowed);
+    assert!(result[1].allowed);
+
+    Ok(())
+}
+#[tokio::test]
 async fn test_compose_nonexistent_utxo() -> Result<()> {
     let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
 
@@ -472,7 +715,7 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
     let error_body = response.text();
-    assert!(error_body.contains("No funding transactions found"));
+    assert!(error_body.contains("No such mempool or blockchain transaction"));
 
     Ok(())
 }

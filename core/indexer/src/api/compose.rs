@@ -28,6 +28,7 @@ const MAX_PARTICIPANTS: usize = 1000;
 const MAX_SCRIPT_BYTES: usize = 16 * 1024; // 16 KiB
 const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
+const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ComposeAddressQuery {
@@ -105,6 +106,10 @@ impl ComposeInputs {
             return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
         }
 
+        if query.sat_per_vbyte == 0 {
+            return Err(anyhow!("Invalid fee rate"));
+        }
+
         let addresses: Vec<ComposeAddressInputs> =
             try_join_all(query.addresses.iter().map(|address_query| async {
                 let address: Address = Address::from_str(&address_query.address)?
@@ -116,6 +121,22 @@ impl ComposeInputs {
                 let x_only_public_key = XOnlyPublicKey::from_str(&address_query.x_only_public_key)?;
                 let funding_utxos =
                     get_utxos(bitcoin_client, address_query.funding_utxo_ids.clone()).await?;
+                if funding_utxos.len() > MAX_UTXOS_PER_PARTICIPANT {
+                    return Err(anyhow!(
+                        "too many utxos for participant (max {})",
+                        MAX_UTXOS_PER_PARTICIPANT
+                    ));
+                }
+                // Ensure no duplicate outpoints within a participant
+                let mut local_set: HashSet<(Txid, u32)> = HashSet::new();
+                for (op, _) in funding_utxos.iter() {
+                    let key = (op.txid, op.vout);
+                    if !local_set.insert(key) {
+                        return Err(anyhow!(
+                            "duplicate funding outpoint provided for participant"
+                        ));
+                    }
+                }
                 Ok(ComposeAddressInputs {
                     address,
                     x_only_public_key,
@@ -285,6 +306,9 @@ pub struct RevealInputs {
 
 impl RevealInputs {
     pub async fn from_query(query: RevealQuery, bitcoin_client: &Client) -> Result<Self> {
+        if query.sat_per_vbyte == 0 {
+            return Err(anyhow!("Invalid fee rate"));
+        }
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
         let commit_txid = bitcoin::Txid::from_str(&query.commit_txid)?;
@@ -328,7 +352,10 @@ impl RevealInputs {
 
         let op_return_data = query.op_return_data.clone();
 
-        let envelope = query.envelope.unwrap_or(330);
+        let envelope = query
+            .envelope
+            .unwrap_or(MIN_ENVELOPE_SATS)
+            .max(MIN_ENVELOPE_SATS);
         let chained_script_data = query.chained_script_data.clone();
 
         Ok(Self {
@@ -428,7 +455,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             &tap_script,
             &tap_info,
             addr.address.script_pubkey().len(),
-            params.envelope,
             params.fee_rate,
         )?;
 
@@ -443,17 +469,39 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         let mut selected: Vec<(OutPoint, TxOut)> = Vec::new();
         let mut selected_sum: u64 = 0;
 
-        loop {
-            // Estimate commit delta fee for current tentative selection using helper
-            let commit_delta_fee = estimate_commit_delta_fee(
-                &commit_psbt.unsigned_tx,
-                selected.len(),
-                script_spendable_address.script_pubkey().len(),
-                addr.address.script_pubkey().len(),
-                params.fee_rate,
+        // Fee paid so far by previous participants (inputs - outputs) on the current tx
+        let paid_so_far_inputs: u64 = commit_psbt
+            .inputs
+            .iter()
+            .map(|inp| inp.witness_utxo.as_ref().map_or(0, |o| o.value.to_sat()))
+            .sum::<u64>()
+            .saturating_sub(
+                commit_psbt
+                    .unsigned_tx
+                    .output
+                    .iter()
+                    .map(|o| o.value.to_sat())
+                    .sum::<u64>(),
             );
 
-            let required_total = script_value.saturating_add(commit_delta_fee);
+        loop {
+            // Waterfall-required total using dummy witnesses
+            let mut base = commit_psbt.unsigned_tx.clone();
+            for _ in 0..selected.len() {
+                base.input.push(dummy_txin());
+            }
+            base.output.push(TxOut {
+                value: Amount::from_sat(script_value),
+                script_pubkey: script_spendable_address.script_pubkey(),
+            });
+            base.output.push(TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: addr.address.script_pubkey(),
+            });
+            let total_fee_target = estimate_fee_with_dummy_key_witness(&base, params.fee_rate)
+                .ok_or(anyhow!("fee calculation overflow"))?;
+            let participant_fee_needed = total_fee_target.saturating_sub(paid_so_far_inputs);
+            let required_total = script_value.saturating_add(participant_fee_needed);
             if selected_sum >= required_total {
                 // We have enough; break selection loop
                 break;
@@ -471,6 +519,8 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         }
 
         // Compute change for this address and append real outputs/inputs
+        // Snapshot tx before adding this participant to compute total incremental fee correctly
+        let tx_before_participant = commit_psbt.unsigned_tx.clone();
         // Append selected inputs to the real PSBT and set per-input metadata
         for (outpoint, prevout) in selected.iter() {
             commit_psbt.unsigned_tx.input.push(TxIn {
@@ -491,23 +541,23 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         });
         // Maintain PSBT outputs array in sync with transaction outputs
         commit_psbt.outputs.push(bitcoin::psbt::Output::default());
-        // Recompute fees precisely: compare base (no change) vs with-change.
+        // Recompute fees precisely using total incremental delta relative to tx_before_participant
+        let before_fee =
+            estimate_fee_with_dummy_key_witness(&tx_before_participant, params.fee_rate)
+                .ok_or(anyhow!("fee calculation overflow"))?;
+        // Fee after adding a zero-valued change output for this participant:
         let mut with_change = commit_psbt.unsigned_tx.clone();
         with_change.output.push(TxOut {
             value: Amount::from_sat(0),
             script_pubkey: addr.address.script_pubkey(),
         });
-        let with_change_vb = tx_vbytes_est(&with_change);
-        let with_change_fee = params
-            .fee_rate
-            .fee_vb(with_change_vb)
-            .ok_or(anyhow!("fee calculation overflow"))?
-            .to_sat();
+        let with_change_fee = estimate_fee_with_dummy_key_witness(&with_change, params.fee_rate)
+            .ok_or(anyhow!("fee calculation overflow"))?;
+        let total_incremental_fee = with_change_fee.saturating_sub(before_fee);
 
-        // If we do NOT add change, miner fee will be: selected_sum - script_value - base_fee.
-        // If we DO add change, change amount equals: selected_sum - script_value - with_change_fee.
+        // Change amount equals inputs selected minus (script_value + total incremental fee)
         let change_candidate =
-            selected_sum.saturating_sub(script_value.saturating_add(with_change_fee));
+            selected_sum.saturating_sub(script_value.saturating_add(total_incremental_fee));
         if change_candidate >= params.envelope {
             commit_psbt.unsigned_tx.output.push(TxOut {
                 value: Amount::from_sat(change_candidate),
@@ -620,7 +670,11 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let mut op_return_added = false;
     // Optional OP_RETURN first (keeps vsize expectations stable)
     if let Some(data) = params.op_return_data.clone() {
-        if data.len() > MAX_OP_RETURN_BYTES {
+        // Enforce total payload size including tag; policy considers total push size
+        let mut payload = Vec::with_capacity(3 + data.len());
+        payload.extend_from_slice(b"kon");
+        payload.extend_from_slice(&data);
+        if payload.len() > MAX_OP_RETURN_BYTES {
             return Err(anyhow!(
                 "OP_RETURN data exceeds {} bytes",
                 MAX_OP_RETURN_BYTES
@@ -631,8 +685,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             script_pubkey: {
                 let mut s = ScriptBuf::new();
                 s.push_opcode(OP_RETURN);
-                s.push_slice(b"kon");
-                s.push_slice(PushBytesBuf::try_from(data)?);
+                s.push_slice(PushBytesBuf::try_from(payload)?);
                 s
             },
         });
@@ -804,35 +857,26 @@ pub fn build_tap_script_and_script_address(
 }
 
 pub fn calculate_change_single(
-    mut outputs: Vec<TxOut>,
+    outputs: Vec<TxOut>,
     input_tuple: (TxIn, TxOut),
     tap_script: &ScriptBuf,
     control_block: &ScriptBuf,
     fee_rate: FeeRate,
 ) -> Option<u64> {
-    let (mut txin, txout) = input_tuple;
-    let mut witness = Witness::new();
-    witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
-    witness.push(tap_script.clone());
-    witness.push(control_block.clone());
-    txin.witness = witness;
-
+    // Sum actual input value
+    let (_txin, txout) = input_tuple;
     let input_sum = txout.value.to_sat();
 
-    let mut dummy_tx = build_dummy_tx(vec![txin], std::mem::take(&mut outputs));
+    // Prepare output script lengths (existing owner outputs + dummy change spk len = 34)
+    let mut spk_lens: Vec<usize> = outputs.iter().map(|o| o.script_pubkey.len()).collect();
+    spk_lens.push(34);
 
-    // push dummy change to the tx
-    dummy_tx.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0; 34]),
-    });
+    // Compute fee for single-input script spend with provided tapscript/control_block
+    let vb = script_spend_vbytes(1, tap_script, control_block, &spk_lens);
+    let fee = fee_rate.fee_vb(vb)?.to_sat();
 
-    let output_sum: u64 = dummy_tx.output.iter().map(|o| o.value.to_sat()).sum();
-    let vsize = dummy_tx.vsize() as u64;
-    let fee = match fee_rate.fee_vb(vsize) {
-        Some(a) => a.to_sat(),
-        None => return None,
-    };
+    // Output sum excludes dummy change (value 0)
+    let output_sum: u64 = outputs.iter().map(|o| o.value.to_sat()).sum();
 
     input_sum.checked_sub(output_sum + fee)
 }
@@ -850,63 +894,51 @@ pub fn tx_vbytes_est(tx: &Transaction) -> u64 {
     weight.div_ceil(4)
 }
 
+// Core low-level helper: return vbytes for a script-spend with the given tapscript/control_block,
+// number of inputs, and output scriptPubKey lengths. Used by both fee estimation and change calc.
+fn script_spend_vbytes(
+    inputs_count: usize,
+    tap_script: &ScriptBuf,
+    control_block: &ScriptBuf,
+    output_spk_lens: &[usize],
+) -> u64 {
+    let mut tx = build_dummy_tx(vec![], vec![]);
+    for _ in 0..inputs_count {
+        let mut txin = dummy_txin();
+        let mut witness = Witness::new();
+        witness.push(vec![0; SCHNORR_SIGNATURE_SIZE]);
+        witness.push(tap_script.clone());
+        witness.push(control_block.clone());
+        txin.witness = witness;
+        tx.input.push(txin);
+    }
+    for &len in output_spk_lens.iter() {
+        tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; len]),
+        });
+    }
+    tx_vbytes_est(&tx)
+}
+
 pub fn estimate_reveal_fee_for_address(
     tap_script: &ScriptBuf,
     tap_info: &TaprootSpendInfo,
     recipient_spk_len: usize,
-    envelope: u64,
     fee_rate: FeeRate,
 ) -> Result<u64> {
-    let mut dummy = build_dummy_tx(
-        vec![dummy_txin()],
-        vec![TxOut {
-            value: Amount::from_sat(envelope),
-            script_pubkey: ScriptBuf::from_bytes(vec![0u8; recipient_spk_len]),
-        }],
+    let cb = tap_info
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+        .ok_or(anyhow!("failed to create control block"))?;
+    let vb = script_spend_vbytes(
+        1,
+        tap_script,
+        &ScriptBuf::from_bytes(cb.serialize()),
+        &[recipient_spk_len],
     );
-    let mut w = Witness::new();
-    w.push(vec![0u8; 65]);
-    w.push(tap_script.clone());
-    if let Some(cb) = tap_info.control_block(&(tap_script.clone(), LeafVersion::TapScript)) {
-        w.push(cb.serialize());
-    } else {
-        return Err(anyhow!("failed to create control block"));
-    }
-    dummy.input[0].witness = w;
-    let vb = tx_vbytes_est(&dummy);
     fee_rate
         .fee_vb(vb)
         .map_or(Err(anyhow!("fee calculation overflow")), |a| Ok(a.to_sat()))
-}
-
-pub fn estimate_commit_delta_fee(
-    base_tx: &Transaction,
-    new_inputs_count: usize,
-    script_spk_len: usize,
-    change_spk_len: usize,
-    fee_rate: FeeRate,
-) -> u64 {
-    let before_vb = tx_vbytes_est(base_tx);
-    let mut temp = base_tx.clone();
-    (0..new_inputs_count).for_each(|_| {
-        temp.input.push(dummy_txin());
-        let idx = temp.input.len() - 1;
-        let mut w = Witness::new();
-        // Model key-path spend for commit inputs: single Schnorr signature
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        temp.input[idx].witness = w;
-    });
-    temp.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; script_spk_len]),
-    });
-    temp.output.push(TxOut {
-        value: Amount::from_sat(0),
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; change_spk_len]),
-    });
-    let after_vb = tx_vbytes_est(&temp);
-    let delta_vb = after_vb.saturating_sub(before_vb);
-    fee_rate.fee_vb(delta_vb).map_or(0, |a| a.to_sat())
 }
 
 pub fn build_dummy_tx(inputs: Vec<TxIn>, outputs: Vec<TxOut>) -> Transaction {
@@ -922,6 +954,17 @@ fn dummy_txin() -> TxIn {
     TxIn {
         ..Default::default()
     }
+}
+
+pub fn estimate_fee_with_dummy_key_witness(tx: &Transaction, fee_rate: FeeRate) -> Option<u64> {
+    let mut t = tx.clone();
+    for inp in &mut t.input {
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        inp.witness = w;
+    }
+    let vb = tx_vbytes_est(&t);
+    fee_rate.fee_vb(vb).map(|a| a.to_sat())
 }
 
 pub fn split_even_chunks(data: &[u8], parts: usize) -> Result<Vec<Vec<u8>>> {
@@ -956,25 +999,27 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
         })
         .collect();
 
-    let funding_txs: Vec<Transaction> = bitcoin_client
-        .get_raw_transactions(
-            outpoints
-                .iter()
-                .map(|outpoint| outpoint.txid)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
+    let txids: Vec<Txid> = outpoints.iter().map(|op| op.txid).collect();
+    let results = bitcoin_client
+        .get_raw_transactions(txids.as_slice())
         .await
-        .map_err(|e| anyhow!("Failed to fetch transactions: {}", e))?
-        .into_iter()
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
-    if funding_txs.is_empty() {
+        .map_err(|e| anyhow!("Failed to fetch transactions: {}", e))?;
+    if results.is_empty() {
         return Err(anyhow!("No funding transactions found"));
     }
 
+    if results.len() != outpoints.len() {
+        return Err(anyhow!(
+            "RPC returned mismatched number of transactions (expected {}, got {})",
+            outpoints.len(),
+            results.len()
+        ));
+    }
+
     let mut funding_utxos: Vec<(OutPoint, TxOut)> = Vec::with_capacity(outpoints.len());
-    for (outpoint, tx) in outpoints.into_iter().zip(funding_txs.into_iter()) {
+    for (outpoint, res) in outpoints.into_iter().zip(results.into_iter()) {
+        let tx =
+            res.map_err(|e| anyhow!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
         let maybe_prevout = tx.output.get(outpoint.vout as usize).cloned();
         match maybe_prevout {
             Some(prevout) => funding_utxos.push((outpoint, prevout)),
