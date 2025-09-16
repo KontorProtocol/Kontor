@@ -22,14 +22,10 @@ fn create_handle(id: numbers::Integer) -> String {
 
 // Helper function to get the token's contract address
 fn get_contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
-    storage(ctx).contract_addr(ctx).unwrap_or_else(|| {
-        // Fallback: This should be set during init
-        foreign::ContractAddress {
-            name: "token".to_string(),
-            height: 0,
-            tx_index: 1,
-        }
-    })
+    storage(ctx).contract_addr(ctx).expect(
+        "Contract address must be properly set during initialization. \
+         This indicates a deployment configuration error."
+    )
 }
 
 #[derive(Clone, Default, StorageRoot)]

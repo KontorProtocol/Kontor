@@ -166,6 +166,7 @@ struct AmmStorage {
     pub pools: Map<String, Pool>,
     pub admin: String,  // Admin address (signer-based auth)
     pub self_address: String,
+    pub next_lp_balance_id: numbers::Integer,  // Counter for unique LP balance IDs
 }
 
 fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::ContractAddress, account: &str) -> Result<numbers::Integer, error::Error> {
@@ -193,7 +194,6 @@ fn create_token_balance_from_pool(
     ctx: &ProcContext,
     token: &foreign::ContractAddress,
     amount: numbers::Integer,
-    recipient: &str,
 ) -> Result<Balance, error::Error> {
     // Withdraw from the pool (using contract signer) and return the Balance
     token_dyn::withdraw(token, ctx.contract_signer(), amount)
@@ -205,13 +205,13 @@ fn create_lp_balance(
     pair: TokenPair,
     amount: numbers::Integer,
 ) -> LpBalance {
-    // Get next ID from storage and create handle
-    let pools = storage(ctx).pools();
-    let canonical_pair = CanonicalTokenPair::new(pair.token_a.clone(), pair.token_b.clone()).unwrap();
-    let id = canonical_pair.id();
+    // Get next ID from storage and increment counter
+    let id = storage(ctx).next_lp_balance_id(ctx);
+    let one = numbers::u64_to_integer(1);
+    storage(ctx).set_next_lp_balance_id(ctx, numbers::add_integer(id, one));
     
-    // Create a unique handle for this LP balance
-    let handle = format!("lp_{}_{}", id, amount.r0); // Simple handle for now
+    // Create a unique handle using the counter (much more robust)
+    let handle = format!("lp_balance_{}", numbers::integer_to_string(id));
     
     let data = LpBalanceData {
         pair,
@@ -391,6 +391,7 @@ impl Guest for Amm {
             pools: Map::default(),
             admin,
             self_address,
+            next_lp_balance_id: numbers::u64_to_integer(0),
         }
         .init(ctx)
     }
@@ -628,8 +629,8 @@ impl Guest for Amm {
 
         if lp_in == 0.into() {
             // Create zero-amount token balances for the result
-            let balance_a = create_token_balance_from_pool(ctx, &pool.token_a, 0.into(), "")?;
-            let balance_b = create_token_balance_from_pool(ctx, &pool.token_b, 0.into(), "")?;
+            let balance_a = create_token_balance_from_pool(ctx, &pool.token_a, 0.into())?;
+            let balance_b = create_token_balance_from_pool(ctx, &pool.token_b, 0.into())?
             return Ok(WithdrawResult { balance_a, balance_b });
         }
 
@@ -651,8 +652,8 @@ impl Guest for Amm {
         validate_min_output(b_out, min_b_out)?;
 
         // Create token Balance resources from the pool
-        let balance_a_out = create_token_balance_from_pool(ctx, &pool.token_a, a_out, &user_address)?;
-        let balance_b_out = create_token_balance_from_pool(ctx, &pool.token_b, b_out, &user_address)?;
+        let balance_a_out = create_token_balance_from_pool(ctx, &pool.token_a, a_out)?;
+        let balance_b_out = create_token_balance_from_pool(ctx, &pool.token_b, b_out)?
 
         // Burn LP tokens from total supply - resource consumption handles the rest!
         pool.lp_total_supply = numbers::sub_integer(pool.lp_total_supply, lp_in);
@@ -695,7 +696,7 @@ impl Guest for Amm {
                 return Err(AmmError::InvalidTokenIn.into());
             };
             
-            return Ok(create_token_balance_from_pool(ctx, &token_out, 0.into(), "")?);
+            return Ok(create_token_balance_from_pool(ctx, &token_out, 0.into())?);
         }
         
         let pool_address = ctx.contract_signer().to_string();
@@ -732,7 +733,7 @@ impl Guest for Amm {
         consume_token_balance_to_pool(ctx, balance_in, &pool_address)?;
         
         // Create output balance resource from pool
-        let balance_out = create_token_balance_from_pool(ctx, &actual_token_out, out_value, "")?;
+        let balance_out = create_token_balance_from_pool(ctx, &actual_token_out, out_value)?
         
         // Update admin fees
         pool.admin_fee_lp = numbers::add_integer(pool.admin_fee_lp, admin_fee_in_lp);
