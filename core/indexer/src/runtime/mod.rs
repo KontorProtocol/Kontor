@@ -518,248 +518,372 @@ impl built_in::foreign::HostWithStore for Runtime {
 
 impl built_in::context::Host for Runtime {}
 
-impl built_in::context::HostViewContext for Runtime {
-    async fn get_str(
-        &mut self,
-        resource: Resource<ViewContext>,
-        path: String,
-    ) -> Result<Option<String>> {
-        self._get_str(resource, path).await
+impl built_in::context::HostViewContext for Runtime {}
+
+impl built_in::context::HostViewContextWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ViewContext>) -> Result<()> {
+        let _res = accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .delete(rep)?;
+        Ok(())
     }
 
-    async fn get_u64(
-        &mut self,
-        resource: Resource<ViewContext>,
+    async fn get_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+        path: String,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_str(self_, path)
+            .await
+    }
+
+    async fn get_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
         path: String,
     ) -> Result<Option<u64>> {
-        self._get_u64(resource, path).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_u64(self_, path)
+            .await
     }
 
-    async fn get_s64(
-        &mut self,
-        resource: Resource<ViewContext>,
+    async fn get_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
         path: String,
     ) -> Result<Option<i64>> {
-        self._get_s64(resource, path).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_s64(self_, path)
+            .await
     }
 
-    async fn get_bool(
-        &mut self,
-        resource: Resource<ViewContext>,
+    async fn get_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
         path: String,
     ) -> Result<Option<bool>> {
-        self._get_bool(resource, path).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_bool(self_, path)
+            .await
     }
 
-    async fn get_keys(
-        &mut self,
-        resource: Resource<ViewContext>,
+    async fn get_keys<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
         path: String,
     ) -> Result<Resource<Keys>> {
-        self._get_keys(resource, path).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_keys(self_, path)
+            .await
     }
 
-    async fn exists(&mut self, resource: Resource<ViewContext>, path: String) -> Result<bool> {
-        self._exists(resource, path).await
+    async fn exists<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+        path: String,
+    ) -> Result<bool> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._exists(self_, path)
+            .await
     }
 
-    async fn matching_path(
-        &mut self,
-        resource: Resource<ViewContext>,
+    async fn matching_path<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
         regexp: String,
     ) -> Result<Option<String>> {
-        self._matching_path(resource, regexp).await
-    }
-
-    async fn drop(&mut self, resource: Resource<ViewContext>) -> Result<()> {
-        let _res = self.table.lock().await.delete(resource)?;
-        Ok(())
+        accessor
+            .with(|mut access| access.get().clone())
+            ._matching_path(self_, regexp)
+            .await
     }
 }
 
-impl built_in::context::HostSigner for Runtime {
-    async fn to_string(&mut self, resource: Resource<Signer>) -> Result<String> {
-        Ok(self.table.lock().await.get(&resource)?.to_string())
+impl built_in::context::HostSigner for Runtime {}
+
+impl built_in::context::HostSignerWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Signer>) -> Result<()> {
+        let _res = accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .delete(rep)?;
+        Ok(())
     }
 
-    async fn drop(&mut self, resource: Resource<Signer>) -> Result<()> {
-        let _res = self.table.lock().await.delete(resource)?;
-        Ok(())
+    async fn to_string<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
+        Ok(accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .get(&self_)?
+            .to_string())
     }
 }
 
-impl built_in::context::HostProcContext for Runtime {
-    async fn get_str(
-        &mut self,
-        resource: Resource<ProcContext>,
+impl built_in::context::HostProcContext for Runtime {}
+
+impl built_in::context::HostProcContextWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ProcContext>) -> Result<()> {
+        let _res = accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .delete(rep)?;
+        Ok(())
+    }
+
+    async fn get_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         path: String,
     ) -> Result<Option<String>> {
-        self._get_str(resource, path).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_str(self_, path)
+            .await
     }
 
-    async fn set_str(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn get_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<u64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_u64(self_, path)
+            .await
+    }
+
+    async fn get_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<i64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_s64(self_, path)
+            .await
+    }
+
+    async fn get_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_bool(self_, path)
+            .await
+    }
+
+    async fn get_keys<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_keys(self_, path)
+            .await
+    }
+
+    async fn exists<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<bool> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._exists(self_, path)
+            .await
+    }
+
+    async fn matching_path<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        regexp: String,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._matching_path(self_, regexp)
+            .await
+    }
+
+    async fn set_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         path: String,
         value: String,
     ) -> Result<()> {
-        self._set_primitive(resource, path, value).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(self_, path, value)
+            .await
     }
 
-    async fn get_u64(
-        &mut self,
-        resource: Resource<ProcContext>,
-        path: String,
-    ) -> Result<Option<u64>> {
-        self._get_u64(resource, path).await
-    }
-
-    async fn set_u64(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn set_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         path: String,
         value: u64,
     ) -> Result<()> {
-        self._set_primitive(resource, path, value).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(self_, path, value)
+            .await
     }
 
-    async fn get_s64(
-        &mut self,
-        resource: Resource<ProcContext>,
-        path: String,
-    ) -> Result<Option<i64>> {
-        self._get_s64(resource, path).await
-    }
-
-    async fn set_s64(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn set_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         path: String,
         value: i64,
     ) -> Result<()> {
-        self._set_primitive(resource, path, value).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(self_, path, value)
+            .await
     }
 
-    async fn get_bool(
-        &mut self,
-        resource: Resource<ProcContext>,
-        path: String,
-    ) -> Result<Option<bool>> {
-        self._get_bool(resource, path).await
-    }
-
-    async fn get_keys(
-        &mut self,
-        resource: Resource<ProcContext>,
-        path: String,
-    ) -> Result<Resource<Keys>> {
-        self._get_keys(resource, path).await
-    }
-
-    async fn set_bool(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn set_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         path: String,
         value: bool,
     ) -> Result<()> {
-        self._set_primitive(resource, path, value).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(self_, path, value)
+            .await
     }
 
-    async fn set_void(&mut self, resource: Resource<ProcContext>, path: String) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage.set(contract_id, &path, &[]).await
+    async fn set_void<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        path: String,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(self_, path, ())
+            .await
     }
 
-    async fn exists(&mut self, resource: Resource<ProcContext>, path: String) -> Result<bool> {
-        self._exists(resource, path).await
-    }
-
-    async fn matching_path(
-        &mut self,
-        resource: Resource<ProcContext>,
-        regexp: String,
-    ) -> Result<Option<String>> {
-        self._matching_path(resource, regexp).await
-    }
-
-    async fn delete_matching_paths(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn delete_matching_paths<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
         regexp: String,
     ) -> Result<u64> {
-        let table = self.table.lock().await;
-        let contract_id = table.get(&resource)?.contract_id;
-        self.storage
+        let runtime = accessor.with(|mut access| access.get().clone());
+        let contract_id = runtime.table.lock().await.get(&self_)?.contract_id;
+        runtime
+            .storage
             .delete_matching_paths(contract_id, &regexp)
             .await
     }
 
-    async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {
-        let mut table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        let signer = _self.signer.clone();
-        Ok(table.push(signer)?)
-    }
-
-    async fn contract_signer(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn signer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
-        let mut table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        let signer = Signer::ContractId(_self.contract_id);
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        let signer = table.get(&self_)?.signer.clone();
         Ok(table.push(signer)?)
     }
 
-    async fn view_context(
-        &mut self,
-        resource: Resource<ProcContext>,
+    async fn contract_signer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(Signer::ContractId(contract_id))?)
+    }
+
+    async fn view_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
-        let mut table = self.table.lock().await;
-        let contract_id = table.get(&resource)?.contract_id;
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
     }
+}
 
-    async fn drop(&mut self, rep: Resource<ProcContext>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
+impl built_in::context::HostKeys for Runtime {}
+
+impl built_in::context::HostKeysWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Keys>) -> Result<()> {
+        let _res = accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .delete(rep)?;
         Ok(())
+    }
+
+    async fn next<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Keys>,
+    ) -> Result<Option<String>> {
+        Ok(accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .get_mut(&self_)?
+            .stream
+            .next()
+            .await
+            .transpose()?)
     }
 }
 
-impl built_in::context::HostKeys for Runtime {
-    async fn next(&mut self, rep: Resource<Keys>) -> Result<Option<String>> {
-        let mut table = self.table.lock().await;
-        let keys = table.get_mut(&rep)?;
-        Ok(keys.stream.next().await.transpose()?)
-    }
+impl built_in::context::HostFallContext for Runtime {}
 
-    async fn drop(&mut self, rep: Resource<Keys>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
+impl built_in::context::HostFallContextWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FallContext>) -> Result<()> {
+        let _res = accessor
+            .with(|mut access| access.get().table.clone())
+            .lock()
+            .await
+            .delete(rep)?;
         Ok(())
     }
-}
 
-impl built_in::context::HostFallContext for Runtime {
-    async fn signer(
-        &mut self,
-        resource: Resource<FallContext>,
+    async fn signer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Signer>>> {
-        let mut table = self.table.lock().await;
-        if let Some(signer) = table.get(&resource)?.signer.clone() {
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        if let Some(signer) = table.get(&self_)?.signer.clone() {
             Ok(Some(table.push(signer)?))
         } else {
             Ok(None)
         }
     }
 
-    async fn proc_context(
-        &mut self,
-        resource: Resource<FallContext>,
+    async fn proc_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
     ) -> Result<Option<Resource<ProcContext>>> {
-        let mut table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        let contract_id = _self.contract_id;
-        if let Some(signer) = _self.signer.clone() {
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        if let Some(signer) = res.signer.clone() {
             Ok(Some(table.push(ProcContext {
                 contract_id,
                 signer,
@@ -769,18 +893,14 @@ impl built_in::context::HostFallContext for Runtime {
         }
     }
 
-    async fn view_context(
-        &mut self,
-        resource: Resource<FallContext>,
+    async fn view_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
     ) -> Result<Resource<ViewContext>> {
-        let mut table = self.table.lock().await;
-        let contract_id = table.get(&resource)?.contract_id;
+        let resource_table = accessor.with(|mut access| access.get().table.clone());
+        let mut table = resource_table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
-    }
-
-    async fn drop(&mut self, rep: Resource<FallContext>) -> Result<()> {
-        let _res = self.table.lock().await.delete(rep)?;
-        Ok(())
     }
 }
 

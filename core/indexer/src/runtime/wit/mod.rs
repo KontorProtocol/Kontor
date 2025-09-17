@@ -16,6 +16,7 @@ wasmtime::component::bindgen!({
     imports: {
         "kontor:built-in/crypto": async | store | trappable,
         "kontor:built-in/foreign": async | store | trappable,
+        "kontor:built-in/context": async | store | trappable,
         default: async | trappable,
     }
 });
