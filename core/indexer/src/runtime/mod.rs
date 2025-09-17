@@ -1,6 +1,7 @@
 mod component_cache;
 mod contracts;
 mod counter;
+mod fuel;
 pub mod numerics;
 mod stack;
 mod storage;
@@ -48,6 +49,7 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::{
     counter::Counter,
+    fuel::Fuel,
     stack::Stack,
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
@@ -295,17 +297,22 @@ impl Runtime {
         handle_call(&self.stack, is_fallback, call_result, results).await
     }
 
-    async fn _get_primitive<T: HasContractId, R: for<'de> Deserialize<'de>>(
+    async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &mut self,
+        accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: String,
     ) -> Result<Option<R>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
+        let fuel = Fuel::Path(&path).consume(accessor)?;
         self.storage
-            .get(1000000, _self.get_contract_id(), &path)
+            .get(fuel, _self.get_contract_id(), &path)
             .await?
-            .map(|bs| deserialize_cbor(&bs))
+            .map(|bs| {
+                Fuel::Get(bs.len()).consume(accessor)?;
+                deserialize_cbor(&bs)
+            })
             .transpose()
     }
 
@@ -430,7 +437,6 @@ impl built_in::foreign::HostWithStore for Runtime {
 
         let (mut store, is_fallback, params, mut results, func) =
             prepare_call(&runtime, &contract_address, signer, &expr, fuel).await?;
-
         let (call_result, results, fuel_result) = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store.get_fuel())
@@ -464,7 +470,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -475,7 +481,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Option<u64>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -486,7 +492,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Option<i64>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -497,7 +503,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Option<bool>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -576,7 +582,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -587,7 +593,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Option<u64>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -598,7 +604,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Option<i64>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 
@@ -609,7 +615,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Option<bool>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_primitive(self_, path)
+            ._get_primitive(accessor, self_, path)
             .await
     }
 

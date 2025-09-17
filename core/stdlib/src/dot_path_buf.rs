@@ -47,6 +47,10 @@ impl DotPathBuf {
     pub fn segments(&self) -> impl Iterator<Item = &str> + '_ {
         self.segments.iter().map(|s| s.as_str())
     }
+
+    pub fn num_segments(&self) -> u64 {
+        self.segments.len() as u64
+    }
 }
 
 impl AsRef<str> for DotPathBuf {
