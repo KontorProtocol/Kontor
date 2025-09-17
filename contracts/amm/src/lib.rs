@@ -52,6 +52,11 @@ impl Default for foreign::ContractAddress {
     }
 }
 
+// Helper function to compare ContractAddress instances
+fn addr_eq(a: &foreign::ContractAddress, b: &foreign::ContractAddress) -> bool {
+    a.name == b.name && a.height == b.height && a.tx_index == b.tx_index
+}
+
 impl CanonicalTokenPair {
     /// Creates a new canonical pair, automatically sorting A < B by (name, height, tx_index) tuple
     pub fn new(
@@ -802,9 +807,9 @@ impl Guest for Amm {
             consume_token_balance_to_pool(ctx, balance_in, &pool_address, &token_in)?;
             
             // Determine output token
-            let token_out = if token_in == pool.token_a {
+            let token_out = if addr_eq(&token_in, &pool.token_a) {
                 pool.token_b.clone()
-            } else if token_in == pool.token_b {
+            } else if addr_eq(&token_in, &pool.token_b) {
                 pool.token_a.clone()
             } else {
                 return Err(AmmError::InvalidTokenIn.into());
@@ -819,11 +824,11 @@ impl Guest for Amm {
         let token_a = pool.token_a.clone();
         let token_b = pool.token_b.clone();
         
-        let (actual_token_out, pool_balance_in, pool_balance_out) = if token_in == token_a {
+        let (actual_token_out, pool_balance_in, pool_balance_out) = if addr_eq(&token_in, &token_a) {
             // Swapping A for B
             let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
             (token_b, balance_a, balance_b)
-        } else if token_in == token_b {
+        } else if addr_eq(&token_in, &token_b) {
             // Swapping B for A
             let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address)?;
             (token_a, balance_b, balance_a)
@@ -956,9 +961,9 @@ impl Guest for Amm {
             }
             
             // Determine which token is being swapped
-            let (balance_in, balance_out) = if token_in == pool.token_a {
+            let (balance_in, balance_out) = if addr_eq(&token_in, &pool.token_a) {
                 get_pool_token_balances(&pool, &pool_address).ok()?
-            } else if token_in == pool.token_b {
+            } else if addr_eq(&token_in, &pool.token_b) {
                 let (balance_a, balance_b) = get_pool_token_balances(&pool, &pool_address).ok()?;
                 (balance_b, balance_a)
             } else {

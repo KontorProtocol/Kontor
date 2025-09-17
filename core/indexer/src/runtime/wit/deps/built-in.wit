@@ -156,6 +156,62 @@ interface resource-manager {
     transfer: func(from-contract: s64, to-contract: s64, handle: u32) -> result<_, error>;
 }
 
+interface assets {
+    use numbers.{integer};
+    use foreign.{contract-address};
+
+    // The Balance resource for token ownership
+    resource balance {
+        // Constructor: Create a new balance
+        constructor(amount: integer, token: contract-address);
+        
+        // Get the amount of tokens
+        amount: func() -> integer;
+        
+        // Get the token contract address
+        token: func() -> contract-address;
+        
+        // Check if balance is zero
+        is-zero: func() -> bool;
+        
+        // Split this balance into two parts
+        split: func(amount: integer) -> split-result;
+        
+        // Merge two balances (static method)
+        merge: static func(first: balance, second: balance) -> result<balance, string>;
+        
+        // Consume this balance (destroy it)
+        consume: func();
+    }
+    
+    // Result of splitting a balance
+    record split-result {
+        split: balance,
+        remainder: option<balance>,
+    }
+    
+    // The LpBalance resource for liquidity pool ownership
+    resource lp-balance {
+        // Constructor: Create a new LP balance
+        constructor(amount: integer, token-a: contract-address, token-b: contract-address);
+        
+        // Get the amount of LP tokens
+        amount: func() -> integer;
+        
+        // Get the first token contract address
+        token-a: func() -> contract-address;
+        
+        // Get the second token contract address  
+        token-b: func() -> contract-address;
+        
+        // Check if LP balance is zero
+        is-zero: func() -> bool;
+        
+        // Consume this LP balance (move-only semantic)
+        consume: func();
+    }
+}
+
 world built-in {
     import context;
     import foreign;
@@ -163,4 +219,5 @@ world built-in {
     import error;
     import numbers;
     import resource-manager;
+    import assets;
 }

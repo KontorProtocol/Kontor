@@ -2,9 +2,18 @@ use std::{fmt, pin::Pin};
 
 use futures_util::Stream;
 
+use crate::runtime::balance::BalanceData;
+use crate::runtime::lp_balance::LpBalanceData;
+
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
+
+// Re-export Balance as the resource type expected by wasmtime
+pub type Balance = BalanceData;
+
+// Re-export LpBalance as the resource type expected by wasmtime  
+pub type LpBalance = LpBalanceData;
 
 pub struct ViewContext {
     pub contract_id: i64,

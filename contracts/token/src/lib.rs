@@ -167,28 +167,27 @@ impl Guest for Token {
         // Decrease ledger balance
         ledger.set(ctx, owner.clone(), numbers::sub_integer(balance, amount));
 
-        // For now, return a placeholder - Balance resource creation needs host support
-        // This would be handled by the resource manager in a real implementation
-        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
+        // Balance resources can only be created by the host
+        // For now, return a placeholder error
+        Err(error::Error::Message("Balance resource creation requires host support".to_string()))
     }
     
-    fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
-        // For now, deposit is not fully implemented due to resource limitations
-        // In a real implementation, we would:
-        // 1. Validate the balance belongs to this token contract
-        // 2. Extract the amount from the Balance resource
-        // 3. Credit the recipient's account
-        // 4. Consume the Balance resource
-        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
+    fn deposit(ctx: &ProcContext, recipient: String, _bal: Balance) -> Result<(), error::Error> {
+        // Balance resources are opaque handles in guest code
+        // We can't directly access their fields or methods
+        // The host would need to provide a way to extract the amount
+        // For now, use a placeholder implementation
+        let _ledger = storage(ctx).ledger();
+        Err(error::Error::Message("Balance resource consumption requires host support".to_string()))
     }
     
-    fn split(ctx: &ProcContext, bal: Balance, split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
-        // Balance split not yet implemented - requires resource support
-        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
+    fn split(_ctx: &ProcContext, _bal: Balance, _split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
+        // Balance split requires host support
+        Err(error::Error::Message("Balance split requires host support".to_string()))
     }
     
-    fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
-        // Balance merge not yet implemented - requires resource support  
-        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
+    fn merge(_ctx: &ProcContext, _a: Balance, _b: Balance) -> Result<Balance, error::Error> {
+        // Balance merge requires host support
+        Err(error::Error::Message("Balance merge requires host support".to_string()))
     }
 }

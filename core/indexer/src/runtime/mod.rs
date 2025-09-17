@@ -1,3 +1,5 @@
+mod balance;
+mod lp_balance;
 mod component_cache;
 mod contracts;
 mod counter;
@@ -866,10 +868,7 @@ impl built_in::resource_manager::Host for Runtime {
             &resource_id,
         ) {
             Ok(data) => Ok(Ok(String::from_utf8(data.payload).unwrap_or_default())),
-            Err(e) => Ok(Err(Error {
-                code: 1,
-                message: e.to_string(),
-            })),
+            Err(e) => Ok(Err(Error::Message(e.to_string()))),
         }
     }
     
@@ -878,10 +877,7 @@ impl built_in::resource_manager::Host for Runtime {
         let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         match self.resource_manager.resource_drop(contract_id, handle as i32) {
             Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(Error {
-                code: 1,
-                message: e.to_string(),
-            })),
+            Err(e) => Ok(Err(Error::Message(e.to_string()))),
         }
     }
     
@@ -889,10 +885,131 @@ impl built_in::resource_manager::Host for Runtime {
         // Use ResourceManager for transferring resources between contracts
         match self.resource_manager.resource_transfer(from_contract, to_contract, handle as i32) {
             Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(Error {
-                code: 1,
-                message: e.to_string(),
-            })),
+            Err(e) => Ok(Err(Error::Message(e.to_string()))),
         }
+    }
+}
+
+impl built_in::assets::Host for Runtime {}
+
+impl built_in::assets::HostBalance for Runtime {
+    async fn new(&mut self, amount: Integer, token: ContractAddress) -> Result<Resource<balance::BalanceData>> {
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let balance = balance::BalanceData::new(amount, token, contract_id);
+        let resource = self.table.lock().await.push(balance)?;
+        Ok(resource)
+    }
+
+    async fn amount(&mut self, resource: Resource<balance::BalanceData>) -> Result<Integer> {
+        let table = self.table.lock().await;
+        let balance = table.get(&resource)?;
+        Ok(balance.amount.clone())
+    }
+
+    async fn token(&mut self, resource: Resource<balance::BalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let balance = table.get(&resource)?;
+        Ok(balance.token.clone())
+    }
+
+    async fn is_zero(&mut self, resource: Resource<balance::BalanceData>) -> Result<bool> {
+        let table = self.table.lock().await;
+        let balance = table.get(&resource)?;
+        Ok(balance.is_zero())
+    }
+
+    async fn split(&mut self, resource: Resource<balance::BalanceData>, split_amount: Integer) -> Result<built_in::assets::SplitResult> {
+        let mut table = self.table.lock().await;
+        let balance = table.delete(resource)?; // Consume the original balance
+        
+        let (split_balance, remainder_balance) = balance.split(split_amount)?;
+        
+        let split_resource = table.push(split_balance)?;
+        let remainder_resource = if let Some(remainder) = remainder_balance {
+            Some(table.push(remainder)?)
+        } else {
+            None
+        };
+        
+        Ok(built_in::assets::SplitResult {
+            split: split_resource,
+            remainder: remainder_resource,
+        })
+    }
+
+    async fn merge(&mut self, first: Resource<balance::BalanceData>, second: Resource<balance::BalanceData>) -> Result<Result<Resource<balance::BalanceData>, String>> {
+        let mut table = self.table.lock().await;
+        
+        // Consume both balances
+        let first_balance = table.delete(first)?;
+        let second_balance = table.delete(second)?;
+        
+        match balance::BalanceData::merge(first_balance, second_balance) {
+            Ok(merged) => {
+                let resource = table.push(merged)?;
+                Ok(Ok(resource))
+            }
+            Err(e) => Ok(Err(e.to_string()))
+        }
+    }
+
+    async fn consume(&mut self, resource: Resource<balance::BalanceData>) -> Result<()> {
+        let _balance = self.table.lock().await.delete(resource)?;
+        // Balance is consumed and dropped
+        Ok(())
+    }
+
+    async fn drop(&mut self, resource: Resource<balance::BalanceData>) -> Result<()> {
+        let _balance = self.table.lock().await.delete(resource)?;
+        Ok(())
+    }
+}
+
+impl built_in::assets::HostLpBalance for Runtime {
+    async fn new(
+        &mut self,
+        amount: Integer,
+        token_a: ContractAddress,
+        token_b: ContractAddress,
+    ) -> Result<Resource<lp_balance::LpBalanceData>> {
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let lp_balance = lp_balance::LpBalanceData::new(amount, token_a, token_b, contract_id);
+        let resource = self.table.lock().await.push(lp_balance)?;
+        Ok(resource)
+    }
+
+    async fn amount(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<Integer> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&resource)?;
+        Ok(lp_balance.amount.clone())
+    }
+
+    async fn token_a(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&resource)?;
+        Ok(lp_balance.token_a.clone())
+    }
+
+    async fn token_b(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&resource)?;
+        Ok(lp_balance.token_b.clone())
+    }
+
+    async fn is_zero(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<bool> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&resource)?;
+        Ok(lp_balance.is_zero())
+    }
+
+    async fn consume(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<()> {
+        let _lp_balance = self.table.lock().await.delete(resource)?;
+        // LpBalance is consumed and dropped
+        Ok(())
+    }
+
+    async fn drop(&mut self, resource: Resource<lp_balance::LpBalanceData>) -> Result<()> {
+        let _lp_balance = self.table.lock().await.delete(resource)?;
+        Ok(())
     }
 }

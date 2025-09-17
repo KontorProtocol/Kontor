@@ -1,6 +1,6 @@
 mod resources;
 
-pub use resources::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext};
+pub use resources::{Balance, LpBalance, FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext};
 
 wasmtime::component::bindgen!({
     world: "contract",
@@ -11,8 +11,11 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context/proc-context": ProcContext,
         "kontor:built-in/context/fall-context": FallContext,
         "kontor:built-in/context/keys": Keys,
+        "kontor:built-in/assets/balance": Balance,
+        "kontor:built-in/assets/lp-balance": LpBalance,
     },
-    additional_derives: [stdlib::Wavey],
+    // Remove additional_derives temporarily - resources can't be serialized via WAVE
+    // additional_derives: [stdlib::Wavey],
     imports: {
         default: async | trappable,
     }
