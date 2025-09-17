@@ -9,6 +9,7 @@ mod contract;
 mod impls;
 mod import;
 mod interface;
+mod registry;
 mod root;
 mod store;
 mod transformers;

@@ -32,10 +32,10 @@ pub trait WriteContext {
 
 pub trait ReadWriteContext: ReadContext + WriteContext {}
 
-pub trait Store: Clone {
+pub trait Store: Sized {
     fn __set(ctx: &impl WriteContext, base_path: DotPathBuf, value: Self);
 }
 
-pub trait Retrieve: Clone {
+pub trait Retrieve: Sized {
     fn __get(ctx: &impl ReadContext, base_path: DotPathBuf) -> Option<Self>;
 }

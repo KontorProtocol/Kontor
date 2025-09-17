@@ -36,4 +36,12 @@ impl<T: Send + PartialEq + Debug> Stack<T> {
         let mut stack = self.inner.lock().await;
         stack.pop()
     }
+    
+    pub fn peek(&self) -> Option<T> 
+    where
+        T: Clone
+    {
+        // Since we need sync access, we'll use try_lock
+        self.inner.try_lock().ok()?.last().cloned()
+    }
 }

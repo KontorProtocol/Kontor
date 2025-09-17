@@ -56,3 +56,8 @@ impl HasContractId for FallContext {
 pub struct Keys {
     pub stream: Pin<Box<dyn Stream<Item = Result<String, libsql::Error>> + Send>>,
 }
+
+pub struct ResourceData {
+    pub resource_id: String,
+    pub payload: String,
+}

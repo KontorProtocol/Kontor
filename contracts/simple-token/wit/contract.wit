@@ -1,0 +1,22 @@
+package kontor:contract;
+
+world contract {
+    import kontor:built-in/context;
+    import kontor:built-in/error;
+    import kontor:built-in/numbers;
+    import kontor:built-in/foreign;
+    
+    use kontor:built-in/context.{view-context, proc-context};
+    use kontor:built-in/error.{error};
+    use kontor:built-in/numbers.{integer};
+    use kontor:built-in/foreign.{contract-address};
+    
+    // Simple token contract exports
+    export init: func(ctx: borrow<proc-context>);
+    
+    // Basic token operations
+    export mint: func(ctx: borrow<proc-context>, to: string, amount: integer);
+    export transfer: func(ctx: borrow<proc-context>, to: string, amount: integer) -> result<_, error>;
+    export balance: func(ctx: borrow<view-context>, account: string) -> integer;
+    export total-supply: func(ctx: borrow<view-context>) -> integer;
+}

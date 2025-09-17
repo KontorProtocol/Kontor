@@ -2,6 +2,7 @@ mod component_cache;
 mod contracts;
 mod counter;
 pub mod numerics;
+mod resource_manager;
 mod stack;
 mod storage;
 mod types;
@@ -20,9 +21,11 @@ pub use types::default_val_for_type;
 pub use wit::Contract;
 
 use std::{
+    collections::HashMap,
     io::{Cursor, Read},
     sync::Arc,
 };
+use rand::{Rng, SeedableRng};
 
 use wit::kontor::*;
 
@@ -47,27 +50,15 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::{
     counter::Counter,
+    resource_manager::{ResourceManager, ResourceData},
     stack::Stack,
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
 
-impl std::fmt::Display for kontor::built_in::error::Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            kontor::built_in::error::Error::Message(msg) => write!(f, "Error: {}", msg),
-            kontor::built_in::error::Error::Overflow(msg) => write!(f, "Overflow Error: {}", msg),
-            kontor::built_in::error::Error::DivByZero(msg) => write!(f, "DivByZero Error: {}", msg),
-        }
-    }
-}
+// Display and Error traits are already implemented by wit-bindgen
 
-impl std::error::Error for kontor::built_in::error::Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
-
-impls!(host = true);
+// Don't generate impls for host side - they conflict with wit-bindgen
+// impls!(host = true);
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
@@ -83,6 +74,8 @@ pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> 
 pub struct Runtime {
     pub engine: Engine,
     pub table: Arc<Mutex<ResourceTable>>,
+    pub resources: Arc<Mutex<HashMap<String, HashMap<u32, ResourceData>>>>,
+    pub resource_manager: ResourceManager,
     pub component_cache: ComponentCache,
     pub storage: Storage,
     pub id_generation_counter: Counter,
@@ -103,6 +96,8 @@ impl Runtime {
         Ok(Self {
             engine,
             table: Arc::new(Mutex::new(ResourceTable::new())),
+            resources: Arc::new(Mutex::new(HashMap::new())),
+            resource_manager: ResourceManager::new(),
             component_cache,
             storage,
             id_generation_counter: Counter::new(),
@@ -153,7 +148,12 @@ impl Runtime {
         })
     }
 
-    pub async fn execute(&self, signer: Option<String>, addr: &ContractAddress, expr: String) -> Result<String, anyhow::Error> {
+    pub async fn execute(
+        &self,
+        signer: Option<String>,
+        addr: &ContractAddress,
+        expr: String,
+    ) -> Result<String, anyhow::Error> {
         let signer = signer.map(|s| Signer::XOnlyPubKey(s));
         let contract_id = self
             .storage
@@ -192,8 +192,8 @@ impl Runtime {
         {
             let mut table = self.table.lock().await;
             match resource_type {
-                t if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) => {
-                    params.insert(
+                t if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) => params
+                    .insert(
                         0,
                         wasmtime::component::Val::Resource(
                             table
@@ -203,8 +203,7 @@ impl Runtime {
                                 })?
                                 .try_into_resource_any(&mut store)?,
                         ),
-                    )
-                }
+                    ),
                 t if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
                     .insert(
                         0,
@@ -214,8 +213,8 @@ impl Runtime {
                                 .try_into_resource_any(&mut store)?,
                         ),
                     ),
-                t if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
-                    params.insert(
+                t if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => params
+                    .insert(
                         0,
                         wasmtime::component::Val::Resource(
                             table
@@ -225,8 +224,7 @@ impl Runtime {
                                 })?
                                 .try_into_resource_any(&mut store)?,
                         ),
-                    )
-                }
+                    ),
                 _ => return Err(anyhow!("Unsupported context/signer type")),
             }
         }
@@ -259,8 +257,14 @@ impl Runtime {
         ))
     }
 
-    pub async fn execute_owned(&self, signer: Option<&str>, addr: ContractAddress, expr: String) -> Result<String, anyhow::Error> {
-        self.execute(signer.map(|s| s.to_string()), &addr, expr).await
+    pub async fn execute_owned(
+        &self,
+        signer: Option<&str>,
+        addr: ContractAddress,
+        expr: String,
+    ) -> Result<String, anyhow::Error> {
+        self.execute(signer.map(|s| s.to_string()), &addr, expr)
+            .await
     }
 
     async fn _get_primitive<T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -812,7 +816,12 @@ impl built_in::numbers::Host for Runtime {
         numerics::decimal_to_integer_ceil(d)
     }
 
-    async fn mul_div_down_integer(&mut self, a: Integer, b: Integer, c: Integer) -> Result<Integer> {
+    async fn mul_div_down_integer(
+        &mut self,
+        a: Integer,
+        b: Integer,
+        c: Integer,
+    ) -> Result<Integer> {
         numerics::mul_div_down_integer(a, b, c)
     }
 
@@ -833,5 +842,57 @@ impl built_in::numbers::Host for Runtime {
     }
     async fn meta_force_generate_decimal(&mut self, _d: built_in::numbers::Decimal) -> Result<()> {
         unimplemented!()
+    }
+}
+
+impl built_in::resource_manager::Host for Runtime {
+    async fn create(&mut self, resource_id: String, data: String) -> Result<u32> {
+        // Use ResourceManager for creating resources
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let handle = self.resource_manager.resource_create(
+            contract_id,
+            resource_id.clone(),
+            data.into_bytes(),
+        )?;
+        Ok(handle as u32)
+    }
+
+    async fn take(&mut self, resource_id: String, handle: u32) -> Result<Result<String, Error>> {
+        // Use ResourceManager for taking resources
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        match self.resource_manager.resource_take(
+            contract_id,
+            handle as i32,
+            &resource_id,
+        ) {
+            Ok(data) => Ok(Ok(String::from_utf8(data.payload).unwrap_or_default())),
+            Err(e) => Ok(Err(Error {
+                code: 1,
+                message: e.to_string(),
+            })),
+        }
+    }
+    
+    async fn drop(&mut self, resource_id: String, handle: u32) -> Result<Result<(), Error>> {
+        // Use ResourceManager for dropping resources
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        match self.resource_manager.resource_drop(contract_id, handle as i32) {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(Error {
+                code: 1,
+                message: e.to_string(),
+            })),
+        }
+    }
+    
+    async fn transfer(&mut self, from_contract: i64, to_contract: i64, handle: u32) -> Result<Result<(), Error>> {
+        // Use ResourceManager for transferring resources between contracts
+        match self.resource_manager.resource_transfer(from_contract, to_contract, handle as i32) {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(Error {
+                code: 1,
+                message: e.to_string(),
+            })),
+        }
     }
 }

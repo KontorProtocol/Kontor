@@ -7,7 +7,7 @@ use fastnum::{
     dec256,
     decimal::{self, Context, SignalsTraps},
 };
-use num::{BigInt, bigint::Sign, Zero};
+use num::{BigInt, Zero, bigint::Sign};
 
 use super::{Decimal, Error, Integer, NumericOrdering, NumericSign};
 
@@ -305,11 +305,11 @@ pub fn log10(a: Decimal) -> Result<Decimal> {
 
 pub fn decimal_to_integer_floor(d: Decimal) -> Result<Integer> {
     let dec: D256 = d.into();
-    
+
     // For floor, we can use the decimal library's built-in truncation
     // towards zero, then adjust for negative numbers with fractional parts
     let truncated = dec.trunc();
-    
+
     // Convert truncated to string, then to BigInt
     let truncated_str = truncated.to_string();
     // Remove any scientific notation by parsing the number
@@ -319,7 +319,7 @@ pub fn decimal_to_integer_floor(d: Decimal) -> Result<Integer> {
     } else {
         truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
     };
-    
+
     // If negative and there was a fractional part, go one more negative
     if dec.is_sign_negative() && dec != truncated {
         Ok((big_int - BigInt::from(1)).into())
@@ -330,10 +330,10 @@ pub fn decimal_to_integer_floor(d: Decimal) -> Result<Integer> {
 
 pub fn decimal_to_integer_ceil(d: Decimal) -> Result<Integer> {
     let dec: D256 = d.into();
-    
+
     // For ceil, we truncate and then add 1 if there was a positive fractional part
     let truncated = dec.trunc();
-    
+
     // Convert truncated to string, then to BigInt
     let truncated_str = truncated.to_string();
     // Remove any scientific notation by parsing the number
@@ -343,7 +343,7 @@ pub fn decimal_to_integer_ceil(d: Decimal) -> Result<Integer> {
     } else {
         truncated_str.parse().unwrap_or_else(|_| BigInt::from(0))
     };
-    
+
     // If positive and there was a fractional part, go one more positive
     if dec.is_sign_positive() && dec != truncated {
         Ok((big_int + BigInt::from(1)).into())

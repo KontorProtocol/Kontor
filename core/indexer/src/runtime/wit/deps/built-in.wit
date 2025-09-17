@@ -147,10 +147,20 @@ interface numbers {
     meta-force-generate-decimal: func(d: decimal);
 }
 
+interface resource-manager {
+    use error.{error};
+
+    create: func(resource-id: string, data: string) -> u32;
+    take: func(resource-id: string, handle: u32) -> result<string, error>;
+    drop: func(resource-id: string, handle: u32) -> result<_, error>;
+    transfer: func(from-contract: s64, to-contract: s64, handle: u32) -> result<_, error>;
+}
+
 world built-in {
     import context;
     import foreign;
     import crypto;
     import error;
     import numbers;
+    import resource-manager;
 }

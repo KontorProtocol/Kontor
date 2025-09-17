@@ -192,25 +192,26 @@ fn generate_functions(
     // Prepare how we provide the contract address to the call site.
     // In async test wrappers, we must not take a reference to a temporary across `.await`.
     // So when `contract_id` is provided, we bind a local first and then pass `&local`.
-    let (contract_prelude, contract_arg) = if let Some((name, height, tx_index)) = contract_id.as_ref() {
-        let addr_ident = Ident::new("__contract_address", Span::call_site());
-        (
-            quote! {
-                let #addr_ident = ContractAddress {
-                    name: #name.to_string(),
-                    height: #height,
-                    tx_index: #tx_index,
-                };
-            },
-            quote! { #addr_ident },
-        )
-    } else {
-        params.insert(
-            if test { 1 } else { 0 },
-            quote! { contract_address: &ContractAddress },
-        );
-        (quote! {}, quote! { contract_address })
-    };
+    let (contract_prelude, contract_arg) =
+        if let Some((name, height, tx_index)) = contract_id.as_ref() {
+            let addr_ident = Ident::new("__contract_address", Span::call_site());
+            (
+                quote! {
+                    let #addr_ident = ContractAddress {
+                        name: #name.to_string(),
+                        height: #height,
+                        tx_index: #tx_index,
+                    };
+                },
+                quote! { #addr_ident },
+            )
+        } else {
+            params.insert(
+                if test { 1 } else { 0 },
+                quote! { contract_address: &ContractAddress },
+            );
+            (quote! {}, quote! { contract_address })
+        };
 
     let mut ret_ty = match &export.result {
         Some(ty) => transformers::wit_type_to_rust_type(resolve, ty, false)?,
@@ -323,15 +324,10 @@ fn generate_functions(
     };
 
     let unwrap_expr = if let Some(ty) = &export.result {
-        transformers::wit_type_to_unwrap_expr(
-            resolve,
-            ty,
-            quote! { __parsed_value },
-        )?
+        transformers::wit_type_to_unwrap_expr(resolve, ty, quote! { __parsed_value })?
     } else {
         quote! { () }
     };
-
 
     let ret_expr_base = if export.result.is_some() {
         if test {
@@ -368,7 +364,7 @@ fn generate_functions(
     } else {
         quote! {}
     };
-    
+
     let function_body = quote! {
         let expr = #expr;
         #contract_prelude
@@ -384,7 +380,7 @@ fn generate_functions(
             fn #wave_fn_name() -> stdlib::wasm_wave::value::Type {
                 #wave_ty
             }
-            
+
             #[allow(clippy::unused_unit)]
             #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
                 #function_body
@@ -402,12 +398,13 @@ fn generate_functions(
 
 pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> Result<TokenStream> {
     let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    
+
     // Check if any field is a resource or contains a resource
-    let has_resource = record.fields.iter().any(|field| {
-        is_resource_type(resolve, &field.ty)
-    });
-    
+    let has_resource = record
+        .fields
+        .iter()
+        .any(|field| is_resource_type(resolve, &field.ty));
+
     let fields = record
         .fields
         .iter()
@@ -442,13 +439,20 @@ fn is_resource_type(resolve: &Resolve, ty: &Type) -> bool {
                 TypeDefKind::Resource => true,
                 TypeDefKind::Option(inner) => is_resource_type(resolve, inner),
                 TypeDefKind::Result(result) => {
-                    result.ok.as_ref().map_or(false, |t| is_resource_type(resolve, t)) ||
-                    result.err.as_ref().map_or(false, |t| is_resource_type(resolve, t))
+                    result
+                        .ok
+                        .as_ref()
+                        .map_or(false, |t| is_resource_type(resolve, t))
+                        || result
+                            .err
+                            .as_ref()
+                            .map_or(false, |t| is_resource_type(resolve, t))
                 }
                 TypeDefKind::List(inner) => is_resource_type(resolve, inner),
-                TypeDefKind::Record(record) => {
-                    record.fields.iter().any(|f| is_resource_type(resolve, &f.ty))
-                }
+                TypeDefKind::Record(record) => record
+                    .fields
+                    .iter()
+                    .any(|f| is_resource_type(resolve, &f.ty)),
                 _ => false,
             }
         }
@@ -477,12 +481,14 @@ pub fn print_typedef_variant(
     variant: &Variant,
 ) -> Result<TokenStream> {
     let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    
+
     // Check if any variant case contains a resource
     let has_resource = variant.cases.iter().any(|case| {
-        case.ty.as_ref().map_or(false, |ty| is_resource_type(resolve, ty))
+        case.ty
+            .as_ref()
+            .map_or(false, |ty| is_resource_type(resolve, ty))
     });
-    
+
     let variants = variant
         .cases
         .iter()
@@ -515,18 +521,18 @@ pub fn print_typedef_variant(
 
 pub fn print_typedef_resource(name: &str) -> Result<TokenStream> {
     let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    
+
     // Resources are opaque handles in the import context
     // They're move-only types that wrap a resource handle
     Ok(quote! {
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         pub struct #struct_name {
             // Resources are opaque handles managed by the runtime
             // They don't implement Clone or Copy, enforcing move semantics
             handle: u32,
             _phantom: std::marker::PhantomData<*const ()>, // Make it !Send and !Sync
         }
-        
+
         impl #struct_name {
             /// Create a resource from a handle (internal use)
             pub(crate) fn from_handle(handle: u32) -> Self {
@@ -535,15 +541,41 @@ pub fn print_typedef_resource(name: &str) -> Result<TokenStream> {
                     _phantom: std::marker::PhantomData,
                 }
             }
-            
+
             /// Get the handle (internal use)
             pub(crate) fn handle(&self) -> u32 {
                 self.handle
             }
-            
+
             /// Take the handle, consuming the resource
             pub(crate) fn take_handle(self) -> u32 {
                 self.handle
+            }
+
+            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+                stdlib::wasm_wave::value::Type::U32
+            }
+        }
+
+        impl Clone for #struct_name {
+            fn clone(&self) -> Self {
+                Self {
+                    handle: self.handle,
+                    _phantom: std::marker::PhantomData,
+                }
+            }
+        }
+
+        impl From<#struct_name> for stdlib::wasm_wave::value::Value {
+            fn from(value_: #struct_name) -> Self {
+                stdlib::wasm_wave::value::Value::from(value_.take_handle())
+            }
+        }
+
+        impl From<stdlib::wasm_wave::value::Value> for #struct_name {
+            fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
+                let handle = stdlib::wasm_wave::wasm::WasmValue::unwrap_u32(&value_);
+                Self::from_handle(handle)
             }
         }
     })

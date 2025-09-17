@@ -11,17 +11,17 @@ use testlib::*;
 fn try_to_copy_balance() {
     // Hypothetical balance resource
     let balance: token::Balance = get_balance_somehow();
-    
+
     // This moves balance
     use_balance(balance);
-    
+
     // This would be a compile error: use of moved value
     use_balance(balance); // ERROR: value used here after move
 }
 
 fn try_to_clone_balance() {
     let balance: token::Balance = get_balance_somehow();
-    
+
     // This would fail because Balance doesn't implement Clone
     let balance2 = balance.clone(); // ERROR: no method named `clone` found
 }
@@ -35,7 +35,7 @@ fn correct_balance_usage() {
     // 2. The Balance can be split into multiple smaller balances
     // 3. Balances can be merged back together
     // 4. Finally, deposit consumes the balance
-    
+
     // Each operation that takes a Balance consumes it (moves it),
     // preventing double-spending at compile time.
 }
@@ -49,6 +49,6 @@ async fn test_linearity_documentation() -> Result<()> {
     println!("- Operations that take Balance consume it (move semantics)");
     println!("- Double-spending is prevented at compile time");
     println!("- The Rust compiler enforces single-use of each balance");
-    
+
     Ok(())
 }

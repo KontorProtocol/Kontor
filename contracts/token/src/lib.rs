@@ -2,24 +2,6 @@ use stdlib::*;
 
 contract!(name = "token");
 
-// Thread-local storage for balance resources using the generic ResourceTable
-resource_table!(BALANCE_TABLE, BalanceData);
-
-// Data backing a Balance resource
-#[derive(Clone)]
-struct BalanceData {
-    token_addr: foreign::ContractAddress,
-    amount: numbers::Integer,
-    handle: String,  // Unique ID for linearity tracking
-}
-
-// Helper to create a unique handle for a balance
-fn create_handle(id: numbers::Integer) -> String {
-    format!("balance_{}", numbers::integer_to_string(id))
-}
-
-// Resource management is now handled by the generic ResourceTable
-
 // Helper function to get the token's contract address
 fn get_contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
     storage(ctx).contract_addr(ctx).expect(
@@ -28,52 +10,86 @@ fn get_contract_address(ctx: &impl ReadContext) -> foreign::ContractAddress {
     )
 }
 
-#[derive(Clone, Default, StorageRoot)]
+fn same_address(a: &foreign::ContractAddress, b: &foreign::ContractAddress) -> bool {
+    a.name == b.name && a.height == b.height && a.tx_index == b.tx_index
+}
+
+// Manual storage implementation since we can't derive with resource types
+#[derive(Clone, Default)]
 struct TokenStorage {
     pub ledger: Map<String, numbers::Integer>,
     pub total_supply: numbers::Integer,
     pub contract_addr: Option<foreign::ContractAddress>, // Store our own address
-    pub next_balance_id: numbers::Integer,  // Counter for unique balance IDs
+}
+
+// Storage initialization
+impl TokenStorage {
+    fn init(&self, ctx: &impl WriteContext) {
+        use stdlib::{Store, Retrieve};
+        // Initialize with default values
+        // Use Store trait to properly handle Integer type
+        <numbers::Integer as Store>::__set(ctx, "total_supply".parse().unwrap(), self.total_supply.clone());
+        if let Some(ref addr) = self.contract_addr {
+            <foreign::ContractAddress as Store>::__set(ctx, "contract_addr".parse().unwrap(), addr.clone());
+        }
+    }
+}
+
+// Helper function for storage access
+fn storage<C>(_ctx: &C) -> TokenStorage {
+    TokenStorage::default()
+}
+
+// Manual storage accessors
+impl TokenStorage {
+    fn ledger(&self) -> MapAccessor<String, numbers::Integer> {
+        MapAccessor::new("ledger")
+    }
+    
+    fn total_supply(&self, ctx: &impl ReadContext) -> numbers::Integer {
+        use stdlib::Retrieve;
+        <numbers::Integer as Retrieve>::__get(ctx, "total_supply".parse().unwrap()).unwrap_or_default()
+    }
+    
+    fn set_total_supply(&self, ctx: &impl WriteContext, value: numbers::Integer) {
+        use stdlib::Store;
+        <numbers::Integer as Store>::__set(ctx, "total_supply".parse().unwrap(), value);
+    }
+    
+    fn contract_addr(&self, ctx: &impl ReadContext) -> Option<foreign::ContractAddress> {
+        use stdlib::Retrieve;
+        <foreign::ContractAddress as Retrieve>::__get(ctx, "contract_addr".parse().unwrap())
+    }
+}
+
+// MapAccessor helper for ledger
+struct MapAccessor<K, V> {
+    base_path: String,
+    _phantom: std::marker::PhantomData<(K, V)>,
+}
+
+impl<K: ToString + FromString, V: Store + Retrieve + Default> MapAccessor<K, V> {
+    fn new(base_path: &str) -> Self {
+        Self {
+            base_path: base_path.to_string(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+    
+    fn get(&self, ctx: &impl ReadContext, key: &K) -> Option<V> {
+        let mut path: DotPathBuf = self.base_path.parse().unwrap();
+        path = path.push(key.to_string());
+        V::__get(ctx, path)
+    }
+    
+    fn set(&self, ctx: &impl WriteContext, key: K, value: V) {
+        let mut path: DotPathBuf = self.base_path.parse().unwrap();
+        path = path.push(key.to_string());
+        V::__set(ctx, path, value);
+    }
 }
 
 // Helper to allocate a new balance
-fn allocate_balance(ctx: &ProcContext, amount: numbers::Integer) -> Balance {
-    let token_addr = get_contract_address(ctx);
-    
-    // Get next ID and increment counter
-    let id = storage(ctx).next_balance_id(ctx);
-    let one = numbers::u64_to_integer(1);
-    storage(ctx).set_next_balance_id(ctx, numbers::add_integer(id, one));
-    
-    let handle = create_handle(id);
-    
-    // Create the resource data
-    let data = BalanceData {
-        token_addr,
-        amount,
-        handle,
-    };
-    
-    // Allocate a resource handle using the generic ResourceTable
-    let index = BALANCE_TABLE.with(|table| table.allocate(data));
-    
-    // The macro should provide a way to create Balance from index
-    // For now, we'll use unsafe from_handle which the macro generates
-    unsafe { Balance::from_handle(index) }
-}
-
-// Helper to consume a balance
-fn consume_balance(balance: Balance) -> Result<numbers::Integer, error::Error> {
-    // Get the handle from the Balance resource
-    let index = balance.take_handle();
-    
-    // Take the balance data from the resource table (this consumes it)
-    let balance_data = BALANCE_TABLE.with(|table| table.take(index))
-        .map_err(|msg| error::Error::Message(msg))?;
-    
-    Ok(balance_data.amount)
-}
-
 impl Guest for Token {
     fn init(ctx: &ProcContext) {
         // Store the contract's address on initialization
@@ -107,7 +123,8 @@ impl Guest for Token {
         let from_balance = ledger.get(ctx, &from).unwrap_or_default();
         let to_balance = ledger.get(ctx, &to).unwrap_or_default();
 
-        if from_balance < n {
+        // Use the numbers module comparison function
+        if numbers::cmp_integer(from_balance.clone(), n.clone()) == numbers::Ordering::Less {
             return Err(error::Error::Message("insufficient funds".to_string()));
         }
 
@@ -119,12 +136,12 @@ impl Guest for Token {
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<numbers::Integer> {
         let ledger = storage(ctx).ledger();
-        ledger.get(ctx, acc)
+        ledger.get(ctx, &acc)
     }
     
     fn balance_or_zero(ctx: &ViewContext, acc: String) -> numbers::Integer {
         let ledger = storage(ctx).ledger();
-        ledger.get(ctx, acc).unwrap_or_default()
+        ledger.get(ctx, &acc).unwrap_or_default()
     }
     
     fn total_supply(ctx: &ViewContext) -> numbers::Integer {
@@ -133,7 +150,7 @@ impl Guest for Token {
 
     fn balance_log10(ctx: &ViewContext, acc: String) -> Option<numbers::Decimal> {
         let ledger = storage(ctx).ledger();
-        ledger.get(ctx, acc).map(|i| numbers::log10(numbers::integer_to_decimal(i)))
+        ledger.get(ctx, &acc).map(|i| numbers::log10(numbers::integer_to_decimal(i)))
     }
     
     // Resource-based asset management
@@ -142,62 +159,36 @@ impl Guest for Token {
         let ledger = storage(ctx).ledger();
         let balance = ledger.get(ctx, &owner).unwrap_or_default();
 
-        if balance < amount {
+        // Use the numbers module comparison function
+        if numbers::cmp_integer(balance.clone(), amount.clone()) == numbers::Ordering::Less {
             return Err(error::Error::Message("insufficient funds".to_string()));
         }
 
         // Decrease ledger balance
         ledger.set(ctx, owner.clone(), numbers::sub_integer(balance, amount));
-        
-        // Create and return a balance resource
-        Ok(allocate_balance(ctx, amount))
+
+        // For now, return a placeholder - Balance resource creation needs host support
+        // This would be handled by the resource manager in a real implementation
+        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
-        // Consume the balance (this moves it, enforcing linearity)
-        let amount = consume_balance(bal)?;
-        
-        // Credit the recipient
-        let ledger = storage(ctx).ledger();
-        let recipient_balance = ledger.get(ctx, &recipient).unwrap_or_default();
-        ledger.set(ctx, recipient, numbers::add_integer(recipient_balance, amount));
-        
-        Ok(())
+        // For now, deposit is not fully implemented due to resource limitations
+        // In a real implementation, we would:
+        // 1. Validate the balance belongs to this token contract
+        // 2. Extract the amount from the Balance resource
+        // 3. Credit the recipient's account
+        // 4. Consume the Balance resource
+        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
     }
     
     fn split(ctx: &ProcContext, bal: Balance, split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
-        // Consume the original balance
-        let total_amount = consume_balance(bal)?;
-        
-        if split_amount > total_amount {
-            return Err(error::Error::Message("Split amount exceeds balance".to_string()));
-        }
-        
-        // Create split balance
-        let split_balance = allocate_balance(ctx, split_amount);
-        
-        // Create remainder balance if any
-        let remainder_amount = numbers::sub_integer(total_amount, split_amount);
-        let zero = numbers::u64_to_integer(0);
-        let remainder_balance = if remainder_amount > zero {
-            Some(allocate_balance(ctx, remainder_amount))
-        } else {
-            None
-        };
-        
-        Ok(SplitResult {
-            split: split_balance,
-            remainder: remainder_balance,
-        })
+        // Balance split not yet implemented - requires resource support
+        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
     }
     
     fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
-        // Consume both balances (they move, cannot be reused)
-        let amount_a = consume_balance(a)?;
-        let amount_b = consume_balance(b)?;
-        
-        // Create merged balance
-        let merged_amount = numbers::add_integer(amount_a, amount_b);
-        Ok(allocate_balance(ctx, merged_amount))
+        // Balance merge not yet implemented - requires resource support  
+        Err(error::Error::Message("Balance resources not yet implemented".to_string()))
     }
 }

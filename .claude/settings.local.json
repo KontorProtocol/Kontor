@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Read(/Users/adam/.cargo/registry/src/**)",
+      "Read(/Users/adam/.cargo/registry/src/**)",
+      "Read(/Users/adam/.cargo/registry/src/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

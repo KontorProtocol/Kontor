@@ -1,0 +1,64 @@
+package kontor:built-in;
+
+interface context {
+    resource view-context {
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
+        
+        exists: func(path: string) -> bool;
+        is-void: func(path: string) -> bool;
+        get-keys: func(path: string) -> keys;
+        matching-path: func(regexp: string) -> option<string>;
+    }
+
+    resource proc-context {
+        get-str: func(path: string) -> option<string>;
+        get-u64: func(path: string) -> option<u64>;
+        get-s64: func(path: string) -> option<s64>;
+        get-bool: func(path: string) -> option<bool>;
+        
+        set-str: func(path: string, value: string);
+        set-u64: func(path: string, value: u64);
+        set-s64: func(path: string, value: s64);
+        set-bool: func(path: string, value: bool);
+        set-void: func(path: string);
+        
+        exists: func(path: string) -> bool;
+        is-void: func(path: string) -> bool;
+        get-keys: func(path: string) -> keys;
+        matching-path: func(regexp: string) -> option<string>;
+        delete-matching-paths: func(regexp: string) -> u64;
+        
+        signer: func() -> signer;
+    }
+    
+    variant signer {
+        x-only-pub-key(string),
+        contract-id(string),
+    }
+    
+    resource keys {
+        %next: func() -> option<string>;
+    }
+}
+
+interface numbers {
+    type integer = string;
+    type decimal = string;
+}
+
+interface error {
+    variant error {
+        message(string),
+    }
+}
+
+interface foreign {
+    record contract-address {
+        name: string,
+        height: s64,
+        tx-index: s64,
+    }
+}

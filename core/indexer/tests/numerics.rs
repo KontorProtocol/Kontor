@@ -71,32 +71,80 @@ async fn test_runtime_decimal_operations() -> Result<()> {
 #[tokio::test]
 async fn test_decimal_to_integer_conversions() -> Result<()> {
     use indexer::runtime::numerics;
-    
+
     // Test floor function with positive numbers
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("10.7"))?, 10.into());
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("10.3"))?, 10.into());
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("10.0"))?, 10.into());
-    
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("10.7"))?,
+        10.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("10.3"))?,
+        10.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("10.0"))?,
+        10.into()
+    );
+
     // Test floor function with negative numbers
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("-10.3"))?, (-11).into());
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("-10.7"))?, (-11).into());
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("-10.0"))?, (-10).into());
-    
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("-10.3"))?,
+        (-11).into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("-10.7"))?,
+        (-11).into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("-10.0"))?,
+        (-10).into()
+    );
+
     // Test ceil function with positive numbers
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("10.7"))?, 11.into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("10.3"))?, 11.into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("10.0"))?, 10.into());
-    
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("10.7"))?,
+        11.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("10.3"))?,
+        11.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("10.0"))?,
+        10.into()
+    );
+
     // Test ceil function with negative numbers
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("-10.3"))?, (-10).into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("-10.7"))?, (-10).into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("-10.0"))?, (-10).into());
-    
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("-10.3"))?,
+        (-10).into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("-10.7"))?,
+        (-10).into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("-10.0"))?,
+        (-10).into()
+    );
+
     // Test edge cases with very small decimals
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("0.999999999"))?, 0.into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("0.000000001"))?, 1.into());
-    assert_eq!(numerics::decimal_to_integer_floor(Decimal::from("-0.000000001"))?, (-1).into());
-    assert_eq!(numerics::decimal_to_integer_ceil(Decimal::from("-0.999999999"))?, 0.into());
-    
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("0.999999999"))?,
+        0.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("0.000000001"))?,
+        1.into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_floor(Decimal::from("-0.000000001"))?,
+        (-1).into()
+    );
+    assert_eq!(
+        numerics::decimal_to_integer_ceil(Decimal::from("-0.999999999"))?,
+        0.into()
+    );
+
     Ok(())
 }

@@ -1,0 +1,15 @@
+[package]
+name = "resource-test"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+stdlib = { workspace = true }
+macros = { path = "../../core/macros" }
+wit-bindgen = { workspace = true }
+
+[build-dependencies]
+wit-component = "0.239.0"

@@ -140,27 +140,45 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn execute(&self, signer: Option<&str>, addr: &ContractAddress, expr: &str) -> Result<String, AnyhowError> {
-        self.runtime.execute(signer.map(|s| s.to_string()), addr, expr.to_string()).await
+    pub async fn execute(
+        &self,
+        signer: Option<&str>,
+        addr: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, AnyhowError> {
+        self.runtime
+            .execute(signer.map(|s| s.to_string()), addr, expr.to_string())
+            .await
     }
 
-    pub async fn execute_owned(&self, signer: Option<&str>, addr: ContractAddress, expr: String) -> Result<String, AnyhowError> {
-        self.runtime.execute(signer.map(|s| s.to_string()), &addr, expr).await
+    pub async fn execute_owned(
+        &self,
+        signer: Option<&str>,
+        addr: ContractAddress,
+        expr: String,
+    ) -> Result<String, AnyhowError> {
+        self.runtime
+            .execute(signer.map(|s| s.to_string()), &addr, expr)
+            .await
     }
 }
 
 /// Load additional token instances for AMM tests that need multiple token contracts
 pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
     use indexer::{
-        database::{queries::{insert_contract, contract_has_state}, types::ContractRow},
+        database::{
+            queries::{contract_has_state, insert_contract},
+            types::ContractRow,
+        },
         runtime::ContractAddress,
     };
-    
-    const TOKEN: &[u8] = include_bytes!("../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
-    
+
+    const TOKEN: &[u8] =
+        include_bytes!("../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
+
     let conn = runtime.runtime.get_storage_conn();
     let height = 0;
-    
+
     // Create token instances at tx_index 1 and 2 for AMM tests
     for tx_index in [1, 2] {
         let contract_id = insert_contract(
@@ -175,7 +193,8 @@ pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
         .await?;
 
         if !contract_has_state(&conn, contract_id).await? {
-            runtime.runtime
+            runtime
+                .runtime
                 .execute(
                     Some("kontor".to_string()),
                     &ContractAddress {
@@ -188,6 +207,6 @@ pub async fn load_amm_test_tokens(runtime: &Runtime) -> Result<()> {
                 .await?;
         }
     }
-    
+
     Ok(())
 }

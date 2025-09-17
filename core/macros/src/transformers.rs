@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail};
 use heck::ToUpperCamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{Ident, PathArguments, Type as SynType, TypePath};
+use syn::{GenericArgument, Ident, PathArguments, Type as SynType, TypePath};
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
 
 pub fn wit_type_to_unwrap_expr(
@@ -336,14 +336,48 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
 
     if let SynType::Path(TypePath { qself: None, path }) = ty {
         if let Some(segment) = &path.segments.last() {
-            if segment.arguments == PathArguments::None {
-                match segment.ident.to_string().as_str() {
+            match &segment.arguments {
+                PathArguments::None => match segment.ident.to_string().as_str() {
                     "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
+                    "u32" => return Ok(quote! { stdlib::wasm_wave::value::Type::U32 }),
                     "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+                    "i32" => return Ok(quote! { stdlib::wasm_wave::value::Type::S32 }),
                     "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
                     "bool" => return Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
-                    _ => (),
+                    _ => {}
+                },
+                PathArguments::AngleBracketed(args) => {
+                    let ident = segment.ident.to_string();
+                    let mut arg_iter = args.args.iter().filter_map(|arg| {
+                        if let GenericArgument::Type(inner) = arg {
+                            Some(inner)
+                        } else {
+                            None
+                        }
+                    });
+                    match ident.as_str() {
+                        "Option" => {
+                            if let Some(inner) = arg_iter.next() {
+                                let inner_ty = syn_type_to_wave_type(inner)?;
+                                return Ok(quote! {{
+                                    let __inner = #inner_ty;
+                                    stdlib::wasm_wave::value::Type::option(__inner)
+                                }});
+                            }
+                        }
+                        "Vec" => {
+                            if let Some(inner) = arg_iter.next() {
+                                let inner_ty = syn_type_to_wave_type(inner)?;
+                                return Ok(quote! {{
+                                    let __inner = #inner_ty;
+                                    stdlib::wasm_wave::value::Type::list(__inner)
+                                }});
+                            }
+                        }
+                        _ => {}
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -354,31 +388,80 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
 pub fn syn_type_to_unwrap_expr(ty: &SynType, value: TokenStream) -> syn::Result<TokenStream> {
     if let SynType::Path(TypePath { qself: None, path }) = ty {
         if let Some(segment) = &path.segments.last() {
-            if segment.arguments == PathArguments::None {
-                let ident = segment.ident.to_string();
-                match ident.as_str() {
-                    "u64" => {
-                        return Ok(
-                            quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value.into_owned()) },
-                        );
+            match &segment.arguments {
+                PathArguments::None => {
+                    let ident = segment.ident.to_string();
+                    match ident.as_str() {
+                        "u64" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value.into_owned()) },
+                            );
+                        }
+                        "u32" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u32(&#value.into_owned()) },
+                            );
+                        }
+                        "i64" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value.into_owned()) },
+                            );
+                        }
+                        "i32" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s32(&#value.into_owned()) },
+                            );
+                        }
+                        "String" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
+                            );
+                        }
+                        "bool" => {
+                            return Ok(
+                                quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value.into_owned()) },
+                            );
+                        }
+                        _ => {}
                     }
-                    "i64" => {
-                        return Ok(
-                            quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value.into_owned()) },
-                        );
-                    }
-                    "String" => {
-                        return Ok(
-                            quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
-                        );
-                    }
-                    "bool" => {
-                        return Ok(
-                            quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value.into_owned()) },
-                        );
-                    }
-                    _ => {}
                 }
+                PathArguments::AngleBracketed(args) => {
+                    let ident = segment.ident.to_string();
+                    let mut arg_iter = args.args.iter().filter_map(|arg| {
+                        if let GenericArgument::Type(inner) = arg {
+                            Some(inner)
+                        } else {
+                            None
+                        }
+                    });
+                    match ident.as_str() {
+                        "Option" => {
+                            if let Some(inner) = arg_iter.next() {
+                                let inner_unwrap = syn_type_to_unwrap_expr(inner, quote! { __opt_val })?;
+                                return Ok(quote! {{
+                                    stdlib::wasm_wave::wasm::WasmValue::unwrap_option(&#value.into_owned())
+                                        .map(|__opt_val| {
+                                            #inner_unwrap
+                                        })
+                                }});
+                            }
+                        }
+                        "Vec" => {
+                            if let Some(inner) = arg_iter.next() {
+                                let inner_unwrap = syn_type_to_unwrap_expr(inner, quote! { __elem })?;
+                                return Ok(quote! {{
+                                    let mut __collected = Vec::new();
+                                    for __elem in stdlib::wasm_wave::wasm::WasmValue::unwrap_list(&#value.into_owned()) {
+                                        __collected.push(#inner_unwrap);
+                                    }
+                                    __collected
+                                }});
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
     }
