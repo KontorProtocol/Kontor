@@ -831,107 +831,162 @@ impl built_in::context::HostFallContextWithStore for Runtime {
     }
 }
 
-impl built_in::numbers::Host for Runtime {
-    async fn u64_to_integer(&mut self, i: u64) -> Result<Integer> {
+impl built_in::numbers::Host for Runtime {}
+
+impl built_in::numbers::HostWithStore for Runtime {
+    async fn u64_to_integer<T>(_accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
         Ok(numerics::u64_to_integer(i))
     }
 
-    async fn s64_to_integer(&mut self, i: i64) -> Result<Integer> {
+    async fn s64_to_integer<T>(_accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
         Ok(numerics::s64_to_integer(i))
     }
 
-    async fn string_to_integer(&mut self, s: String) -> Result<Result<Integer, Error>> {
+    async fn string_to_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        s: String,
+    ) -> Result<Result<Integer, Error>> {
         Ok(numerics::string_to_integer(&s))
     }
 
-    async fn integer_to_string(&mut self, i: Integer) -> Result<String> {
+    async fn integer_to_string<T>(_accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
         Ok(numerics::integer_to_string(i))
     }
 
-    async fn eq_integer(&mut self, a: Integer, b: Integer) -> Result<bool> {
+    async fn eq_integer<T>(_accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
         Ok(numerics::eq_integer(a, b))
     }
 
-    async fn cmp_integer(&mut self, a: Integer, b: Integer) -> Result<NumericOrdering> {
+    async fn cmp_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+    ) -> Result<NumericOrdering> {
         Ok(numerics::cmp_integer(a, b))
     }
 
-    async fn add_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+    async fn add_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+    ) -> Result<Result<Integer, Error>> {
         Ok(numerics::add_integer(a, b))
     }
 
-    async fn sub_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+    async fn sub_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+    ) -> Result<Result<Integer, Error>> {
         Ok(numerics::sub_integer(a, b))
     }
 
-    async fn mul_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+    async fn mul_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+    ) -> Result<Result<Integer, Error>> {
         Ok(numerics::mul_integer(a, b))
     }
 
-    async fn div_integer(&mut self, a: Integer, b: Integer) -> Result<Result<Integer, Error>> {
+    async fn div_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+    ) -> Result<Result<Integer, Error>> {
         Ok(numerics::div_integer(a, b))
     }
 
-    async fn integer_to_decimal(&mut self, i: Integer) -> Result<Decimal> {
+    async fn integer_to_decimal<T>(_accessor: &Accessor<T, Self>, i: Integer) -> Result<Decimal> {
         Ok(numerics::integer_to_decimal(i))
     }
 
-    async fn decimal_to_integer(&mut self, d: Decimal) -> Result<Integer> {
+    async fn decimal_to_integer<T>(_accessor: &Accessor<T, Self>, d: Decimal) -> Result<Integer> {
         Ok(numerics::decimal_to_integer(d))
     }
 
-    async fn u64_to_decimal(&mut self, i: u64) -> Result<Decimal> {
+    async fn u64_to_decimal<T>(_accessor: &Accessor<T, Self>, i: u64) -> Result<Decimal> {
         Ok(numerics::u64_to_decimal(i))
     }
 
-    async fn s64_to_decimal(&mut self, i: i64) -> Result<Decimal> {
+    async fn s64_to_decimal<T>(_accessor: &Accessor<T, Self>, i: i64) -> Result<Decimal> {
         Ok(numerics::s64_to_decimal(i))
     }
 
-    async fn f64_to_decimal(&mut self, f: f64) -> Result<Decimal> {
+    async fn f64_to_decimal<T>(_accessor: &Accessor<T, Self>, f: f64) -> Result<Decimal> {
         Ok(numerics::f64_to_decimal(f))
     }
 
-    async fn string_to_decimal(&mut self, s: String) -> Result<Result<Decimal, Error>> {
+    async fn string_to_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        s: String,
+    ) -> Result<Result<Decimal, Error>> {
         Ok(numerics::string_to_decimal(&s))
     }
 
-    async fn decimal_to_string(&mut self, d: Decimal) -> Result<String> {
+    async fn decimal_to_string<T>(_accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
         Ok(numerics::decimal_to_string(d))
     }
 
-    async fn eq_decimal(&mut self, a: Decimal, b: Decimal) -> Result<bool> {
+    async fn eq_decimal<T>(_accessor: &Accessor<T, Self>, a: Decimal, b: Decimal) -> Result<bool> {
         Ok(numerics::eq_decimal(a, b))
     }
 
-    async fn cmp_decimal(&mut self, a: Decimal, b: Decimal) -> Result<NumericOrdering> {
+    async fn cmp_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<NumericOrdering> {
         Ok(numerics::cmp_decimal(a, b))
     }
 
-    async fn add_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+    async fn add_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
         Ok(numerics::add_decimal(a, b))
     }
 
-    async fn sub_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+    async fn sub_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
         Ok(numerics::sub_decimal(a, b))
     }
 
-    async fn mul_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+    async fn mul_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
         Ok(numerics::mul_decimal(a, b))
     }
 
-    async fn div_decimal(&mut self, a: Decimal, b: Decimal) -> Result<Result<Decimal, Error>> {
+    async fn div_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
         Ok(numerics::div_decimal(a, b))
     }
 
-    async fn log10(&mut self, a: Decimal) -> Result<Decimal> {
+    async fn log10<T>(_accessor: &Accessor<T, Self>, a: Decimal) -> Result<Decimal> {
         Ok(numerics::log10(a))
     }
 
-    async fn meta_force_generate_integer(&mut self, _i: built_in::numbers::Integer) -> Result<()> {
+    async fn meta_force_generate_integer<T>(
+        _accessor: &Accessor<T, Self>,
+        _i: Integer,
+    ) -> Result<()> {
         unimplemented!()
     }
-    async fn meta_force_generate_decimal(&mut self, _d: built_in::numbers::Decimal) -> Result<()> {
+
+    async fn meta_force_generate_decimal<T>(
+        _accessor: &Accessor<T, Self>,
+        _d: Decimal,
+    ) -> Result<()> {
         unimplemented!()
     }
 }
