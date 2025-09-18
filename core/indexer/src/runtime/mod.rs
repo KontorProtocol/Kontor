@@ -890,7 +890,62 @@ impl built_in::resource_manager::Host for Runtime {
     }
 }
 
-impl built_in::assets::Host for Runtime {}
+impl built_in::assets::Host for Runtime {
+    async fn create_balance(
+        &mut self,
+        amount: Integer,
+        token: ContractAddress,
+    ) -> Result<Resource<balance::BalanceData>> {
+        // Same as Balance constructor, but callable by guest code
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let balance = balance::BalanceData::new(amount, token, contract_id);
+        let resource = self.table.lock().await.push(balance)?;
+        Ok(resource)
+    }
+
+    async fn create_lp_balance(
+        &mut self,
+        amount: Integer,
+        token_a: ContractAddress,
+        token_b: ContractAddress,
+    ) -> Result<Resource<lp_balance::LpBalanceData>> {
+        // Same as LpBalance constructor, but callable by guest code
+        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let lp_balance = lp_balance::LpBalanceData::new(amount, token_a, token_b, contract_id);
+        let resource = self.table.lock().await.push(lp_balance)?;
+        Ok(resource)
+    }
+
+    async fn balance_amount(&mut self, bal: Resource<balance::BalanceData>) -> Result<Integer> {
+        let table = self.table.lock().await;
+        let balance = table.get(&bal)?;
+        Ok(balance.amount.clone())
+    }
+
+    async fn balance_token(&mut self, bal: Resource<balance::BalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let balance = table.get(&bal)?;
+        Ok(balance.token.clone())
+    }
+
+    async fn lp_balance_amount(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<Integer> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&lp)?;
+        Ok(lp_balance.amount.clone())
+    }
+
+    async fn lp_balance_token_a(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&lp)?;
+        Ok(lp_balance.token_a.clone())
+    }
+
+    async fn lp_balance_token_b(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let table = self.table.lock().await;
+        let lp_balance = table.get(&lp)?;
+        Ok(lp_balance.token_b.clone())
+    }
+}
 
 impl built_in::assets::HostBalance for Runtime {
     async fn new(&mut self, amount: Integer, token: ContractAddress) -> Result<Resource<balance::BalanceData>> {

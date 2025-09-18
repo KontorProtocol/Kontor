@@ -167,27 +167,76 @@ impl Guest for Token {
         // Decrease ledger balance
         ledger.set(ctx, owner.clone(), numbers::sub_integer(balance, amount));
 
-        // Balance resources can only be created by the host
-        // For now, return a placeholder error
-        Err(error::Error::Message("Balance resource creation requires host support".to_string()))
+        // Create a Balance resource using the factory function
+        let contract_addr = get_contract_address(ctx);
+        Ok(create_balance(amount, contract_addr))
     }
     
-    fn deposit(ctx: &ProcContext, recipient: String, _bal: Balance) -> Result<(), error::Error> {
-        // Balance resources are opaque handles in guest code
-        // We can't directly access their fields or methods
-        // The host would need to provide a way to extract the amount
-        // For now, use a placeholder implementation
-        let _ledger = storage(ctx).ledger();
-        Err(error::Error::Message("Balance resource consumption requires host support".to_string()))
+    fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
+        // Use accessor functions to get resource data
+        let amount = balance_amount(&bal);
+        let token = balance_token(&bal);
+        
+        // Verify the balance is for this token contract
+        let contract_addr = get_contract_address(ctx);
+        if !same_address(&token, &contract_addr) {
+            return Err(error::Error::Message("Balance is for different token".to_string()));
+        }
+        
+        // Credit the recipient's account
+        let ledger = storage(ctx).ledger();
+        let current_balance = ledger.get(ctx, &recipient).unwrap_or_default();
+        ledger.set(ctx, recipient, numbers::add_integer(current_balance, amount));
+        
+        // The Balance resource is automatically consumed when it goes out of scope
+        Ok(())
     }
     
-    fn split(_ctx: &ProcContext, _bal: Balance, _split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
-        // Balance split requires host support
-        Err(error::Error::Message("Balance split requires host support".to_string()))
+    fn split(ctx: &ProcContext, bal: Balance, split_amount: numbers::Integer) -> Result<SplitResult, error::Error> {
+        // Get balance info
+        let total_amount = balance_amount(&bal);
+        let token = balance_token(&bal);
+        
+        // Check if split amount is valid
+        if numbers::cmp_integer(split_amount.clone(), total_amount.clone()) == numbers::Ordering::Greater {
+            return Err(error::Error::Message("Split amount exceeds balance".to_string()));
+        }
+        
+        // Calculate remainder
+        let remainder_amount = numbers::sub_integer(total_amount, split_amount.clone());
+        
+        // Create new balances
+        let split_balance = create_balance(split_amount, token.clone());
+        let remainder_balance = if numbers::cmp_integer(remainder_amount.clone(), numbers::u64_to_integer(0)) == numbers::Ordering::Greater {
+            Some(create_balance(remainder_amount, token))
+        } else {
+            None
+        };
+        
+        // The original balance is consumed
+        Ok(SplitResult {
+            split: split_balance,
+            remainder: remainder_balance,
+        })
     }
     
-    fn merge(_ctx: &ProcContext, _a: Balance, _b: Balance) -> Result<Balance, error::Error> {
-        // Balance merge requires host support
-        Err(error::Error::Message("Balance merge requires host support".to_string()))
+    fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, error::Error> {
+        // Get balance info
+        let amount_a = balance_amount(&a);
+        let amount_b = balance_amount(&b);
+        let token_a = balance_token(&a);
+        let token_b = balance_token(&b);
+        
+        // Verify both balances are for the same token
+        if !same_address(&token_a, &token_b) {
+            return Err(error::Error::Message("Cannot merge balances from different tokens".to_string()));
+        }
+        
+        // Add the amounts
+        let total = numbers::add_integer(amount_a, amount_b);
+        
+        // Create merged balance
+        // Both input balances are consumed
+        Ok(create_balance(total, token_a))
     }
 }

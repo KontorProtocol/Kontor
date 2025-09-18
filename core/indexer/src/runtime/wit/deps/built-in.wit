@@ -210,6 +210,17 @@ interface assets {
         // Consume this LP balance (move-only semantic)
         consume: func();
     }
+    
+    // Factory functions for guest code to create resources
+    create-balance: func(amount: integer, token: contract-address) -> balance;
+    create-lp-balance: func(amount: integer, token-a: contract-address, token-b: contract-address) -> lp-balance;
+    
+    // Accessor functions for guest code to inspect resources
+    balance-amount: func(bal: borrow<balance>) -> integer;
+    balance-token: func(bal: borrow<balance>) -> contract-address;
+    lp-balance-amount: func(lp: borrow<lp-balance>) -> integer;
+    lp-balance-token-a: func(lp: borrow<lp-balance>) -> contract-address;
+    lp-balance-token-b: func(lp: borrow<lp-balance>) -> contract-address;
 }
 
 world built-in {
