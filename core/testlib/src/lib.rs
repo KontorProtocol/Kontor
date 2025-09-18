@@ -11,8 +11,8 @@ use indexer::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},
     runtime::{
-        ComponentCache, Runtime as IndexerRuntime, Storage, load_contracts, load_native_contracts,
-        wit::Signer,
+        ComponentCache, Runtime as IndexerRuntime, Storage, fuel::FuelGauge, load_contracts,
+        load_native_contracts, wit::Signer,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
@@ -155,5 +155,12 @@ impl Runtime {
                 expr,
             )
             .await
+    }
+
+    pub fn fuel_gauge(&self) -> FuelGauge {
+        self.runtime
+            .gauge
+            .clone()
+            .expect("Test environment runtime doesn't have fuel gauge")
     }
 }
