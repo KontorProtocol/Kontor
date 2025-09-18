@@ -43,11 +43,10 @@ pub fn generate(config: Config) -> TokenStream {
             generate_all,
             // Don't add derives to resources - they don't support them
             // additional_derives: [stdlib::Storage, stdlib::Wavey],
-            export_macro_name: "__export__",
             #with_clause
         });
 
-        // Re-export generated bindings with proper module structure
+        // Re-export built-in modules
         pub use kontor::built_in;
         
         // Re-export the modules publicly so contracts can use them
@@ -264,7 +263,8 @@ pub fn generate(config: Config) -> TokenStream {
         // Contract implementation struct
         struct #name;
         
-        __export__!(#name);
+        // Export the implementation
+        export!(#name);
     }
 }
 
@@ -301,10 +301,16 @@ fn parse_wit_resources(wit_path: &PathBuf, world_name: &str) -> Result<(HashSet<
         return Ok((resources, records_with_resources, TokenStream::new()));
     }
     
-    // Parse WIT files
+    // Parse WIT files - use push_dir to handle deps properly
     let mut resolve = Resolve::new();
-    for path in &paths {
-        resolve.push_file(path)?;
+    if wit_path.is_dir() {
+        resolve.push_dir(wit_path)?;
+    } else if let Some(parent) = wit_path.parent() {
+        resolve.push_dir(parent)?;
+    } else {
+        for path in &paths {
+            resolve.push_file(path)?;
+        }
     }
     
     // Find the target world
