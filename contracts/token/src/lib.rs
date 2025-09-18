@@ -184,70 +184,71 @@ impl Guest for Token {
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), kontor::built_in::error::Error> {
-        // Use accessor functions to get resource data
+        // Use accessor functions to get resource data BEFORE consuming
         let amount = balance_amount(&bal);
         let token = balance_token(&bal);
-        
+
         // Verify the balance is for this token contract
         let contract_addr = get_contract_address(ctx);
         if !same_address(&token, &contract_addr) {
             return Err(kontor::built_in::error::Error::Message("Balance is for different token".to_string()));
         }
-        
-        // Credit the recipient's account
+
+        // CRITICAL: Explicitly consume the balance to enforce linearity
+        // This validates ownership and prevents double-spending
+        bal.consume();
+
+        // Credit the recipient's account AFTER consuming the balance
         let ledger = storage(ctx).ledger();
         let current_balance = ledger.get(ctx, &recipient).unwrap_or_default();
         ledger.set(ctx, recipient, kontor::built_in::numbers::add_integer(current_balance, amount));
-        
-        // The Balance resource is automatically consumed when it goes out of scope
+
         Ok(())
     }
     
     fn split(_ctx: &ProcContext, bal: Balance, split_amount: kontor::built_in::numbers::Integer) -> Result<SplitResult, kontor::built_in::error::Error> {
-        // Get balance info
+        // SECURITY: Use host-backed split operation to enforce ownership and atomicity
+        // This consumes the original balance and creates new ones with proper validation
+
+        // Check if split amount is valid before calling host operation
         let total_amount = balance_amount(&bal);
-        let token = balance_token(&bal);
-        
-        // Check if split amount is valid
-        if kontor::built_in::numbers::cmp_integer(split_amount.clone(), total_amount.clone()) == kontor::built_in::numbers::Ordering::Greater {
+        if kontor::built_in::numbers::cmp_integer(split_amount.clone(), total_amount) == kontor::built_in::numbers::Ordering::Greater {
             return Err(kontor::built_in::error::Error::Message("Split amount exceeds balance".to_string()));
         }
-        
-        // Calculate remainder
-        let remainder_amount = kontor::built_in::numbers::sub_integer(total_amount, split_amount.clone());
-        
-        // Create new balances using the Balance resource constructor
-        let split_balance = Balance::new(split_amount, &token);
-        let remainder_balance = if kontor::built_in::numbers::cmp_integer(remainder_amount.clone(), kontor::built_in::numbers::u64_to_integer(0)) == kontor::built_in::numbers::Ordering::Greater {
-            Some(Balance::new(remainder_amount, &token))
-        } else {
-            None
-        };
-        
-        // The original balance is consumed
+
+        // Use the host-backed split operation which:
+        // 1. Validates ownership (only owner can split)
+        // 2. Atomically consumes original and creates new balances
+        // 3. Enforces linear type safety
+        let split_result = bal.split(split_amount);
+
         Ok(SplitResult {
-            split: split_balance,
-            remainder: remainder_balance,
+            split: split_result.split,
+            remainder: split_result.remainder,
         })
     }
     
     fn merge(_ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, kontor::built_in::error::Error> {
-        // Get balance info
-        let amount_a = balance_amount(&a);
-        let amount_b = balance_amount(&b);
+        // SECURITY: Use host-backed merge operation to enforce ownership and atomicity
+        // This validates that both balances are owned by the current contract
+        // and atomically consumes both to create a new merged balance
+
+        // Verify both balances are for the same token before merging
         let token_a = balance_token(&a);
         let token_b = balance_token(&b);
-        
-        // Verify both balances are for the same token
+
         if !same_address(&token_a, &token_b) {
             return Err(kontor::built_in::error::Error::Message("Cannot merge balances from different tokens".to_string()));
         }
-        
-        // Add the amounts
-        let total = kontor::built_in::numbers::add_integer(amount_a, amount_b);
-        
-        // Create merged balance
-        // Both input balances are consumed
-        Ok(Balance::new(total, &token_a))
+
+        // Use the host-backed merge operation which:
+        // 1. Validates ownership (only owner can merge)
+        // 2. Atomically consumes both input balances
+        // 3. Creates new merged balance with proper validation
+        // 4. Enforces linear type safety
+        match Balance::merge(a, b) {
+            Ok(merged_balance) => Ok(merged_balance),
+            Err(error_msg) => Err(kontor::built_in::error::Error::Message(error_msg)),
+        }
     }
 }

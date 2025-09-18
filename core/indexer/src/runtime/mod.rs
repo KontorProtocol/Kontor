@@ -1139,15 +1139,30 @@ impl built_in::assets::Host for Runtime {
 
 impl built_in::assets::HostBalance for Runtime {
     async fn new(&mut self, amount: Integer, token: ContractAddress) -> Result<Resource<balance::BalanceData>> {
-        // SECURITY: Balance creation is restricted to token contracts only
-        // The owner_contract MUST be the token contract itself, not the caller
+        // CRITICAL SECURITY: Only the token contract itself can create balances for its token
         // This prevents balance forgery by unauthorized contracts
 
         let current_contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
 
-        // SECURITY: Only the token contract itself can create balances for its token
-        // This prevents balance forgery by other contracts
-        // The balance is owned by the calling contract, which must be the token contract
+        // SECURITY VALIDATION: Verify the calling contract matches the token contract
+        // TODO: In production, resolve ContractAddress to actual contract_id and compare
+        // For now, we need to add validation that current_contract_id == token_contract_id
+
+        // Get the token contract ID from the ContractAddress
+        let token_contract_id = self.storage
+            .contract_id(&token)
+            .await?
+            .ok_or_else(|| anyhow!("Token contract not found: {}", token.name))?;
+
+        // ENFORCE: Only the token contract can create balances for itself
+        if current_contract_id != token_contract_id {
+            return Err(anyhow!(
+                "Balance creation denied: contract {} cannot create balances for token contract {} ({})",
+                current_contract_id, token_contract_id, token.name
+            ));
+        }
+
+        // Create balance owned by the token contract
         let balance = balance::BalanceData::new(amount, token, current_contract_id);
         let resource = self.table.lock().await.push_with_owner(balance, current_contract_id)?;
         Ok(resource)
