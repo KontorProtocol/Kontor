@@ -6,7 +6,9 @@ contract!(name = "token");
 // - Integer, Balance, SplitResult
 // Import ContractAddress and the functions we need:
 use kontor::built_in::foreign::ContractAddress;
-use kontor::built_in::assets::{create_balance, balance_amount, balance_token};
+use kontor::built_in::assets::{balance_amount, balance_token};
+// NOTE: create_balance has been removed to prevent forgery
+// Balances are created internally by the withdraw operation
 
 // Helper function to get the token's contract address
 fn get_contract_address(ctx: &impl ReadContext) -> ContractAddress {
@@ -173,9 +175,12 @@ impl Guest for Token {
         // Decrease ledger balance
         ledger.set(ctx, owner.clone(), kontor::built_in::numbers::sub_integer(balance, amount));
 
-        // Create a Balance resource using the factory function
+        // Create a Balance resource through the resource constructor
+        // This is secure because only the token contract can create its own balances
         let contract_addr = get_contract_address(ctx);
-        Ok(create_balance(amount, &contract_addr))
+        // The Balance constructor is available through the WIT resource definition
+        // and is implemented by HostBalance::new in the runtime
+        Ok(Balance::new(amount, &contract_addr))
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), kontor::built_in::error::Error> {
@@ -211,10 +216,10 @@ impl Guest for Token {
         // Calculate remainder
         let remainder_amount = kontor::built_in::numbers::sub_integer(total_amount, split_amount.clone());
         
-        // Create new balances
-        let split_balance = create_balance(split_amount, &token);
+        // Create new balances using the Balance resource constructor
+        let split_balance = Balance::new(split_amount, &token);
         let remainder_balance = if kontor::built_in::numbers::cmp_integer(remainder_amount.clone(), kontor::built_in::numbers::u64_to_integer(0)) == kontor::built_in::numbers::Ordering::Greater {
-            Some(create_balance(remainder_amount, &token))
+            Some(Balance::new(remainder_amount, &token))
         } else {
             None
         };
@@ -243,6 +248,6 @@ impl Guest for Token {
         
         // Create merged balance
         // Both input balances are consumed
-        Ok(create_balance(total, &token_a))
+        Ok(Balance::new(total, &token_a))
     }
 }

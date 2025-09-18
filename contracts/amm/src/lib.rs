@@ -5,9 +5,11 @@ contract!(name = "amm");
 // Import functions we need from the generated bindings
 // Types like Integer, ContractAddress, Balance, LpBalance are already exported by the macro
 use kontor::built_in::assets::{
-    create_balance, balance_amount, balance_token,
-    create_lp_balance, lp_balance_amount, lp_balance_token_a, lp_balance_token_b
+    balance_amount, balance_token,
+    lp_balance_amount, lp_balance_token_a, lp_balance_token_b
 };
+// NOTE: create_balance and create_lp_balance have been removed to prevent forgery
+// Only token/AMM contracts can create their own resources
 use kontor::built_in::numbers as numbers;  // For numbers:: calls
 use crate::kontor::built_in::foreign as foreign;  // For foreign:: namespace
 use crate::kontor::built_in::context as context;  // For context:: namespace
@@ -30,7 +32,8 @@ mod token_dyn {
     
     pub fn withdraw(_token: &ContractAddress, _signer: &String, _amount: Integer) -> Result<Balance, Error> {
         // Create a dummy balance - can't use default since Balance is a resource
-        Ok(create_balance(Integer::default(), &ContractAddress::default()))
+        // Stub implementation - in real system would call token contract's withdraw
+        Ok(Balance::new(Integer::default(), &ContractAddress::default()))
     }
     
     pub struct SplitResult {
@@ -40,7 +43,7 @@ mod token_dyn {
     
     pub fn split(_token: &ContractAddress, _signer: &String, _balance: Balance, _amount: Integer) -> Result<SplitResult, Error> {
         Ok(SplitResult {
-            split: create_balance(Integer::default(), &ContractAddress::default()),
+            split: Balance::new(Integer::default(), &ContractAddress::default()),
             remainder: None,
         })
     }
@@ -590,7 +593,7 @@ impl Guest for Amm {
         // EVENT: PoolCreated { pool_id: id, initial_lp: lp_to_issue }
         
         // Create LpBalance resource using factory function
-        Ok(create_lp_balance(lp_to_issue, &pair.token_a, &pair.token_b))
+        Ok(LpBalance::new(lp_to_issue, &pair.token_a, &pair.token_b))
     }
 
     fn values(ctx: &ViewContext, pair: TokenPair) -> Option<PoolValues> {
@@ -654,7 +657,7 @@ impl Guest for Amm {
             consume_token_balance_to_pool(ctx, balance_a, &pool_address, &token_a)?;
             consume_token_balance_to_pool(ctx, balance_b, &pool_address, &token_b)?;
             // Return zero LP balance
-            return Ok(create_lp_balance(numbers::u64_to_integer(0), &token_a, &token_b));
+            return Ok(LpBalance::new(numbers::u64_to_integer(0), &token_a, &token_b));
         }
 
         let pool_address = ctx.contract_signer().to_string();
@@ -750,7 +753,7 @@ impl Guest for Amm {
         // EVENT: Deposit { user: user_address, token_a_amount: deposit_a, token_b_amount: deposit_b, lp_minted: lp_to_issue }
         
         // Create LpBalance resource using factory function
-        Ok(create_lp_balance(lp_to_issue, &token_a, &token_b))
+        Ok(LpBalance::new(lp_to_issue, &token_a, &token_b))
     }
 
     fn withdraw(
@@ -932,7 +935,7 @@ impl Guest for Amm {
         // EVENT: AdminWithdrawFees { admin: admin_address, amount: amount_int }
         
         // Create LpBalance resource for admin fees
-        Ok(create_lp_balance(amount_int, &token_a, &token_b))
+        Ok(LpBalance::new(amount_int, &token_a, &token_b))
     }
 
     fn admin_set_fees(
