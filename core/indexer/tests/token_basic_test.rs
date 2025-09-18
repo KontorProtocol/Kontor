@@ -23,7 +23,7 @@ async fn test_token_withdraw_deposit() -> Result<()> {
         .execute(
             Some(alice),
             &token_addr,
-            "mint({r0: 1000, r1: 0, r2: 0, r3: 0, sign: plus})",
+            &format!("mint({})", int_str(1000)),
         )
         .await?;
 
@@ -38,7 +38,7 @@ async fn test_token_withdraw_deposit() -> Result<()> {
         .execute(
             Some(alice),
             &token_addr,
-            "withdraw({r0: 100, r1: 0, r2: 0, r3: 0, sign: plus})",
+            &format!("withdraw({})", int_str(100)),
         )
         .await?;
     assert!(result.contains("ok"));

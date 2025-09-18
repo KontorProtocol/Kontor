@@ -4,8 +4,24 @@ use bon::Builder;
 pub use indexer::runtime::wit::kontor::built_in::{
     error::Error,
     foreign::ContractAddress,
-    numbers::{Decimal, Integer},
+    numbers::{Decimal, Integer, Sign},
 };
+
+// Helper to create Integer from u64
+pub fn int(n: u64) -> Integer {
+    Integer {
+        r0: n,
+        r1: 0,
+        r2: 0,
+        r3: 0,
+        sign: Sign::Plus,
+    }
+}
+
+// Helper to format Integer for Wave string interface
+pub fn int_str(n: u64) -> String {
+    format!("{{r0: {}, r1: 0, r2: 0, r3: 0, sign: plus}}", n)
+}
 use indexer::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},
