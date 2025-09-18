@@ -45,15 +45,9 @@ pub fn generate(config: Config) -> TokenStream {
             // additional_derives: [stdlib::Storage, stdlib::Wavey],
             #with_clause
         });
-        
-        // Import commonly used types and modules for convenience
-        use self::kontor::built_in::{assets, context, error, foreign, numbers};
-        use self::kontor::built_in::context::{ProcContext, ViewContext};
-        use self::kontor::built_in::error::Error;
-        use self::kontor::built_in::assets::Balance;
-        use self::kontor::built_in::numbers::Integer;
-        use self::kontor::built_in::foreign::ContractAddress;
-        use self::exports::kontor::contract::contract::Guest;
+
+        // Don't import types - let each contract import what it needs
+        // This avoids conflicts with wit-bindgen generated types
 
         fn make_keys_iterator<T: FromString>(keys: crate::kontor::built_in::context::Keys) -> impl Iterator<Item = T> {
             struct KeysIterator<T: FromString> {
@@ -213,14 +207,14 @@ pub fn generate(config: Config) -> TokenStream {
                 ctx.__set_str(&path, &s);
             }
         }
-        
+
         impl stdlib::Retrieve for crate::kontor::built_in::numbers::Integer {
             fn __get(ctx: &impl stdlib::ReadContext, path: stdlib::DotPathBuf) -> Option<Self> {
                 // Convert from string representation
-                ctx.__get_str(&path).map(|s| crate::kontor::built_in::numbers::string_to_integer(&s))
+                ctx.__get_str(&path).map(|s| crate::kontor::built_in::numbers::string_to_integer(s))
             }
         }
-        
+
         impl Default for crate::kontor::built_in::numbers::Integer {
             fn default() -> Self {
                 crate::kontor::built_in::numbers::u64_to_integer(0)
@@ -234,13 +228,13 @@ pub fn generate(config: Config) -> TokenStream {
                 ctx.__set_str(&path, &serialized);
             }
         }
-        
+
         impl stdlib::Retrieve for crate::kontor::built_in::foreign::ContractAddress {
             fn __get(ctx: &impl stdlib::ReadContext, path: stdlib::DotPathBuf) -> Option<Self> {
                 ctx.__get_str(&path).and_then(|s| {
                     let parts: Vec<&str> = s.split(':').collect();
                     if parts.len() == 3 {
-                        Some(foreign::ContractAddress {
+                        Some(crate::kontor::built_in::foreign::ContractAddress {
                             name: parts[0].to_string(),
                             height: parts[1].parse().ok()?,
                             tx_index: parts[2].parse().ok()?,
