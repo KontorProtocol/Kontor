@@ -2,8 +2,8 @@ use stdlib::*;
 
 contract!(name = "arith");
 
-// TODO: Fix import! macro for cross-contract calls
-// import!(name = "fib", height = 0, tx_index = 0, path = "fib/wit");
+// Cross-contract import for fib functionality
+import!(name = "fib", height = 0, tx_index = 0, path = "fib/wit");
 
 #[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {

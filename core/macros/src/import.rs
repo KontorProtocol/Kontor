@@ -112,6 +112,10 @@ pub fn import(
                 // Type aliases are handled inline, skip them here
                 continue;
             }
+            TypeDefKind::List(_) | TypeDefKind::Handle(_) | TypeDefKind::Flags(_) => {
+                // These types are handled inline or not needed for basic cross-contract calls
+                continue;
+            }
             _ => panic!("Unsupported type definition kind: {:?}", def.kind),
         }
         .expect("Failed to generate type");

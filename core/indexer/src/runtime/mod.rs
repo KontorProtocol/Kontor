@@ -811,9 +811,9 @@ impl built_in::context::HostProcContext for Runtime {
     ) -> Result<u64> {
         let table = self.table.lock().await;
         let contract_id = table.get(&resource)?.contract_id;
-        self.storage
+        Ok(self.storage
             .delete_matching_paths(contract_id, &regexp)
-            .await
+            .await? as u64)
     }
 
     async fn signer(&mut self, resource: Resource<ProcContext>) -> Result<Resource<Signer>> {
@@ -1039,7 +1039,7 @@ impl built_in::numbers::Host for Runtime {
 /// Resource manager operations for cross-contract resource transfers
 /// These enable secure movement of resources between contract instances
 impl built_in::resource_manager::Host for Runtime {
-    async fn register_balance(&mut self, bal: Resource<balance::BalanceData>) -> Result<u32> {
+    async fn register_balance(&mut self, bal: Resource<balance::BalanceData>) -> Result<u64> {
         // Register a Balance resource for cross-contract transfer
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let mut table = self.table.lock().await;
@@ -1057,17 +1057,17 @@ impl built_in::resource_manager::Host for Runtime {
         tracing::info!("Registered Balance resource {} as global handle {} for contract {}",
                       resource_rep, global_handle, current_contract);
 
-        Ok(global_handle)
+        Ok(global_handle as u64)
     }
 
-    async fn take_balance(&mut self, handle: u32) -> Result<Result<Resource<balance::BalanceData>, Error>> {
+    async fn take_balance(&mut self, handle: u64) -> Result<Result<Resource<balance::BalanceData>, Error>> {
         // Take ownership of a transferred Balance resource
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let mut table = self.table.lock().await;
 
         // Verify ownership
-        if !table.is_owned_by(handle, current_contract) {
-            let owner = table.get_owner(handle);
+        if !table.is_owned_by(handle as u32, current_contract) {
+            let owner = table.get_owner(handle as u32);
             return Ok(Err(Error::Message(format!(
                 "Cannot take Balance handle {}: owned by contract {:?}, not {}",
                 handle, owner, current_contract
@@ -1075,10 +1075,10 @@ impl built_in::resource_manager::Host for Runtime {
         }
 
         // Convert global handle to actual Resource<BalanceData>
-        match table.global_handle_to_balance(handle) {
+        match table.global_handle_to_balance(handle as u32) {
             Ok(balance_resource) => {
                 // Remove the global handle mapping since ownership is transferring
-                table.remove_global_handle(handle)?;
+                table.remove_global_handle(handle as u32)?;
 
                 tracing::info!("Contract {} took Balance resource via handle {}",
                               current_contract, handle);
@@ -1091,7 +1091,7 @@ impl built_in::resource_manager::Host for Runtime {
         }
     }
 
-    async fn transfer(&mut self, from_contract: i64, to_contract: i64, handle: u32) -> Result<Result<(), Error>> {
+    async fn transfer(&mut self, from_contract: i64, to_contract: i64, handle: u64) -> Result<Result<(), Error>> {
         // Transfer ownership of a resource from one contract to another
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
 
@@ -1105,7 +1105,7 @@ impl built_in::resource_manager::Host for Runtime {
 
         let mut table = self.table.lock().await;
 
-        match table.transfer_ownership(handle, from_contract, to_contract) {
+        match table.transfer_ownership(handle as u32, from_contract, to_contract) {
             Ok(()) => {
                 tracing::info!("Transferred resource handle {} from contract {} to contract {}",
                               handle, from_contract, to_contract);
@@ -1118,14 +1118,14 @@ impl built_in::resource_manager::Host for Runtime {
         }
     }
 
-    async fn drop(&mut self, resource_id: String, handle: u32) -> Result<Result<(), Error>> {
+    async fn drop(&mut self, resource_id: String, handle: u64) -> Result<Result<(), Error>> {
         // Drop a resource handle (delete it)
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let mut table = self.table.lock().await;
 
         // Verify ownership
-        if !table.is_owned_by(handle, current_contract) {
-            let owner = table.get_owner(handle);
+        if !table.is_owned_by(handle as u32, current_contract) {
+            let owner = table.get_owner(handle as u32);
             return Ok(Err(Error::Message(format!(
                 "Cannot drop resource {}: owned by contract {:?}, not {}",
                 resource_id, owner, current_contract
@@ -1133,7 +1133,7 @@ impl built_in::resource_manager::Host for Runtime {
         }
 
         // Remove the global handle mapping and clean up
-        table.remove_global_handle(handle)?;
+        table.remove_global_handle(handle as u32)?;
 
         tracing::info!("Contract {} dropped resource {} with handle {}",
                       current_contract, resource_id, handle);

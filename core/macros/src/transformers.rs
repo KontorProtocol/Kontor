@@ -11,8 +11,16 @@ pub fn wit_type_to_unwrap_expr(
     value: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     match ty {
+        WitType::U8 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u8(&#value) }),
+        WitType::U16 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u16(&#value) }),
+        WitType::U32 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u32(&#value) }),
         WitType::U64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value) }),
+        WitType::S8 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s8(&#value) }),
+        WitType::S16 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s16(&#value) }),
+        WitType::S32 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s32(&#value) }),
         WitType::S64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value) }),
+        WitType::Bool => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value) }),
+        WitType::Char => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_char(&#value) }),
         WitType::String => {
             Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value).into_owned() })
         }
@@ -132,8 +140,16 @@ pub fn wit_type_to_rust_type(
     use_str: bool,
 ) -> anyhow::Result<TokenStream> {
     match (ty, use_str) {
+        (WitType::U8, _) => Ok(quote! { u8 }),
+        (WitType::U16, _) => Ok(quote! { u16 }),
+        (WitType::U32, _) => Ok(quote! { u32 }),
         (WitType::U64, _) => Ok(quote! { u64 }),
+        (WitType::S8, _) => Ok(quote! { i8 }),
+        (WitType::S16, _) => Ok(quote! { i16 }),
+        (WitType::S32, _) => Ok(quote! { i32 }),
         (WitType::S64, _) => Ok(quote! { i64 }),
+        (WitType::Bool, _) => Ok(quote! { bool }),
+        (WitType::Char, _) => Ok(quote! { char }),
         (WitType::String, false) => Ok(quote! { String }),
         (WitType::String, true) => Ok(quote! { &str }),
         (WitType::Id(id), _) => {
@@ -206,8 +222,16 @@ pub fn wit_type_to_rust_type(
 
 pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<TokenStream> {
     match ty {
+        WitType::U8 => Ok(quote! { stdlib::wasm_wave::value::Type::U8 }),
+        WitType::U16 => Ok(quote! { stdlib::wasm_wave::value::Type::U16 }),
+        WitType::U32 => Ok(quote! { stdlib::wasm_wave::value::Type::U32 }),
         WitType::U64 => Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
+        WitType::S8 => Ok(quote! { stdlib::wasm_wave::value::Type::S8 }),
+        WitType::S16 => Ok(quote! { stdlib::wasm_wave::value::Type::S16 }),
+        WitType::S32 => Ok(quote! { stdlib::wasm_wave::value::Type::S32 }),
         WitType::S64 => Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+        WitType::Bool => Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
+        WitType::Char => Ok(quote! { stdlib::wasm_wave::value::Type::CHAR }),
         WitType::String => Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];

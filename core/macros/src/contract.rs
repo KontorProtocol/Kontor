@@ -290,25 +290,20 @@ pub fn generate(config: Config) -> TokenStream {
         
         impl stdlib::Store for crate::kontor::built_in::foreign::ContractAddress {
             fn __set(ctx: &impl stdlib::WriteContext, path: stdlib::DotPathBuf, value: Self) {
-                // Store as JSON or similar serialized format
-                let serialized = format!("{}:{}:{}", value.name, value.height, value.tx_index);
-                ctx.__set_str(&path, &serialized);
+                // Store as structured fields (consistent with proxy contract)
+                ctx.__set_str(&format!("{}.name", path), &value.name);
+                ctx.__set_s64(&format!("{}.height", path), value.height);
+                ctx.__set_s64(&format!("{}.tx_index", path), value.tx_index);
             }
         }
 
         impl stdlib::Retrieve for crate::kontor::built_in::foreign::ContractAddress {
             fn __get(ctx: &impl stdlib::ReadContext, path: stdlib::DotPathBuf) -> Option<Self> {
-                ctx.__get_str(&path).and_then(|s| {
-                    let parts: Vec<&str> = s.split(':').collect();
-                    if parts.len() == 3 {
-                        Some(crate::kontor::built_in::foreign::ContractAddress {
-                            name: parts[0].to_string(),
-                            height: parts[1].parse().ok()?,
-                            tx_index: parts[2].parse().ok()?,
-                        })
-                    } else {
-                        None
-                    }
+                // Retrieve structured fields (consistent with proxy contract)
+                Some(crate::kontor::built_in::foreign::ContractAddress {
+                    name: ctx.__get_str(&format!("{}.name", path))?,
+                    height: ctx.__get_s64(&format!("{}.height", path))?,
+                    tx_index: ctx.__get_s64(&format!("{}.tx_index", path))?,
                 })
             }
         }

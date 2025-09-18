@@ -166,16 +166,16 @@ interface resource-manager {
     use assets.{balance};
 
     // Register a Balance resource for cross-contract transfer
-    register-balance: func(bal: balance) -> u32;
+    register-balance: func(bal: balance) -> u64;
 
     // Take ownership of a transferred Balance resource
-    take-balance: func(handle: u32) -> result<balance, error>;
+    take-balance: func(handle: u64) -> result<balance, error>;
 
     // Transfer ownership of a resource between contracts
-    transfer: func(from-contract: s64, to-contract: s64, handle: u32) -> result<_, error>;
+    transfer: func(from-contract: s64, to-contract: s64, handle: u64) -> result<_, error>;
 
     // Drop a resource handle
-    drop: func(resource-id: string, handle: u32) -> result<_, error>;
+    drop: func(resource-id: string, handle: u64) -> result<_, error>;
 }
 
 interface assets {
