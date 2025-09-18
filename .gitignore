@@ -12,4 +12,6 @@
 **/*.so
 !/core/indexer/sqlean*/**/*.so
 !/core/indexer/sqlean*/**/*.dylib
-!/contracts/target/**/*.wasm.br
+# Don't commit compiled WASM artifacts
+**/*.wasm
+**/*.wasm.br

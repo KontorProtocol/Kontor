@@ -4,7 +4,6 @@ mod component_cache;
 mod contracts;
 mod counter;
 pub mod numerics;
-mod resource_manager;
 mod stack;
 mod storage;
 mod types;
@@ -52,7 +51,6 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::{
     counter::Counter,
-    resource_manager::{ResourceManager, ResourceData},
     stack::Stack,
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
@@ -76,8 +74,6 @@ pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> 
 pub struct Runtime {
     pub engine: Engine,
     pub table: Arc<Mutex<ResourceTable>>,
-    pub resources: Arc<Mutex<HashMap<String, HashMap<u32, ResourceData>>>>,
-    pub resource_manager: ResourceManager,
     pub component_cache: ComponentCache,
     pub storage: Storage,
     pub id_generation_counter: Counter,
@@ -98,8 +94,6 @@ impl Runtime {
         Ok(Self {
             engine,
             table: Arc::new(Mutex::new(ResourceTable::new())),
-            resources: Arc::new(Mutex::new(HashMap::new())),
-            resource_manager: ResourceManager::new(),
             component_cache,
             storage,
             id_generation_counter: Counter::new(),
@@ -847,46 +841,27 @@ impl built_in::numbers::Host for Runtime {
     }
 }
 
+// Resource manager operations are now handled through Wasmtime's ResourceTable
+// For cross-contract transfers, we'll need to implement a proper bridge
 impl built_in::resource_manager::Host for Runtime {
-    async fn create(&mut self, resource_id: String, data: String) -> Result<u32> {
-        // Use ResourceManager for creating resources
-        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
-        let handle = self.resource_manager.resource_create(
-            contract_id,
-            resource_id.clone(),
-            data.into_bytes(),
-        )?;
-        Ok(handle as u32)
+    async fn create(&mut self, _resource_id: String, _data: String) -> Result<u32> {
+        // TODO: Implement using ResourceTable
+        Err(anyhow!("resource_manager::create not yet implemented with ResourceTable"))
     }
 
-    async fn take(&mut self, resource_id: String, handle: u32) -> Result<Result<String, Error>> {
-        // Use ResourceManager for taking resources
-        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
-        match self.resource_manager.resource_take(
-            contract_id,
-            handle as i32,
-            &resource_id,
-        ) {
-            Ok(data) => Ok(Ok(String::from_utf8(data.payload).unwrap_or_default())),
-            Err(e) => Ok(Err(Error::Message(e.to_string()))),
-        }
+    async fn take(&mut self, _resource_id: String, _handle: u32) -> Result<Result<String, Error>> {
+        // TODO: Implement using ResourceTable
+        Ok(Err(Error::Message("resource_manager::take not yet implemented".to_string())))
     }
-    
-    async fn drop(&mut self, resource_id: String, handle: u32) -> Result<Result<(), Error>> {
-        // Use ResourceManager for dropping resources
-        let contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
-        match self.resource_manager.resource_drop(contract_id, handle as i32) {
-            Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(Error::Message(e.to_string()))),
-        }
+
+    async fn drop(&mut self, _resource_id: String, _handle: u32) -> Result<Result<(), Error>> {
+        // TODO: Implement using ResourceTable
+        Ok(Err(Error::Message("resource_manager::drop not yet implemented".to_string())))
     }
-    
-    async fn transfer(&mut self, from_contract: i64, to_contract: i64, handle: u32) -> Result<Result<(), Error>> {
-        // Use ResourceManager for transferring resources between contracts
-        match self.resource_manager.resource_transfer(from_contract, to_contract, handle as i32) {
-            Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(Error::Message(e.to_string()))),
-        }
+
+    async fn transfer(&mut self, _from_contract: i64, _to_contract: i64, _handle: u32) -> Result<Result<(), Error>> {
+        // TODO: Implement cross-contract resource transfer using ResourceTable
+        Ok(Err(Error::Message("resource_manager::transfer not yet implemented".to_string())))
     }
 }
 

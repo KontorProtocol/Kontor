@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-cargo build --release
+cargo build --target wasm32-unknown-unknown --release
 
 # Hardcoded target directory
 TARGET_DIR="target/wasm32-unknown-unknown/release"

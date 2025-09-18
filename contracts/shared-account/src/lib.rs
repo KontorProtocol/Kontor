@@ -26,7 +26,7 @@ fn authorized(ctx: &ProcContext, account: &AccountWrapper) -> bool {
             .is_some_and(|b| b)
 }
 
-fn parse_integer(s: &str) -> Integer {
+fn parse_integer(_s: &str) -> Integer {
     // Simple parsing - just get a default for now
     // In production, would parse the debug format
     Integer::default()
