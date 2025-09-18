@@ -8,11 +8,78 @@ use indexer::runtime::wit::kontor::built_in::{
     numbers::{Decimal as WitDecimal, Integer as WitInteger, Sign},
 };
 
-// Create type aliases for easier use
+// We can't implement traits on foreign types, so use the raw types directly
 pub type Error = WitError;
 pub type ContractAddress = WitContractAddress;
 pub type Integer = WitInteger;
 pub type Decimal = WitDecimal;
+
+// Conversion traits for test code
+// We can't implement From on foreign types, so we provide our own trait
+
+/// Trait for converting values to Integer in tests
+pub trait IntoInteger {
+    fn into_integer(self) -> Integer;
+}
+
+impl IntoInteger for u64 {
+    fn into_integer(self) -> Integer {
+        int(self)
+    }
+}
+
+impl IntoInteger for i64 {
+    fn into_integer(self) -> Integer {
+        int_from_i64(self)
+    }
+}
+
+impl IntoInteger for i32 {
+    fn into_integer(self) -> Integer {
+        int_from_i64(self as i64)
+    }
+}
+
+impl IntoInteger for &str {
+    fn into_integer(self) -> Integer {
+        int_from_str(self)
+    }
+}
+
+impl IntoInteger for String {
+    fn into_integer(self) -> Integer {
+        int_from_str(&self)
+    }
+}
+
+/// Trait for converting values to Decimal in tests
+pub trait IntoDecimal {
+    fn into_decimal(self) -> Decimal;
+}
+
+impl IntoDecimal for f64 {
+    fn into_decimal(self) -> Decimal {
+        decimal_from_f64(self)
+    }
+}
+
+impl IntoDecimal for f32 {
+    fn into_decimal(self) -> Decimal {
+        decimal_from_f64(self as f64)
+    }
+}
+
+impl IntoDecimal for &str {
+    fn into_decimal(self) -> Decimal {
+        decimal_from_str(self)
+    }
+}
+
+impl IntoDecimal for Integer {
+    fn into_decimal(self) -> Decimal {
+        indexer::runtime::numerics::integer_to_decimal(self).expect("Integer to decimal")
+    }
+}
 
 // Helper to create Integer from u64
 pub fn int(n: u64) -> Integer {
@@ -68,12 +135,49 @@ pub fn decimal_from_f64(f: f64) -> Decimal {
     }
 }
 
+pub fn decimal_from_int(i: Integer) -> Decimal {
+    indexer::runtime::numerics::integer_to_decimal(i).expect("Integer to decimal conversion")
+}
+
 pub fn decimal_from_str(s: &str) -> Decimal {
     if let Ok(f) = s.parse::<f64>() {
         decimal_from_f64(f)
     } else {
         decimal_from_f64(0.0)
     }
+}
+
+// Arithmetic operations as functions (can't implement traits on foreign types)
+pub fn int_add(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::add_integer(a, b).expect("Integer addition")
+}
+
+pub fn int_sub(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::sub_integer(a, b).expect("Integer subtraction")
+}
+
+pub fn int_mul(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::mul_integer(a, b).expect("Integer multiplication")
+}
+
+pub fn int_div(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::div_integer(a, b).expect("Integer division")
+}
+
+pub fn decimal_add(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::add_decimal(a, b).expect("Decimal addition")
+}
+
+pub fn decimal_sub(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::sub_decimal(a, b).expect("Decimal subtraction")
+}
+
+pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::mul_decimal(a, b).expect("Decimal multiplication")
+}
+
+pub fn decimal_div(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::div_decimal(a, b).expect("Decimal division")
 }
 
 // Helper functions for comparison
@@ -93,30 +197,6 @@ pub fn decimal_eq(a: &Decimal, b: &Decimal) -> bool {
     a.sign == b.sign
 }
 
-// Arithmetic helpers - delegate to runtime numerics
-pub fn int_add(a: Integer, b: Integer) -> Integer {
-    indexer::runtime::numerics::add_integer(a, b).expect("Integer addition")
-}
-
-pub fn int_sub(a: Integer, b: Integer) -> Integer {
-    indexer::runtime::numerics::sub_integer(a, b).expect("Integer subtraction")
-}
-
-pub fn int_mul(a: Integer, b: Integer) -> Integer {
-    indexer::runtime::numerics::mul_integer(a, b).expect("Integer multiplication")
-}
-
-pub fn int_div(a: Integer, b: Integer) -> Integer {
-    indexer::runtime::numerics::div_integer(a, b).expect("Integer division")
-}
-
-pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
-    indexer::runtime::numerics::mul_decimal(a, b).expect("Decimal multiplication")
-}
-
-pub fn decimal_div(a: Decimal, b: Decimal) -> Decimal {
-    indexer::runtime::numerics::div_decimal(a, b).expect("Decimal division")
-}
 use indexer::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},

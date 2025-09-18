@@ -4,66 +4,85 @@ use testlib::*;
 
 #[tokio::test]
 async fn test_numerics() -> Result<()> {
-    assert!(Integer::from(123) == 123.into());
-    assert!(Integer::from(123) == 123.into());
-    assert!(
-        Integer::from("57843975908437589027340573245") == "57843975908437589027340573245".into()
-    );
+    assert!(int_eq(&int(123), &int(123)));
+    assert!(int_eq(&int_from_str("57843975908437589027340573245"), 
+                    &int_from_str("57843975908437589027340573245")));
 
-    assert_eq!(Integer::from(123) + 123.into(), 246.into());
+    assert!(int_eq(&int_add(int(123), int(123)), &int(246)));
 
-    assert_eq!(Integer::from(123) - 21.into(), 102.into());
+    assert!(int_eq(&int_sub(int(123), int(21)), &int(102)));
 
-    assert_eq!(Integer::from(5) * 6.into(), 30.into());
+    assert!(int_eq(&int_mul(int(5), int(6)), &int(30)));
 
-    assert_eq!(Integer::from(5) / 2.into(), 2.into());
+    assert!(int_eq(&int_div(int(5), int(2)), &int(2)));
 
-    assert_eq!(Integer::from(-5) / 2.into(), (-2).into());
-    assert_eq!(
-        Integer::from("-1000000000000000000000000000") / (-2).into(),
-        ("500000000000000000000000000").into()
-    );
+    assert!(int_eq(&int_div(int_from_i64(-5), int(2)), &int_from_i64(-2)));
+    assert!(int_eq(
+        &int_div(int_from_str("-1000000000000000000000000000"), int_from_i64(-2)),
+        &int_from_str("500000000000000000000000000")
+    ));
 
-    assert_eq!(
-        Decimal::from(Integer::from(123)) / (10).into(),
-        "12.3".into()
-    );
+    assert!(decimal_eq(
+        &decimal_div(decimal_from_int(int(123)), decimal_from_int(int(10))),
+        &decimal_from_str("12.3")
+    ));
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_runtime_decimal_operations() -> Result<()> {
-    assert!(Decimal::from(123.0) == "123".into());
+    assert!(decimal_eq(&decimal_from_f64(123.0), &decimal_from_str("123")));
+    assert!(decimal_eq(
+        &decimal_from_str("57843975908.437589027340573245"),
+        &decimal_from_str("57843975908.437589027340573245")
+    ));
+
+    assert!(decimal_eq(
+        &decimal_add(decimal_from_f64(123.0), decimal_from_str("123.0")),
+        &decimal_from_str("246.0")
+    ));
+
+    assert!(decimal_eq(
+        &decimal_sub(decimal_from_f64(123.0), decimal_from_f64(21.0)),
+        &decimal_from_f64(102.0)
+    ));
+
+    assert!(decimal_eq(
+        &decimal_mul(decimal_from_f64(-123.0), decimal_from_f64(0.5)),
+        &decimal_from_f64(-61.5)
+    ));
+
     assert!(
-        Decimal::from("57843975908.437589027340573245") == "57843975908.437589027340573245".into()
-    );
-
-    assert_eq!(Decimal::from(123.0) + "123.0".into(), "246.0".into());
-
-    assert_eq!(Decimal::from(123.0) - 21.0.into(), 102.0.into());
-
-    assert_eq!(Decimal::from(-123.0) * 0.5.into(), (-61.5).into());
-
-    assert!(
-        catch_unwind(|| Decimal::from("1000000000000000000000000000000000000")
-            * "1000000000000000000000000000000000000".into())
+        catch_unwind(|| decimal_mul(
+            decimal_from_str("1000000000000000000000000000000000000"),
+            decimal_from_str("1000000000000000000000000000000000000")
+        ))
         .is_err()
     );
 
-    assert_eq!(Decimal::from(-123.0) / 2.0.into(), (-61.5).into());
+    assert!(decimal_eq(
+        &decimal_div(decimal_from_f64(-123.0), decimal_from_f64(2.0)),
+        &decimal_from_f64(-61.5)
+    ));
 
-    assert!(catch_unwind(|| Decimal::from(10.0) / 0.0.into()).is_err());
+    assert!(catch_unwind(|| decimal_div(decimal_from_f64(10.0), decimal_from_f64(0.0))).is_err());
 
-    assert_eq!(
-        Decimal::from("-1000000000000000000000000000") / (-2).into(),
-        ("500000000000000000000000000").into()
-    );
+    assert!(decimal_eq(
+        &decimal_div(
+            decimal_from_str("-1000000000000000000000000000"),
+            decimal_from_int(int_from_i64(-2))
+        ),
+        &decimal_from_str("500000000000000000000000000")
+    ));
 
-    assert_eq!(
-        Decimal::from("-100000000000000000000000000000000000000000000.000001") / (-2).into(),
-        ("50000000000000000000000000000000000000000000.0000005").into()
-    );
+    assert!(decimal_eq(
+        &decimal_div(
+            decimal_from_str("-100000000000000000000000000000000000000000000.000001"),
+            decimal_from_int(int_from_i64(-2))
+        ),
+        &decimal_from_str("50000000000000000000000000000000000000000000.0000005")
+    ));
 
     Ok(())
 }
@@ -73,78 +92,78 @@ async fn test_decimal_to_integer_conversions() -> Result<()> {
     use indexer::runtime::numerics;
 
     // Test floor function with positive numbers
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("10.7"))?,
-        10.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("10.3"))?,
-        10.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("10.0"))?,
-        10.into()
-    );
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("10.7"))?,
+        &int(10)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("10.3"))?,
+        &int(10)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("10.0"))?,
+        &int(10)
+    ));
 
     // Test floor function with negative numbers
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("-10.3"))?,
-        (-11).into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("-10.7"))?,
-        (-11).into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("-10.0"))?,
-        (-10).into()
-    );
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("-10.3"))?,
+        &int_from_i64(-11)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("-10.7"))?,
+        &int_from_i64(-11)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("-10.0"))?,
+        &int_from_i64(-10)
+    ));
 
     // Test ceil function with positive numbers
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("10.7"))?,
-        11.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("10.3"))?,
-        11.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("10.0"))?,
-        10.into()
-    );
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("10.7"))?,
+        &int(11)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("10.3"))?,
+        &int(11)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("10.0"))?,
+        &int(10)
+    ));
 
     // Test ceil function with negative numbers
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("-10.3"))?,
-        (-10).into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("-10.7"))?,
-        (-10).into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("-10.0"))?,
-        (-10).into()
-    );
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("-10.3"))?,
+        &int_from_i64(-10)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("-10.7"))?,
+        &int_from_i64(-10)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("-10.0"))?,
+        &int_from_i64(-10)
+    ));
 
     // Test edge cases with very small decimals
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("0.999999999"))?,
-        0.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("0.000000001"))?,
-        1.into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_floor(Decimal::from("-0.000000001"))?,
-        (-1).into()
-    );
-    assert_eq!(
-        numerics::decimal_to_integer_ceil(Decimal::from("-0.999999999"))?,
-        0.into()
-    );
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("0.999999999"))?,
+        &int(0)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("0.000000001"))?,
+        &int(1)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_floor(decimal_from_str("-0.000000001"))?,
+        &int_from_i64(-1)
+    ));
+    assert!(int_eq(
+        &numerics::decimal_to_integer_ceil(decimal_from_str("-0.999999999"))?,
+        &int(0)
+    ));
 
     Ok(())
 }
