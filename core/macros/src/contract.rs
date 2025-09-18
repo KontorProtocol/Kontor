@@ -199,25 +199,92 @@ pub fn generate(config: Config) -> TokenStream {
         // Generate implementations for built-in types
         impls!();
         
-        // Integer is a record type, store it as a string representation
+        // Integer is a record type, store each field directly
         impl stdlib::Store for crate::kontor::built_in::numbers::Integer {
             fn __set(ctx: &impl stdlib::WriteContext, path: stdlib::DotPathBuf, value: Self) {
-                // Convert to string for storage using the numbers module
-                let s = crate::kontor::built_in::numbers::integer_to_string(value);
-                ctx.__set_str(&path, &s);
+                // Store each field of the Integer record
+                ctx.__set_u64(&format!("{}.r0", path), value.r0);
+                ctx.__set_u64(&format!("{}.r1", path), value.r1);
+                ctx.__set_u64(&format!("{}.r2", path), value.r2);
+                ctx.__set_u64(&format!("{}.r3", path), value.r3);
+                // Store sign as u64: 0 = plus, 1 = minus
+                let sign_val = match value.sign {
+                    crate::kontor::built_in::numbers::Sign::Plus => 0u64,
+                    crate::kontor::built_in::numbers::Sign::Minus => 1u64,
+                };
+                ctx.__set_u64(&format!("{}.sign", path), sign_val);
             }
         }
 
         impl stdlib::Retrieve for crate::kontor::built_in::numbers::Integer {
             fn __get(ctx: &impl stdlib::ReadContext, path: stdlib::DotPathBuf) -> Option<Self> {
-                // Convert from string representation
-                ctx.__get_str(&path).map(|s| crate::kontor::built_in::numbers::string_to_integer(s))
+                // Retrieve each field of the Integer record
+                let r0 = ctx.__get_u64(&format!("{}.r0", path))?;
+                let r1 = ctx.__get_u64(&format!("{}.r1", path))?;
+                let r2 = ctx.__get_u64(&format!("{}.r2", path))?;
+                let r3 = ctx.__get_u64(&format!("{}.r3", path))?;
+                let sign_val = ctx.__get_u64(&format!("{}.sign", path))?;
+                let sign = match sign_val {
+                    0 => crate::kontor::built_in::numbers::Sign::Plus,
+                    1 => crate::kontor::built_in::numbers::Sign::Minus,
+                    _ => return None, // Invalid sign value
+                };
+                Some(crate::kontor::built_in::numbers::Integer { r0, r1, r2, r3, sign })
             }
         }
 
         impl Default for crate::kontor::built_in::numbers::Integer {
             fn default() -> Self {
-                crate::kontor::built_in::numbers::u64_to_integer(0)
+                crate::kontor::built_in::numbers::Integer {
+                    r0: 0,
+                    r1: 0,
+                    r2: 0,
+                    r3: 0,
+                    sign: crate::kontor::built_in::numbers::Sign::Plus,
+                }
+            }
+        }
+
+        // Decimal is also a record type, store each field directly
+        impl stdlib::Store for crate::kontor::built_in::numbers::Decimal {
+            fn __set(ctx: &impl stdlib::WriteContext, path: stdlib::DotPathBuf, value: Self) {
+                ctx.__set_u64(&format!("{}.r0", path), value.r0);
+                ctx.__set_u64(&format!("{}.r1", path), value.r1);
+                ctx.__set_u64(&format!("{}.r2", path), value.r2);
+                ctx.__set_u64(&format!("{}.r3", path), value.r3);
+                let sign_val = match value.sign {
+                    crate::kontor::built_in::numbers::Sign::Plus => 0u64,
+                    crate::kontor::built_in::numbers::Sign::Minus => 1u64,
+                };
+                ctx.__set_u64(&format!("{}.sign", path), sign_val);
+            }
+        }
+
+        impl stdlib::Retrieve for crate::kontor::built_in::numbers::Decimal {
+            fn __get(ctx: &impl stdlib::ReadContext, path: stdlib::DotPathBuf) -> Option<Self> {
+                let r0 = ctx.__get_u64(&format!("{}.r0", path))?;
+                let r1 = ctx.__get_u64(&format!("{}.r1", path))?;
+                let r2 = ctx.__get_u64(&format!("{}.r2", path))?;
+                let r3 = ctx.__get_u64(&format!("{}.r3", path))?;
+                let sign_val = ctx.__get_u64(&format!("{}.sign", path))?;
+                let sign = match sign_val {
+                    0 => crate::kontor::built_in::numbers::Sign::Plus,
+                    1 => crate::kontor::built_in::numbers::Sign::Minus,
+                    _ => return None,
+                };
+                Some(crate::kontor::built_in::numbers::Decimal { r0, r1, r2, r3, sign })
+            }
+        }
+
+        impl Default for crate::kontor::built_in::numbers::Decimal {
+            fn default() -> Self {
+                crate::kontor::built_in::numbers::Decimal {
+                    r0: 0,
+                    r1: 0,
+                    r2: 0,
+                    r3: 0,
+                    sign: crate::kontor::built_in::numbers::Sign::Plus,
+                }
             }
         }
         
