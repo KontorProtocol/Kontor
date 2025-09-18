@@ -113,26 +113,14 @@ pub fn int_from_i64(n: i64) -> Integer {
 }
 
 pub fn int_from_str(s: &str) -> Integer {
-    if let Ok(n) = s.parse::<i64>() {
-        int_from_i64(n)
-    } else {
-        int(0)
-    }
+    indexer::runtime::numerics::string_to_integer(s)
+        .unwrap_or_else(|_| int(0))
 }
 
 // Helper functions for Decimal
 pub fn decimal_from_f64(f: f64) -> Decimal {
-    let is_negative = f < 0.0;
-    let abs_val = f.abs();
-    let whole = abs_val as u64;
-    
-    Decimal {
-        r0: whole,
-        r1: 0,
-        r2: 0,
-        r3: 0,
-        sign: if is_negative { Sign::Minus } else { Sign::Plus },
-    }
+    indexer::runtime::numerics::f64_to_decimal(f)
+        .expect("Decimal from f64 conversion")
 }
 
 pub fn decimal_from_int(i: Integer) -> Decimal {
@@ -140,11 +128,8 @@ pub fn decimal_from_int(i: Integer) -> Decimal {
 }
 
 pub fn decimal_from_str(s: &str) -> Decimal {
-    if let Ok(f) = s.parse::<f64>() {
-        decimal_from_f64(f)
-    } else {
-        decimal_from_f64(0.0)
-    }
+    indexer::runtime::numerics::string_to_decimal(s)
+        .expect("Decimal from string conversion")
 }
 
 // Arithmetic operations as functions (can't implement traits on foreign types)
