@@ -2,35 +2,109 @@ use stdlib::*;
 
 contract!(name = "shared-account");
 
+// Import functions we need
+use kontor::built_in::numbers as numbers;
+use kontor::built_in::crypto as crypto;
+
 // TODO: Fix import! and interface! macros for cross-contract calls
 // import!(name = "token", height = 0, tx_index = 0, path = "token/wit");
 // interface!(name = "token_dyn", path = "token/wit");
 
-#[derive(Clone, Default, Storage)]
+#[derive(Clone, Default)]
 struct Account {
     pub other_tenants: Map<String, bool>,
-    pub balance_str: String,  // Store as string since Integer doesn't impl Store
+    pub balance: Integer,
     pub owner: String,
 }
 
-#[derive(Clone, Default, StorageRoot)]
+
+#[derive(Clone, Default)]
 struct SharedAccountStorage {
     pub accounts: Map<String, Account>,
 }
 
-fn authorized(ctx: &ProcContext, account: &AccountWrapper) -> bool {
-    account.owner(ctx) == ctx.signer().to_string()
-        || account
-            .other_tenants()
-            .get(ctx, ctx.signer().to_string())
-            .is_some_and(|b| b)
+// Manual storage implementation
+fn storage<C>(_ctx: &C) -> SharedAccountStorage {
+    SharedAccountStorage::default()
 }
 
-fn parse_integer(_s: &str) -> Integer {
-    // Simple parsing - just get a default for now
-    // In production, would parse the debug format
-    Integer::default()
+impl SharedAccountStorage {
+    fn init(&self, _ctx: &impl WriteContext) {
+        // Nothing to initialize for a map
+    }
+
+    fn accounts(&self) -> MapAccessor<String, Account> {
+        MapAccessor::new("accounts")
+    }
 }
+
+// MapAccessor helper
+struct MapAccessor<K, V> {
+    base_path: String,
+    _phantom: std::marker::PhantomData<(K, V)>,
+}
+
+impl<K: ToString + FromString, V: Store + Retrieve + Default> MapAccessor<K, V> {
+    fn new(base_path: &str) -> Self {
+        Self {
+            base_path: base_path.to_string(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    fn get(&self, ctx: &impl ReadContext, key: &K) -> Option<V> {
+        let mut path: DotPathBuf = self.base_path.parse().unwrap();
+        path = path.push(key.to_string());
+        V::__get(ctx, path)
+    }
+
+    fn set(&self, ctx: &impl WriteContext, key: K, value: V) {
+        let mut path: DotPathBuf = self.base_path.parse().unwrap();
+        path = path.push(key.to_string());
+        V::__set(ctx, path, value);
+    }
+}
+
+// Manual Storage implementation for Account
+impl Store for Account {
+    fn __set(ctx: &impl WriteContext, path: DotPathBuf, value: Self) {
+        // Store each field
+        ctx.__set_str(&format!("{}.owner", path), &value.owner);
+        <Integer as Store>::__set(ctx, format!("{}.balance", path).parse().unwrap(), value.balance);
+        // Store other_tenants map entries
+        for (k, v) in value.other_tenants.entries.iter() {
+            ctx.__set_bool(&format!("{}.other_tenants.{}", path, k), *v);
+        }
+    }
+}
+
+impl Retrieve for Account {
+    fn __get(ctx: &impl ReadContext, path: DotPathBuf) -> Option<Self> {
+        let owner = ctx.__get_str(&format!("{}.owner", path))?;
+        let balance = <Integer as Retrieve>::__get(ctx, format!("{}.balance", path).parse().unwrap())?;
+
+        // For other_tenants, we need to iterate over keys - simplified for now
+        let mut other_tenants = Map::default();
+        // TODO: Properly iterate over keys in other_tenants
+
+        Some(Account {
+            owner,
+            balance,
+            other_tenants,
+        })
+    }
+}
+
+fn authorized(ctx: &ProcContext, account: &Account) -> bool {
+    account.owner == ctx.signer().to_string()
+        || account
+            .other_tenants
+            .entries.iter()
+            .find(|(k, _)| k == &ctx.signer().to_string())
+            .map(|(_, v)| v)
+            .is_some_and(|b| *b)
+}
+
 
 fn insufficient_balance_error() -> Error {
     Error::Message("insufficient balance".to_string())
@@ -61,7 +135,7 @@ impl Guest for SharedAccount {
             ctx,
             account_id.clone(),
             Account {
-                balance_str: format!("{:?}", n),
+                balance: n,
                 owner: ctx.signer().to_string(),
                 other_tenants: Map::new(
                     &other_tenants
@@ -83,34 +157,36 @@ impl Guest for SharedAccount {
         // if balance < n {
         //     return Err(insufficient_balance_error());
         // }
-        let account = storage(ctx)
+        let mut account = storage(ctx)
             .accounts()
-            .get(ctx, account_id)
+            .get(ctx, &account_id)
             .ok_or(unknown_error())?;
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        let current_balance = parse_integer(&account.balance_str(ctx));
+        let current_balance = account.balance;
         let new_balance = numbers::add_integer(current_balance, n);
-        account.set_balance_str(ctx, format!("{:?}", new_balance));
+        account.balance = new_balance;
+        storage(ctx).accounts().set(ctx, account_id, account);
         // TODO: Re-enable when import! is fixed
         // token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)
         Ok(())
     }
 
     fn withdraw(ctx: &ProcContext, account_id: String, n: Integer) -> Result<(), Error> {
-        let account = storage(ctx)
+        let mut account = storage(ctx)
             .accounts()
-            .get(ctx, account_id)
+            .get(ctx, &account_id)
             .ok_or(unknown_error())?;
         if !authorized(ctx, &account) {
             return Err(unauthorized_error());
         }
-        let balance = parse_integer(&account.balance_str(ctx));
+        let balance = account.balance;
         if numbers::cmp_integer(balance.clone(), n.clone()) == numbers::Ordering::Less {
             return Err(insufficient_balance_error());
         }
-        account.set_balance_str(ctx, format!("{:?}", numbers::sub_integer(balance, n)));
+        account.balance = numbers::sub_integer(balance, n);
+        storage(ctx).accounts().set(ctx, account_id, account);
         // TODO: Re-enable when import! is fixed
         // token::transfer(ctx.contract_signer(), &ctx.signer().to_string(), n)
         Ok(())
@@ -119,8 +195,8 @@ impl Guest for SharedAccount {
     fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
         storage(ctx)
             .accounts()
-            .get(ctx, account_id)
-            .map(|a| parse_integer(&a.balance_str(ctx)))
+            .get(ctx, &account_id)
+            .map(|a| a.balance)
     }
 
     fn token_balance(
@@ -134,10 +210,10 @@ impl Guest for SharedAccount {
     }
 
     fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {
-        storage(ctx).accounts().get(ctx, account_id).map(|a| {
-            [a.owner(ctx)]
+        storage(ctx).accounts().get(ctx, &account_id).map(|a| {
+            [a.owner.clone()]
                 .into_iter()
-                .chain(a.other_tenants().keys(ctx))
+                .chain(a.other_tenants.entries.iter().map(|(k, _)| k.clone()))
                 .collect()
         })
     }

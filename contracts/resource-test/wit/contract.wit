@@ -2,24 +2,13 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
-    
     use kontor:built-in/context.{view-context, proc-context};
-    use kontor:built-in/error.{error};
-    use kontor:built-in/numbers.{integer};
-    use kontor:built-in/foreign.{contract-address};
-    
-    // Use the built-in Balance resource
-    use kontor:built-in/assets.{balance};
-    
-    // Export functions for testing resource handling
+
     export init: func(ctx: borrow<proc-context>);
-    
-    // Test consuming a resource
-    export consume-balance: func(ctx: borrow<proc-context>, bal: balance) -> result<_, error>;
-    
-    // Test creating a resource
-    export create-balance: func(ctx: borrow<proc-context>, amount: integer) -> result<balance, error>;
-    
-    // Test optional resource
-    export maybe-balance: func(ctx: borrow<view-context>, check: bool) -> option<balance>;
+
+    export hash: func(ctx: borrow<view-context>, input: string) -> string;
+
+    export hash-with-salt: func(ctx: borrow<view-context>, input: string, salt: string) -> string;
+
+    export generate-id: func(ctx: borrow<view-context>) -> string;
 }

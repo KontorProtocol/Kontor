@@ -1,31 +1,19 @@
 use stdlib::*;
 
-// Test contract to validate compilation
 contract!(name = "resource_test");
 
-// wit-bindgen generates a struct based on the contract name
 impl Guest for ResourceTest {
-    fn init(_ctx: &ProcContext) {
-        // Initialize the contract
+    fn init(_ctx: &ProcContext) {}
+
+    fn hash(_ctx: &ViewContext, input: String) -> String {
+        kontor::built_in::crypto::hash(&input).0
     }
-    
-    fn consume_balance(_ctx: &ProcContext, _bal: Balance) -> Result<(), Error> {
-        Ok(())
+
+    fn hash_with_salt(_ctx: &ViewContext, input: String, salt: String) -> String {
+        kontor::built_in::crypto::hash_with_salt(&input, &salt).0
     }
-    
-    fn create_balance(_ctx: &ProcContext, amount: Integer) -> Result<Balance, Error> {
-        // Create a test balance using the factory function
-        // Use a dummy token address for testing
-        let test_token = ContractAddress {
-            name: "test_token".to_string(),
-            height: 0,
-            tx_index: 0,
-        };
-        // Use the assets module's create_balance function
-        Ok(kontor::built_in::assets::create_balance(amount, test_token))
-    }
-    
-    fn maybe_balance(_ctx: &ViewContext, _check: bool) -> Option<Balance> {
-        None
+
+    fn generate_id(_ctx: &ViewContext) -> String {
+        kontor::built_in::crypto::generate_id()
     }
 }

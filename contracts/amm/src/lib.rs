@@ -2,6 +2,16 @@ use stdlib::*;
 
 contract!(name = "amm");
 
+// Import functions we need from the generated bindings
+// Types like Integer, ContractAddress, Balance, LpBalance are already exported by the macro
+use kontor::built_in::assets::{
+    create_balance, balance_amount, balance_token,
+    create_lp_balance, lp_balance_amount, lp_balance_token_a, lp_balance_token_b
+};
+use kontor::built_in::numbers as numbers;  // For numbers:: calls
+use crate::kontor::built_in::foreign as foreign;  // For foreign:: namespace
+use crate::kontor::built_in::context as context;  // For context:: namespace
+
 // Use interface macro for real cross-contract calls  
 // TODO: Fix interface! macro for cross-contract calls
 // interface!(name = "token_dyn", path = "token/wit");
