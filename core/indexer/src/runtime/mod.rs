@@ -308,6 +308,35 @@ impl Runtime {
         handle_call(&self.stack, is_fallback, call_result, results).await
     }
 
+    async fn _call<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        signer: Option<Resource<Signer>>,
+        contract_address: ContractAddress,
+        expr: String,
+    ) -> Result<String> {
+        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+
+        let signer = if let Some(resource) = signer {
+            let _self = self.table.lock().await.get(&resource)?.clone();
+            Some(_self)
+        } else {
+            None
+        };
+
+        let (mut store, is_fallback, params, mut results, func) =
+            prepare_call(self, &contract_address, signer, &expr, fuel).await?;
+        let (call_result, results, fuel_result) = tokio::spawn(async move {
+            let call_result = func.call_async(&mut store, &params, &mut results).await;
+            (call_result, results, store.get_fuel())
+        })
+        .await?;
+        let remaining_fuel = fuel_result?;
+        accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
+
+        handle_call(&self.stack, is_fallback, call_result, results).await
+    }
+
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &mut self,
         accessor: &Accessor<S, Self>,
@@ -316,9 +345,7 @@ impl Runtime {
     ) -> Result<Option<R>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        let fuel = Fuel::Path(path.clone())
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
         if let Some(bs) = self
             .storage
             .get(fuel, _self.get_contract_id(), &path)
@@ -333,49 +360,230 @@ impl Runtime {
         }
     }
 
-    async fn _get_keys<T: HasContractId>(
+    async fn _get_keys<S, T: HasContractId>(
         &mut self,
+        accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: String,
     ) -> Result<Resource<Keys>> {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
+        Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
         let stream = Box::pin(self.storage.keys(contract_id, path.clone()).await?);
         Ok(table.push(Keys { stream })?)
     }
 
-    async fn _exists<T: HasContractId>(
+    async fn _exists<S, T: HasContractId>(
         &mut self,
+        accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: String,
     ) -> Result<bool> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
+        Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
         self.storage.exists(_self.get_contract_id(), &path).await
     }
 
-    async fn _matching_path<T: HasContractId>(
+    async fn _matching_path<S, T: HasContractId>(
         &mut self,
+        accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         regexp: String,
     ) -> Result<Option<String>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
+        Fuel::MatchingPath(regexp.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
         self.storage
             .matching_path(_self.get_contract_id(), &regexp)
             .await
     }
 
-    async fn _set_primitive<T: Serialize>(
+    async fn _delete_matching_paths<T>(
         &mut self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+        regexp: String,
+    ) -> Result<u64> {
+        Fuel::DeleteMatchingPaths(regexp.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let contract_id = self.table.lock().await.get(&self_)?.contract_id;
+        self.storage
+            .delete_matching_paths(contract_id, &regexp)
+            .await
+    }
+
+    async fn _set_primitive<S, T: Serialize>(
+        &mut self,
+        accessor: &Accessor<S, Self>,
         resource: Resource<ProcContext>,
         path: String,
         value: T,
     ) -> Result<()> {
         let contract_id = self.table.lock().await.get(&resource)?.contract_id;
-        self.storage
-            .set(contract_id, &path, &serialize_cbor(&value)?)
+        Fuel::Path(path.clone())
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let bs = &serialize_cbor(&value)?;
+        Fuel::Set(bs.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        self.storage.set(contract_id, &path, bs).await
+    }
+
+    async fn _hash<T>(
+        &self,
+        accessor: &Accessor<T, Runtime>,
+        input: String,
+    ) -> Result<(String, Vec<u8>)> {
+        Fuel::CryptoHash(input.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let bs = hasher.finalize().to_vec();
+        let s = hex::encode(&bs);
+        Ok((s, bs))
+    }
+
+    async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
+        Fuel::CryptoGenerateId
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let count = self.id_generation_counter.get().await;
+        self.id_generation_counter.increment().await;
+        let s = format!("{}-{}-{}", self.storage.height, self.storage.tx_id, count);
+        self._hash(accessor, s).await.map(|(s, _)| s)
+    }
+
+    async fn _signer_to_string<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<String> {
+        Fuel::SignerToString
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        Ok(self.table.lock().await.get(&self_)?.to_string())
+    }
+
+    async fn _proc_signer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::ProcSigner
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let signer = table.get(&self_)?.signer.clone();
+        Ok(table.push(signer)?)
+    }
+
+    async fn _proc_contract_signer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::ProcContractSigner
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(Signer::ContractId(contract_id))?)
+    }
+
+    async fn _proc_view_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<ViewContext>> {
+        Fuel::ProcViewContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    async fn _next<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Keys>,
+    ) -> Result<Option<String>> {
+        let k = self
+            .table
+            .lock()
             .await
+            .get_mut(&self_)?
+            .stream
+            .next()
+            .await
+            .transpose()?;
+        if let Some(k) = &k {
+            Fuel::KeysNext(k.len() as u64)
+                .consume(accessor, self.gauge.as_ref())
+                .await?;
+        }
+        Ok(k)
+    }
+
+    async fn _fall_signer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<Signer>>> {
+        Fuel::FallSigner
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        if let Some(signer) = table.get(&self_)?.signer.clone() {
+            Ok(Some(table.push(signer)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn _fall_proc_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<ProcContext>>> {
+        Fuel::FallProcContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        if let Some(signer) = res.signer.clone() {
+            Ok(Some(table.push(ProcContext {
+                contract_id,
+                signer,
+            })?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn _fall_view_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Resource<ViewContext>> {
+        Fuel::FallViewContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {
+        self.table.lock().await.delete(rep)?;
+        Ok(())
     }
 }
 
@@ -389,47 +597,32 @@ impl built_in::error::Host for Runtime {
     }
 }
 
-fn _hash(input: String) -> Result<(String, Vec<u8>)> {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let bs = hasher.finalize().to_vec();
-    let s = hex::encode(&bs);
-    Ok((s, bs))
-}
-
 impl built_in::crypto::Host for Runtime {}
 
 impl built_in::crypto::HostWithStore for Runtime {
-    async fn hash<T>(_: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {
-        _hash(input)
+    async fn hash<T>(accessor: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._hash(accessor, input)
+            .await
     }
 
     async fn hash_with_salt<T>(
-        _: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         input: String,
         salt: String,
     ) -> Result<(String, Vec<u8>)> {
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        hasher.update(salt.as_bytes());
-        let bs = hasher.finalize().to_vec();
-        let s = hex::encode(&bs);
-        Ok((s, bs))
+        accessor
+            .with(|mut access| access.get().clone())
+            ._hash(accessor, input + &salt)
+            .await
     }
 
     async fn generate_id<T>(accessor: &Accessor<T, Self>) -> Result<String> {
-        let (height, tx_id, counter) = accessor.with(|mut access| {
-            let _self = access.get();
-            (
-                _self.storage.height,
-                _self.storage.tx_id,
-                _self.id_generation_counter.clone(),
-            )
-        });
-        let count = counter.get().await;
-        counter.increment().await;
-        let s = format!("{}-{}-{}", height, tx_id, count);
-        _hash(s).map(|(s, _)| s)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._generate_id(accessor)
+            .await
     }
 }
 
@@ -442,27 +635,10 @@ impl built_in::foreign::HostWithStore for Runtime {
         contract_address: ContractAddress,
         expr: String,
     ) -> Result<String> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
-
-        let signer = if let Some(resource) = signer {
-            let _self = runtime.table.lock().await.get(&resource)?.clone();
-            Some(_self)
-        } else {
-            None
-        };
-
-        let (mut store, is_fallback, params, mut results, func) =
-            prepare_call(&runtime, &contract_address, signer, &expr, fuel).await?;
-        let (call_result, results, fuel_result) = tokio::spawn(async move {
-            let call_result = func.call_async(&mut store, &params, &mut results).await;
-            (call_result, results, store.get_fuel())
-        })
-        .await?;
-        let remaining_fuel = fuel_result?;
-        accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
-
-        handle_call(&runtime.stack, is_fallback, call_result, results).await
+        accessor
+            .with(|mut access| access.get().clone())
+            ._call(accessor, signer, contract_address, expr)
+            .await
     }
 }
 
@@ -472,12 +648,10 @@ impl built_in::context::HostViewContext for Runtime {}
 
 impl built_in::context::HostViewContextWithStore for Runtime {
     async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ViewContext>) -> Result<()> {
-        let _res = accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
             .await
-            .delete(rep)?;
-        Ok(())
     }
 
     async fn get_str<T>(
@@ -531,7 +705,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_keys(self_, path)
+            ._get_keys(accessor, self_, path)
             .await
     }
 
@@ -542,7 +716,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<bool> {
         accessor
             .with(|mut access| access.get().clone())
-            ._exists(self_, path)
+            ._exists(accessor, self_, path)
             .await
     }
 
@@ -553,7 +727,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._matching_path(self_, regexp)
+            ._matching_path(accessor, self_, regexp)
             .await
     }
 }
@@ -562,21 +736,17 @@ impl built_in::context::HostSigner for Runtime {}
 
 impl built_in::context::HostSignerWithStore for Runtime {
     async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Signer>) -> Result<()> {
-        let _res = accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
             .await
-            .delete(rep)?;
-        Ok(())
     }
 
     async fn to_string<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
-        Ok(accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._signer_to_string(accessor, self_)
             .await
-            .get(&self_)?
-            .to_string())
     }
 }
 
@@ -584,12 +754,10 @@ impl built_in::context::HostProcContext for Runtime {}
 
 impl built_in::context::HostProcContextWithStore for Runtime {
     async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ProcContext>) -> Result<()> {
-        let _res = accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
             .await
-            .delete(rep)?;
-        Ok(())
     }
 
     async fn get_str<T>(
@@ -643,7 +811,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_keys(self_, path)
+            ._get_keys(accessor, self_, path)
             .await
     }
 
@@ -654,7 +822,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<bool> {
         accessor
             .with(|mut access| access.get().clone())
-            ._exists(self_, path)
+            ._exists(accessor, self_, path)
             .await
     }
 
@@ -665,7 +833,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._matching_path(self_, regexp)
+            ._matching_path(accessor, self_, regexp)
             .await
     }
 
@@ -677,7 +845,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._set_primitive(self_, path, value)
+            ._set_primitive(accessor, self_, path, value)
             .await
     }
 
@@ -689,7 +857,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._set_primitive(self_, path, value)
+            ._set_primitive(accessor, self_, path, value)
             .await
     }
 
@@ -701,7 +869,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._set_primitive(self_, path, value)
+            ._set_primitive(accessor, self_, path, value)
             .await
     }
 
@@ -713,7 +881,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._set_primitive(self_, path, value)
+            ._set_primitive(accessor, self_, path, value)
             .await
     }
 
@@ -724,7 +892,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._set_primitive(self_, path, ())
+            ._set_primitive(accessor, self_, path, ())
             .await
     }
 
@@ -733,11 +901,9 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         self_: Resource<ProcContext>,
         regexp: String,
     ) -> Result<u64> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        let contract_id = runtime.table.lock().await.get(&self_)?.contract_id;
-        runtime
-            .storage
-            .delete_matching_paths(contract_id, &regexp)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._delete_matching_paths(accessor, self_, regexp)
             .await
     }
 
@@ -745,30 +911,30 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        let signer = table.get(&self_)?.signer.clone();
-        Ok(table.push(signer)?)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_signer(accessor, self_)
+            .await
     }
 
     async fn contract_signer<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        let contract_id = table.get(&self_)?.contract_id;
-        Ok(table.push(Signer::ContractId(contract_id))?)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_contract_signer(accessor, self_)
+            .await
     }
 
     async fn view_context<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        let contract_id = table.get(&self_)?.contract_id;
-        Ok(table.push(ViewContext { contract_id })?)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_view_context(accessor, self_)
+            .await
     }
 }
 
@@ -776,27 +942,20 @@ impl built_in::context::HostKeys for Runtime {}
 
 impl built_in::context::HostKeysWithStore for Runtime {
     async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Keys>) -> Result<()> {
-        let _res = accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
             .await
-            .delete(rep)?;
-        Ok(())
     }
 
     async fn next<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
     ) -> Result<Option<String>> {
-        Ok(accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._next(accessor, self_)
             .await
-            .get_mut(&self_)?
-            .stream
-            .next()
-            .await
-            .transpose()?)
     }
 }
 
@@ -804,198 +963,379 @@ impl built_in::context::HostFallContext for Runtime {}
 
 impl built_in::context::HostFallContextWithStore for Runtime {
     async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FallContext>) -> Result<()> {
-        let _res = accessor
-            .with(|mut access| access.get().table.clone())
-            .lock()
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
             .await
-            .delete(rep)?;
-        Ok(())
     }
 
     async fn signer<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Signer>>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        if let Some(signer) = table.get(&self_)?.signer.clone() {
-            Ok(Some(table.push(signer)?))
-        } else {
-            Ok(None)
-        }
+        accessor
+            .with(|mut access| access.get().clone())
+            ._fall_signer(accessor, self_)
+            .await
     }
 
     async fn proc_context<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<ProcContext>>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        let res = table.get(&self_)?;
-        let contract_id = res.contract_id;
-        if let Some(signer) = res.signer.clone() {
-            Ok(Some(table.push(ProcContext {
-                contract_id,
-                signer,
-            })?))
-        } else {
-            Ok(None)
-        }
+        accessor
+            .with(|mut access| access.get().clone())
+            ._fall_proc_context(accessor, self_)
+            .await
     }
 
     async fn view_context<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Resource<ViewContext>> {
-        let resource_table = accessor.with(|mut access| access.get().table.clone());
-        let mut table = resource_table.lock().await;
-        let contract_id = table.get(&self_)?.contract_id;
-        Ok(table.push(ViewContext { contract_id })?)
+        accessor
+            .with(|mut access| access.get().clone())
+            ._fall_view_context(accessor, self_)
+            .await
     }
 }
 
 impl built_in::numbers::Host for Runtime {}
 
 impl built_in::numbers::HostWithStore for Runtime {
-    async fn u64_to_integer<T>(_accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
+    async fn u64_to_integer<T>(accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
+        Fuel::NumbersU64ToInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::u64_to_integer(i))
     }
 
-    async fn s64_to_integer<T>(_accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
+    async fn s64_to_integer<T>(accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
+        Fuel::NumbersS64ToInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::s64_to_integer(i))
     }
 
     async fn string_to_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Integer, Error>> {
+        Fuel::NumbersStringToInteger(s.len() as u64)
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::string_to_integer(&s))
     }
 
-    async fn integer_to_string<T>(_accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
-        Ok(numerics::integer_to_string(i))
+    async fn integer_to_string<T>(accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
+        let s = numerics::integer_to_string(i);
+        Fuel::NumbersIntegerToString(s.len() as u64)
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        Ok(s)
     }
 
-    async fn eq_integer<T>(_accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
+    async fn eq_integer<T>(accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
+        Fuel::NumbersEqInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::eq_integer(a, b))
     }
 
     async fn cmp_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
     ) -> Result<NumericOrdering> {
+        Fuel::NumbersCmpInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::cmp_integer(a, b))
     }
 
     async fn add_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
+        Fuel::NumbersAddInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::add_integer(a, b))
     }
 
     async fn sub_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
+        Fuel::NumbersSubInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::sub_integer(a, b))
     }
 
     async fn mul_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
+        Fuel::NumbersMulInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::mul_integer(a, b))
     }
 
     async fn div_integer<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
+        Fuel::NumbersDivInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::div_integer(a, b))
     }
 
-    async fn integer_to_decimal<T>(_accessor: &Accessor<T, Self>, i: Integer) -> Result<Decimal> {
+    async fn integer_to_decimal<T>(accessor: &Accessor<T, Self>, i: Integer) -> Result<Decimal> {
+        Fuel::NumbersIntegerToDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::integer_to_decimal(i))
     }
 
-    async fn decimal_to_integer<T>(_accessor: &Accessor<T, Self>, d: Decimal) -> Result<Integer> {
+    async fn decimal_to_integer<T>(accessor: &Accessor<T, Self>, d: Decimal) -> Result<Integer> {
+        Fuel::NumbersDecimalToInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::decimal_to_integer(d))
     }
 
-    async fn u64_to_decimal<T>(_accessor: &Accessor<T, Self>, i: u64) -> Result<Decimal> {
+    async fn u64_to_decimal<T>(accessor: &Accessor<T, Self>, i: u64) -> Result<Decimal> {
+        Fuel::NumbersU64ToDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::u64_to_decimal(i))
     }
 
-    async fn s64_to_decimal<T>(_accessor: &Accessor<T, Self>, i: i64) -> Result<Decimal> {
+    async fn s64_to_decimal<T>(accessor: &Accessor<T, Self>, i: i64) -> Result<Decimal> {
+        Fuel::NumbersS64ToDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::s64_to_decimal(i))
     }
 
-    async fn f64_to_decimal<T>(_accessor: &Accessor<T, Self>, f: f64) -> Result<Decimal> {
+    async fn f64_to_decimal<T>(accessor: &Accessor<T, Self>, f: f64) -> Result<Decimal> {
+        Fuel::NumbersF64ToDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::f64_to_decimal(f))
     }
 
     async fn string_to_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersStringToDecimal(s.len() as u64)
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::string_to_decimal(&s))
     }
 
-    async fn decimal_to_string<T>(_accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
-        Ok(numerics::decimal_to_string(d))
+    async fn decimal_to_string<T>(accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
+        let s = numerics::decimal_to_string(d);
+        Fuel::NumbersDecimalToString(s.len() as u64)
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        Ok(s)
     }
 
-    async fn eq_decimal<T>(_accessor: &Accessor<T, Self>, a: Decimal, b: Decimal) -> Result<bool> {
+    async fn eq_decimal<T>(accessor: &Accessor<T, Self>, a: Decimal, b: Decimal) -> Result<bool> {
+        Fuel::NumbersEqDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::eq_decimal(a, b))
     }
 
     async fn cmp_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
     ) -> Result<NumericOrdering> {
+        Fuel::NumbersCmpDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::cmp_decimal(a, b))
     }
 
     async fn add_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersAddDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::add_decimal(a, b))
     }
 
     async fn sub_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersSubDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::sub_decimal(a, b))
     }
 
     async fn mul_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersMulDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::mul_decimal(a, b))
     }
 
     async fn div_decimal<T>(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersDivDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::div_decimal(a, b))
     }
 
-    async fn log10<T>(_accessor: &Accessor<T, Self>, a: Decimal) -> Result<Decimal> {
+    async fn log10<T>(accessor: &Accessor<T, Self>, a: Decimal) -> Result<Decimal> {
+        Fuel::NumbersLog10
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
         Ok(numerics::log10(a))
     }
 
