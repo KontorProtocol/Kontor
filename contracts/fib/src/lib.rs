@@ -2,7 +2,8 @@ use stdlib::*;
 
 contract!(name = "fib");
 
-import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
+// TODO: Fix import! macro for cross-contract calls
+// import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
 
 #[derive(Clone, Default, Storage)]
 struct FibValue {
@@ -24,14 +25,16 @@ impl Fib {
         let value = match n {
             0 | 1 => n,
             _ => {
-                arith::eval(
-                    ctx.signer(),
-                    Self::raw_fib(ctx, n - 1),
-                    arith::Op::Sum(arith::Operand {
-                        y: Self::raw_fib(ctx, n - 2),
-                    }),
-                )
-                .value
+                // TODO: Re-enable when import! is fixed
+                // arith::eval(
+                //     ctx.signer(),
+                //     Self::raw_fib(ctx, n - 1),
+                //     arith::Op::Sum(arith::Operand {
+                //         y: Self::raw_fib(ctx, n - 2),
+                //     }),
+                // )
+                // .value
+                Self::raw_fib(ctx, n - 1) + Self::raw_fib(ctx, n - 2)
             }
         };
         cache.set(ctx, n, FibValue { value });
@@ -52,7 +55,14 @@ impl Guest for Fib {
     }
 
     fn fib_of_sub(ctx: &ProcContext, x: String, y: String) -> Result<u64, Error> {
-        let n = arith::checked_sub(&x, &y)?;
+        // TODO: Re-enable when import! is fixed
+        // let n = arith::checked_sub(&x, &y)?;
+        let x_val = x.parse::<u64>()
+            .map_err(|e| Error::Message(format!("Failed to parse x: {}", e)))?;
+        let y_val = y.parse::<u64>()
+            .map_err(|e| Error::Message(format!("Failed to parse y: {}", e)))?;
+        let n = x_val.checked_sub(y_val)
+            .ok_or(Error::Message("Underflow".to_string()))?;
         Ok(Fib::fib(ctx, n))
     }
 

@@ -6,14 +6,14 @@ impl Guest for Crypto {
     fn init(_ctx: &ProcContext) {}
 
     fn hash(_ctx: &ViewContext, input: String) -> String {
-        crypto::hash(&input).0
+        stdlib::crypto::hash(&input).0
     }
 
     fn hash_with_salt(_ctx: &ViewContext, input: String, salt: String) -> String {
-        crypto::hash_with_salt(&input, &salt).0
+        stdlib::crypto::hash_with_salt(&input, &salt).0
     }
 
     fn generate_id(_ctx: &ViewContext) -> String {
-        crypto::generate_id()
+        stdlib::crypto::generate_id()
     }
 }

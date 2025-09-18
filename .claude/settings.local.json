@@ -4,7 +4,8 @@
       "Bash(cargo:*)",
       "Read(/Users/adam/.cargo/registry/src/**)",
       "Read(/Users/adam/.cargo/registry/src/**)",
-      "Read(/Users/adam/.cargo/registry/src/**)"
+      "Read(/Users/adam/.cargo/registry/src/**)",
+      "Read(/Users/adam/dev/UnspendableLabs/**)"
     ],
     "deny": [],
     "ask": []
