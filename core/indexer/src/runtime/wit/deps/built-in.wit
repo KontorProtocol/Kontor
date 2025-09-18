@@ -59,6 +59,20 @@ interface foreign {
     }
 
     call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+
+    // Cross-contract resource transfer support
+    variant call-param {
+        string-val(string),
+        resource-handle(u32),
+        integer-val(string),
+    }
+
+    call-with-resources: func(
+        signer: option<signer>,
+        contract-address: contract-address,
+        function-name: string,
+        params: list<call-param>
+    ) -> string;
 }
 
 interface crypto {
