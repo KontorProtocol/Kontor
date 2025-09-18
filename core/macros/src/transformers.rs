@@ -265,9 +265,54 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
                     })
                 }
                 TypeDefKind::Record(_) | TypeDefKind::Enum(_) | TypeDefKind::Variant(_) => {
-                    let name = ty_def.name.as_ref().ok_or_else(|| anyhow::anyhow!("Unnamed return types are not supported"))?.to_upper_camel_case();
-                    let ident = Ident::new(&name, Span::call_site());
-                    Ok(quote! { <#ident>::wave_type() })
+                    let name = ty_def.name.as_ref().ok_or_else(|| anyhow::anyhow!("Unnamed return types are not supported"))?;
+                    
+                    // Handle built-in types that don't have wave_type() method
+                    match name.as_str() {
+                        "integer" => Ok(quote! {
+                            stdlib::wasm_wave::value::Type::record(vec![
+                                ("r0", stdlib::wasm_wave::value::Type::U64),
+                                ("r1", stdlib::wasm_wave::value::Type::U64),
+                                ("r2", stdlib::wasm_wave::value::Type::U64),
+                                ("r3", stdlib::wasm_wave::value::Type::U64),
+                                ("sign", stdlib::wasm_wave::value::Type::variant(vec![
+                                    ("plus", None),
+                                    ("minus", None),
+                                ]).unwrap()),
+                            ]).unwrap()
+                        }),
+                        "decimal" => Ok(quote! {
+                            stdlib::wasm_wave::value::Type::record(vec![
+                                ("r0", stdlib::wasm_wave::value::Type::U64),
+                                ("r1", stdlib::wasm_wave::value::Type::U64),
+                                ("r2", stdlib::wasm_wave::value::Type::U64),
+                                ("r3", stdlib::wasm_wave::value::Type::U64),
+                                ("sign", stdlib::wasm_wave::value::Type::variant(vec![
+                                    ("plus", None),
+                                    ("minus", None),
+                                ]).unwrap()),
+                            ]).unwrap()
+                        }),
+                        "error" => Ok(quote! {
+                            stdlib::wasm_wave::value::Type::variant(vec![
+                                ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
+                                ("overflow", Some(stdlib::wasm_wave::value::Type::STRING)),
+                                ("div-by-zero", Some(stdlib::wasm_wave::value::Type::STRING)),
+                            ]).unwrap()
+                        }),
+                        "contract-address" => Ok(quote! {
+                            stdlib::wasm_wave::value::Type::record(vec![
+                                ("name", stdlib::wasm_wave::value::Type::STRING),
+                                ("height", stdlib::wasm_wave::value::Type::S64),
+                                ("tx-index", stdlib::wasm_wave::value::Type::S64),
+                            ]).unwrap()
+                        }),
+                        _ => {
+                            // For non-builtin types, use wave_type() method
+                            let ident = Ident::new(&name.to_upper_camel_case(), Span::call_site());
+                            Ok(quote! { <#ident>::wave_type() })
+                        }
+                    }
                 }
                 TypeDefKind::Handle(Handle::Own(_)) | TypeDefKind::Handle(Handle::Borrow(_)) => {
                     Ok(quote! { stdlib::wasm_wave::value::Type::U32 })
@@ -382,7 +427,49 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
         }
     }
 
-    Ok(quote! { #ty::wave_type() })
+    // Handle built-in types specially
+    let ty_str = quote!(#ty).to_string();
+    match ty_str.as_str() {
+        "Integer" | "testlib :: Integer" => Ok(quote! {
+            stdlib::wasm_wave::value::Type::record(vec![
+                ("r0", stdlib::wasm_wave::value::Type::U64),
+                ("r1", stdlib::wasm_wave::value::Type::U64),
+                ("r2", stdlib::wasm_wave::value::Type::U64),
+                ("r3", stdlib::wasm_wave::value::Type::U64),
+                ("sign", stdlib::wasm_wave::value::Type::variant(vec![
+                    ("plus", None),
+                    ("minus", None),
+                ]).unwrap()),
+            ]).unwrap()
+        }),
+        "Decimal" | "testlib :: Decimal" => Ok(quote! {
+            stdlib::wasm_wave::value::Type::record(vec![
+                ("r0", stdlib::wasm_wave::value::Type::U64),
+                ("r1", stdlib::wasm_wave::value::Type::U64),
+                ("r2", stdlib::wasm_wave::value::Type::U64),
+                ("r3", stdlib::wasm_wave::value::Type::U64),
+                ("sign", stdlib::wasm_wave::value::Type::variant(vec![
+                    ("plus", None),
+                    ("minus", None),
+                ]).unwrap()),
+            ]).unwrap()
+        }),
+        "Error" | "testlib :: Error" => Ok(quote! {
+            stdlib::wasm_wave::value::Type::variant(vec![
+                ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
+                ("overflow", Some(stdlib::wasm_wave::value::Type::STRING)),
+                ("div-by-zero", Some(stdlib::wasm_wave::value::Type::STRING)),
+            ]).unwrap()
+        }),
+        "ContractAddress" | "testlib :: ContractAddress" => Ok(quote! {
+            stdlib::wasm_wave::value::Type::record(vec![
+                ("name", stdlib::wasm_wave::value::Type::STRING),
+                ("height", stdlib::wasm_wave::value::Type::S64),
+                ("tx-index", stdlib::wasm_wave::value::Type::S64),
+            ]).unwrap()
+        }),
+        _ => Ok(quote! { #ty::wave_type() })
+    }
 }
 
 pub fn syn_type_to_unwrap_expr(ty: &SynType, value: TokenStream) -> syn::Result<TokenStream> {

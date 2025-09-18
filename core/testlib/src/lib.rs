@@ -1,11 +1,18 @@
 use std::{env::current_dir, path::Path};
 
 use bon::Builder;
-pub use indexer::runtime::wit::kontor::built_in::{
-    error::Error,
-    foreign::ContractAddress,
-    numbers::{Decimal, Integer, Sign},
+// Re-export the actual types from indexer  
+use indexer::runtime::wit::kontor::built_in::{
+    error::Error as WitError,
+    foreign::ContractAddress as WitContractAddress,
+    numbers::{Decimal as WitDecimal, Integer as WitInteger, Sign},
 };
+
+// Create type aliases for easier use
+pub type Error = WitError;
+pub type ContractAddress = WitContractAddress;
+pub type Integer = WitInteger;
+pub type Decimal = WitDecimal;
 
 // Helper to create Integer from u64
 pub fn int(n: u64) -> Integer {
@@ -21,6 +28,94 @@ pub fn int(n: u64) -> Integer {
 // Helper to format Integer for Wave string interface
 pub fn int_str(n: u64) -> String {
     format!("{{r0: {}, r1: 0, r2: 0, r3: 0, sign: plus}}", n)
+}
+
+// Helper functions for creating Integers from different types
+pub fn int_from_i64(n: i64) -> Integer {
+    if n >= 0 {
+        int(n as u64)
+    } else {
+        Integer {
+            r0: (-n) as u64,
+            r1: 0,
+            r2: 0,
+            r3: 0,
+            sign: Sign::Minus,
+        }
+    }
+}
+
+pub fn int_from_str(s: &str) -> Integer {
+    if let Ok(n) = s.parse::<i64>() {
+        int_from_i64(n)
+    } else {
+        int(0)
+    }
+}
+
+// Helper functions for Decimal
+pub fn decimal_from_f64(f: f64) -> Decimal {
+    let is_negative = f < 0.0;
+    let abs_val = f.abs();
+    let whole = abs_val as u64;
+    
+    Decimal {
+        r0: whole,
+        r1: 0,
+        r2: 0,
+        r3: 0,
+        sign: if is_negative { Sign::Minus } else { Sign::Plus },
+    }
+}
+
+pub fn decimal_from_str(s: &str) -> Decimal {
+    if let Ok(f) = s.parse::<f64>() {
+        decimal_from_f64(f)
+    } else {
+        decimal_from_f64(0.0)
+    }
+}
+
+// Helper functions for comparison
+pub fn int_eq(a: &Integer, b: &Integer) -> bool {
+    a.r0 == b.r0 && 
+    a.r1 == b.r1 && 
+    a.r2 == b.r2 && 
+    a.r3 == b.r3 && 
+    a.sign == b.sign
+}
+
+pub fn decimal_eq(a: &Decimal, b: &Decimal) -> bool {
+    a.r0 == b.r0 && 
+    a.r1 == b.r1 && 
+    a.r2 == b.r2 && 
+    a.r3 == b.r3 && 
+    a.sign == b.sign
+}
+
+// Arithmetic helpers - delegate to runtime numerics
+pub fn int_add(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::add_integer(a, b).expect("Integer addition")
+}
+
+pub fn int_sub(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::sub_integer(a, b).expect("Integer subtraction")
+}
+
+pub fn int_mul(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::mul_integer(a, b).expect("Integer multiplication")
+}
+
+pub fn int_div(a: Integer, b: Integer) -> Integer {
+    indexer::runtime::numerics::div_integer(a, b).expect("Integer division")
+}
+
+pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::mul_decimal(a, b).expect("Decimal multiplication")
+}
+
+pub fn decimal_div(a: Decimal, b: Decimal) -> Decimal {
+    indexer::runtime::numerics::div_decimal(a, b).expect("Decimal division")
 }
 use indexer::{
     config::Config,

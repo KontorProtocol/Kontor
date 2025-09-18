@@ -14,8 +14,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/assets/balance": Balance,
         "kontor:built-in/assets/lp-balance": LpBalance,
     },
-    // Remove additional_derives temporarily - resources can't be serialized via WAVE
-    // additional_derives: [stdlib::Wavey],
+    // Don't add derives to resources - they break serialization
     imports: {
         default: async | trappable,
     }
