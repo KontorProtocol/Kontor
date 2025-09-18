@@ -33,7 +33,7 @@ struct TokenStorage {
 // Storage initialization
 impl TokenStorage {
     fn init(&self, ctx: &impl WriteContext) {
-        use stdlib::{Store, Retrieve};
+        use stdlib::Store;
         // Initialize with default values
         // Use Store trait to properly handle Integer type
         <Integer as Store>::__set(ctx, "total_supply".parse().unwrap(), self.total_supply.clone());
@@ -203,7 +203,7 @@ impl Guest for Token {
         Ok(())
     }
     
-    fn split(ctx: &ProcContext, bal: Balance, split_amount: kontor::built_in::numbers::Integer) -> Result<SplitResult, kontor::built_in::error::Error> {
+    fn split(_ctx: &ProcContext, bal: Balance, split_amount: kontor::built_in::numbers::Integer) -> Result<SplitResult, kontor::built_in::error::Error> {
         // Get balance info
         let total_amount = balance_amount(&bal);
         let token = balance_token(&bal);
@@ -231,7 +231,7 @@ impl Guest for Token {
         })
     }
     
-    fn merge(ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, kontor::built_in::error::Error> {
+    fn merge(_ctx: &ProcContext, a: Balance, b: Balance) -> Result<Balance, kontor::built_in::error::Error> {
         // Get balance info
         let amount_a = balance_amount(&a);
         let amount_b = balance_amount(&b);

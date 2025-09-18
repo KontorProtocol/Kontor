@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Result;
 
 #[test]
 fn test_resource_manager_basic_ownership() {

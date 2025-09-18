@@ -6,9 +6,6 @@ contract!(name = "shared-account");
 use kontor::built_in::numbers as numbers;
 use kontor::built_in::crypto as crypto;
 
-// TODO: Fix import! and interface! macros for cross-contract calls
-// import!(name = "token", height = 0, tx_index = 0, path = "token/wit");
-// interface!(name = "token_dyn", path = "token/wit");
 
 #[derive(Clone, Default)]
 struct Account {
@@ -84,7 +81,7 @@ impl Retrieve for Account {
         let balance = <Integer as Retrieve>::__get(ctx, format!("{}.balance", path).parse().unwrap())?;
 
         // For other_tenants, we need to iterate over keys - simplified for now
-        let mut other_tenants = Map::default();
+        let other_tenants = Map::default();
         // TODO: Properly iterate over keys in other_tenants
 
         Some(Account {

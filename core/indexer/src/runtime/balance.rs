@@ -1,5 +1,4 @@
 use anyhow::Result;
-use wasmtime::component::Resource;
 
 use super::built_in::{
     foreign::ContractAddress,

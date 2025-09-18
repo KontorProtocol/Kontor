@@ -1,4 +1,3 @@
-use anyhow::Result;
 
 use super::built_in::{
     foreign::ContractAddress,

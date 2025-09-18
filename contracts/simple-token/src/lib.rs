@@ -18,7 +18,7 @@ fn storage<C>(_ctx: &C) -> TokenStorage {
 impl TokenStorage {
     fn init(&self, ctx: &impl WriteContext) {
         // Initialize with default values
-        use stdlib::{Store, Retrieve};
+        use stdlib::Store;
         <Integer as Store>::__set(ctx, "total_supply".parse().unwrap(), self.total_supply.clone());
     }
 
@@ -99,7 +99,7 @@ impl Guest for SimpleToken {
         let to_balance = balances.get(ctx, &to).unwrap_or_default();
 
         // Check sufficient funds (compare with zero)
-        let zero = Integer::default();
+        let _zero = Integer::default();
         if kontor::built_in::numbers::cmp_integer(from_balance, amount) == kontor::built_in::numbers::Ordering::Less {
             return Err(Error::Message("Insufficient balance".to_string()));
         }

@@ -6,7 +6,7 @@ contract!(name = "amm");
 // Types like Integer, ContractAddress, Balance, LpBalance are already exported by the macro
 use kontor::built_in::assets::{
     balance_amount, balance_token,
-    lp_balance_amount, lp_balance_token_a, lp_balance_token_b
+    lp_balance_amount
 };
 // NOTE: create_balance and create_lp_balance have been removed to prevent forgery
 // Only token/AMM contracts can create their own resources
@@ -16,16 +16,13 @@ use crate::kontor::built_in::context as context;  // For context:: namespace
 // ViewContext and ProcContext are already exported by the contract macro
 use crate::kontor::built_in::foreign::CallParam;  // For cross-contract calls
 
-// Use interface macro for real cross-contract calls  
-// TODO: Fix interface! macro for cross-contract calls
-// interface!(name = "token_dyn", path = "token/wit");
 
 // Real cross-contract token operations using our secure resource transfer system
 mod token_dyn {
     use super::*;
 
     /// Get token balance for an account (view function)
-    pub fn balance_or_zero(ctx: &ViewContext, token: &ContractAddress, account: String) -> Integer {
+    pub fn balance_or_zero(_ctx: &ViewContext, token: &ContractAddress, account: String) -> Integer {
         // Call token contract's balance_or_zero function
         let call_expr = format!("balance_or_zero(\"{}\")", account);
 
@@ -731,7 +728,7 @@ impl Guest for Amm {
         let lp_to_issue = numbers::sub_integer(total_lp, min_liq);
         
         // Create pool - no ledger needed, LP ownership is tracked via resources!
-        let lp_pair = TokenPair {
+        let _lp_pair = TokenPair {
             token_a: token_a.clone(),
             token_b: token_b.clone(),
         };
@@ -895,14 +892,10 @@ impl Guest for Amm {
 
         // Return any excess balances to the user
         if let Some(excess) = excess_a {
-            let iface = balance_to_interface(excess);
-            // TODO: Re-enable when interface! is fixed
-            // token_dyn::deposit(&token_a, &ctx.contract_signer().to_string(), user_address.as_str(), iface)?;
+            token_dyn::deposit(ctx, &token_a, &user_address, excess)?;
         }
         if let Some(excess) = excess_b {
-            let iface = balance_to_interface(excess);
-            // TODO: Re-enable when interface! is fixed
-            // token_dyn::deposit(&token_b, &ctx.contract_signer().to_string(), user_address.as_str(), iface)?;
+            token_dyn::deposit(ctx, &token_b, &user_address, excess)?;
         }
 
         // Update total supply - no ledger manipulation needed!

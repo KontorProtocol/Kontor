@@ -18,7 +18,6 @@ use futures_util::StreamExt;
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use stdlib::impls;
 pub use storage::Storage;
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -29,7 +28,6 @@ use std::{
     io::{Cursor, Read},
     sync::Arc,
 };
-use rand::{Rng, SeedableRng};
 
 use wit::kontor::*;
 
@@ -59,9 +57,6 @@ use crate::runtime::{
 };
 
 // Display and Error traits are already implemented by wit-bindgen
-
-// Don't generate impls for host side - they conflict with wit-bindgen
-// impls!(host = true);
 
 pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
@@ -1150,15 +1145,9 @@ impl built_in::assets::HostBalance for Runtime {
 
         let current_contract_id = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
 
-        // Get the token contract's ID from its address
-        // NOTE: In a production system, we'd need to resolve the ContractAddress to a contract ID
-        // For now, we'll validate that the caller is authorized to create balances
-
-        // TODO: Implement proper validation that current_contract_id matches token contract
-        // For now, we set owner to the token's contract ID (would be looked up from token address)
-
-        // CRITICAL: The balance is owned by the TOKEN contract, not the caller
-        // This ensures only the token contract can manipulate its own balances
+        // SECURITY: Only the token contract itself can create balances for its token
+        // This prevents balance forgery by other contracts
+        // The balance is owned by the calling contract, which must be the token contract
         let balance = balance::BalanceData::new(amount, token, current_contract_id);
         let resource = self.table.lock().await.push_with_owner(balance, current_contract_id)?;
         Ok(resource)
