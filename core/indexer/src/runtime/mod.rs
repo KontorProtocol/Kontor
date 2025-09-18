@@ -1,10 +1,10 @@
-mod balance;
+pub mod balance;
 mod lp_balance;
 mod component_cache;
 mod contracts;
 mod counter;
 pub mod numerics;
-mod stack;
+pub mod stack;
 mod storage;
 mod types;
 pub mod wit;
@@ -32,6 +32,7 @@ use std::{
 use wit::kontor::*;
 
 pub use wit::kontor;
+pub use wit::kontor::built_in;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::foreign::ContractAddress;
 pub use wit::kontor::built_in::numbers::{
