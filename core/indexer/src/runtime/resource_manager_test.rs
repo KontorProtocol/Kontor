@@ -204,3 +204,207 @@ fn test_resource_manager_host_functions() {
 
     println!("✓ Resource manager host function patterns work correctly");
 }
+
+// Integration tests for cross-contract resource transfers
+
+#[test]
+fn test_cross_contract_balance_transfer_simulation() {
+    let mut manager = ResourceManager::new();
+
+    // Simulate AMM contract (ID 1) withdrawing from token contract (ID 2)
+
+    // 1. Token contract creates a balance for withdrawal
+    let token_addr = ContractAddress {
+        name: "test_token".to_string(),
+        height: 1,
+        tx_index: 0,
+    };
+
+    let balance_data = balance::BalanceData::new(
+        numerics::u64_to_integer(1000).unwrap(),
+        token_addr.clone(),
+        2, // owned by token contract
+    );
+
+    let resource = manager.push_with_owner(balance_data, 2).unwrap();
+    let handle = resource.rep();
+
+    // 2. Token contract transfers ownership to AMM contract
+    assert!(manager.transfer_ownership(handle, 2, 1).is_ok());
+    assert_eq!(manager.get_owner(handle), Some(1));
+
+    // 3. AMM contract can now use the balance
+    let balance = manager.get(&resource).unwrap();
+    assert_eq!(balance.owner_contract, 2); // Original owner in data
+    assert_eq!(balance.amount.r0, 1000);
+
+    // 4. AMM processes the balance (simulating deposit to pool)
+    let consumed_balance = manager.delete(resource).unwrap();
+    assert_eq!(consumed_balance.amount.r0, 1000);
+
+    // 5. Verify resource is cleaned up
+    assert_eq!(manager.get_owner(handle), None);
+
+    println!("✓ Cross-contract balance transfer simulation works");
+}
+
+#[test]
+fn test_multi_contract_resource_flow() {
+    let mut manager = ResourceManager::new();
+
+    // Simulate complex AMM flow: User → Token A → AMM → Token B → User
+
+    // 1. Token A contract creates balance for user withdrawal
+    let token_a_addr = ContractAddress {
+        name: "token_a".to_string(),
+        height: 1,
+        tx_index: 0,
+    };
+
+    let balance_a = balance::BalanceData::new(
+        numerics::u64_to_integer(500).unwrap(),
+        token_a_addr.clone(),
+        2, // token_a contract ID
+    );
+
+    let resource_a = manager.push_with_owner(balance_a, 2).unwrap();
+    let handle_a = resource_a.rep();
+
+    // 2. Transfer Token A balance to AMM for swap
+    assert!(manager.transfer_ownership(handle_a, 2, 1).is_ok()); // token_a → AMM
+
+    // 3. AMM processes swap, creates Token B balance
+    let token_b_addr = ContractAddress {
+        name: "token_b".to_string(),
+        height: 1,
+        tx_index: 1,
+    };
+
+    let balance_b = balance::BalanceData::new(
+        numerics::u64_to_integer(450).unwrap(), // After swap fees
+        token_b_addr.clone(),
+        1, // created by AMM
+    );
+
+    let resource_b = manager.push_with_owner(balance_b, 1).unwrap();
+    let handle_b = resource_b.rep();
+
+    // 4. AMM transfers Token B balance to Token B contract for user deposit
+    assert!(manager.transfer_ownership(handle_b, 1, 3).is_ok()); // AMM → token_b
+
+    // 5. Verify final state
+    assert_eq!(manager.get_owner(handle_a), Some(1)); // AMM owns input
+    assert_eq!(manager.get_owner(handle_b), Some(3)); // Token B owns output
+
+    // 6. Clean up resources
+    let _consumed_a = manager.delete(resource_a).unwrap();
+    let _consumed_b = manager.delete(resource_b).unwrap();
+
+    assert_eq!(manager.get_owner(handle_a), None);
+    assert_eq!(manager.get_owner(handle_b), None);
+
+    println!("✓ Multi-contract resource flow (User → Token A → AMM → Token B → User) works");
+}
+
+#[test]
+fn test_resource_transfer_security_enforcement() {
+    let mut manager = ResourceManager::new();
+
+    // Create resources owned by different contracts
+    let balance_1 = balance::BalanceData::new(
+        numerics::u64_to_integer(1000).unwrap(),
+        ContractAddress { name: "token1".to_string(), height: 1, tx_index: 0 },
+        1
+    );
+    let balance_2 = balance::BalanceData::new(
+        numerics::u64_to_integer(2000).unwrap(),
+        ContractAddress { name: "token2".to_string(), height: 1, tx_index: 1 },
+        2
+    );
+
+    let resource_1 = manager.push_with_owner(balance_1, 1).unwrap();
+    let resource_2 = manager.push_with_owner(balance_2, 2).unwrap();
+
+    let handle_1 = resource_1.rep();
+    let handle_2 = resource_2.rep();
+
+    // Test security: Contract 1 cannot transfer Contract 2's resource
+    let unauthorized_transfer = manager.transfer_ownership(handle_2, 1, 3);
+    assert!(unauthorized_transfer.is_err());
+    assert!(unauthorized_transfer.unwrap_err().to_string().contains("owned by contract 2, not 1"));
+
+    // Test security: Contract 3 cannot transfer anyone's resources
+    let no_permission_transfer = manager.transfer_ownership(handle_1, 3, 2);
+    assert!(no_permission_transfer.is_err());
+
+    // Verify resources remain with original owners
+    assert_eq!(manager.get_owner(handle_1), Some(1));
+    assert_eq!(manager.get_owner(handle_2), Some(2));
+
+    // Test legitimate transfers work
+    assert!(manager.transfer_ownership(handle_1, 1, 3).is_ok());
+    assert_eq!(manager.get_owner(handle_1), Some(3));
+
+    println!("✓ Resource transfer security enforcement works correctly");
+}
+
+#[test]
+fn test_balance_split_simulation() {
+    let mut manager = ResourceManager::new();
+
+    // Simulate the full split operation flow
+
+    // 1. AMM has a balance to split
+    let original_amount = numerics::u64_to_integer(1000).unwrap();
+    let split_amount = numerics::u64_to_integer(300).unwrap();
+
+    let balance_data = balance::BalanceData::new(
+        original_amount.clone(),
+        ContractAddress { name: "token_a".to_string(), height: 1, tx_index: 0 },
+        1 // AMM contract
+    );
+
+    let original_resource = manager.push_with_owner(balance_data, 1).unwrap();
+    let original_handle = original_resource.rep();
+
+    // 2. AMM transfers balance to token contract for splitting
+    assert!(manager.transfer_ownership(original_handle, 1, 2).is_ok());
+
+    // 3. Token contract splits and creates two new resources
+    let split_data = balance::BalanceData::new(
+        split_amount.clone(),
+        ContractAddress { name: "token_a".to_string(), height: 1, tx_index: 0 },
+        2 // token contract
+    );
+    let remainder_data = balance::BalanceData::new(
+        numerics::sub_integer(original_amount, split_amount).unwrap(),
+        ContractAddress { name: "token_a".to_string(), height: 1, tx_index: 0 },
+        2 // token contract
+    );
+
+    let split_resource = manager.push_with_owner(split_data, 2).unwrap();
+    let remainder_resource = manager.push_with_owner(remainder_data, 2).unwrap();
+
+    let split_handle = split_resource.rep();
+    let remainder_handle = remainder_resource.rep();
+
+    // 4. Token contract transfers split results back to AMM
+    assert!(manager.transfer_ownership(split_handle, 2, 1).is_ok());
+    assert!(manager.transfer_ownership(remainder_handle, 2, 1).is_ok());
+
+    // 5. Verify AMM receives both split resources
+    assert_eq!(manager.get_owner(split_handle), Some(1));
+    assert_eq!(manager.get_owner(remainder_handle), Some(1));
+
+    // 6. AMM can access the split balances
+    let split_balance = manager.get(&split_resource).unwrap();
+    let remainder_balance = manager.get(&remainder_resource).unwrap();
+
+    assert_eq!(split_balance.amount.r0, 300);
+    assert_eq!(remainder_balance.amount.r0, 700);
+
+    // 7. Original resource should be consumed by token contract
+    // (We don't delete it here since in reality the token contract would have consumed it)
+
+    println!("✓ Balance split simulation with resource transfers works");
+}
