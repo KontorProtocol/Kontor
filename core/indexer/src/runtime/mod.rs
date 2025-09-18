@@ -1,7 +1,7 @@
 mod component_cache;
 mod contracts;
 mod counter;
-mod fuel;
+pub mod fuel;
 pub mod numerics;
 mod stack;
 mod storage;
@@ -10,7 +10,7 @@ pub mod wit;
 
 pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,7 +49,7 @@ use wit_component::ComponentEncoder;
 
 use crate::runtime::{
     counter::Counter,
-    fuel::Fuel,
+    fuel::{Fuel, FuelGauge},
     stack::Stack,
     wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
 };
@@ -251,6 +251,7 @@ pub struct Runtime {
     pub storage: Storage,
     pub id_generation_counter: Counter,
     pub stack: Stack<i64>,
+    pub gauge: Option<FuelGauge>,
 }
 
 impl Runtime {
@@ -272,6 +273,7 @@ impl Runtime {
             storage,
             id_generation_counter: Counter::new(),
             stack: Stack::new(),
+            gauge: Some(FuelGauge::new()),
         })
     }
 
@@ -289,10 +291,19 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
+        let fuel = 1000000;
         let (mut store, is_fallback, params, mut results, func) =
-            prepare_call(self, contract_address, signer, expr, 1000000).await?;
+            prepare_call(self, contract_address, signer, expr, fuel).await?;
 
+        OptionFuture::from(self.gauge.as_ref().map(|g| g.set_starting_fuel(fuel))).await;
         let call_result = func.call_async(&mut store, &params, &mut results).await;
+        let remaining_fuel = store.get_fuel()?;
+        OptionFuture::from(
+            self.gauge
+                .as_ref()
+                .map(|g| g.set_ending_fuel(remaining_fuel)),
+        )
+        .await;
 
         handle_call(&self.stack, is_fallback, call_result, results).await
     }
@@ -305,15 +316,21 @@ impl Runtime {
     ) -> Result<Option<R>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        let fuel = Fuel::Path(&path).consume(accessor)?;
-        self.storage
+        let fuel = Fuel::Path(path.clone())
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        if let Some(bs) = self
+            .storage
             .get(fuel, _self.get_contract_id(), &path)
             .await?
-            .map(|bs| {
-                Fuel::Get(bs.len()).consume(accessor)?;
-                deserialize_cbor(&bs)
-            })
-            .transpose()
+        {
+            Fuel::Get(bs.len())
+                .consume(accessor, self.gauge.as_ref())
+                .await?;
+            deserialize_cbor(&bs)
+        } else {
+            Ok(None)
+        }
     }
 
     async fn _get_keys<T: HasContractId>(

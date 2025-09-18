@@ -48,6 +48,9 @@ async fn test_fib_contract() -> Result<()> {
     let n = 8;
     let result = fib::fib(&runtime, signer, n).await?;
     assert_eq!(result, 21);
+    let gauge = runtime.fuel_gauge();
+    assert_eq!(gauge.starting_fuel().await, 1000000);
+    assert_eq!(gauge.ending_fuel().await, 525281);
 
     let last_op = Some(arith::Op::Sum(arith::Operand { y: 8 }));
     let result = arith::last_op(&runtime).await?;
