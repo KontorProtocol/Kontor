@@ -7,8 +7,8 @@ world contract {
     use kontor:built-in/numbers.{integer, decimal};
     use kontor:built-in/foreign.{contract-address};
     
-    // Use the shared Balance resource from kontor:assets
-    use kontor:assets/balance.{balance, split-result};
+    // Use Balance resource from built-in assets
+    use kontor:built-in/assets.{balance, split-result};
 
     export init: func(ctx: borrow<proc-context>);
 

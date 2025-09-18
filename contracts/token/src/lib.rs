@@ -169,7 +169,7 @@ impl Guest for Token {
 
         // Create a Balance resource using the factory function
         let contract_addr = get_contract_address(ctx);
-        Ok(create_balance(amount, contract_addr))
+        Ok(create_balance(amount, &contract_addr))
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), error::Error> {
@@ -206,9 +206,9 @@ impl Guest for Token {
         let remainder_amount = numbers::sub_integer(total_amount, split_amount.clone());
         
         // Create new balances
-        let split_balance = create_balance(split_amount, token.clone());
+        let split_balance = create_balance(split_amount, &token);
         let remainder_balance = if numbers::cmp_integer(remainder_amount.clone(), numbers::u64_to_integer(0)) == numbers::Ordering::Greater {
-            Some(create_balance(remainder_amount, token))
+            Some(create_balance(remainder_amount, &token))
         } else {
             None
         };
@@ -237,6 +237,6 @@ impl Guest for Token {
         
         // Create merged balance
         // Both input balances are consumed
-        Ok(create_balance(total, token_a))
+        Ok(create_balance(total, &token_a))
     }
 }
