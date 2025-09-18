@@ -401,6 +401,7 @@ pub enum ResourceParam {
     Integer(String), // Serialized integer representation
 }
 
+impl Runtime {
     async fn _get_primitive<T: HasContractId, R: for<'de> Deserialize<'de>>(
         &mut self,
         resource: Resource<T>,
@@ -517,6 +518,7 @@ pub enum ResourceParam {
             .set(contract_id, &path, &serialize_cbor(&value)?)
             .await
     }
+}
 
 impl built_in::error::Host for Runtime {
     async fn meta_force_generate_error(&mut self, _e: built_in::error::Error) -> Result<()> {
