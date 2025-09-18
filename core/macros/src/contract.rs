@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use std::collections::{HashSet, HashMap};
 use std::path::PathBuf;
 use syn::Ident;
-use wit_parser::{TypeDefKind, TypeOwner};
+use wit_parser::TypeDefKind;
 
 #[derive(FromMeta)]
 pub struct Config {
@@ -23,7 +23,7 @@ pub fn generate(config: Config) -> TokenStream {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
     let wit_path = PathBuf::from(&manifest_dir).join(&path);
     
-    let (resource_types, records_with_resources, with_clause) = parse_wit_resources(&wit_path, &world)
+    let (resource_types, _records_with_resources, with_clause) = parse_wit_resources(&wit_path, &world)
         .unwrap_or_else(|e| {
             panic!("Failed to parse WIT resources: {}. This is required for proper resource handling.", e);
         });
@@ -334,7 +334,7 @@ fn parse_wit_resources(wit_path: &PathBuf, world_name: &str) -> Result<(HashSet<
     
     // Register detailed resource information
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-    for (name, info) in resource_infos {
+    for (_name, info) in resource_infos {
         crate::registry::register_resource(&manifest_dir, info);
     }
     

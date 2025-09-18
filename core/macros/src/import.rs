@@ -85,6 +85,9 @@ pub fn import(
                 "keys",
                 "integer",
                 "decimal",
+                "balance",      // Skip built-in Balance resource
+                "lp-balance",   // Skip built-in LpBalance resource
+                "split-result", // Skip built-in split-result record
             ]
             .contains(&name)
         } else {
@@ -525,7 +528,7 @@ pub fn print_typedef_resource(name: &str) -> Result<TokenStream> {
     // Resources are opaque handles in the import context
     // They're move-only types that wrap a resource handle
     Ok(quote! {
-        #[derive(Debug, PartialEq, Eq)]
+        #[derive(Debug)]
         pub struct #struct_name {
             // Resources are opaque handles managed by the runtime
             // They don't implement Clone or Copy, enforcing move semantics
@@ -557,11 +560,18 @@ pub fn print_typedef_resource(name: &str) -> Result<TokenStream> {
             }
         }
 
-        impl Clone for #struct_name {
-            fn clone(&self) -> Self {
-                Self {
-                    handle: self.handle,
-                    _phantom: std::marker::PhantomData,
+        // Resources cannot be cloned - they have move-only semantics
+        // Do NOT implement Clone!
+        
+        impl Drop for #struct_name {
+            fn drop(&mut self) {
+                // Call the host to properly release this resource handle
+                // This prevents resource leaks when resources go out of scope
+                unsafe {
+                    // TODO: Call resource-manager::drop through the runtime
+                    // For now, we rely on the host's garbage collection
+                    // The proper implementation would be:
+                    // crate::runtime::resource_manager_drop("Balance", self.handle);
                 }
             }
         }

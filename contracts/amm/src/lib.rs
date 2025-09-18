@@ -319,18 +319,18 @@ fn get_token_balance(_signer: Option<context::Signer>, token: &foreign::Contract
     Ok(token_dyn::balance_or_zero(token, account.to_string()))
 }
 
-fn balance_to_interface(balance: Balance) -> token_dyn::Balance {
-    // Resources are the same type now
+// Since we're using the same Balance type from built-in assets everywhere,
+// these conversion functions are now identity functions.
+// They're kept for API compatibility but could be removed in a refactor.
+fn balance_to_interface(balance: Balance) -> Balance {
     balance
 }
 
-fn balance_from_interface(balance: token_dyn::Balance) -> Balance {
-    // Resources are the same type now
+fn balance_from_interface(balance: Balance) -> Balance {
     balance
 }
 
-fn balance_option_from_interface(balance: Option<token_dyn::Balance>) -> Option<Balance> {
-    // Resources are the same type now
+fn balance_option_from_interface(balance: Option<Balance>) -> Option<Balance> {
     balance
 }
 
@@ -346,7 +346,7 @@ fn consume_token_balance_to_pool(
     
     // Convert and deposit the balance to the pool
     let iface_balance = balance_to_interface(balance);
-    token_dyn::deposit(token, &ctx.contract_signer(), pool_address, iface_balance)?;
+    token_dyn::deposit(token, ctx.contract_signer(), pool_address, iface_balance)?;
     
     Ok(amount)
 }
@@ -357,7 +357,7 @@ fn create_token_balance_from_pool(
     token: &foreign::ContractAddress,
     amount: numbers::Integer,
 ) -> Result<Balance, Error> {
-    let iface_balance = token_dyn::withdraw(token, &ctx.contract_signer(), amount)?;
+    let iface_balance = token_dyn::withdraw(token, ctx.contract_signer(), amount)?;
     Ok(balance_from_interface(iface_balance))
 }
 
@@ -701,11 +701,11 @@ impl Guest for Amm {
         // Return any excess balances to the user
         if let Some(excess) = excess_a {
             let iface = balance_to_interface(excess);
-            token_dyn::deposit(&token_a, &ctx.contract_signer(), user_address.as_str(), iface)?;
+            token_dyn::deposit(&token_a, ctx.contract_signer(), user_address.as_str(), iface)?;
         }
         if let Some(excess) = excess_b {
             let iface = balance_to_interface(excess);
-            token_dyn::deposit(&token_b, &ctx.contract_signer(), user_address.as_str(), iface)?;
+            token_dyn::deposit(&token_b, ctx.contract_signer(), user_address.as_str(), iface)?;
         }
 
         // Update total supply - no ledger manipulation needed!

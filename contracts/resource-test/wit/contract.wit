@@ -1,24 +1,15 @@
 package kontor:contract;
 
 world contract {
-    import kontor:built-in/context;
-    import kontor:built-in/error;
-    import kontor:built-in/numbers;
-    import kontor:built-in/foreign;
+    include kontor:built-in/built-in;
     
     use kontor:built-in/context.{view-context, proc-context};
     use kontor:built-in/error.{error};
     use kontor:built-in/numbers.{integer};
     use kontor:built-in/foreign.{contract-address};
     
-    // Define a test Balance resource
-    resource balance {
-        amount: func() -> integer;
-        token: func() -> contract-address;
-        
-        // Constructor
-        constructor(amount: integer, token: contract-address);
-    }
+    // Use the built-in Balance resource
+    use kontor:built-in/assets.{balance};
     
     // Export functions for testing resource handling
     export init: func(ctx: borrow<proc-context>);

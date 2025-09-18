@@ -3,8 +3,12 @@ use stdlib::*;
 // Test contract to validate compilation
 contract!(name = "resource_test");
 
-// The types are already imported by the contract! macro
-// No need to re-import them
+// Import types from their proper locations
+use context::{ProcContext, ViewContext};
+use error::Error;
+use assets::{Balance, create_balance};
+use numbers::Integer;
+use foreign;
 
 impl Guest for ResourceTest {
     fn init(_ctx: &ProcContext) {
