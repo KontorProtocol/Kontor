@@ -75,6 +75,10 @@ pub struct ResourceManager {
     table: ResourceTable,
     /// Maps resource handle -> owner contract ID
     pub ownership: HashMap<u32, i64>,
+    /// Maps global handle -> actual Resource<T> handle (as u32)
+    global_to_resource: HashMap<u32, u32>,
+    /// Maps actual Resource<T> handle -> global handle
+    resource_to_global: HashMap<u32, u32>,
     /// Next available handle for cross-contract sharing
     next_global_handle: u32,
 }
@@ -84,6 +88,8 @@ impl ResourceManager {
         Self {
             table: ResourceTable::new(),
             ownership: HashMap::new(),
+            global_to_resource: HashMap::new(),
+            resource_to_global: HashMap::new(),
             next_global_handle: 1000, // Start global handles at 1000 to avoid conflicts
         }
     }
@@ -126,12 +132,37 @@ impl ResourceManager {
         let global_handle = self.next_global_handle;
         self.next_global_handle += 1;
 
-        // We can't directly insert a handle into ResourceTable, so we'll store the resource
-        // and create a mapping for cross-contract access
-        let _resource_handle = self.table.push(resource)?;
+        // Push the resource and get the actual Resource<T> handle
+        let resource_handle = self.table.push(resource)?;
+        let resource_rep = resource_handle.rep();
+
+        // Create bidirectional mapping between global handle and Resource<T> handle
+        self.global_to_resource.insert(global_handle, resource_rep);
+        self.resource_to_global.insert(resource_rep, global_handle);
         self.ownership.insert(global_handle, owner);
 
         Ok(global_handle)
+    }
+
+    /// Convert a global handle to a Resource<BalanceData> (for cross-contract balance transfers)
+    pub fn global_handle_to_balance(&self, global_handle: u32) -> Result<Resource<balance::BalanceData>> {
+        // Look up the actual Resource<BalanceData> handle
+        let resource_rep = self.global_to_resource.get(&global_handle)
+            .ok_or_else(|| anyhow!("Global handle {} not found", global_handle))?;
+
+        // Reconstruct the Resource<BalanceData> from its handle representation
+        let resource = Resource::new_own(*resource_rep);
+
+        Ok(resource)
+    }
+
+    /// Remove a global handle mapping when resource is consumed
+    pub fn remove_global_handle(&mut self, global_handle: u32) -> Result<()> {
+        if let Some(resource_rep) = self.global_to_resource.remove(&global_handle) {
+            self.resource_to_global.remove(&resource_rep);
+            self.ownership.remove(&global_handle);
+        }
+        Ok(())
     }
 
     /// Delegate to underlying ResourceTable with proper error conversion
@@ -1007,25 +1038,29 @@ impl built_in::numbers::Host for Runtime {
 /// Resource manager operations for cross-contract resource transfers
 /// These enable secure movement of resources between contract instances
 impl built_in::resource_manager::Host for Runtime {
-    async fn create(&mut self, resource_id: String, data: String) -> Result<u32> {
-        // Create a global handle for cross-contract sharing
-        // This allows a resource to be referenced across contract boundaries
+    async fn register_balance(&mut self, bal: Resource<balance::BalanceData>) -> Result<u32> {
+        // Register a Balance resource for cross-contract transfer
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
-
-        // For now, we serialize arbitrary data as the resource content
-        // In production, this would be more sophisticated type-specific handling
         let mut table = self.table.lock().await;
-        let global_handle = table.create_global_handle(data, current_contract)?;
 
-        tracing::info!("Created global resource handle {} for resource_id {} owned by contract {}",
-                      global_handle, resource_id, current_contract);
+        // Get the resource handle and create a global mapping
+        let resource_rep = bal.rep();
+        let global_handle = table.next_global_handle;
+        table.next_global_handle += 1;
+
+        // Create bidirectional mapping - the Balance resource stays in the ResourceTable
+        table.global_to_resource.insert(global_handle, resource_rep);
+        table.resource_to_global.insert(resource_rep, global_handle);
+        table.ownership.insert(global_handle, current_contract);
+
+        tracing::info!("Registered Balance resource {} as global handle {} for contract {}",
+                      resource_rep, global_handle, current_contract);
 
         Ok(global_handle)
     }
 
-    async fn take(&mut self, resource_id: String, handle: u32) -> Result<Result<String, Error>> {
-        // Take ownership of a resource and return its serialized data
-        // This consumes the resource from the current location
+    async fn take_balance(&mut self, handle: u32) -> Result<Result<Resource<balance::BalanceData>, Error>> {
+        // Take ownership of a transferred Balance resource
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let mut table = self.table.lock().await;
 
@@ -1033,48 +1068,30 @@ impl built_in::resource_manager::Host for Runtime {
         if !table.is_owned_by(handle, current_contract) {
             let owner = table.get_owner(handle);
             return Ok(Err(Error::Message(format!(
-                "Cannot take resource {}: owned by contract {:?}, not {}",
-                resource_id, owner, current_contract
+                "Cannot take Balance handle {}: owned by contract {:?}, not {}",
+                handle, owner, current_contract
             ))));
         }
 
-        // For now, we can't easily extract typed data from ResourceTable
-        // This would need more sophisticated resource type management
-        // Return placeholder data
-        let data = format!("resource_data_for_handle_{}", handle);
+        // Convert global handle to actual Resource<BalanceData>
+        match table.global_handle_to_balance(handle) {
+            Ok(balance_resource) => {
+                // Remove the global handle mapping since ownership is transferring
+                table.remove_global_handle(handle)?;
 
-        tracing::info!("Contract {} took resource {} with handle {}",
-                      current_contract, resource_id, handle);
-
-        Ok(Ok(data))
-    }
-
-    async fn drop(&mut self, resource_id: String, handle: u32) -> Result<Result<(), Error>> {
-        // Drop a resource handle (delete it)
-        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
-        let mut table = self.table.lock().await;
-
-        // Verify ownership
-        if !table.is_owned_by(handle, current_contract) {
-            let owner = table.get_owner(handle);
-            return Ok(Err(Error::Message(format!(
-                "Cannot drop resource {}: owned by contract {:?}, not {}",
-                resource_id, owner, current_contract
-            ))));
+                tracing::info!("Contract {} took Balance resource via handle {}",
+                              current_contract, handle);
+                Ok(Ok(balance_resource))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to convert handle {} to Balance: {}", handle, e);
+                Ok(Err(Error::Message(e.to_string())))
+            }
         }
-
-        // Remove ownership tracking (the actual resource cleanup would be more complex)
-        table.ownership.remove(&handle);
-
-        tracing::info!("Contract {} dropped resource {} with handle {}",
-                      current_contract, resource_id, handle);
-
-        Ok(Ok(()))
     }
 
     async fn transfer(&mut self, from_contract: i64, to_contract: i64, handle: u32) -> Result<Result<(), Error>> {
         // Transfer ownership of a resource from one contract to another
-        // This is the core of cross-contract resource movement
         let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
 
         // Only the owning contract can initiate transfers
@@ -1099,6 +1116,29 @@ impl built_in::resource_manager::Host for Runtime {
             }
         }
     }
+
+    async fn drop(&mut self, resource_id: String, handle: u32) -> Result<Result<(), Error>> {
+        // Drop a resource handle (delete it)
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
+        let mut table = self.table.lock().await;
+
+        // Verify ownership
+        if !table.is_owned_by(handle, current_contract) {
+            let owner = table.get_owner(handle);
+            return Ok(Err(Error::Message(format!(
+                "Cannot drop resource {}: owned by contract {:?}, not {}",
+                resource_id, owner, current_contract
+            ))));
+        }
+
+        // Remove the global handle mapping and clean up
+        table.remove_global_handle(handle)?;
+
+        tracing::info!("Contract {} dropped resource {} with handle {}",
+                      current_contract, resource_id, handle);
+
+        Ok(Ok(()))
+    }
 }
 
 impl built_in::assets::Host for Runtime {
@@ -1107,32 +1147,82 @@ impl built_in::assets::Host for Runtime {
     // that owns them through the withdraw operation.
 
     async fn balance_amount(&mut self, bal: Resource<balance::BalanceData>) -> Result<Integer> {
+        // SECURITY: Verify the current contract owns this balance before reading
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
+        // Check ownership
         let balance = table.get(&bal)?;
+        if balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "Balance access denied: contract {} cannot read balance owned by contract {}",
+                current_contract, balance.owner_contract
+            ));
+        }
+
         Ok(balance.amount.clone())
     }
 
     async fn balance_token(&mut self, bal: Resource<balance::BalanceData>) -> Result<ContractAddress> {
+        // SECURITY: Verify the current contract owns this balance before reading
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
+        // Check ownership
         let balance = table.get(&bal)?;
+        if balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "Balance access denied: contract {} cannot read balance owned by contract {}",
+                current_contract, balance.owner_contract
+            ));
+        }
+
         Ok(balance.token.clone())
     }
 
     async fn lp_balance_amount(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<Integer> {
+        // SECURITY: Verify the current contract owns this LP balance before reading
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let lp_balance = table.get(&lp)?;
+        if lp_balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "LP balance access denied: contract {} cannot read LP balance owned by contract {}",
+                current_contract, lp_balance.owner_contract
+            ));
+        }
+
         Ok(lp_balance.amount.clone())
     }
 
     async fn lp_balance_token_a(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let lp_balance = table.get(&lp)?;
+        if lp_balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "LP balance access denied: contract {} cannot read LP balance owned by contract {}",
+                current_contract, lp_balance.owner_contract
+            ));
+        }
+
         Ok(lp_balance.token_a.clone())
     }
 
     async fn lp_balance_token_b(&mut self, lp: Resource<lp_balance::LpBalanceData>) -> Result<ContractAddress> {
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let lp_balance = table.get(&lp)?;
+        if lp_balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "LP balance access denied: contract {} cannot read LP balance owned by contract {}",
+                current_contract, lp_balance.owner_contract
+            ));
+        }
+
         Ok(lp_balance.token_b.clone())
     }
 }
@@ -1169,20 +1259,47 @@ impl built_in::assets::HostBalance for Runtime {
     }
 
     async fn amount(&mut self, resource: Resource<balance::BalanceData>) -> Result<Integer> {
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let balance = table.get(&resource)?;
+        if balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "Balance access denied: contract {} cannot read balance owned by contract {}",
+                current_contract, balance.owner_contract
+            ));
+        }
+
         Ok(balance.amount.clone())
     }
 
     async fn token(&mut self, resource: Resource<balance::BalanceData>) -> Result<ContractAddress> {
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let balance = table.get(&resource)?;
+        if balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "Balance access denied: contract {} cannot read balance owned by contract {}",
+                current_contract, balance.owner_contract
+            ));
+        }
+
         Ok(balance.token.clone())
     }
 
     async fn is_zero(&mut self, resource: Resource<balance::BalanceData>) -> Result<bool> {
+        let current_contract = self.stack.peek().ok_or_else(|| anyhow!("no active contract"))?;
         let table = self.table.lock().await;
+
         let balance = table.get(&resource)?;
+        if balance.owner_contract != current_contract {
+            return Err(anyhow!(
+                "Balance access denied: contract {} cannot read balance owned by contract {}",
+                current_contract, balance.owner_contract
+            ));
+        }
+
         Ok(balance.is_zero())
     }
 

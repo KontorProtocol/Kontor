@@ -163,11 +163,19 @@ interface numbers {
 
 interface resource-manager {
     use error.{error};
+    use assets.{balance};
 
-    create: func(resource-id: string, data: string) -> u32;
-    take: func(resource-id: string, handle: u32) -> result<string, error>;
-    drop: func(resource-id: string, handle: u32) -> result<_, error>;
+    // Register a Balance resource for cross-contract transfer
+    register-balance: func(bal: balance) -> u32;
+
+    // Take ownership of a transferred Balance resource
+    take-balance: func(handle: u32) -> result<balance, error>;
+
+    // Transfer ownership of a resource between contracts
     transfer: func(from-contract: s64, to-contract: s64, handle: u32) -> result<_, error>;
+
+    // Drop a resource handle
+    drop: func(resource-id: string, handle: u32) -> result<_, error>;
 }
 
 interface assets {

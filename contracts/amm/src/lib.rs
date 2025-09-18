@@ -40,29 +40,20 @@ mod token_dyn {
 
     /// Deposit a balance resource into a token contract
     pub fn deposit(ctx: &ProcContext, token: &ContractAddress, recipient: &str, balance: Balance) -> Result<(), Error> {
-        // Serialize the balance resource for cross-contract transfer
-        let balance_data = format!("balance:{}:{}",
-            numbers::integer_to_string(balance_amount(&balance)),
-            balance_token(&balance).name
-        );
+        // Register the Balance resource for cross-contract transfer
+        let handle = kontor::built_in::resource_manager::register_balance(balance);
 
-        // Create global handle for the balance resource
-        let handle = kontor::built_in::resource_manager::create("balance", &balance_data);
-
-        // Transfer the balance resource to the token contract
+        // Transfer ownership to the token contract
         let current_contract = 1; // TODO: Get actual AMM contract ID
         let token_contract_id = 2; // TODO: Resolve from ContractAddress
 
-        let transfer_result = kontor::built_in::resource_manager::transfer(
+        kontor::built_in::resource_manager::transfer(
             current_contract,
             token_contract_id,
             handle
-        );
+        )?;
 
-        // Execute the cross-contract deposit with resource transfer
-        // For now, simplified error handling - in production would handle all error cases
-        let _transfer_ok = transfer_result.is_ok();
-
+        // Call the token contract's deposit function with the resource handle
         let _response = foreign::call_with_resources(
             Some(ctx.signer()),
             &token,
@@ -73,11 +64,8 @@ mod token_dyn {
             ]
         );
 
-        // Consume the balance since it's been processed
-        balance.consume();
-
-        // In production, would check response for success/failure
-        // For now, assume success
+        // The Balance resource has been transferred to the token contract
+        // The token contract will consume it in its deposit function
         Ok(())
     }
 
@@ -98,12 +86,13 @@ mod token_dyn {
         if response.starts_with("resource_handle_") {
             let handle_str = response.trim_start_matches("resource_handle_");
             if let Ok(resource_handle) = handle_str.parse::<u32>() {
-                // Take ownership of the Balance resource that was transferred to us
-                match kontor::built_in::resource_manager::take("balance", resource_handle) {
-                    Ok(_balance_data) => {
-                        // Successfully received the Balance resource
-                        // Create the Balance from the transferred resource
-                        Ok(Balance::new(amount, token))
+                // Take ownership of the Balance resource that was created by the token contract
+                match kontor::built_in::resource_manager::take_balance(resource_handle) {
+                    Ok(balance_resource) => {
+                        // Successfully received the actual Balance resource from token contract
+                        // This resource was created by the token contract via HostBalance::new
+                        // and registered in the resource_manager for cross-contract transfer
+                        Ok(balance_resource)
                     }
                     Err(e) => Err(e),
                 }
@@ -122,28 +111,20 @@ mod token_dyn {
 
     /// Split a balance using the token contract's split function
     pub fn split(ctx: &ProcContext, token: &ContractAddress, balance: Balance, amount: Integer) -> Result<SplitResult, Error> {
-        // Serialize the balance resource for cross-contract transfer
-        let balance_data = format!("balance:{}:{}",
-            numbers::integer_to_string(balance_amount(&balance)),
-            balance_token(&balance).name
-        );
-
-        // Create global handle for the balance resource
-        let handle = kontor::built_in::resource_manager::create("balance", &balance_data);
+        // Register the Balance resource for cross-contract transfer
+        let handle = kontor::built_in::resource_manager::register_balance(balance);
 
         // Transfer the resource to the token contract for processing
-        let current_contract = 1; // TODO: Get actual contract ID
+        let current_contract = 1; // TODO: Get actual AMM contract ID
         let token_contract_id = 2; // TODO: Resolve from ContractAddress
 
-        let transfer_result = kontor::built_in::resource_manager::transfer(
+        kontor::built_in::resource_manager::transfer(
             current_contract,
             token_contract_id,
             handle
-        );
+        )?;
 
-        // Execute the cross-contract split with resource transfer
-        let _transfer_ok = transfer_result.is_ok();
-
+        // Call the token contract's split function with the resource handle
         let response = foreign::call_with_resources(
             Some(ctx.signer()),
             &token,
@@ -165,28 +146,24 @@ mod token_dyn {
                 let split_handle = handles[0].parse::<u32>()
                     .map_err(|_| Error::Message("Invalid split handle".to_string()))?;
 
-                match kontor::built_in::resource_manager::take("balance", split_handle) {
-                    Ok(_split_data) => {
-                        let split_balance = Balance::new(amount.clone(), token);
-
+                // Take ownership of the split Balance resource from token contract
+                match kontor::built_in::resource_manager::take_balance(split_handle) {
+                    Ok(split_balance) => {
                         // Handle remainder if present
                         let remainder_balance = if handles.len() > 1 && !handles[1].is_empty() {
                             let remainder_handle = handles[1].parse::<u32>()
                                 .map_err(|_| Error::Message("Invalid remainder handle".to_string()))?;
 
-                            match kontor::built_in::resource_manager::take("balance", remainder_handle) {
-                                Ok(_remainder_data) => {
-                                    let remainder_amount = numbers::sub_integer(balance_amount(&balance), amount);
-                                    Some(Balance::new(remainder_amount, token))
-                                }
-                                _ => None,
+                            match kontor::built_in::resource_manager::take_balance(remainder_handle) {
+                                Ok(remainder_resource) => Some(remainder_resource),
+                                Err(_) => None,
                             }
                         } else {
                             None
                         };
 
-                        // Consume the original balance
-                        balance.consume();
+                        // The original balance was transferred to the token contract
+                        // The token contract consumed it during the split operation
 
                         Ok(SplitResult {
                             split: split_balance,

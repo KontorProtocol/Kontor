@@ -175,12 +175,29 @@ impl Guest for Token {
         // Decrease ledger balance
         ledger.set(ctx, owner.clone(), kontor::built_in::numbers::sub_integer(balance, amount));
 
-        // Create a Balance resource through the resource constructor
-        // This is secure because only the token contract can create its own balances
+        // Create a Balance resource for the withdrawal
         let contract_addr = get_contract_address(ctx);
-        // The Balance constructor is available through the WIT resource definition
-        // and is implemented by HostBalance::new in the runtime
-        Ok(Balance::new(amount, &contract_addr))
+        let balance = Balance::new(amount, &contract_addr);
+
+        // Register the Balance resource for cross-contract transfer
+        let handle = kontor::built_in::resource_manager::register_balance(balance);
+
+        // Transfer ownership to the calling contract
+        let token_contract_id = 1; // TODO: Get actual token contract ID
+        let caller_contract_id = 2; // TODO: Get actual caller contract ID
+
+        kontor::built_in::resource_manager::transfer(
+            token_contract_id,
+            caller_contract_id,
+            handle
+        )?;
+
+        // Retrieve the Balance resource to return to the caller
+        // Since we just transferred ownership, the caller can take it
+        match kontor::built_in::resource_manager::take_balance(handle) {
+            Ok(transferred_balance) => Ok(transferred_balance),
+            Err(e) => Err(kontor::built_in::error::Error::Message(format!("Transfer failed: {:?}", e))),
+        }
     }
     
     fn deposit(ctx: &ProcContext, recipient: String, bal: Balance) -> Result<(), kontor::built_in::error::Error> {
