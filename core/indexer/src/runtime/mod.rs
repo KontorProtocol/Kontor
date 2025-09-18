@@ -9,6 +9,9 @@ mod storage;
 mod types;
 pub mod wit;
 
+#[cfg(test)]
+mod resource_manager_test;
+
 pub use component_cache::ComponentCache;
 pub use contracts::{load_contracts, load_native_contracts};
 use futures_util::StreamExt;
@@ -91,7 +94,7 @@ impl ResourceManager {
     }
 
     /// Push a resource with owner tracking
-    pub fn push_with_owner<T: Send + 'static>(&mut self, resource: T, owner: i64) -> wasmtime::Result<Resource<T>> {
+    pub fn push_with_owner<T: Send + 'static>(&mut self, resource: T, owner: i64) -> Result<Resource<T>> {
         let resource_handle = self.table.push(resource)?;
         self.ownership.insert(resource_handle.rep(), owner);
         Ok(resource_handle)
@@ -136,23 +139,23 @@ impl ResourceManager {
         Ok(global_handle)
     }
 
-    /// Delegate to underlying ResourceTable
-    pub fn get<T: 'static>(&self, resource: &Resource<T>) -> wasmtime::Result<&T> {
-        self.table.get(resource)
+    /// Delegate to underlying ResourceTable with proper error conversion
+    pub fn get<T: 'static>(&self, resource: &Resource<T>) -> Result<&T> {
+        Ok(self.table.get(resource)?)
     }
 
-    pub fn get_mut<T: 'static>(&mut self, resource: &Resource<T>) -> wasmtime::Result<&mut T> {
-        self.table.get_mut(resource)
+    pub fn get_mut<T: 'static>(&mut self, resource: &Resource<T>) -> Result<&mut T> {
+        Ok(self.table.get_mut(resource)?)
     }
 
-    pub fn delete<T: 'static>(&mut self, resource: Resource<T>) -> wasmtime::Result<T> {
+    pub fn delete<T: 'static>(&mut self, resource: Resource<T>) -> Result<T> {
         let handle = resource.rep();
         self.ownership.remove(&handle);
-        self.table.delete(resource)
+        Ok(self.table.delete(resource)?)
     }
 
-    pub fn push<T: Send + 'static>(&mut self, resource: T) -> wasmtime::Result<Resource<T>> {
-        self.table.push(resource)
+    pub fn push<T: Send + 'static>(&mut self, resource: T) -> Result<Resource<T>> {
+        Ok(self.table.push(resource)?)
     }
 }
 
@@ -514,7 +517,6 @@ pub enum ResourceParam {
             .set(contract_id, &path, &serialize_cbor(&value)?)
             .await
     }
-}
 
 impl built_in::error::Host for Runtime {
     async fn meta_force_generate_error(&mut self, _e: built_in::error::Error) -> Result<()> {
