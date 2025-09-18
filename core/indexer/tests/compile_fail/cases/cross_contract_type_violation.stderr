@@ -1,0 +1,27 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/cases/cross_contract_type_violation.rs:28:21
+   |
+28 |     deposit_token_a(token_b_balance);
+   |     --------------- ^^^^^^^^^^^^^^^ expected `TokenABalance`, found `TokenBBalance`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: function defined here
+  --> tests/compile_fail/cases/cross_contract_type_violation.rs:14:4
+   |
+14 | fn deposit_token_a(_balance: TokenABalance) {
+   |    ^^^^^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+  --> tests/compile_fail/cases/cross_contract_type_violation.rs:33:21
+   |
+33 |     deposit_token_b(token_a_balance);
+   |     --------------- ^^^^^^^^^^^^^^^ expected `TokenBBalance`, found `TokenABalance`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: function defined here
+  --> tests/compile_fail/cases/cross_contract_type_violation.rs:19:4
+   |
+19 | fn deposit_token_b(_balance: TokenBBalance) {
+   |    ^^^^^^^^^^^^^^^ -----------------------

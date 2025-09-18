@@ -1,0 +1,25 @@
+warning: unused import: `std::collections::HashMap`
+ --> tests/compile_fail/cases/resource_double_use.rs:3:5
+  |
+3 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0382]: borrow of moved value: `balance`
+  --> tests/compile_fail/cases/resource_double_use.rs:33:19
+   |
+26 |     let balance = MockBalance { amount: 1000, consumed: false };
+   |         ------- move occurs because `balance` has type `MockBalance`, which does not implement the `Copy` trait
+...
+30 |     balance.consume(); // Balance is moved and consumed
+   |             --------- `balance` moved due to this method call
+...
+33 |     let amount2 = balance.amount();
+   |                   ^^^^^^^ value borrowed here after move
+   |
+note: `MockBalance::consume` takes ownership of the receiver `self`, which moves `balance`
+  --> tests/compile_fail/cases/resource_double_use.rs:12:20
+   |
+12 |     fn consume(mut self) {
+   |                    ^^^^

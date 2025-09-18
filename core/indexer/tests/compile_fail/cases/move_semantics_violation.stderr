@@ -1,0 +1,11 @@
+error[E0507]: cannot move out of `*balance` which is behind a shared reference
+  --> tests/compile_fail/cases/move_semantics_violation.rs:26:17
+   |
+26 |     use_balance(*balance);
+   |                 ^^^^^^^^ move occurs because `*balance` has type `BalanceData`, which does not implement the `Copy` trait
+   |
+help: consider cloning the value if the performance cost is acceptable
+   |
+26 -     use_balance(*balance);
+26 +     use_balance(balance.clone());
+   |

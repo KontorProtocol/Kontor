@@ -1,0 +1,11 @@
+error[E0603]: module `lp_balance` is private
+ --> tests/compile_fail/cases/wrong_resource_type.rs:5:23
+  |
+5 | use indexer::runtime::lp_balance;
+  |                       ^^^^^^^^^^ private module
+  |
+note: the module `lp_balance` is defined here
+ --> src/runtime/mod.rs
+  |
+  | mod lp_balance;
+  | ^^^^^^^^^^^^^^

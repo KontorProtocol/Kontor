@@ -2230,6 +2230,7 @@ dependencies = [
  "tower-http 0.6.6",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
  "urlencoding",
  "wasm-wave 0.239.0",
  "wasmtime",
