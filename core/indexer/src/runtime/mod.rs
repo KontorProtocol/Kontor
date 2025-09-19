@@ -66,183 +66,6 @@ pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> 
     Ok(ciborium::from_reader(&mut Cursor::new(buffer))?)
 }
 
-async fn load_component(
-    engine: &Engine,
-    component_cache: &ComponentCache,
-    storage: &Storage,
-    contract_id: i64,
-) -> Result<Component> {
-    Ok(match component_cache.get(&contract_id) {
-        Some(component) => component,
-        None => {
-            let compressed_bytes = storage
-                .contract_bytes(contract_id)
-                .await?
-                .ok_or(anyhow!("Contract not found"))?;
-            let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
-            let mut module_bytes = Vec::new();
-            decompressor.read_to_end(&mut module_bytes)?;
-
-            let component_bytes = ComponentEncoder::default()
-                .module(&module_bytes)?
-                .validate(true)
-                .encode()?;
-
-            let component = Component::from_binary(engine, &component_bytes)?;
-            component_cache.put(contract_id, component.clone());
-            component
-        }
-    })
-}
-
-pub fn make_linker(engine: &Engine) -> Result<Linker<Runtime>> {
-    let mut linker = Linker::new(engine);
-    Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
-    Ok(linker)
-}
-
-pub fn make_store(engine: &Engine, runtime: &Runtime, fuel: u64) -> Result<Store<Runtime>> {
-    let mut s = Store::new(engine, runtime.clone());
-    s.set_fuel(fuel)?;
-    Ok(s)
-}
-
-async fn prepare_call(
-    runtime: &Runtime,
-    contract_address: &ContractAddress,
-    signer: Option<Signer>,
-    expr: &str,
-    fuel: u64,
-) -> Result<(Store<Runtime>, bool, Vec<Val>, Vec<Val>, Func)> {
-    let contract_id = runtime
-        .storage
-        .contract_id(contract_address)
-        .await?
-        .ok_or(anyhow!("Contract not found"))?;
-    let component = load_component(
-        &runtime.engine,
-        &runtime.component_cache,
-        &runtime.storage,
-        contract_id,
-    )
-    .await?;
-    let linker = make_linker(&runtime.engine)?;
-    let mut store = make_store(&runtime.engine, runtime, fuel)?;
-    let instance = linker.instantiate_async(&mut store, &component).await?;
-    let fallback_name = "fallback";
-    let fallback_expr = format!(
-        "{}({})",
-        fallback_name,
-        to_wave_string(&WaveValue::from(expr))?
-    );
-
-    let call = WaveParser::new(expr).parse_raw_func_call()?;
-    let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
-        (call, func)
-    } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
-        (WaveParser::new(&fallback_expr).parse_raw_func_call()?, func)
-    } else {
-        return Err(anyhow!("Expression does not refer to any known function"));
-    };
-
-    let func_params = func.params(&store);
-    let func_param_types = func_params.iter().map(|(_, t)| t).collect::<Vec<_>>();
-    let (func_ctx_param_type, func_param_types) = func_param_types
-        .split_first()
-        .ok_or(anyhow!("Context/signer parameter not found"))?;
-    let mut params = call.to_wasm_params(func_param_types.to_vec())?;
-    let resource_type = match func_ctx_param_type {
-        wasmtime::component::Type::Borrow(t) => Ok(*t),
-        _ => Err(anyhow!("Unsupported context type")),
-    }?;
-    {
-        if let Some(Signer::ContractId(id)) = signer
-            && runtime.stack.peek().await != Some(id)
-        {
-            return Err(anyhow!("Invalid contract id signer"));
-        }
-        let mut table = runtime.table.lock().await;
-        match (resource_type, signer) {
-            (t, Some(signer))
-                if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
-            {
-                params.insert(
-                    0,
-                    wasmtime::component::Val::Resource(
-                        table
-                            .push(ProcContext {
-                                signer,
-                                contract_id,
-                            })?
-                            .try_into_resource_any(&mut store)?,
-                    ),
-                )
-            }
-            (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
-                .insert(
-                    0,
-                    wasmtime::component::Val::Resource(
-                        table
-                            .push(ViewContext { contract_id })?
-                            .try_into_resource_any(&mut store)?,
-                    ),
-                ),
-            (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
-                params.insert(
-                    0,
-                    wasmtime::component::Val::Resource(
-                        table
-                            .push(FallContext {
-                                signer,
-                                contract_id,
-                            })?
-                            .try_into_resource_any(&mut store)?,
-                    ),
-                )
-            }
-            _ => return Err(anyhow!("Unsupported context/signer type")),
-        }
-    }
-
-    runtime.stack.push(contract_id).await?;
-    let results = func
-        .results(&store)
-        .iter()
-        .map(default_val_for_type)
-        .collect::<Vec<_>>();
-    Ok((store, call.name() == fallback_name, params, results, func))
-}
-
-async fn handle_call(
-    stack: &Stack<i64>,
-    is_fallback: bool,
-    call_result: Result<()>,
-    mut results: Vec<Val>,
-) -> Result<String> {
-    stack.pop().await;
-    call_result?;
-    if results.is_empty() {
-        return Ok("()".to_string());
-    }
-
-    if results.len() == 1 {
-        let result = results.remove(0);
-        return if is_fallback {
-            if let wasmtime::component::Val::String(return_expr) = result {
-                Ok(return_expr)
-            } else {
-                Err(anyhow!("fallback did not return a string"))
-            }
-        } else {
-            result.to_wave()
-        };
-    }
-
-    Err(anyhow!(
-        "Functions with multiple return values are not supported"
-    ))
-}
-
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
@@ -292,8 +115,9 @@ impl Runtime {
         expr: &str,
     ) -> Result<String> {
         let fuel = 1000000;
-        let (mut store, is_fallback, params, mut results, func) =
-            prepare_call(self, contract_address, signer, expr, fuel).await?;
+        let (mut store, is_fallback, params, mut results, func) = self
+            .prepare_call(contract_address, signer, expr, fuel)
+            .await?;
 
         OptionFuture::from(self.gauge.as_ref().map(|g| g.set_starting_fuel(fuel))).await;
         let call_result = func.call_async(&mut store, &params, &mut results).await;
@@ -305,7 +129,174 @@ impl Runtime {
         )
         .await;
 
-        handle_call(&self.stack, is_fallback, call_result, results).await
+        self.handle_call(is_fallback, call_result, results).await
+    }
+
+    async fn load_component(&self, contract_id: i64) -> Result<Component> {
+        Ok(match self.component_cache.get(&contract_id) {
+            Some(component) => component,
+            None => {
+                let compressed_bytes = self
+                    .storage
+                    .contract_bytes(contract_id)
+                    .await?
+                    .ok_or(anyhow!("Contract not found"))?;
+                let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
+                let mut module_bytes = Vec::new();
+                decompressor.read_to_end(&mut module_bytes)?;
+
+                let component_bytes = ComponentEncoder::default()
+                    .module(&module_bytes)?
+                    .validate(true)
+                    .encode()?;
+
+                let component = Component::from_binary(&self.engine, &component_bytes)?;
+                self.component_cache.put(contract_id, component.clone());
+                component
+            }
+        })
+    }
+
+    pub fn make_linker(&self) -> Result<Linker<Runtime>> {
+        let mut linker = Linker::new(&self.engine);
+        Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
+        Ok(linker)
+    }
+
+    pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
+        let mut s = Store::new(&self.engine, self.clone());
+        s.set_fuel(fuel)?;
+        Ok(s)
+    }
+
+    async fn prepare_call(
+        &self,
+        contract_address: &ContractAddress,
+        signer: Option<Signer>,
+        expr: &str,
+        fuel: u64,
+    ) -> Result<(Store<Runtime>, bool, Vec<Val>, Vec<Val>, Func)> {
+        let contract_id = self
+            .storage
+            .contract_id(contract_address)
+            .await?
+            .ok_or(anyhow!("Contract not found"))?;
+        let component = self.load_component(contract_id).await?;
+        let linker = self.make_linker()?;
+        let mut store = self.make_store(fuel)?;
+        let instance = linker.instantiate_async(&mut store, &component).await?;
+        let fallback_name = "fallback";
+        let fallback_expr = format!(
+            "{}({})",
+            fallback_name,
+            to_wave_string(&WaveValue::from(expr))?
+        );
+
+        let call = WaveParser::new(expr).parse_raw_func_call()?;
+        let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
+            (call, func)
+        } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
+            (WaveParser::new(&fallback_expr).parse_raw_func_call()?, func)
+        } else {
+            return Err(anyhow!("Expression does not refer to any known function"));
+        };
+
+        let func_params = func.params(&store);
+        let func_param_types = func_params.iter().map(|(_, t)| t).collect::<Vec<_>>();
+        let (func_ctx_param_type, func_param_types) = func_param_types
+            .split_first()
+            .ok_or(anyhow!("Context/signer parameter not found"))?;
+        let mut params = call.to_wasm_params(func_param_types.to_vec())?;
+        let resource_type = match func_ctx_param_type {
+            wasmtime::component::Type::Borrow(t) => Ok(*t),
+            _ => Err(anyhow!("Unsupported context type")),
+        }?;
+        {
+            if let Some(Signer::ContractId(id)) = signer
+                && self.stack.peek().await != Some(id)
+            {
+                return Err(anyhow!("Invalid contract id signer"));
+            }
+            let mut table = self.table.lock().await;
+            match (resource_type, signer) {
+                (t, Some(signer))
+                    if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
+                {
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ProcContext {
+                                    signer,
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
+                    .insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ViewContext { contract_id })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    ),
+                (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(FallContext {
+                                    signer,
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                _ => return Err(anyhow!("Unsupported context/signer type")),
+            }
+        }
+
+        self.stack.push(contract_id).await?;
+        let results = func
+            .results(&store)
+            .iter()
+            .map(default_val_for_type)
+            .collect::<Vec<_>>();
+        Ok((store, call.name() == fallback_name, params, results, func))
+    }
+
+    async fn handle_call(
+        &self,
+        is_fallback: bool,
+        call_result: Result<()>,
+        mut results: Vec<Val>,
+    ) -> Result<String> {
+        self.stack.pop().await;
+        call_result?;
+        if results.is_empty() {
+            return Ok("()".to_string());
+        }
+
+        if results.len() == 1 {
+            let result = results.remove(0);
+            return if is_fallback {
+                if let wasmtime::component::Val::String(return_expr) = result {
+                    Ok(return_expr)
+                } else {
+                    Err(anyhow!("fallback did not return a string"))
+                }
+            } else {
+                result.to_wave()
+            };
+        }
+
+        Err(anyhow!(
+            "Functions with multiple return values are not supported"
+        ))
     }
 
     async fn _call<T>(
@@ -317,15 +308,14 @@ impl Runtime {
     ) -> Result<String> {
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
 
-        let signer = if let Some(resource) = signer {
-            let _self = self.table.lock().await.get(&resource)?.clone();
-            Some(_self)
-        } else {
-            None
-        };
+        let signer =
+            OptionFuture::from(signer.map(async |s| self.table.lock().await.get(&s).cloned()))
+                .await
+                .transpose()?;
 
-        let (mut store, is_fallback, params, mut results, func) =
-            prepare_call(self, &contract_address, signer, &expr, fuel).await?;
+        let (mut store, is_fallback, params, mut results, func) = self
+            .prepare_call(&contract_address, signer, &expr, fuel)
+            .await?;
         let (call_result, results, fuel_result) = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store.get_fuel())
@@ -334,34 +324,35 @@ impl Runtime {
         let remaining_fuel = fuel_result?;
         accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
 
-        handle_call(&self.stack, is_fallback, call_result, results).await
+        self.handle_call(is_fallback, call_result, results).await
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
-        &mut self,
+        &self,
         accessor: &Accessor<S, Self>,
-        resource: Resource<T>,
+        self_: Resource<T>,
         path: String,
     ) -> Result<Option<R>> {
-        let table = self.table.lock().await;
-        let _self = table.get(&resource)?;
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
-        if let Some(bs) = self
-            .storage
-            .get(fuel, _self.get_contract_id(), &path)
-            .await?
-        {
-            Fuel::Get(bs.len())
-                .consume(accessor, self.gauge.as_ref())
-                .await?;
-            deserialize_cbor(&bs)
-        } else {
-            Ok(None)
-        }
+        let table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.get_contract_id();
+        OptionFuture::from(
+            self.storage
+                .get(fuel, contract_id, &path)
+                .await?
+                .map(async |bs| {
+                    Fuel::Get(bs.len())
+                        .consume(accessor, self.gauge.as_ref())
+                        .await?;
+                    deserialize_cbor(&bs)
+                }),
+        )
+        .await
+        .transpose()
     }
 
     async fn _get_keys<S, T: HasContractId>(
-        &mut self,
+        &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: String,
@@ -374,7 +365,7 @@ impl Runtime {
     }
 
     async fn _exists<S, T: HasContractId>(
-        &mut self,
+        &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: String,
@@ -386,7 +377,7 @@ impl Runtime {
     }
 
     async fn _matching_path<S, T: HasContractId>(
-        &mut self,
+        &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         regexp: String,
@@ -402,7 +393,7 @@ impl Runtime {
     }
 
     async fn _delete_matching_paths<T>(
-        &mut self,
+        &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
         regexp: String,
@@ -417,7 +408,7 @@ impl Runtime {
     }
 
     async fn _set_primitive<S, T: Serialize>(
-        &mut self,
+        &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<ProcContext>,
         path: String,
@@ -540,11 +531,12 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let mut table = self.table.lock().await;
-        if let Some(signer) = table.get(&self_)?.signer.clone() {
-            Ok(Some(table.push(signer)?))
-        } else {
-            Ok(None)
-        }
+        Ok(table
+            .get(&self_)?
+            .signer
+            .clone()
+            .map(|s| table.push(s))
+            .transpose()?)
     }
 
     async fn _fall_proc_context<T>(
@@ -558,14 +550,16 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
-        if let Some(signer) = res.signer.clone() {
-            Ok(Some(table.push(ProcContext {
-                contract_id,
-                signer,
-            })?))
-        } else {
-            Ok(None)
-        }
+        Ok(res
+            .signer
+            .clone()
+            .map(|signer| {
+                table.push(ProcContext {
+                    contract_id,
+                    signer,
+                })
+            })
+            .transpose()?)
     }
 
     async fn _fall_view_context<T>(
