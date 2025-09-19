@@ -142,6 +142,10 @@ impl Runtime {
         Ok(())
     }
 
+    pub async fn set_starting_fuel(&mut self, starting_fuel: u64) {
+        self.runtime.set_starting_fuel(starting_fuel)
+    }
+
     pub async fn execute(
         &self,
         signer: Option<&str>,

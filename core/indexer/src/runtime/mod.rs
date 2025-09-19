@@ -75,6 +75,7 @@ pub struct Runtime {
     pub id_generation_counter: Counter,
     pub stack: Stack<i64>,
     pub gauge: Option<FuelGauge>,
+    pub starting_fuel: u64,
 }
 
 impl Runtime {
@@ -97,6 +98,7 @@ impl Runtime {
             id_generation_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
+            starting_fuel: 1000000,
         })
     }
 
@@ -108,18 +110,26 @@ impl Runtime {
         self.storage = storage;
     }
 
+    pub fn set_starting_fuel(&mut self, starting_fuel: u64) {
+        self.starting_fuel = starting_fuel
+    }
+
     pub async fn execute(
         &self,
         signer: Option<Signer>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let fuel = 1000000;
         let (mut store, is_fallback, params, mut results, func) = self
-            .prepare_call(contract_address, signer, expr, fuel)
+            .prepare_call(contract_address, signer, expr, self.starting_fuel)
             .await?;
 
-        OptionFuture::from(self.gauge.as_ref().map(|g| g.set_starting_fuel(fuel))).await;
+        OptionFuture::from(
+            self.gauge
+                .as_ref()
+                .map(|g| g.set_starting_fuel(self.starting_fuel)),
+        )
+        .await;
         let call_result = func.call_async(&mut store, &params, &mut results).await;
         let remaining_fuel = store.get_fuel()?;
         OptionFuture::from(
