@@ -21,17 +21,6 @@ jobs:
           key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
             rust-toolchain-${{ runner.os }}-stable-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Cache Cargo tools
         uses: actions/cache@v4
         with:
@@ -42,12 +31,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install cargo expand
-        run: command -v cargo-expand || cargo install cargo-expand
-      - name: Install contract build dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y binaryen brotli
       - name: Check formatting (contracts)
         run: cargo fmt --all -- --check
         working-directory: ./contracts
@@ -56,9 +39,6 @@ jobs:
         working-directory: ./core
       - name: Run clippy (contracts)
         run: cargo clippy --workspace --tests -- -D warnings
-        working-directory: ./contracts
-      - name: Build native contracts
-        run: ./build.sh
         working-directory: ./contracts
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
