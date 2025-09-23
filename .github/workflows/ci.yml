@@ -21,6 +21,17 @@ jobs:
           key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
             rust-toolchain-${{ runner.os }}-stable-
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+            core/target
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Cache Cargo tools
         uses: actions/cache@v4
         with:
