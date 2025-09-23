@@ -27,7 +27,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            contracts/target
+            core/target
           key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
@@ -128,7 +129,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            contracts/target
+            core/target
           key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
