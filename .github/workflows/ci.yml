@@ -8,31 +8,7 @@ env:
   CARGO_TERM_COLOR: always
 
 x-caching-steps: &caching-steps
-  - name: Cache Rust toolchain
-    uses: actions/cache@v4
-    with:
-      path: |
-        ~/.rustup
-      key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
-      restore-keys: |
-        rust-toolchain-${{ runner.os }}-stable-
-  - name: Cache Cargo dependencies
-    uses: actions/cache@v4
-    with:
-      path: |
-        ~/.cargo/registry
-        ~/.cargo/git
-        target
-      key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      restore-keys: |
-        cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
-  - name: Cache Cargo tools
-    uses: actions/cache@v4
-    with:
-      path: ~/.cargo/bin
-      key: cargo-tools-${{ runner.os }}-expand-audit-wasmopt-${{ hashFiles('**/Cargo.lock') }}
-      restore-keys: |
-        cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
+  
 
 jobs:
   quality-checks:
@@ -40,7 +16,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      *caching-steps
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+          key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            rust-toolchain-${{ runner.os }}-stable-
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
+      - name: Cache Cargo tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-tools-${{ runner.os }}-expand-audit-wasmopt-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -117,7 +117,31 @@ jobs:
       SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
     steps:
       - uses: actions/checkout@v4
-      *caching-steps
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+          key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            rust-toolchain-${{ runner.os }}-stable-
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
+      - name: Cache Cargo tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-tools-${{ runner.os }}-expand-audit-wasmopt-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
       - uses: dtolnay/rust-toolchain@stable
       - name: Free up disk space
         if: runner.os == 'Linux'
