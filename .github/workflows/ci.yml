@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      *cachine-steps
+      *caching-steps
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
