@@ -28,6 +28,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     );
 
     let start = ctrl_rx.recv().await.unwrap();
@@ -151,6 +152,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     );
 
     let start = ctrl_rx.recv().await.unwrap();
@@ -191,6 +193,7 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     );
 
     let start = ctrl_rx.recv().await.unwrap();
@@ -291,6 +294,7 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     );
 
     let start = ctrl_rx.recv().await.unwrap();
@@ -422,6 +426,7 @@ async fn test_reactor_rollback_hash_event() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     );
 
     let start = ctrl_rx.recv().await.unwrap();

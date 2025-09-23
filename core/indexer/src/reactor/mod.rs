@@ -1,7 +1,11 @@
 pub mod events;
 
 use anyhow::{Result, bail};
-use tokio::{select, sync::mpsc::Receiver, task::JoinHandle};
+use tokio::{
+    select,
+    sync::{mpsc::Receiver, oneshot},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
@@ -29,6 +33,7 @@ struct Reactor<T: Tx + 'static> {
     cancel_token: CancellationToken, // currently not used due to relaxed error handling
     ctrl: CtrlChannel<T>,
     event_rx: Option<Receiver<Event<T>>>,
+    init_tx: Option<oneshot::Sender<bool>>,
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
@@ -41,6 +46,7 @@ impl<T: Tx + 'static> Reactor<T> {
         writer: database::Writer,
         ctrl: CtrlChannel<T>,
         cancel_token: CancellationToken,
+        init_tx: Option<oneshot::Sender<bool>>,
     ) -> Result<Self> {
         let conn = &*reader.connection().await?;
         match select_block_latest(conn).await? {
@@ -66,6 +72,7 @@ impl<T: Tx + 'static> Reactor<T> {
                     event_rx: None,
                     last_height: block.height as u64,
                     option_last_hash: Some(block.hash),
+                    init_tx,
                 })
             }
             None => {
@@ -82,6 +89,7 @@ impl<T: Tx + 'static> Reactor<T> {
                     event_rx: None,
                     last_height: starting_block_height - 1,
                     option_last_hash: None,
+                    init_tx,
                 })
             }
         }
@@ -205,6 +213,7 @@ impl<T: Tx + 'static> Reactor<T> {
         };
 
         self.event_rx = Some(rx);
+        self.init_tx.take().map(|tx| tx.send(true));
 
         loop {
             let event_rx = match self.event_rx.as_mut() {
@@ -277,6 +286,7 @@ pub fn run<T: Tx + 'static>(
     reader: database::Reader,
     writer: database::Writer,
     ctrl: CtrlChannel<T>,
+    init_rx: Option<oneshot::Sender<bool>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -286,6 +296,7 @@ pub fn run<T: Tx + 'static>(
                 writer,
                 ctrl.clone(),
                 cancel_token.clone(),
+                init_rx,
             )
             .await
             {

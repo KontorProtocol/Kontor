@@ -60,6 +60,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     handles.push(tokio::spawn(async move {
@@ -73,6 +74,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     ));
 
     mock.clone().await_running().await;
@@ -161,6 +163,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     handles.push(tokio::spawn(async move {
@@ -174,6 +177,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     ));
 
     mock.clone().await_running().await;
@@ -265,6 +269,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     handles.push(tokio::spawn(async move {
@@ -278,6 +283,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     ));
 
     mock.await_running().await;
@@ -387,6 +393,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
@@ -414,6 +421,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
@@ -438,6 +446,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
     let (event_tx, _event_rx) = mpsc::channel(1);
     let res = rec
@@ -493,6 +502,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     handles.push(tokio::spawn(async move {
@@ -506,6 +516,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     ));
 
     mock.await_running().await;
@@ -615,6 +626,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     handles.push(tokio::spawn(async move {
@@ -628,6 +640,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
     ));
 
     mock.await_running().await;

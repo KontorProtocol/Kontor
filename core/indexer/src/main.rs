@@ -4,7 +4,7 @@ use clap::Parser;
 use indexer::reactor::events::EventSubscriber;
 use indexer::{api, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -21,6 +21,32 @@ async fn main() -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(config.clone(), filename).await?;
     let writer = database::Writer::new(&config, filename).await?;
+
+    let (ctrl, ctrl_rx) = bitcoin_follower::ctrl::CtrlChannel::create();
+    let (init_tx, init_rx) = oneshot::channel();
+    handles.push(reactor::run(
+        config.starting_block_height,
+        cancel_token.clone(),
+        reader.clone(),
+        writer,
+        ctrl,
+        Some(init_tx),
+    ));
+    init_rx.await?;
+    let (init_tx, init_rx) = oneshot::channel();
+    handles.push(
+        bitcoin_follower::run(
+            config.zmq_address.clone(),
+            cancel_token.clone(),
+            bitcoin.clone(),
+            Some,
+            ctrl_rx,
+            Some(init_tx),
+        )
+        .await?,
+    );
+    init_rx.await?;
+
     let (_, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
@@ -35,25 +61,6 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    let (ctrl, ctrl_rx) = bitcoin_follower::ctrl::CtrlChannel::create();
-
-    handles.push(
-        bitcoin_follower::run(
-            config.zmq_address,
-            cancel_token.clone(),
-            bitcoin,
-            Some,
-            ctrl_rx,
-        )
-        .await?,
-    );
-    handles.push(reactor::run(
-        config.starting_block_height,
-        cancel_token,
-        reader,
-        writer,
-        ctrl,
-    ));
     for handle in handles {
         let _ = handle.await;
     }

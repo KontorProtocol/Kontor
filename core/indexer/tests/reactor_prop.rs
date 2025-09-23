@@ -259,6 +259,7 @@ proptest! {
                 db.reader.clone(),
                 db.writer.clone(),
                 ctrl,
+                None
             );
 
             let start = ctrl_rx.recv().await.unwrap();

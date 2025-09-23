@@ -1,13 +1,24 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use bitcoin::{
+    Address, Network, XOnlyPublicKey,
+    key::{Keypair, Secp256k1, rand},
+};
 use clap::Parser;
-use indexer::{api, bitcoin_client, config::Config, logging, retry::retry_simple};
+use indexer::{
+    api,
+    bitcoin_client::{self, client::RegtestRpc},
+    config::Config,
+    logging,
+    retry::retry_simple,
+};
 use tempfile::TempDir;
 use tokio::{
     fs,
     io::AsyncWriteExt,
     process::{Child, Command},
+    time::sleep,
 };
 
 const REGTEST_CONF: &str = r#"
@@ -36,8 +47,14 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
         .spawn()?;
     let client = bitcoin_client::Client::new_from_config(&Config::try_parse()?)?;
-    let i = retry_simple(|| client.get_blockchain_info()).await?;
-    assert_eq!(i.chain, bitcoin::Network::Regtest);
+    retry_simple(async || {
+        let i = client.get_blockchain_info().await?;
+        if i.chain != Network::Regtest {
+            bail!("Network not regtest");
+        }
+        Ok(())
+    })
+    .await?;
     Ok((process, client))
 }
 
@@ -47,9 +64,42 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, api::client::Client)> {
         .arg(data_dir.to_string_lossy().into_owned())
         .spawn()?;
     let client = api::client::Client::new_from_config(&Config::try_parse()?)?;
-    let i = retry_simple(|| client.index()).await?;
-    assert!(i.available);
+    retry_simple(async || {
+        let i = client.index().await?;
+        if !i.available {
+            bail!("Not available");
+        }
+        Ok(())
+    })
+    .await?;
     Ok((process, client))
+}
+
+fn generate_taproot_address() -> (Address, XOnlyPublicKey) {
+    let secp = Secp256k1::new();
+    let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+    let (x_only_public_key, _parity) = keypair.x_only_public_key();
+    (
+        Address::p2tr(&secp, x_only_public_key, None, Network::Regtest),
+        x_only_public_key,
+    )
+}
+
+pub struct Identity {
+    pub name: String,
+    pub address: Address,
+    pub x_only_public_key: XOnlyPublicKey,
+}
+
+impl Identity {
+    pub fn new(name: &str) -> Self {
+        let (address, x_only_public_key) = generate_taproot_address();
+        Self {
+            name: name.to_string(),
+            address,
+            x_only_public_key,
+        }
+    }
 }
 
 #[tokio::test]
@@ -60,6 +110,14 @@ async fn test_regtest() -> Result<()> {
     let temp_kontor_data_dir = TempDir::new()?;
     let (mut bitcoin, bitcoin_client) = run_bitcoin(temp_bitcoin_data_dir.path()).await?;
     let (mut kontor, kontor_client) = run_kontor(temp_kontor_data_dir.path()).await?;
+
+    let alice = Identity::new("alice");
+
+    bitcoin_client
+        .generate_to_address(1, &alice.address.to_string())
+        .await?;
+
+    sleep(Duration::from_secs(5)).await;
 
     kontor_client.stop().await?;
     kontor.wait().await?;

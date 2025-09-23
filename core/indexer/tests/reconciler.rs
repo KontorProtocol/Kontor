@@ -32,6 +32,7 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     let handle = tokio::spawn(async move {
@@ -141,6 +142,7 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
         mock.clone(),
         rpc_rx,
         zmq_rx,
+        None,
     );
 
     let handle = tokio::spawn(async move {

@@ -3,8 +3,10 @@ use bitcoin::Transaction;
 use std::time::Duration;
 use tokio::{
     select,
-    sync::mpsc::Receiver,
-    sync::mpsc::{self, UnboundedSender},
+    sync::{
+        mpsc::{self, Receiver, UnboundedSender},
+        oneshot,
+    },
     task::JoinHandle,
     time::sleep,
 };
@@ -67,6 +69,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     bitcoin: C,
     f: fn(Transaction) -> Option<T>,
     ctrl_rx: Receiver<ctrl::StartMessage<T>>,
+    init_tx: Option<oneshot::Sender<bool>>,
 ) -> Result<JoinHandle<()>> {
     let info = info::Info::new(cancel_token.clone(), bitcoin.clone());
 
@@ -85,8 +88,15 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     )
     .await;
 
-    let mut reconciler =
-        reconciler::Reconciler::new(cancel_token.clone(), info, fetcher, mempool, rpc_rx, zmq_rx);
+    let mut reconciler = reconciler::Reconciler::new(
+        cancel_token.clone(),
+        info,
+        fetcher,
+        mempool,
+        rpc_rx,
+        zmq_rx,
+        init_tx,
+    );
 
     Ok(tokio::spawn(async move {
         reconciler.run(ctrl_rx).await;

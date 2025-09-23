@@ -116,9 +116,17 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
             )
             .await
             .context("Failed to get block handling BlockConnected sequence message")?;
+            let height = if let Ok(height) = block.bip34_block_height() {
+                height
+            } else {
+                warn!(
+                    "Get blockchain info used to get block height. Should only occur when using test environments."
+                );
+                bitcoin.get_blockchain_info().await?.blocks
+            };
             Ok((
                 Some(ZmqEvent::BlockConnected(Block {
-                    height: block.bip34_block_height()?,
+                    height,
                     hash: block.block_hash(),
                     prev_hash: block.header.prev_blockhash,
                     transactions: block.txdata.into_par_iter().filter_map(f).collect(),

@@ -148,6 +148,7 @@ proptest! {
                 mock.clone(),
                 rpc_rx,
                 zmq_rx,
+                None,
             );
 
             let mut events = vec![];

@@ -2,7 +2,10 @@ use anyhow::{Result, bail};
 use bitcoin::BlockHash;
 use tokio::{
     select,
-    sync::mpsc::{Receiver, Sender, UnboundedReceiver},
+    sync::{
+        mpsc::{Receiver, Sender, UnboundedReceiver},
+        oneshot,
+    },
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -46,6 +49,7 @@ pub struct Reconciler<T: Tx, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetch
     pub mempool: M,
     pub rpc_rx: Receiver<(u64, Block<T>)>,
     pub zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
+    init_tx: Option<oneshot::Sender<bool>>,
 
     pub state: State,
     event_tx: Option<Sender<Event<T>>>,
@@ -61,6 +65,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         mempool: M,
         rpc_rx: Receiver<(u64, Block<T>)>,
         zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
+        init_tx: Option<oneshot::Sender<bool>>,
     ) -> Self {
         let state = State::new();
         Self {
@@ -72,6 +77,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
             zmq_rx,
             state,
             event_tx: None,
+            init_tx,
         }
     }
 
@@ -93,6 +99,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
                     }
                 }
 
+                self.init_tx.take().map(|tx| tx.send(true));
                 events
             }
             ZmqEvent::Disconnected(e) => {
