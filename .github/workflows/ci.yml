@@ -29,9 +29,9 @@ jobs:
             ~/.cargo/git
             contracts/target
             core/target
-          key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
+            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Cache Cargo tools
         uses: actions/cache@v4
         with:
@@ -131,9 +131,9 @@ jobs:
             ~/.cargo/git
             contracts/target
             core/target
-          key: cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ matrix.job-name || 'quality-checks' }}-${{ runner.os }}-stable-
+            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Cache Cargo tools
         uses: actions/cache@v4
         with:
