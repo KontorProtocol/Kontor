@@ -130,8 +130,12 @@ impl Runtime {
                 .map(|g| g.set_starting_fuel(self.starting_fuel)),
         )
         .await;
-        let call_result = func.call_async(&mut store, &params, &mut results).await;
-        let remaining_fuel = store.get_fuel()?;
+        let (call_result, results, fuel_result) = tokio::spawn(async move {
+            let call_result = func.call_async(&mut store, &params, &mut results).await;
+            (call_result, results, store.get_fuel())
+        })
+        .await?;
+        let remaining_fuel = fuel_result?;
         OptionFuture::from(
             self.gauge
                 .as_ref()
