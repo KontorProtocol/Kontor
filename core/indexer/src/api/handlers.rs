@@ -21,11 +21,25 @@ use super::{
     result::Result,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct TxsQuery {
     txs: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Info {
+    pub available: bool,
+}
+
+pub async fn get_index() -> Result<Info> {
+    Ok(Info { available: true }.into())
+}
+
+pub async fn stop(State(env): State<Env>) -> Result<Info> {
+    env.cancel_token.cancel();
+    Ok(Info { available: false }.into())
 }
 
 pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {

@@ -17,7 +17,7 @@ use tower_http::{
 };
 use tracing::{Level, Span, error, field, info, span};
 
-use crate::api::handlers::{get_transaction, get_transactions};
+use crate::api::handlers::{get_index, get_transaction, get_transactions, stop};
 
 use super::{
     Env,
@@ -88,6 +88,7 @@ pub fn new(context: Env) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
     Router::new()
+        .route("/api", get(get_index))
         .nest(
             "/api",
             Router::new()
@@ -96,7 +97,8 @@ pub fn new(context: Env) -> Router {
                 .route("/blocks/{height}/transactions", get(get_transactions))
                 .route("/transactions", get(get_transactions))
                 .route("/transactions/{txid}", get(get_transaction))
-                .route("/test_mempool_accept", get(test_mempool_accept)),
+                .route("/test_mempool_accept", get(test_mempool_accept))
+                .route("/stop", get(stop)),
         )
         .nest(
             "/compose",

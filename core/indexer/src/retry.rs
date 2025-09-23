@@ -47,3 +47,14 @@ where
         .await
         .map_err(Into::into) // Convert backon::RetryError<E> to anyhow::Error
 }
+
+pub async fn retry_simple<T, E, F, Fut>(operation: F) -> Result<T>
+where
+    E: std::fmt::Debug + Into<Error>,
+    Fut: Future<Output = Result<T, E>>,
+    F: FnMut() -> Fut,
+{
+    let cancel_token = CancellationToken::new();
+    let backoff = new_backoff_limited();
+    retry(operation, "test_operation", backoff, cancel_token).await
+}

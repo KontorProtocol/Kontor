@@ -1,9 +1,9 @@
 use axum::{Json, response::IntoResponse};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::error::Error;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResultResponse<T: Serialize> {
     pub result: T,
 }
