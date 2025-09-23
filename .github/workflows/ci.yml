@@ -174,7 +174,7 @@ jobs:
         run: pacman -S --noconfirm mingw-w64-x86_64-brotli mingw-w64-x86_64-binaryen
       - name: Install wasm-opt via cargo (Windows)
         if: runner.os == 'Windows'
-        run: cargo install wasm-opt
+        run: command -v wasm-opt || cargo install wasm-opt
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
