@@ -84,7 +84,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
     pub async fn handle_zmq_event(&mut self, zmq_event: ZmqEvent<T>) -> Result<Vec<Event<T>>> {
         let events = match zmq_event {
             ZmqEvent::Connected => {
-                info!("ZMQ connected test");
+                info!("ZMQ connected");
                 self.state.zmq_connected = true;
 
                 let mut events = vec![];
