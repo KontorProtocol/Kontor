@@ -1,0 +1,20 @@
+package kontor:contract;
+
+world contract {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context, signer};
+    use kontor:built-in/error.{error};
+    use kontor:built-in/foreign.{contract-address};
+    use kontor:built-in/numbers.{integer, decimal};
+
+    export init: func(ctx: borrow<proc-context>);
+
+    export create: func(ctx: borrow<proc-context>, a: contract-address, b: contract-address);
+
+    export custody-address: func(ctx: borrow<view-context>) -> string;
+
+    export swap: func(ctx: borrow<proc-context>, token-in: contract-address, amount-in: integer) -> result<integer, error>;
+    export quote-swap: func(ctx: borrow<view-context>, token-in: contract-address, amount-in: integer) -> option<integer>;
+
+    export token-balance: func(ctx: borrow<view-context>, token: contract-address) -> option<integer>;
+}

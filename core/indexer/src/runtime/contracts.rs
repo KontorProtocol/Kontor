@@ -9,6 +9,9 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
+const AMM: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/amm.wasm.br");
+
 const ARITH: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/arith.wasm.br");
 
@@ -72,12 +75,15 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
     load_contracts(
         runtime,
         &[
+            ("amm", AMM),
             ("arith", ARITH),
             ("crypto", CRYPTO),
             ("fib", FIB),
             ("proxy", PROXY),
             ("shared-account", SHARED_ACCOUNT),
             ("token", TOKEN),
+            ("token_a", TOKEN),
+            ("token_b", TOKEN),
         ],
     )
     .await
