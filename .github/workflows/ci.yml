@@ -105,6 +105,51 @@ jobs:
       SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
       SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
     steps:
+      - name: Free up disk space
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk usage before cleanup:"
+          df -h
+
+          # Remove unused .NET SDK
+          sudo rm -rf /usr/share/dotnet
+          echo "Removed .NET SDK"
+
+          # Remove Android SDK
+          sudo rm -rf /usr/local/lib/android
+          echo "Removed Android SDK"
+
+          # Remove cached tools
+          sudo rm -rf /opt/hostedtoolcache
+          echo "Removed hosted tool cache"
+
+          # Clean APT cache and package lists
+          sudo apt-get clean
+          sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
+          echo "Cleaned APT cache"
+
+          # Clean up Docker (images, containers, networks)
+          docker system prune -af --volumes
+          echo "Pruned Docker system"
+
+          # Remove temporary files
+          sudo rm -rf /tmp/* /var/tmp/*
+          echo "Cleared temporary files"
+
+          # Clear package manager caches (e.g., pip, npm)
+          sudo rm -rf /home/runner/.cache/pip /home/runner/.cache/npm
+          echo "Cleared pip and npm caches"
+
+          # Remove Go toolchain if unused
+          sudo rm -rf /usr/local/go
+          echo "Removed Go toolchain"
+
+          # Clear logs (be cautious, only remove old logs)
+          sudo find /var/log -type f -name "*.log" -delete
+          echo "Cleared log files"
+
+          echo "Disk usage after cleanup:"
+          df -h
       - uses: actions/checkout@v4
       - name: Cache Rust toolchain
         uses: actions/cache@v4
@@ -133,16 +178,6 @@ jobs:
           restore-keys: |
             cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
       - uses: dtolnay/rust-toolchain@stable
-      - name: Free up disk space
-        if: runner.os == 'Linux'
-        run: |
-          df -h  # Log disk usage before cleanup
-          sudo rm -rf /usr/share/dotnet  # Remove unused .NET SDK
-          sudo rm -rf /usr/local/lib/android  # Remove Android SDK
-          sudo rm -rf /opt/hostedtoolcache  # Remove cached tools
-          sudo apt-get clean  # Clean apt cache
-          docker image prune -f  # Remove unused Docker images
-          df -h  # Log disk usage after cleanup
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
