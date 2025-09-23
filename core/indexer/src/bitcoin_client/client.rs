@@ -215,6 +215,10 @@ impl Client {
     ) -> Result<Vec<TestMempoolAcceptResult>, Error> {
         self.call("testmempoolaccept", vec![raw_txs.into()]).await
     }
+
+    pub async fn stop(&self) -> Result<String, Error> {
+        self.call("stop", vec![]).await
+    }
 }
 
 pub trait BitcoinRpc: Send + Sync + Clone + 'static {

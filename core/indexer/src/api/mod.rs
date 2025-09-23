@@ -1,3 +1,4 @@
+pub mod client;
 pub mod compose;
 pub mod env;
 pub mod error;
@@ -6,7 +7,7 @@ pub mod result;
 pub mod router;
 pub mod ws;
 
-use std::{net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, path::Path, time::Duration};
 
 use anyhow::Result;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
@@ -15,13 +16,11 @@ use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 pub async fn run(env: Env) -> Result<JoinHandle<()>> {
-    let config = RustlsConfig::from_pem_file(
-        env.config.data_dir.join("cert.pem"),
-        env.config.data_dir.join("key.pem"),
-    )
-    .await?;
+    let cert_path = env.config.data_dir.join("cert.pem");
+    let key_path = env.config.data_dir.join("key.pem");
     let addr = SocketAddr::from(([127, 0, 0, 1], env.config.api_port));
     let handle = Handle::new();
+
     tokio::spawn({
         let handle = handle.clone();
         let cancel_token = env.cancel_token.clone();
@@ -30,17 +29,37 @@ pub async fn run(env: Env) -> Result<JoinHandle<()>> {
             handle.graceful_shutdown(Some(Duration::from_secs(10)));
         }
     });
-    info!("Server running @ https://{}", addr);
-    Ok(tokio::spawn(async move {
-        if axum_server::bind_rustls(addr, config)
-            .handle(handle)
-            .serve(router::new(env).into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .is_err()
-        {
-            error!("Panicked on join");
-        }
 
-        info!("Exited");
-    }))
+    let router = router::new(env);
+
+    let use_https = Path::new(&cert_path).exists() && Path::new(&key_path).exists();
+
+    if use_https {
+        let config = RustlsConfig::from_pem_file(&cert_path, &key_path).await?;
+        info!("HTTPS server running @ https://{}", addr);
+        Ok(tokio::spawn(async move {
+            if axum_server::bind_rustls(addr, config)
+                .handle(handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .is_err()
+            {
+                error!("HTTPS server panicked on join");
+            }
+            info!("HTTPS server exited");
+        }))
+    } else {
+        info!("HTTP server running @ http://{}", addr);
+        Ok(tokio::spawn(async move {
+            if axum_server::bind(addr)
+                .handle(handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .is_err()
+            {
+                error!("HTTP server panicked on join");
+            }
+            info!("HTTP server exited");
+        }))
+    }
 }
