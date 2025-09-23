@@ -45,7 +45,7 @@ jobs:
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
-        run: cargo install cargo-expand
+        run: command -v cargo-expand || cargo install cargo-expand
       - name: Install contract build dependencies (Linux)
         run: sudo apt-get update && sudo apt-get install -y binaryen brotli
       - name: Check formatting (contracts)
@@ -64,7 +64,7 @@ jobs:
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: command -v cargo-audit || cargo install cargo-audit
       - name: Audit contracts
         run: cargo audit
         working-directory: ./contracts
@@ -155,7 +155,7 @@ jobs:
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
-        run: cargo install cargo-expand
+        run: command -v cargo-expand || cargo install cargo-expand
       - name: Setup MSYS2 (Windows only)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
