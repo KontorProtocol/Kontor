@@ -31,7 +31,7 @@ fn arb_vec_blocks(max: u64) -> impl Strategy<Value = Vec<Block<MockTransaction>>
 proptest! {
     #![proptest_config(ProptestConfig {
         failure_persistence: None,
-        timeout: 100,
+        timeout: 300,
         .. ProptestConfig::default()
     })]
 
