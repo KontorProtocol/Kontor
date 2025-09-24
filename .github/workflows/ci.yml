@@ -196,6 +196,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: pacman -S --noconfirm mingw-w64-x86_64-brotli
+      - name: Incremental cargo builds (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CARGO_INCREMENTAL: 1
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
