@@ -25,8 +25,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
@@ -184,6 +188,8 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
         run: cargo install cargo-expand
+      - name: Install wasm-opt via cargo
+        run: cargo install wasm-opt
       - name: Setup MSYS2 (Windows only)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -200,8 +206,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: pacman -S --noconfirm mingw-w64-x86_64-brotli
-      - name: Install wasm-opt via cargo
-        run: cargo install wasm-opt
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
