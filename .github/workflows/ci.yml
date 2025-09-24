@@ -21,7 +21,7 @@ jobs:
           key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
             rust-toolchain-${{ runner.os }}-stable-
-      - name: Cache Cargo dependencies
+      - name: Cache Cargo things
         uses: actions/cache@v4
         with:
           path: |
@@ -36,13 +36,6 @@ jobs:
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ github.job }}-${{ runner.os }}-stable-
-      - name: Cache Cargo tools
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: cargo-tools-${{ runner.os }}-expand-audit-wasmopt-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -165,24 +158,21 @@ jobs:
           key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
             rust-toolchain-${{ runner.os }}-stable-
-      - name: Cache Cargo dependencies
+      - name: Cache Cargo things
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ github.job }}-${{ runner.os }}-stable-
-      - name: Cache Cargo tools
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: cargo-tools-${{ runner.os }}-expand-audit-wasmopt-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-tools-${{ runner.os }}-expand-audit-wasmopt-
       - uses: dtolnay/rust-toolchain@stable
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
