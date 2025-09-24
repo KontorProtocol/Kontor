@@ -17,6 +17,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces:
+            - contracts
+            - core
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
@@ -128,8 +132,12 @@ jobs:
           echo "Disk usage after cleanup:"
           df -h
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces:
+            - contracts
+            - core
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
