@@ -164,9 +164,6 @@ jobs:
         run: ./build.sh
         working-directory: ./contracts
         shell: bash
-      - name: Build core
-        run: cargo build --workspace
-        working-directory: ./core
       - name: Install mkcert
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
