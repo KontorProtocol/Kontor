@@ -13,32 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache Rust toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.rustup
-          key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
-          restore-keys: |
-            rust-toolchain-${{ runner.os }}-stable-
-      - name: Cache Cargo things
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
@@ -150,29 +128,7 @@ jobs:
           echo "Disk usage after cleanup:"
           df -h
       - uses: actions/checkout@v4
-      - name: Cache Rust toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.rustup
-          key: rust-toolchain-${{ runner.os }}-stable-${{ hashFiles('rust-toolchain.toml') }}
-          restore-keys: |
-            rust-toolchain-${{ runner.os }}-stable-
-      - name: Cache Cargo things
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ runner.os }}-stable-
+      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
