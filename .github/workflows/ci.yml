@@ -42,6 +42,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
         run: cargo fmt --all -- --check
         working-directory: ./contracts
