@@ -21,6 +21,8 @@ jobs:
           workspaces: |
             ./contracts
             ./core
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
@@ -138,6 +140,8 @@ jobs:
           workspaces: |
             ./contracts
             ./core
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
