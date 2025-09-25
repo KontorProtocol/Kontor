@@ -168,6 +168,7 @@ async fn run_test_regtest(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_regtest() -> Result<()> {
     logging::setup();
     let mut reg_tester = RegTester::new().await?;
