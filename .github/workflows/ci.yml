@@ -163,7 +163,7 @@ jobs:
       - name: Install contract build dependencies (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: pacman -S --noconfirm mingw-w64-x86_64-brotli
+        run: pacman -S --noconfirm mingw-w64-x86_64-brotli mingw-w64-x86_64-boost
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -183,7 +183,7 @@ jobs:
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
-            sudo apt-get install -y libzmq3-dev libboost
+            sudo apt-get install -y libzmq3-dev libboost-all-dev
           elif [ "$RUNNER_OS" == "macOS" ]; then
             brew install zmq boost
           fi
