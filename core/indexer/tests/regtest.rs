@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use bitcoin::{
@@ -7,8 +7,8 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::{
-    api,
-    bitcoin_client::{self, client::RegtestRpc},
+    api::client::Client as KontorClient,
+    bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
     config::Config,
     logging,
     retry::retry_simple,
@@ -18,7 +18,6 @@ use tokio::{
     fs,
     io::AsyncWriteExt,
     process::{Child, Command},
-    time::sleep,
 };
 
 const REGTEST_CONF: &str = r#"
@@ -58,12 +57,12 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
     Ok((process, client))
 }
 
-async fn run_kontor(data_dir: &Path) -> Result<(Child, api::client::Client)> {
+async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
         .spawn()?;
-    let client = api::client::Client::new_from_config(&Config::try_parse()?)?;
+    let client = KontorClient::new_from_config(&Config::try_parse()?)?;
     retry_simple(async || {
         let i = client.index().await?;
         if !i.available {
@@ -102,26 +101,77 @@ impl Identity {
     }
 }
 
+pub struct RegTester {
+    _bitcoin_data_dir: TempDir,
+    bitcoin_child: Child,
+    bitcoin_client: BitcoinClient,
+    _kontor_data_dir: TempDir,
+    kontor_child: Child,
+    kontor_client: KontorClient,
+    height: i64,
+}
+
+impl RegTester {
+    pub async fn new() -> Result<Self> {
+        let _bitcoin_data_dir = TempDir::new()?;
+        let _kontor_data_dir = TempDir::new()?;
+        let (bitcoin_child, bitcoin_client) = run_bitcoin(_bitcoin_data_dir.path()).await?;
+        let (kontor_child, kontor_client) = run_kontor(_kontor_data_dir.path()).await?;
+        Ok(Self {
+            _bitcoin_data_dir,
+            bitcoin_child,
+            bitcoin_client,
+            _kontor_data_dir,
+            kontor_child,
+            kontor_client,
+            height: 0,
+        })
+    }
+
+    pub async fn fund(&mut self, address: &str) -> Result<()> {
+        self.bitcoin_client.generate_to_address(1, address).await?;
+        self.height += 1;
+        Ok(())
+    }
+
+    pub async fn identity(&mut self, name: &str) -> Result<Identity> {
+        let identity = Identity::new(name);
+        self.fund(&identity.address.to_string()).await?;
+        Ok(identity)
+    }
+
+    pub async fn wait(&self) -> Result<()> {
+        retry_simple(async || {
+            let i = self.kontor_client.index().await?;
+            if i.height != self.height {
+                bail!("Not caught up");
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) -> Result<()> {
+        self.wait().await?;
+        self.kontor_client.stop().await?;
+        self.kontor_child.wait().await?;
+        self.bitcoin_client.stop().await?;
+        self.bitcoin_child.wait().await?;
+        Ok(())
+    }
+}
+
+async fn run_test_regtest(reg_tester: &mut RegTester) -> Result<()> {
+    reg_tester.identity("alice").await?;
+    Ok(())
+}
+
 #[tokio::test]
-#[ignore]
 async fn test_regtest() -> Result<()> {
     logging::setup();
-    let temp_bitcoin_data_dir = TempDir::new()?;
-    let temp_kontor_data_dir = TempDir::new()?;
-    let (mut bitcoin, bitcoin_client) = run_bitcoin(temp_bitcoin_data_dir.path()).await?;
-    let (mut kontor, kontor_client) = run_kontor(temp_kontor_data_dir.path()).await?;
-
-    let alice = Identity::new("alice");
-
-    bitcoin_client
-        .generate_to_address(1, &alice.address.to_string())
-        .await?;
-
-    sleep(Duration::from_secs(5)).await;
-
-    kontor_client.stop().await?;
-    kontor.wait().await?;
-    bitcoin_client.stop().await?;
-    bitcoin.wait().await?;
-    Ok(())
+    let mut reg_tester = RegTester::new().await?;
+    let r = run_test_regtest(&mut reg_tester).await;
+    reg_tester.stop().await?;
+    r
 }
