@@ -174,6 +174,7 @@ jobs:
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          pacman -S --noconfirm mingw-w64-x86_64-zeromq
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
@@ -181,6 +182,11 @@ jobs:
       - name: Build Bitcoin (Others)
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get install -y libzmq3-dev
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install zmq
+          fi
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
