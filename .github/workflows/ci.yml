@@ -200,6 +200,7 @@ jobs:
           bitcoind --version
       - name: Add Bitcoin to PATH and test (Others)
         run: |
+          ls -l ${{ github.workspace }}/bitcoin/build/bin
           echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
           bitcoind --version
       - name: Build contracts
