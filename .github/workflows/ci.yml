@@ -170,9 +170,16 @@ jobs:
         with:
           path: ${{ github.workspace }}/bitcoin/build/bin
           key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v29.1
-      - name: Build Bitcoin
-        if: steps.bitcoin-cache.outputs.cache-hit != 'true'
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+      - name: Build Bitcoin (Windows)
+        if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
+          cd bitcoin
+          cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
+          cmake --build build
+      - name: Build Bitcoin (Others)
+        if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
