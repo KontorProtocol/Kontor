@@ -192,7 +192,7 @@ jobs:
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: bitcoind --version
+        run: bitcoind.exe --version
       - name: Add Bitcoin to PATH (Others)
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
       - name: Test bitcoind (Others)
