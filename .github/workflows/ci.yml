@@ -164,6 +164,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: pacman -S --noconfirm mingw-w64-x86_64-brotli
+      - name: Cache Bitcoin binaries
+        id: bitcoin-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/bitcoin/build/bin
+          key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v29.1
+      - name: Build Bitcoin
+        if: steps.bitcoin-cache.outputs.cache-hit != 'true'
+        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        run: |
+          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
+          cd bitcoin
+          cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
+          cmake --build build
+      - name: Add Bitcoin to PATH
+        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+      - name: Test Bitcoin binary
+        run: |
+          bitcoind --version
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
