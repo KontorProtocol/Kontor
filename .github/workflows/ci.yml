@@ -90,51 +90,65 @@ jobs:
       SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
       SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
     steps:
-      - name: Free up disk space
+      - name: Initial disk usage
+        run: df -h
+      - name: Remove .NET SDK
         if: runner.os == 'Linux'
         run: |
-          echo "Disk usage before cleanup:"
+          echo "Removing .NET SDK..."
+          time sudo rm -rf /usr/share/dotnet
           df -h
-
-          # Remove unused .NET SDK
-          sudo rm -rf /usr/share/dotnet
-          echo "Removed .NET SDK"
-
-          # Remove Android SDK
-          sudo rm -rf /usr/local/lib/android
-          echo "Removed Android SDK"
-
-          # Remove cached tools
-          sudo rm -rf /opt/hostedtoolcache
-          echo "Removed hosted tool cache"
-
-          # Clean APT cache and package lists
-          sudo apt-get clean
-          sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
-          echo "Cleaned APT cache"
-
-          # Clean up Docker (images, containers, networks)
-          docker system prune -af --volumes
-          echo "Pruned Docker system"
-
-          # Remove temporary files
-          sudo rm -rf /tmp/* /var/tmp/*
-          echo "Cleared temporary files"
-
-          # Clear package manager caches (e.g., pip, npm)
-          sudo rm -rf /home/runner/.cache/pip /home/runner/.cache/npm
-          echo "Cleared pip and npm caches"
-
-          # Remove Go toolchain if unused
-          sudo rm -rf /usr/local/go
-          echo "Removed Go toolchain"
-
-          # Clear logs (be cautious, only remove old logs)
-          sudo find /var/log -type f -name "*.log" -delete
-          echo "Cleared log files"
-
-          echo "Disk usage after cleanup:"
+      - name: Remove Android SDK
+        if: runner.os == 'Linux'
+        run: |
+          echo "Removing Android SDK..."
+          time sudo rm -rf /usr/local/lib/android
           df -h
+      - name: Remove hosted tool cache
+        if: runner.os == 'Linux'
+        run: |
+          echo "Removing hosted tool cache..."
+          time sudo rm -rf /opt/hostedtoolcache
+          df -h
+      - name: Clean APT cache
+        if: runner.os == 'Linux'
+        run: |
+          echo "Cleaning APT cache..."
+          time sudo apt-get clean
+          time sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
+          df -h
+      - name: Prune Docker system
+        if: runner.os == 'Linux'
+        run: |
+          echo "Pruning Docker system..."
+          time docker system prune -af --volumes
+          df -h
+      - name: Clear temporary files
+        if: runner.os == 'Linux'
+        run: |
+          echo "Clearing temporary files..."
+          time sudo rm -rf /tmp/* /var/tmp/*
+          df -h
+      - name: Clear pip and npm caches
+        if: runner.os == 'Linux'
+        run: |
+          echo "Clearing pip and npm caches..."
+          time sudo rm -rf /home/runner/.cache/pip /home/runner/.cache/npm
+          df -h
+      - name: Remove Go toolchain
+        if: runner.os == 'Linux'
+        run: |
+          echo "Removing Go toolchain..."
+          time sudo rm -rf /usr/local/go
+          df -h
+      - name: Clear log files
+        if: runner.os == 'Linux'
+        run: |
+          echo "Clearing log files..."
+          time sudo find /var/log -type f -name "*.log" -delete
+          df -h
+      - name: Final disk usage
+        run: df -h
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
