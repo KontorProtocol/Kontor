@@ -31,8 +31,6 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
@@ -142,8 +140,6 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
