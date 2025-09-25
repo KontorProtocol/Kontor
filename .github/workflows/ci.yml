@@ -18,13 +18,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo things
+        uses: actions/cache@v4
         with:
-          cache-all-crates: true
-          cache-workspace-crates: true
-          workspaces: |
-            ./contracts
-            ./core
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            contracts/target
+            core/target
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
@@ -121,11 +129,21 @@ jobs:
         run: df -h
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo things
+        uses: actions/cache@v4
         with:
-          workspaces: |
-            ./contracts
-            ./core
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            contracts/target
+            core/target
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ github.job }}-${{ runner.os }}-stable-
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
