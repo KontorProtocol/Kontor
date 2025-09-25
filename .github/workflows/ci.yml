@@ -154,16 +154,16 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-      - name: Install contract build dependencies (Linux)
+      - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y brotli
-      - name: Install contract build dependencies (macOS)
+        run: sudo apt-get update && sudo apt-get install -y brotli libzmq3-dev libboost-all-dev
+      - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install brotli
-      - name: Install contract build dependencies (Windows)
+        run: brew install brotli zmq boost
+      - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: pacman -S --noconfirm mingw-w64-x86_64-brotli
+        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -174,7 +174,6 @@ jobs:
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          pacman -S --noconfirm git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
@@ -182,11 +181,6 @@ jobs:
       - name: Build Bitcoin (Others)
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            sudo apt-get install -y libzmq3-dev libboost-all-dev
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            brew install zmq boost
-          fi
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
