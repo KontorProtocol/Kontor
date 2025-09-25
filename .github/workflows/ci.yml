@@ -191,10 +191,15 @@ jobs:
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
-      - name: Add Bitcoin to PATH
-        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
-      - name: Test Bitcoin binary
+      - name: Add Bitcoin to PATH and test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
+          echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+          bitcoind --version
+      - name: Add Bitcoin to PATH and test (Others)
+        run: |
+          echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
           bitcoind --version
       - name: Build contracts
         run: ./build.sh
