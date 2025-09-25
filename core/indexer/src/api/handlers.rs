@@ -31,15 +31,32 @@ pub struct TxsQuery {
 #[derive(Deserialize, Serialize)]
 pub struct Info {
     pub available: bool,
+    pub height: i64,
 }
 
-pub async fn get_index() -> Result<Info> {
-    Ok(Info { available: true }.into())
+pub async fn get_index(State(env): State<Env>) -> Result<Info> {
+    let height = select_block_latest(&*env.reader.connection().await?)
+        .await?
+        .map(|b| b.height)
+        .unwrap_or_default();
+    Ok(Info {
+        available: true,
+        height,
+    }
+    .into())
 }
 
 pub async fn stop(State(env): State<Env>) -> Result<Info> {
     env.cancel_token.cancel();
-    Ok(Info { available: false }.into())
+    let height = select_block_latest(&*env.reader.connection().await?)
+        .await?
+        .map(|b| b.height)
+        .unwrap_or_default();
+    Ok(Info {
+        available: false,
+        height,
+    }
+    .into())
 }
 
 pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {
