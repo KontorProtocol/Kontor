@@ -174,7 +174,7 @@ jobs:
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          pacman -S --noconfirm git mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
+          pacman -S --noconfirm git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
