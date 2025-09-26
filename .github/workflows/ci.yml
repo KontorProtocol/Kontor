@@ -213,6 +213,9 @@ jobs:
         working-directory: ./core
         shell: bash
       - name: Run core integration tests
-        run: cargo test --workspace
+        run: |
+          export PATH=$PATH:$(pwd)/../bitcoin/build/bin
+          bitcoind --version
+          cargo test --workspace
         working-directory: ./core
         shell: bash

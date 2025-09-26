@@ -9,6 +9,7 @@ pub mod logging;
 pub mod multi_psbt_test_utils;
 pub mod op_return;
 pub mod reactor;
+pub mod reg_tester;
 pub mod regtest_utils;
 pub mod retry;
 pub mod runtime;
