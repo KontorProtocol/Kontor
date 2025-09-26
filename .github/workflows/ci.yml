@@ -192,8 +192,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          ls -l ${{ github.workspace }}/bitcoin/build/bin
-          export PATH=$PATH:${{ github.workspace }}/bitcoin/build/bin
+          ls -l ${{ github.workspace }}\bitcoin\build\bin
+          export PATH=$PATH:${{ github.workspace }}\bitcoin\build\bin
           bitcoind --version
       - name: Cache Cargo things
         uses: actions/cache@v4
