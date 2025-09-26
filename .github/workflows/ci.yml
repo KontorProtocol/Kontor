@@ -172,11 +172,10 @@ jobs:
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
       - name: Test bitcoind (Others)
         if: runner.os != 'Windows'
-        shell: bash
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
           bitcoind --version
       - name: Install wasm32-unknown-unknown
