@@ -212,10 +212,15 @@ jobs:
           echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
         working-directory: ./core
         shell: bash
-      - name: Run core integration tests
+      - name: Run core integration tests (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
-          export PATH=$PATH:$(pwd)/../bitcoin/build/bin
+          export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
+          cd core
           cargo test --workspace
+      - name: Run core integration tests (Others)
+        if: runner.os != 'Windows'
         working-directory: ./core
-        shell: bash
+        run: cargo test --workspace
