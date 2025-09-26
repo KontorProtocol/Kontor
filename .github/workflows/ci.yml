@@ -98,6 +98,9 @@ jobs:
       SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
       SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
     steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Disable man-db to make package install and removal faster
         if: runner.os == 'Linux'
         run: |
@@ -125,29 +128,16 @@ jobs:
           df -h
       - name: Final disk usage
         run: df -h
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install cargo expand
-        run: cargo install cargo-expand
-      - name: Install wasm-opt via cargo
-        run: cargo install wasm-opt
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y brotli libzmq3-dev libboost-all-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zmq boost
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Setup MSYS2 (Windows only)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -162,16 +152,6 @@ jobs:
           #   libevent
           #   zeromq
           #   boost
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y brotli libzmq3-dev libboost-all-dev
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install zmq boost
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -208,11 +188,30 @@ jobs:
         shell: bash
       - name: Add Bitcoin to PATH (Windows)
         if: runner.os == 'Windows'
-        run: echo "${{ github.workspace }}\bitcoin\build\bin" >> $GITHUB_PATH
+        run: echo "$(pwd)/bitcoin/build/bin" >> $GITHUB_PATH
         shell: bash
       - name: Test bitcoind (Others)
         run: bitcoind --version
         shell: bash
+      - name: Cache Cargo things
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            contracts/target
+            core/target
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install cargo expand
+        run: cargo install cargo-expand
+      - name: Install wasm-opt via cargo
+        run: cargo install wasm-opt
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
