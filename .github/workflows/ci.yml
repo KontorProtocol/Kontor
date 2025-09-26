@@ -174,7 +174,7 @@ jobs:
         run: |
           ls -l D:/a/Kontor/Kontor/bitcoin/build/bin
           export PATH=$PATH:D:/a/Kontor/Kontor/bitcoin/build/bin
-          bitcoind --version
+          bitcoind.exe --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
