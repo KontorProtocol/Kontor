@@ -165,7 +165,7 @@ jobs:
       - name: Add Bitcoin to PATH (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "$GITHUB_WORKSPACE/bitcoin/build/bin;$PATH" >> $GITHUB_ENV
+        run: echo "PATH=$GITHUB_WORKSPACE/bitcoin/build/bin;$PATH" >> $GITHUB_ENV
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
