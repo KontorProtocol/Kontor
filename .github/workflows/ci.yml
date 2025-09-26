@@ -192,7 +192,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          ls -l ${{ github.workspace }}
+          ls -l $(pwd)
           export PATH=$PATH:${{ github.workspace }}/bitcoin/build/bin
           bitcoind --version
       - name: Cache Cargo things
