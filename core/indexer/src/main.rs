@@ -1,6 +1,8 @@
 use crate::api::Env;
 use anyhow::Result;
+use bitcoin::Network;
 use clap::Parser;
+use indexer::config::RegtestConfig;
 use indexer::reactor::events::EventSubscriber;
 use indexer::{api, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
@@ -12,7 +14,13 @@ use tracing::info;
 async fn main() -> Result<()> {
     logging::setup();
     info!("Kontor");
-    let config = Config::try_parse()?;
+    let mut config = Config::try_parse()?;
+    if config.network == Network::Regtest && config.use_local_regtest {
+        let regtest_config = RegtestConfig::default();
+        config.bitcoin_rpc_url = regtest_config.bitcoin_rpc_url;
+        config.bitcoin_rpc_user = regtest_config.bitcoin_rpc_user;
+        config.bitcoin_rpc_password = regtest_config.bitcoin_rpc_password;
+    }
     info!("{:#?}", config);
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();

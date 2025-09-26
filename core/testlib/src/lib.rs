@@ -113,17 +113,7 @@ impl Runtime {
     }
 
     pub async fn new(config: RuntimeConfig<'_>) -> Result<Self> {
-        let na = "n/a".to_string();
-        let (_, writer, _test_db_dir) = new_test_db(&Config {
-            bitcoin_rpc_url: na.clone(),
-            bitcoin_rpc_user: na.clone(),
-            bitcoin_rpc_password: na.clone(),
-            zmq_address: na,
-            api_port: 0,
-            data_dir: "will be set".into(),
-            starting_block_height: 1,
-        })
-        .await?;
+        let (_, writer, _test_db_dir) = new_test_db(&Config::new_na()).await?;
         let conn = writer.connection();
         let storage = Runtime::make_storage(config.get_call_context(), conn).await?;
         let component_cache: ComponentCache = ComponentCache::new();

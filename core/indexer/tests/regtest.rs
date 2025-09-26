@@ -9,7 +9,7 @@ use clap::Parser;
 use indexer::{
     api::client::Client as KontorClient,
     bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
-    config::Config,
+    config::{Config, RegtestConfig},
     logging,
     retry::retry_simple,
 };
@@ -42,10 +42,10 @@ async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
 
 async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)> {
     create_bitcoin_conf(data_dir).await?;
-    let process = Command::new("/home/quorra/bitcoin/build/bin/bitcoind")
+    let process = Command::new("bitcoind")
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
         .spawn()?;
-    let client = bitcoin_client::Client::new_from_config(&Config::try_parse()?)?;
+    let client = bitcoin_client::Client::new_from_config(&RegtestConfig::default())?;
     retry_simple(async || {
         let i = client.get_blockchain_info().await?;
         if i.chain != Network::Regtest {
@@ -61,6 +61,9 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
+        .arg("--network")
+        .arg("regtest")
+        .arg("--use-local-regtest")
         .spawn()?;
     let client = KontorClient::new_from_config(&Config::try_parse()?)?;
     retry_simple(async || {
@@ -168,7 +171,6 @@ async fn run_test_regtest(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_regtest() -> Result<()> {
     logging::setup();
     let mut reg_tester = RegTester::new().await?;
