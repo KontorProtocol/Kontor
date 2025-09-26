@@ -37,7 +37,7 @@ pub struct Config {
         long,
         env = "ZMQ_ADDRESS",
         help = "ZMQ address for sequence notifications (e.g., tcp://localhost:28332)",
-        default_value = "tcp://localhost:28332"
+        default_value = "tcp://127.0.0.1:28332"
     )]
     pub zmq_address: String,
 
