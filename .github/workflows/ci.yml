@@ -166,14 +166,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          echo "PATH=$GITHUB_WORKSPACE/bitcoin/build/bin;$PATH" >> $GITHUB_ENV
-          bitcoind --version
+          echo "PATH=$(pwd)/bitcoin/build/bin;$PATH" >> $GITHUB_ENV
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
-      # - name: Test bitcoind (Others)
-      #   if: runner.os != 'Windows'
-      #   run: bitcoind --version
+      - name: Test bitcoind (Others)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
