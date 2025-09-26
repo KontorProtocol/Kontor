@@ -154,6 +154,14 @@ jobs:
         with:
           msystem: MINGW64
           update: true
+          # install: >-
+          #   git
+          #   brotli
+          #   toolchain
+          #   cmake
+          #   libevent
+          #   zeromq
+          #   boost
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y brotli libzmq3-dev libboost-all-dev
@@ -195,11 +203,11 @@ jobs:
       #   shell: msys2 {0}
       #   run: bitcoind.exe --version
       - name: Add Bitcoin to PATH (Others)
-        if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+        shell: bash
       - name: Test bitcoind (Others)
-        if: runner.os != 'Windows'
         run: bitcoind --version
+        shell: bash
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
