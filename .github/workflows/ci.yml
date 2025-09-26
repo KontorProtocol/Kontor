@@ -198,6 +198,7 @@ jobs:
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
       - name: Test bitcoind (Others)
+        if: runner.os != 'Windows'
         run: bitcoind --version
       - name: Build contracts
         run: ./build.sh
