@@ -106,6 +106,10 @@ jobs:
           df -h
       - name: Final disk usage
         run: df -h
+      - name: Check ls
+        if: runner.os == 'Windows'
+        run: ls -l D:/a/Kontor/Kontor
+        shell: bash
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
