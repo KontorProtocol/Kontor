@@ -182,17 +182,21 @@ jobs:
       #   if: runner.os == 'Windows'
       #   shell: msys2 {0}
       #   run: bitcoind.exe --version
+      - name: Add Bitcoin to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: echo "$(pwd)/bitcoin/build/bin" >> $GITHUB_PATH
+        shell: msys2 {0}
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
         shell: bash
-      - name: Add Bitcoin to PATH (Windows)
+      - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        run: echo "$(pwd)/bitcoin/build/bin" >> $GITHUB_PATH
-        shell: bash
-      - name: Test bitcoind (Others)
         run: bitcoind --version
-        shell: bash
+        shell: msys2 {0}
+      - name: Test bitcoind (Others)
+        if: runner.os != 'Windows'
+        run: bitcoind --version
       - name: Cache Cargo things
         uses: actions/cache@v4
         with:
