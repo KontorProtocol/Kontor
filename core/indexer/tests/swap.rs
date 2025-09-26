@@ -3,6 +3,7 @@ use std::str::FromStr;
 use anyhow::Result;
 use bitcoin::Amount;
 use bitcoin::FeeRate;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::TapSighashType;
@@ -44,11 +45,19 @@ async fn test_psbt_inscription() -> Result<()> {
 
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
 
-    let (buyer_address, buyer_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
+    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        1,
+    )?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();

@@ -28,10 +28,20 @@ async fn test_taproot_transaction() -> Result<()> {
     let secp = Secp256k1::new();
 
     let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+        test_utils::generate_taproot_address_from_mnemonic(
+            &secp,
+            Network::Bitcoin,
+            &config.taproot_key_path,
+            0,
+        )?;
 
     let (recipient_address, _recipient_child_key, _recipient_compressed_pubkey) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 1)?;
+        test_utils::generate_taproot_address_from_mnemonic(
+            &secp,
+            Network::Bitcoin,
+            &config.taproot_key_path,
+            1,
+        )?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
 

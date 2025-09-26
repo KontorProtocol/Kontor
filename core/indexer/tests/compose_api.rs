@@ -8,7 +8,7 @@ use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, Amount, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut, Txid};
+use bitcoin::{Address, Amount, FeeRate, KnownHrp, Network, OutPoint, TapSighashType, TxOut, Txid};
 use bitcoin::{
     consensus::encode::serialize as serialize_tx,
     key::{Keypair, Secp256k1},
@@ -70,8 +70,12 @@ async fn test_compose() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -205,8 +209,12 @@ async fn test_compose_all_fields() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -389,8 +397,12 @@ async fn test_compose_missing_params() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -442,8 +454,12 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (addr, child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (addr, child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -516,8 +532,12 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (addr, child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (addr, child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -578,8 +598,12 @@ async fn test_reveal_with_op_return_mempool_accept() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -681,8 +705,12 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -775,8 +803,12 @@ async fn test_compose_insufficient_funds() -> Result<()> {
     let config = TestConfig::try_parse()?;
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 

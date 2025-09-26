@@ -65,13 +65,13 @@ fn find_single_output_index(outputs: &[TxOut], script: &bitcoin::script::ScriptB
 #[test]
 fn test_commit_psbt_security_invariants() -> Result<()> {
     // Setup (deterministic environment)
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit PSBT as portal would
@@ -106,7 +106,8 @@ fn test_commit_psbt_security_invariants() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Prepare prevouts for validation
@@ -276,13 +277,13 @@ fn test_commit_psbt_security_invariants() -> Result<()> {
 #[test]
 fn test_reveal_psbt_security_invariants() -> Result<()> {
     // Setup (deterministic environment)
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit PSBT
@@ -316,7 +317,8 @@ fn test_reveal_psbt_security_invariants() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Build reveal PSBT
@@ -413,13 +415,13 @@ fn test_reveal_psbt_security_invariants() -> Result<()> {
 #[test]
 fn test_inputs_sequences_are_rbf() -> Result<()> {
     // Setup
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Commit PSBT
@@ -448,7 +450,8 @@ fn test_inputs_sequences_are_rbf() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Reveal PSBT
@@ -505,13 +508,13 @@ fn test_inputs_sequences_are_rbf() -> Result<()> {
 #[test]
 fn test_commit_outputs_whitelist_including_portal() -> Result<()> {
     // Setup
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -537,7 +540,8 @@ fn test_commit_outputs_whitelist_including_portal() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Build whitelist of allowed script_pubkeys
@@ -576,13 +580,13 @@ fn test_commit_outputs_whitelist_including_portal() -> Result<()> {
 #[test]
 fn test_sighash_default_encoding_for_signatures() -> Result<()> {
     // Setup and build commit/reveal PSBTs
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -612,7 +616,8 @@ fn test_sighash_default_encoding_for_signatures() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let all_prevouts_c: Vec<TxOut> = commit_psbt
@@ -641,7 +646,7 @@ fn test_sighash_default_encoding_for_signatures() -> Result<()> {
     }
 
     // Sign one node's commit input and reveal input using SIGHASH_DEFAULT and inspect witnesses
-    let (_, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (_, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_index = 0;
     let input_index = node_input_indices[node_index];
     let keypair = secrets[node_index].keypair;
@@ -721,10 +726,10 @@ fn test_sighash_default_encoding_for_signatures() -> Result<()> {
 #[test]
 fn test_script_address_hrp_matches_network() -> Result<()> {
     // Ensure the script address HRP matches the configured network (prevents UI/ops confusion)
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let (tap_script, _tap_info, addr) = build_tap_script_and_script_address_helper(
         signups[0].internal_key,
         b"node-data".to_vec(),
@@ -745,12 +750,12 @@ fn test_script_address_hrp_matches_network() -> Result<()> {
 #[test]
 fn test_reveal_outputs_whitelist_and_counts() -> Result<()> {
     // Build commit and reveal as usual
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -777,7 +782,8 @@ fn test_reveal_outputs_whitelist_and_counts() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let commit_txid = commit_psbt.unsigned_tx.compute_txid();
@@ -833,12 +839,12 @@ fn test_reveal_outputs_whitelist_and_counts() -> Result<()> {
 #[test]
 fn test_portal_reveal_fairness_base_plus_witness() -> Result<()> {
     // Build commit and reveal
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -865,7 +871,8 @@ fn test_portal_reveal_fairness_base_plus_witness() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let commit_txid = commit_psbt.unsigned_tx.compute_txid();
@@ -972,12 +979,12 @@ fn test_portal_reveal_fairness_base_plus_witness() -> Result<()> {
 #[test]
 fn test_psbt_hygiene_and_witness_utxo_presence() -> Result<()> {
     // Build commit and reveal
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -1004,7 +1011,8 @@ fn test_psbt_hygiene_and_witness_utxo_presence() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let commit_txid = commit_psbt.unsigned_tx.compute_txid();
@@ -1069,10 +1077,10 @@ fn test_psbt_hygiene_and_witness_utxo_presence() -> Result<()> {
 #[test]
 fn test_tapscript_prefix_structure_pubkey_then_op_checksig() -> Result<()> {
     // For each node and the portal, ensure tapscript begins with pubkey push then OP_CHECKSIG.
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
 
     for s in &signups {
         let (tap_script, _tap_info, _addr) = build_tap_script_and_script_address_helper(
@@ -1099,7 +1107,8 @@ fn test_tapscript_prefix_structure_pubkey_then_op_checksig() -> Result<()> {
     }
 
     // Portal
-    let portal_info = indexer::multi_psbt_test_utils::get_portal_info(&secp, &test_cfg)?;
+    let portal_info =
+        indexer::multi_psbt_test_utils::get_portal_info(&secp, network, &config.taproot_key_path)?;
     let (tap_script_p, _tap_info_p, _addr_p) = build_tap_script_and_script_address_helper(
         portal_info.internal_key,
         b"portal-data".to_vec(),
@@ -1131,13 +1140,13 @@ fn test_tapscript_prefix_structure_pubkey_then_op_checksig() -> Result<()> {
 #[tokio::test]
 async fn test_async_node_sign_and_merge_flows() -> Result<()> {
     // End-to-end async signing by nodes and merge back into the portal PSBTs
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -1167,7 +1176,8 @@ async fn test_async_node_sign_and_merge_flows() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Prevouts for commit signatures
@@ -1274,10 +1284,10 @@ async fn test_async_node_sign_and_merge_flows() -> Result<()> {
 // unintended behavior or security vulnerabilities.
 #[test]
 fn test_tapscript_builder_rejects_empty_data() -> Result<()> {
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let res = indexer::multi_psbt_test_utils::build_tap_script_and_script_address_helper(
         signups[0].internal_key,
         Vec::new(),
@@ -1295,10 +1305,10 @@ fn test_tapscript_builder_rejects_empty_data() -> Result<()> {
 // This test ensures that the HRP for a given network is consistent and correct.
 #[test]
 fn test_script_address_hrp_across_networks() -> Result<()> {
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let ikey = signups[0].internal_key;
 
     let (_s1, _i1, a_main) =
@@ -1347,13 +1357,13 @@ fn test_script_address_hrp_across_networks() -> Result<()> {
 #[test]
 fn test_script_output_funds_dust_plus_reveal_fee_estimate() -> Result<()> {
     // Each script output should fund exactly (or at least) dust + reveal fee estimate
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -1383,7 +1393,8 @@ fn test_script_output_funds_dust_plus_reveal_fee_estimate() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Nodes
@@ -1460,13 +1471,13 @@ fn test_script_output_funds_dust_plus_reveal_fee_estimate() -> Result<()> {
 #[test]
 fn test_pre_sign_estimated_commit_fee_is_covered() -> Result<()> {
     // Participant contributions sum to commit fee paid (pre-sign accounting consistency)
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -1498,7 +1509,8 @@ fn test_pre_sign_estimated_commit_fee_is_covered() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Overall commit fee paid
@@ -1587,13 +1599,13 @@ fn test_pre_sign_estimated_commit_fee_is_covered() -> Result<()> {
 #[tokio::test]
 async fn test_commit_shortfall_is_offset_by_reveal_surplus_after_signing() -> Result<()> {
     // After signing, total (commit_paid + reveal_paid) should cover (commit_req + reveal_req)
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -1622,7 +1634,8 @@ async fn test_commit_shortfall_is_offset_by_reveal_surplus_after_signing() -> Re
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let all_prevouts_c: Vec<TxOut> = commit_psbt
@@ -1759,13 +1772,13 @@ async fn test_commit_shortfall_is_offset_by_reveal_surplus_after_signing() -> Re
 // against the correct internal key, preventing signature forgery.
 #[tokio::test]
 async fn test_tap_internal_key_set_on_commit_and_reveal_inputs() -> Result<()> {
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -1801,7 +1814,8 @@ async fn test_tap_internal_key_set_on_commit_and_reveal_inputs() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
     assert_eq!(
         commit_psbt.inputs[portal_input_index].tap_internal_key,
@@ -1887,13 +1901,13 @@ async fn test_tap_internal_key_set_on_commit_and_reveal_inputs() -> Result<()> {
 // - Reveal script-spend: 3 elements (Taproot signature, Taproot key, OP_CHECKSIG)
 #[tokio::test]
 async fn test_witness_stack_shapes_commit_and_reveal() -> Result<()> {
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -1922,7 +1936,8 @@ async fn test_witness_stack_shapes_commit_and_reveal() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let all_prevouts_c: Vec<TxOut> = commit_psbt

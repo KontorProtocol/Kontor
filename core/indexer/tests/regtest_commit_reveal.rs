@@ -22,8 +22,8 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     config.bitcoin_rpc_url = "http://127.0.0.1:18443".to_string();
 
     let client = Client::new_from_config(&config)?;
-    let mut test_config = TestConfig::try_parse()?;
-    test_config.network = Network::Regtest;
+    let test_config = TestConfig::try_parse()?;
+    let network = Network::Regtest;
 
     // Set up wallet if needed - this will ensure we have funds
     regtest_utils::ensure_wallet_setup(&client).await?;
@@ -31,8 +31,12 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let secp = Secp256k1::new();
 
     // Generate taproot address
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &test_config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        network,
+        &test_config.taproot_key_path,
+        0,
+    )?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();

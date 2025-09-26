@@ -29,14 +29,14 @@ async fn test_pre_sign_node_refuses_on_underfunded_script_output() -> Result<()>
     // This simulates nodes signing what they think is correct, then a malicious reordering happens
     // prior to broadcast. SIGHASH_DEFAULT must invalidate signatures, and mempool must reject.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -66,7 +66,8 @@ async fn test_pre_sign_node_refuses_on_underfunded_script_output() -> Result<()>
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Build reveal
@@ -163,14 +164,14 @@ async fn test_pre_sign_node_refuses_on_reveal_output_remap() -> Result<()> {
     // are committed to in the signature digest, so changing them invalidates signatures.
     // We mutate the signed reveal TX and assert mempool rejection while commit remains valid.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -200,7 +201,8 @@ async fn test_pre_sign_node_refuses_on_reveal_output_remap() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Build reveal referencing the commit
@@ -299,14 +301,14 @@ async fn test_reordering_commit_inputs_rejected() -> Result<()> {
     // Therefore, any reordering invalidates signatures. We mutate the signed commit TX and
     // assert mempool rejection.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -336,7 +338,8 @@ async fn test_reordering_commit_inputs_rejected() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     let all_prevouts_c: Vec<TxOut> = commit_psbt
@@ -449,14 +452,14 @@ async fn test_reordering_commit_outputs_rejected() -> Result<()> {
     // Reordering invalidates signatures and also changes the commit txid, breaking reveal mapping.
     // We mutate the signed commit TX and assert mempool rejection.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit/reveal and sign everything as in the nominal flow
@@ -486,7 +489,8 @@ async fn test_reordering_commit_outputs_rejected() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
     let all_prevouts_c: Vec<TxOut> = commit_psbt
         .inputs
@@ -579,14 +583,14 @@ async fn test_portal_cannot_steal_change_rejected() -> Result<()> {
     // node's change output into the portal's change output. With SIGHASH_DEFAULT (ALL), changing
     // any output value invalidates signatures. We simulate the theft and assert mempool rejects.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit/reveal and sign everything as in the nominal flow
@@ -616,7 +620,8 @@ async fn test_portal_cannot_steal_change_rejected() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
     let all_prevouts_c: Vec<TxOut> = commit_psbt
         .inputs
@@ -770,14 +775,14 @@ async fn test_node_cannot_steal_in_reveal_rejected() -> Result<()> {
     // by bumping its dust output. With SIGHASH_DEFAULT, this invalidates the reveal signature.
     // We simulate the mutation and assert mempool rejection of the reveal.
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -806,7 +811,8 @@ async fn test_node_cannot_steal_in_reveal_rejected() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
     let all_prevouts_c: Vec<TxOut> = commit_psbt
         .inputs
@@ -898,14 +904,14 @@ async fn test_node_cannot_steal_in_reveal_rejected() -> Result<()> {
 #[tokio::test]
 async fn test_portal_reorders_commit_inputs_before_sign_rejected() -> Result<()> {
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
-    let (signups, secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
     let node_utxos = mock_fetch_utxos_for_addresses(&signups);
 
     // Build commit
@@ -935,7 +941,8 @@ async fn test_portal_reorders_commit_inputs_before_sign_rejected() -> Result<()>
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Malicious portal reorders commit inputs BEFORE sending to nodes: swap first two inputs
