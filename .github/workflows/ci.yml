@@ -106,10 +106,6 @@ jobs:
           df -h
       - name: Final disk usage
         run: df -h
-      - name: Check ls
-        if: runner.os == 'Windows'
-        run: ls -l D:/a/Kontor/Kontor
-        shell: bash
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
@@ -166,11 +162,6 @@ jobs:
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
-      - name: Test bitcoind (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "PATH=$(pwd)/bitcoin/build/bin;$PATH" >> $GITHUB_ENV
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
@@ -181,6 +172,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          ls -l D:/a/Kontor/Kontor/bitcoin/build/bin
+          export PATH=$PATH:D:/a/Kontor/Kontor/bitcoin/build/bin
           bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
@@ -223,9 +216,10 @@ jobs:
       - name: Run core integration tests (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        working-directory: ./core
         run: |
+          export PATH=$PATH:D:/a/Kontor/Kontor/bitcoin/build/bin
           bitcoind --version
+          cd core
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
