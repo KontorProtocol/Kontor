@@ -1,7 +1,6 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use proptest::test_runner::FileFailurePersistence;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::{Duration, timeout};
 
@@ -87,16 +86,7 @@ async fn new_db_wrapper() -> Database {
 
 async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
     // unable to parse Config object with clap due to conflict with proptest flags.
-    let (reader, writer, _temp_dir) = new_test_db(&Config {
-        bitcoin_rpc_url: "".to_string(),
-        bitcoin_rpc_user: "".to_string(),
-        bitcoin_rpc_password: "".to_string(),
-        zmq_address: "".to_string(),
-        api_port: 0,
-        data_dir: PathBuf::from("/tmp"),
-        starting_block_height: 0,
-    })
-    .await?;
+    let (reader, writer, _temp_dir) = new_test_db(&Config::new_na()).await?;
     Ok((reader, writer, _temp_dir))
 }
 

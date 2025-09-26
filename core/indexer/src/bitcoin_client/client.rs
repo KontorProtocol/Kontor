@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::bitcoin_client::types::{
     CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult, TestMempoolAcceptResult,
 };
-use crate::config::{Config, TestConfig};
+use crate::config::{Config, RegtestConfig, TestConfig};
 
 use super::types::{RawTransactionInput, SignRawTransactionResult, UnspentOutput};
 use super::{
@@ -44,6 +44,18 @@ impl BitcoinRpcConfig for Config {
 }
 
 impl BitcoinRpcConfig for TestConfig {
+    fn bitcoin_rpc_url(&self) -> &str {
+        &self.bitcoin_rpc_url
+    }
+    fn bitcoin_rpc_user(&self) -> &str {
+        &self.bitcoin_rpc_user
+    }
+    fn bitcoin_rpc_password(&self) -> &str {
+        &self.bitcoin_rpc_password
+    }
+}
+
+impl BitcoinRpcConfig for RegtestConfig {
     fn bitcoin_rpc_url(&self) -> &str {
         &self.bitcoin_rpc_url
     }

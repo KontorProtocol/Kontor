@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bitcoin::Network;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,39 @@ pub struct Config {
         default_value = "894000"
     )]
     pub starting_block_height: u64,
+
+    #[clap(
+        long,
+        env = "NETWORK",
+        help = "Network for Bitcoin RPC authentication",
+        default_value = "bitcoin"
+    )]
+    pub network: bitcoin::Network,
+
+    #[clap(
+        long,
+        env = "USE_LOCAL_REGTEST",
+        help = "Whether or not to use a local regtest",
+        default_value = "false"
+    )]
+    pub use_local_regtest: bool,
+}
+
+impl Config {
+    pub fn new_na() -> Self {
+        let na = "n/a".to_string();
+        Self {
+            network: Network::Bitcoin,
+            bitcoin_rpc_url: na.clone(),
+            bitcoin_rpc_user: na.clone(),
+            bitcoin_rpc_password: na.clone(),
+            zmq_address: na,
+            api_port: 0,
+            data_dir: "will be set".into(),
+            starting_block_height: 1,
+            use_local_regtest: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
@@ -107,4 +141,21 @@ pub struct TestConfig {
         help = "Full path to the taproot key file"
     )]
     pub taproot_key_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegtestConfig {
+    pub bitcoin_rpc_url: String,
+    pub bitcoin_rpc_user: String,
+    pub bitcoin_rpc_password: String,
+}
+
+impl Default for RegtestConfig {
+    fn default() -> Self {
+        Self {
+            bitcoin_rpc_url: "http://127.0.0.1:18443".into(),
+            bitcoin_rpc_user: "rpc".into(),
+            bitcoin_rpc_password: "rpc".into(),
+        }
+    }
 }
