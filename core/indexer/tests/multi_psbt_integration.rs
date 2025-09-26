@@ -18,6 +18,7 @@ use indexer::multi_psbt_test_utils::{
     log_total_size_and_fee_breakdown,
 };
 use indexer::{bitcoin_client::Client, logging, test_utils};
+use std::path::Path;
 use std::str::FromStr;
 use tracing::info;
 
@@ -62,13 +63,18 @@ struct PortalInfo {
 // NODE AND PORTAL SETUP HELPERS
 fn get_node_addresses(
     secp: &Secp256k1<All>,
-    test_cfg: &TestConfig,
+    network: Network,
+    taproot_key_path: &Path,
 ) -> Result<(Vec<NodeInfo>, Vec<NodeSecrets>)> {
     let mut infos = Vec::new();
     let mut secrets = Vec::new();
     for i in 0..3 {
-        let (address, child_key, _compressed) =
-            test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, i as u32)?;
+        let (address, child_key, _compressed) = test_utils::generate_taproot_address_from_mnemonic(
+            secp,
+            network,
+            taproot_key_path,
+            i as u32,
+        )?;
         let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
         let (internal_key, _parity) = keypair.x_only_public_key();
         infos.push(NodeInfo {
@@ -80,9 +86,13 @@ fn get_node_addresses(
     Ok((infos, secrets))
 }
 
-fn get_portal_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<PortalInfo> {
+fn get_portal_info(
+    secp: &Secp256k1<All>,
+    network: Network,
+    taproot_key_path: &Path,
+) -> Result<PortalInfo> {
     let (address, child_key, _compressed) =
-        test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, 4)?;
+        test_utils::generate_taproot_address_from_mnemonic(secp, network, taproot_key_path, 4)?;
     let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
     Ok(PortalInfo {
@@ -224,11 +234,11 @@ Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
 async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Setup
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
+    let network = Network::Testnet4;
+    let config = TestConfig::try_parse()?;
 
     // Ensure we are talking to the Testnet4 node (default port 48332)
-    let client = Client::new_from_config(&test_cfg)?;
+    let client = Client::new_from_config(&config)?;
 
     let secp = Secp256k1::new();
 
@@ -242,7 +252,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     info!("min_sat_per_vb={}", min_sat_per_vb);
 
     // Phase 1: Nodes sign up for agreement with address + x-only pubkey
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
 
     // Phase 2: Portal fetches node utxos and constructs COMMIT PSBT using nodes' outpoints/prevouts
     let node_utxos: Vec<(OutPoint, TxOut)> = mock_fetch_utxos_for_addresses(&signups);
@@ -359,7 +369,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
     info!("portal appending to COMMIT");
-    let portal_info = get_portal_info(&secp, &test_cfg)?;
+    let portal_info = get_portal_info(&secp, network, &config.taproot_key_path)?;
     let (portal_outpoint, portal_prevout) = mock_fetch_portal_utxo(&portal_info);
     let base_before_portal_vb = tx_vbytes(&commit_psbt.unsigned_tx);
     let portal_input_index = commit_psbt.unsigned_tx.input.len();
@@ -494,7 +504,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         Some(commit_psbt.unsigned_tx.output[portal_script_vout as usize].clone());
     reveal_psbt.inputs[nodes_n].tap_internal_key = Some(portal_info.internal_key);
 
-    let (_, node_secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (_, node_secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
 
     // Phase 4: Portal sends both PSBTs to nodes; nodes sign commit input (key-spend, SIGHASH_ALL) and reveal input (script-spend, SIGHASH_ALL)
     // Each node signs asynchronously and returns only its own witnesses; portal merges them

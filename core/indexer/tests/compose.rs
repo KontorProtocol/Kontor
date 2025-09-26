@@ -5,7 +5,7 @@ use bitcoin::{
     Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
-use bitcoin::{FeeRate, TapSighashType};
+use bitcoin::{FeeRate, Network, TapSighashType};
 use clap::Parser;
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
@@ -25,8 +25,12 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) =
-        test_utils::generate_taproot_address_from_mnemonic(&secp, &config, 0)?;
+    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
+        &secp,
+        Network::Bitcoin,
+        &config.taproot_key_path,
+        0,
+    )?;
 
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -165,9 +169,9 @@ async fn test_taproot_transaction() -> Result<()> {
 
 #[test]
 fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
-    let cfg = TestConfig::try_parse_from(["test"])?;
+    let config = TestConfig::try_parse()?;
     let secp = bitcoin::key::Secp256k1::new();
-    let (nodes, _secrets) = get_node_addresses(&secp, &cfg)?;
+    let (nodes, _secrets) = get_node_addresses(&secp, Network::Bitcoin, &config.taproot_key_path)?;
     let utxos = mock_fetch_utxos_for_addresses(&nodes);
 
     let mut addresses = Vec::new();

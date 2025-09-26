@@ -11,9 +11,9 @@ use bitcoin::{Psbt, TapSighashType, Txid, Witness};
 use futures_util::future::join_all;
 use tracing::info;
 
+use std::path::Path;
 use std::str::FromStr;
 
-use crate::config::TestConfig;
 use crate::test_utils;
 use bitcoin::Network;
 use bitcoin::address::KnownHrp;
@@ -45,13 +45,18 @@ pub struct PortalInfo {
 // NODE AND PORTAL SETUP HELPERS
 pub fn get_node_addresses(
     secp: &Secp256k1<All>,
-    test_cfg: &TestConfig,
+    network: Network,
+    taproot_key_path: &Path,
 ) -> Result<(Vec<NodeInfo>, Vec<NodeSecrets>)> {
     let mut infos = Vec::new();
     let mut secrets = Vec::new();
     for i in 0..3 {
-        let (address, child_key, _compressed) =
-            test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, i as u32)?;
+        let (address, child_key, _compressed) = test_utils::generate_taproot_address_from_mnemonic(
+            secp,
+            network,
+            taproot_key_path,
+            i as u32,
+        )?;
         let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
         let (internal_key, _parity) = keypair.x_only_public_key();
         infos.push(NodeInfo {
@@ -63,9 +68,13 @@ pub fn get_node_addresses(
     Ok((infos, secrets))
 }
 
-pub fn get_portal_info(secp: &Secp256k1<All>, test_cfg: &TestConfig) -> Result<PortalInfo> {
+pub fn get_portal_info(
+    secp: &Secp256k1<All>,
+    network: Network,
+    taproot_key_path: &Path,
+) -> Result<PortalInfo> {
     let (address, child_key, _compressed) =
-        test_utils::generate_taproot_address_from_mnemonic(secp, test_cfg, 4)?;
+        test_utils::generate_taproot_address_from_mnemonic(secp, network, taproot_key_path, 4)?;
     let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
     Ok(PortalInfo {
@@ -473,11 +482,12 @@ pub fn add_portal_input_and_output_to_commit_psbt(
     min_sat_per_vb: u64,
     dust_limit_sat: u64,
     secp: &Secp256k1<All>,
-    test_cfg: &TestConfig,
+    network: Network,
+    taproot_key_path: &Path,
 ) -> Result<(PortalInfo, u64, usize)> {
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
     info!("portal appending to COMMIT");
-    let portal_info = get_portal_info(secp, test_cfg)?;
+    let portal_info = get_portal_info(secp, network, taproot_key_path)?;
     let (portal_outpoint, portal_prevout) = mock_fetch_portal_utxo(&portal_info);
     let base_before_portal_vb = tx_vbytes(&commit_psbt.unsigned_tx);
     let portal_input_index = commit_psbt.unsigned_tx.input.len();

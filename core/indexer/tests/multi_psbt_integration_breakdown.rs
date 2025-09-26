@@ -42,9 +42,9 @@ Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
 async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Setup
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
     let dust_limit_sat: u64 = 330;
 
@@ -53,7 +53,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     info!("Random sats/vbyte: {}", min_sat_per_vb);
 
     // Phase 1: Nodes sign up for agreement with address + x-only pubkey
-    let (signups, _) = get_node_addresses(&secp, &test_cfg)?;
+    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
 
     // Phase 2: Portal fetches node utxos and constructs COMMIT PSBT using nodes' outpoints/prevouts
     let node_utxos: Vec<(OutPoint, TxOut)> = mock_fetch_utxos_for_addresses(&signups);
@@ -92,7 +92,8 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             min_sat_per_vb,
             dust_limit_sat,
             &secp,
-            &test_cfg,
+            network,
+            &config.taproot_key_path,
         )?;
 
     // Prepare prevouts for commit signing
@@ -139,7 +140,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Phase 4: Portal sends both PSBTs to nodes; nodes sign commit input (key-spend, SIGHASH_ALL) and reveal input (script-spend, SIGHASH_ALL)
     // Each node signs asynchronously and returns only its own witnesses; portal merges them
 
-    let (_, node_secrets) = get_node_addresses(&secp, &test_cfg)?;
+    let (_, node_secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
 
     let node_sign_futs: Vec<_> = signups
         .iter()
@@ -206,9 +207,9 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 async fn test_portal_coordinated_compose_flow() -> Result<()> {
     // Setup
     logging::setup();
-    let mut test_cfg = TestConfig::try_parse()?;
-    test_cfg.network = Network::Testnet4;
-    let client = indexer::bitcoin_client::Client::new_from_config(&test_cfg)?;
+    let config = TestConfig::try_parse()?;
+    let network = Network::Testnet4;
+    let client = indexer::bitcoin_client::Client::new_from_config(&config)?;
     let secp = Secp256k1::new();
 
     // Fee environment: choose a random integer sats/vB in [2, 15]
@@ -216,9 +217,13 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
     let envelope_sat: u64 = 330;
 
     // Participants: 3 nodes + portal
-    let (signups, node_secrets) =
-        indexer::multi_psbt_test_utils::get_node_addresses(&secp, &test_cfg)?;
-    let portal_info = indexer::multi_psbt_test_utils::get_portal_info(&secp, &test_cfg)?;
+    let (signups, node_secrets) = indexer::multi_psbt_test_utils::get_node_addresses(
+        &secp,
+        network,
+        &config.taproot_key_path,
+    )?;
+    let portal_info =
+        indexer::multi_psbt_test_utils::get_portal_info(&secp, network, &config.taproot_key_path)?;
     let mut all_participants = signups.clone();
     // Append portal as the last participant
     let portal_as_node = indexer::multi_psbt_test_utils::NodeInfo {
