@@ -143,11 +143,11 @@ jobs:
           install: >-
             git
             brotli
-            toolchain
-            cmake
-            libevent
-            zeromq
-            boost
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-libevent
+            mingw-w64-x86_64-zeromq
+            mingw-w64-x86_64-boost
       # - name: Install dependencies (Windows)
       #   if: runner.os == 'Windows'
       #   shell: msys2 {0}
