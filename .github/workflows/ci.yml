@@ -114,12 +114,12 @@ jobs:
           echo "Removing .NET SDK..."
           time sudo rm -rf /usr/share/dotnet
           df -h
-      # - name: Remove Android SDK
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     echo "Removing Android SDK..."
-      #     time sudo rm -rf /usr/local/lib/android
-      #     df -h
+      - name: Remove Android SDK
+        if: runner.os == 'Linux'
+        run: |
+          echo "Removing Android SDK..."
+          time sudo rm -rf /usr/local/lib/android
+          df -h
       - name: Remove hosted tool cache
         if: runner.os == 'Linux'
         run: |
@@ -140,18 +140,18 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          # install: >-
-          #   git
-          #   brotli
-          #   toolchain
-          #   cmake
-          #   libevent
-          #   zeromq
-          #   boost
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
+          install: >-
+            git
+            brotli
+            toolchain
+            cmake
+            libevent
+            zeromq
+            boost
+      # - name: Install dependencies (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: msys2 {0}
+      #   run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -166,7 +166,6 @@ jobs:
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
-          ls -l build/bin
       - name: Build Bitcoin (Others)
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
@@ -174,14 +173,6 @@ jobs:
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
-      # - name: Add Bitcoin to PATH (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: msys2 {0}
-      #   run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
-      # - name: Test bitcoind (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: msys2 {0}
-      #   run: bitcoind.exe --version
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
@@ -192,7 +183,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          ls -l $(pwd)/bitcoin/build/bin
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
       - name: Cache Cargo things
