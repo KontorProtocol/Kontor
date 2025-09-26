@@ -134,10 +134,6 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install zmq boost
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Setup MSYS2 (Windows only)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -152,6 +148,10 @@ jobs:
           #   libevent
           #   zeromq
           #   boost
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: pacman -S --noconfirm git mingw-w64-x86_64-brotli mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-libevent mingw-w64-x86_64-zeromq mingw-w64-x86_64-boost
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
