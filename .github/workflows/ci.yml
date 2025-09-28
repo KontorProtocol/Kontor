@@ -109,8 +109,11 @@ jobs:
       - name: PWD
         run: pwd
       - name: PATH
-        run: echo $PATH
+        if: runner.os == 'Windows'
         shell: bash
+        run: |
+          export PATH="$PATH:$(pwd)/bitcoin/build/bin"
+          echo $PATH
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
