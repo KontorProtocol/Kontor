@@ -108,6 +108,9 @@ jobs:
         run: df -h
       - name: PWD
         run: pwd
+      - name: PATH
+        run: echo $PATH
+        shell: bash
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
@@ -159,7 +162,9 @@ jobs:
           cmake --build build
       - name: Add Bitcoin to PATH (Windows)
         if: runner.os == 'Windows'
-        run: echo "D:/a/Kontor/Kontor/bitcoin/build/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+        shell: msys2 {0}
+        run: |
+          cmake --install build --prefix ${{ github.workspace }}/bitcoin/build/bin
       - name: Show GITHUB_PATH (Windows)
         if: runner.os == 'Windows'
         shell: bash
