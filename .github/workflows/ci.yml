@@ -145,6 +145,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          ls -l $HOME/.cargo/bin
           export PATH=$PATH:$HOME/.cargo/bin
           cargo --version
       - name: Cache Bitcoin binaries
