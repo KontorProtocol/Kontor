@@ -107,9 +107,9 @@ jobs:
       - name: Final disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things (Windows)
+      - name: Cache Cargo things (Others)
         uses: actions/cache@v4
-        if: runner.os == 'Windows'
+        if: runner.os != 'Windows'
         with:
           path: |
             ~/.cargo/bin
@@ -121,9 +121,9 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache Cargo things (Others)
+      - name: Cache Cargo things (Windows)
         uses: actions/cache@v4
-        if: runner.os != 'Windows'
+        if: runner.os == 'Windows'
         with:
           path: |
             /home/runneradmin/.cargo/bin
