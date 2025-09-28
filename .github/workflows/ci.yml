@@ -71,7 +71,11 @@ jobs:
 
   build:
     name: Build
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    environment: mainnet
+    strategy:
+      matrix:
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,6 +93,8 @@ jobs:
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install wasm32-unknown-unknown
+        run: rustup target add wasm32-unknown-unknown
       - name: Build contracts
         run: cargo build
         working-directory: ./contracts
