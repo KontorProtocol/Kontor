@@ -106,20 +106,6 @@ jobs:
           df -h
       - name: Final disk usage
         run: df -h
-      - name: PWD
-        run: pwd
-      - name: PATH
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          export PATH="$PATH:$(pwd)/bitcoin/build/bin"
-          echo $PATH
-      - name: Home bash
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cd ~/
-          pwd
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
@@ -155,12 +141,12 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-zeromq
             mingw-w64-x86_64-boost
-      - name: Home msys
+      - name: Test Cargo (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          cd ~/
-          pwd
+          export PATH=$PATH:/c/Users/runneradmin/.cargo/bin
+          cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -190,8 +176,10 @@ jobs:
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        run: bitcoind --version
+        shell: msys2 {0}
+        run: |
+          export PATH=$PATH:$(pwd)/bitcoin/build/bin
+          bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
@@ -232,11 +220,12 @@ jobs:
         shell: bash
       - name: Run core integration tests (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
           cd core
+          export PATH=$PATH:/c/Users/runneradmin/.cargo/bin
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
