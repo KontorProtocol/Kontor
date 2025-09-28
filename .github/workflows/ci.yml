@@ -145,7 +145,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          export PATH=$PATH:~/.cargo/bin
+          export PATH=$PATH:$HOME/.cargo/bin
           cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
@@ -225,7 +225,7 @@ jobs:
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
           cd core
-          export PATH=$PATH:~/.cargo/bin
+          export PATH=$PATH:$HOME/.cargo/bin
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
