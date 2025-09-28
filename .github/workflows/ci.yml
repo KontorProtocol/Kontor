@@ -121,20 +121,20 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache Cargo things (Windows)
-        uses: actions/cache@v4
-        if: runner.os == 'Windows'
-        with:
-          path: |
-            /home/runneradmin/.cargo/bin
-            /home/runneradmin/.cargo/.crates.toml
-            /home/runneradmin/.cargo/.crates2.json
-            /home/runneradmin/.cargo/registry/index
-            /home/runneradmin/.cargo/registry/cache
-            /home/runneradmin/.cargo/git/db
-            contracts/target
-            core/target
-          key: cargo-msys2-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+      # - name: Cache Cargo things (Windows)
+      #   uses: actions/cache@v4
+      #   if: runner.os == 'Windows'
+      #   with:
+      #     path: |
+      #       /home/runneradmin/.cargo/bin
+      #       /home/runneradmin/.cargo/.crates.toml
+      #       /home/runneradmin/.cargo/.crates2.json
+      #       /home/runneradmin/.cargo/registry/index
+      #       /home/runneradmin/.cargo/registry/cache
+      #       /home/runneradmin/.cargo/git/db
+      #       contracts/target
+      #       core/target
+      #     key: cargo-msys2-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -162,7 +162,7 @@ jobs:
         shell: msys2 {0}
         run: |
           cargo --version
-          ls ~/.cargo
+          which cargo
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
