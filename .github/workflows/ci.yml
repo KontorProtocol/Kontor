@@ -167,21 +167,24 @@ jobs:
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
       - name: Add Bitcoin to PATH (Others)
         if: runner.os == 'Windows'
-        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+        run: echo "$(pwd)/bitcoin/build/bin" >> $GITHUB_PATH
         shell: bash
       - name: Test bitcoind (Others)
         if: runner.os != 'Windows'
         run: bitcoind --version
+      - name: Show GITHUB_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo $GITHUB_PATH
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          echo $GITHUB_PATH
           bitcoind --version
           pwd
           ls -l
           echo "$(pwd)/bitcoin/build/bin"
-          alias bitcoind="$(pwd)/bitcoin/build/bin"
+          alias bitcoind="$(pwd)/bitcoin/build/bin/bitcoind.exe"
           bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
