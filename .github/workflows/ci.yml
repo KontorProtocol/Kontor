@@ -178,7 +178,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          let -l
+          ls -l
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
       - name: Install wasm32-unknown-unknown
