@@ -8,6 +8,19 @@ env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: true
+  BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
+  BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
+  BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
+  TESTNET_BITCOIN_RPC_URL: ${{ vars.TESTNET_BITCOIN_RPC_URL }}
+  TESTNET_BITCOIN_RPC_USER: ${{ vars.TESTNET_BITCOIN_RPC_USER }}
+  TESTNET_BITCOIN_RPC_PASSWORD: ${{ vars.TESTNET_BITCOIN_RPC_PASSWORD }}
+  DATA_DIR: ${{ github.workspace }}/core/test-data
+  TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
+  SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
+  SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
+  TAPROOT_KEY_PATH: ${{ github.workspace }}/core/keys/taproot_key.txt
+  SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
+  SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
 
 jobs:
   quality-checks:
@@ -56,27 +69,40 @@ jobs:
         run: cargo audit
         working-directory: ./core
 
+  build:
+    name: Build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo things
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            contracts/target
+            core/target
+          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Build contracts
+        run: cargo build
+        working-directory: ./contracts
+      - name: Build core
+        run: cargo build
+        working-directory: ./core
+
   test:
     name: Build & Test
     runs-on: ${{ matrix.os }}
     environment: mainnet
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
-    env:
-      BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
-      BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
-      BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
-      TESTNET_BITCOIN_RPC_URL: ${{ vars.TESTNET_BITCOIN_RPC_URL }}
-      TESTNET_BITCOIN_RPC_USER: ${{ vars.TESTNET_BITCOIN_RPC_USER }}
-      TESTNET_BITCOIN_RPC_PASSWORD: ${{ vars.TESTNET_BITCOIN_RPC_PASSWORD }}
-      DATA_DIR: ${{ github.workspace }}/core/test-data
-      TAPROOT_KEY_CONTENT: ${{ secrets.TAPROOT_KEY_CONTENT }}
-      SEGWIT_SELLER_KEY_CONTENT: ${{ secrets.SEGWIT_SELLER_KEY_CONTENT }}
-      SEGWIT_BUYER_KEY_CONTENT: ${{ secrets.SEGWIT_BUYER_KEY_CONTENT }}
-      TAPROOT_KEY_PATH: ${{ github.workspace }}/core/keys/taproot_key.txt
-      SEGWIT_SELLER_KEY_PATH: ${{ github.workspace }}/core/keys/seller_key.txt
-      SEGWIT_BUYER_KEY_PATH: ${{ github.workspace }}/core/keys/buyer_key.txt
+        os: [ubuntu-latest, macos-latest, macos-14]
     steps:
       - uses: actions/checkout@v4
       - name: Disable man-db to make package install and removal faster
@@ -107,9 +133,8 @@ jobs:
       - name: Final disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things (Others)
+      - name: Cache Cargo things
         uses: actions/cache@v4
-        if: runner.os != 'Windows'
         with:
           path: |
             ~/.cargo/bin
@@ -121,14 +146,6 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache Cargo things (Windows)
-        uses: actions/cache@v4
-        if: runner.os == 'Windows'
-        with:
-          path: |
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -136,58 +153,23 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install zmq boost
-      - name: Setup MSYS2 (Windows only)
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            brotli
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-libevent
-            mingw-w64-x86_64-zeromq
-            mingw-w64-x86_64-boost
-            mingw-w64-x86_64-rust
-      - name: Test Cargo (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/bitcoin/build/bin
           key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v29.1
-      - name: Build Bitcoin (Windows)
-        if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
-        shell: msys2 {0}
+      - name: Build Bitcoin
+        if: steps.bitcoin-cache.outputs.cache-hit != 'true'
         run: |
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
-      - name: Build Bitcoin (Others)
-        if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
-        run: |
-          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v29.1
-          cd bitcoin
-          cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
-          cmake --build build
-      - name: Add Bitcoin to PATH (Others)
-        if: runner.os != 'Windows'
+      - name: Add Bitcoin to PATH
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
-      - name: Test bitcoind (Others)
-        if: runner.os != 'Windows'
+      - name: Test bitcoind
         run: bitcoind --version
-      - name: Test bitcoind (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          export PATH=$PATH:$(pwd)/bitcoin/build/bin
-          bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
@@ -197,7 +179,6 @@ jobs:
       - name: Build contracts
         run: ./build.sh
         working-directory: ./contracts
-        shell: bash
       - name: Install mkcert
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
@@ -226,15 +207,6 @@ jobs:
           echo "$SEGWIT_BUYER_KEY_CONTENT" > "$SEGWIT_BUYER_KEY_PATH"
         working-directory: ./core
         shell: bash
-      # - name: Run core integration tests (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: msys2 {0}
-      #   run: |
-      #     export PATH=$PATH:$(pwd)/bitcoin/build/bin
-      #     bitcoind --version
-      #     cd core
-      #     cargo test --workspace
-      # - name: Run core integration tests (Others)
-      #   if: runner.os != 'Windows'
-      #   working-directory: ./core
-      #   run: cargo test --workspace
+      - name: Run core integration tests
+        working-directory: ./core
+        run: cargo test --workspace
