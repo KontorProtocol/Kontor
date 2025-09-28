@@ -141,13 +141,6 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-zeromq
             mingw-w64-x86_64-boost
-      - name: Test cargo (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          pwd
-          ls -l
-          cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -177,11 +170,11 @@ jobs:
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
           pwd
           ls -l
-          export PATH=$PATH:$(pwd)/bitcoin/build/bin
+          export PATH=$PATH:"$(pwd)/bitcoin/build/bin"
           bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
