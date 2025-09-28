@@ -143,10 +143,9 @@ jobs:
             mingw-w64-x86_64-boost
       - name: Test cargo (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
-          ls -l .cargo/bin
-          export PATH=$PATH:$HOME/.cargo/bin
+          pwd
           cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
