@@ -120,12 +120,6 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - name: Test cargo (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          export PATH=$PATH:~/.cargo/bin
-          cargo --version
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -147,6 +141,12 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-zeromq
             mingw-w64-x86_64-boost
+      - name: Test cargo (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PATH=$PATH:~/.cargo/bin
+          cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
