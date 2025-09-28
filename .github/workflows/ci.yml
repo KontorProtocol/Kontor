@@ -107,8 +107,9 @@ jobs:
       - name: Final disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things
+      - name: Cache Cargo things (Windows)
         uses: actions/cache@v4
+        if: runner.os == 'Windows'
         with:
           path: |
             ~/.cargo/bin
@@ -120,6 +121,20 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache Cargo things (Others)
+        uses: actions/cache@v4
+        if: runner.os != 'Windows'
+        with:
+          path: |
+            /home/runneradmin/.cargo/bin
+            /home/runneradmin/.cargo/.crates.toml
+            /home/runneradmin/.cargo/.crates2.json
+            /home/runneradmin/.cargo/registry/index
+            /home/runneradmin/.cargo/registry/cache
+            /home/runneradmin/.cargo/git/db
+            contracts/target
+            core/target
+          key: cargo-msys2-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -141,12 +156,13 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-zeromq
             mingw-w64-x86_64-boost
+            mingw-w64-x86_64-rust
       - name: Test Cargo (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          export PATH=$PATH:/c/Users/runneradmin/.cargo/bin
           cargo --version
+          ls ~/.cargo
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
         uses: actions/cache@v4
@@ -225,7 +241,6 @@ jobs:
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
           cd core
-          export PATH=$PATH:/c/Users/runneradmin/.cargo/bin
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
