@@ -176,8 +176,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          echo 'export PATH=$PATH:$(pwd)/bitcoin/build/bin' >> ~/.bashrc
+          source ~/.bashrc
+          echo $PATH
           ls "$(pwd)/bitcoin/build/bin"
-          alias bitcoind="$(pwd)/bitcoin/build/bin/bitcoind.exe"
           bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
