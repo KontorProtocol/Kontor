@@ -165,6 +165,10 @@ jobs:
       - name: Add Bitcoin to PATH (Others)
         if: runner.os != 'Windows'
         run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+      - name: Add Bitcoin to PATH (Others)
+        if: runner.os == 'Windows'
+        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+        shell: bash
       - name: Test bitcoind (Others)
         if: runner.os != 'Windows'
         run: bitcoind --version
@@ -172,6 +176,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          echo $GITHUB_PATH
+          bitcoind --version
           pwd
           ls -l
           echo "$(pwd)/bitcoin/build/bin"
