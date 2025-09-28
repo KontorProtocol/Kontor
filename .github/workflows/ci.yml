@@ -120,6 +120,12 @@ jobs:
             contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+      - name: Test cargo (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PATH=$PATH:~/.cargo/bin
+          cargo --version
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -170,11 +176,10 @@ jobs:
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
-          ls -l D:/a/Kontor/Kontor/bitcoin/build/bin
-          export PATH=$PATH:D:/a/Kontor/Kontor/bitcoin/build/bin
-          bitcoind.exe --version
+          export PATH=$PATH:$(pwd)/bitcoin/build/bin
+          bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
@@ -215,11 +220,12 @@ jobs:
         shell: bash
       - name: Run core integration tests (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
-          export PATH=$PATH:D:/a/Kontor/Kontor/bitcoin/build/bin
+          export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
           cd core
+          export PATH=$PATH:~/.cargo/bin
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
