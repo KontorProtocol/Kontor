@@ -176,8 +176,9 @@ jobs:
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
+          let -l
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
       - name: Install wasm32-unknown-unknown
@@ -220,12 +221,11 @@ jobs:
         shell: bash
       - name: Run core integration tests (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
           cd core
-          export PATH=$PATH:$HOME/.cargo/bin
           cargo test --workspace
       - name: Run core integration tests (Others)
         if: runner.os != 'Windows'
