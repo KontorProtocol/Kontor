@@ -167,7 +167,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          cmake --install build --prefix ${{ github.workspace }}/bitcoin/build/bin
+          cmake --install build --prefix /c/Users/runneradmin/bin
+          ls /c/Users/runneradmin/bin
       - name: Show GITHUB_PATH (Windows)
         if: runner.os == 'Windows'
         shell: bash
