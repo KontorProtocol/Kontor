@@ -106,6 +106,8 @@ jobs:
           df -h
       - name: Final disk usage
         run: df -h
+      - name: PWD
+        run: pwd
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo things
         uses: actions/cache@v4
@@ -155,6 +157,13 @@ jobs:
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DWITH_ZMQ=ON
           cmake --build build
+      - name: Add Bitcoin to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: echo "D:/a/Kontor/Kontor/bitcoin/build/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+      - name: Show GITHUB_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo $env::GITHUB_PATH
       - name: Build Bitcoin (Others)
         if: steps.bitcoin-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
@@ -168,19 +177,10 @@ jobs:
       - name: Test bitcoind (Others)
         if: runner.os != 'Windows'
         run: bitcoind --version
-      - name: Show GITHUB_PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: echo $GITHUB_PATH
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          echo 'export PATH=$PATH:$(pwd)/bitcoin/build/bin' >> ~/.bashrc
-          source ~/.bashrc
-          echo $PATH
-          ls "$(pwd)/bitcoin/build/bin"
-          bitcoind --version
+        run: bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
