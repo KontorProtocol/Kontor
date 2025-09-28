@@ -146,6 +146,7 @@ jobs:
         shell: bash
         run: |
           pwd
+          ls -l
           cargo --version
       - name: Cache Bitcoin binaries
         id: bitcoin-cache
@@ -176,8 +177,9 @@ jobs:
         run: bitcoind --version
       - name: Test bitcoind (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
+          pwd
           ls -l
           export PATH=$PATH:$(pwd)/bitcoin/build/bin
           bitcoind --version
