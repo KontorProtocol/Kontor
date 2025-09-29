@@ -182,9 +182,6 @@ jobs:
         run: cargo install cargo-expand
       - name: Install wasm-opt via cargo
         run: cargo install wasm-opt
-      - name: Build contracts
-        run: ./build.sh
-        working-directory: ./contracts
       - name: Install mkcert
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
