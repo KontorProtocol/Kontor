@@ -46,6 +46,8 @@ jobs:
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+      - name: check brotli
+        run: brotli --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
@@ -62,6 +64,8 @@ jobs:
         working-directory: ./core
       - name: Install cargo-audit
         run: cargo install cargo-audit
+      - name: Install wasm-opt
+        run: cargo install wasm-opt
       - name: Audit contracts
         run: cargo audit
         working-directory: ./contracts
