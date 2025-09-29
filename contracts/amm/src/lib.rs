@@ -11,6 +11,7 @@ struct AMMStorage {
     pub token_a: ContractAddress,
     pub token_b: ContractAddress,
     pub custody_addr: String,
+    pub fee_bps: Integer,
 
     pub lp_total_supply: Integer,
     pub lp_ledger: Map<String, Integer>,
@@ -30,7 +31,8 @@ impl Default for AMMStorage {
                 tx_index: 0,
             },
             custody_addr: "".to_string(),
-            lp_total_supply: Integer::default(),
+            fee_bps: 0.into(),
+            lp_total_supply: 0.into(),
             lp_ledger: Map::default(),
         }
     }
@@ -49,20 +51,33 @@ fn check_amount_positive(amount: Integer) -> Result<(), Error> {
     Ok(())
 }
 
-fn calc_swap_result(amount_in: Integer, bal_in: Integer, bal_out: Integer) -> Result<Integer, Error> {
+fn calc_swap_result(
+    amount_in: Integer,
+    bal_in: Integer,
+    bal_out: Integer,
+    fee_bps: Integer,
+) -> Result<Integer, Error> {
     check_amount_positive(amount_in)?;
     check_amount_positive(bal_in)?;
     check_amount_positive(bal_out)?;
 
-    let new_bal_in = bal_in + amount_in;
+    // input amount less fee, round down
+    let bps_in_100pct = 10000.into();
+    let in_less_fee = amount_in * (bps_in_100pct - fee_bps) / bps_in_100pct;
+
+    let new_bal_in = bal_in + in_less_fee;
     check_amount_positive(new_bal_in)?;
 
+    // calculate output amount from delta in output-token balance, round down
     let k = bal_in * bal_out;
-    Ok(((bal_out * new_bal_in) - k) / new_bal_in)
+    Ok((bal_out * new_bal_in - k) / new_bal_in)
 }
 
 impl Amm {
-    fn token_out<C: ReadContext>(ctx: &C, token_in: &ContractAddress) -> Result<ContractAddress, Error> {
+    fn token_out<C: ReadContext>(
+        ctx: &C,
+        token_in: &ContractAddress,
+    ) -> Result<ContractAddress, Error> {
         let token_a = storage(ctx).token_a(ctx);
         let token_b = storage(ctx).token_b(ctx);
         if token_string(token_in) == token_string(&token_a) {
@@ -84,8 +99,9 @@ impl Amm {
 
         let bal_in = token_dyn::balance(token_in, &addr).unwrap_or_default();
         let bal_out = token_dyn::balance(&token_out, &addr).unwrap_or_default();
+        let fee_bps = storage(ctx).fee_bps(ctx);
 
-        calc_swap_result(amount_in, bal_in, bal_out)
+        calc_swap_result(amount_in, bal_in, bal_out, fee_bps)
     }
 
     fn quote_deposit<C: ReadContext>(
@@ -118,10 +134,7 @@ impl Amm {
         })
     }
 
-    fn quote_withdraw<C: ReadContext>(
-        ctx: &C,
-        shares: Integer,
-    ) -> Result<WithdrawResult, Error> {
+    fn quote_withdraw<C: ReadContext>(ctx: &C, shares: Integer) -> Result<WithdrawResult, Error> {
         check_amount_positive(shares)?;
 
         let token_a = storage(ctx).token_a(ctx);
@@ -132,7 +145,7 @@ impl Amm {
         let bal_a = token_dyn::balance(&token_a, &addr).unwrap_or_default();
         let bal_b = token_dyn::balance(&token_b, &addr).unwrap_or_default();
 
-        Ok(WithdrawResult{
+        Ok(WithdrawResult {
             amount_a: shares * bal_a / lp_supply,
             amount_b: shares * bal_b / lp_supply,
         })
@@ -150,6 +163,7 @@ impl Guest for Amm {
         amount_a: Integer,
         token_b: ContractAddress,
         amount_b: Integer,
+        fee_bps: Integer,
     ) -> Result<Integer, Error> {
         if storage(ctx).lp_total_supply(ctx) > 0.into() {
             return Err(Error::Message("already created".to_string()));
@@ -173,8 +187,24 @@ impl Guest for Amm {
         storage(ctx).set_token_b(ctx, token_b);
         storage(ctx).set_custody_addr(ctx, custody_addr);
         storage(ctx).set_lp_total_supply(ctx, lp_shares);
+        storage(ctx).set_fee_bps(ctx, fee_bps);
 
         Ok(lp_shares)
+    }
+
+    fn fee(ctx: &ViewContext) -> Integer {
+        storage(ctx).fee_bps(ctx)
+    }
+
+    fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
+        let ledger = storage(ctx).lp_ledger();
+        ledger.get(ctx, acc)
+    }
+
+    fn token_balance(ctx: &ViewContext, token: ContractAddress) -> Result<Integer, Error> {
+        Self::token_out(ctx, &token)?;
+        let addr = storage(ctx).custody_addr(ctx);
+        Ok(token_dyn::balance(&token, &addr).unwrap_or_default())
     }
 
     fn quote_deposit(
@@ -210,17 +240,11 @@ impl Guest for Amm {
         Ok(res)
     }
 
-    fn quote_withdraw(
-        ctx: &ViewContext,
-        shares: Integer,
-    ) -> Result<WithdrawResult, Error> {
+    fn quote_withdraw(ctx: &ViewContext, shares: Integer) -> Result<WithdrawResult, Error> {
         Self::quote_withdraw(ctx, shares)
     }
 
-    fn withdraw(
-        ctx: &ProcContext,
-        shares: Integer,
-    ) -> Result<WithdrawResult, Error> {
+    fn withdraw(ctx: &ProcContext, shares: Integer) -> Result<WithdrawResult, Error> {
         let res = Self::quote_withdraw(ctx, shares)?;
 
         let token_a = storage(ctx).token_a(ctx);
@@ -245,17 +269,6 @@ impl Guest for Amm {
         token_dyn::transfer(&token_b, ctx.contract_signer(), &user, res.amount_b)?;
 
         Ok(res)
-    }
-
-    fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
-        let ledger = storage(ctx).lp_ledger();
-        ledger.get(ctx, acc)
-    }
-
-    fn token_balance(ctx: &ViewContext, token: ContractAddress) -> Result<Integer, Error> {
-        Self::token_out(ctx, &token)?;
-        let addr = storage(ctx).custody_addr(ctx);
-        Ok(token_dyn::balance(&token, &addr).unwrap_or_default())
     }
 
     fn quote_swap(
@@ -288,9 +301,5 @@ impl Guest for Amm {
                 amount_out
             )))
         }
-    }
-
-    fn custody_address(ctx: &ViewContext) -> String {
-        storage(ctx).custody_addr(ctx)
     }
 }

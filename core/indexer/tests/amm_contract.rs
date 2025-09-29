@@ -54,6 +54,7 @@ async fn test_amm_swaps() -> Result<()> {
         100.into(),
         token_b.clone(),
         500.into(),
+        0.into(),
     )
     .await?;
     assert_eq!(res, Ok(223.into()));
@@ -67,6 +68,15 @@ async fn test_amm_swaps() -> Result<()> {
     let res = amm::quote_swap(&runtime, token_a.clone(), 10.into()).await?;
     assert_eq!(res, Ok(45.into()));
 
+    let res = amm::quote_swap(&runtime, token_a.clone(), 100.into()).await?;
+    assert_eq!(res, Ok(250.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 1000.into()).await?;
+    assert_eq!(res, Ok(454.into()));
+
+    let res = amm::swap(&runtime, minter, token_a.clone(), 10.into(), 46.into()).await?;
+    assert!(res.is_err()); // below minimum
+
     let res = amm::swap(&runtime, minter, token_a.clone(), 10.into(), 45.into()).await?;
     assert_eq!(res, Ok(45.into()));
 
@@ -79,6 +89,154 @@ async fn test_amm_swaps() -> Result<()> {
     assert_eq!(res, Ok(9.into()));
     let res = amm::swap(&runtime, minter, token_b.clone(), 45.into(), 0.into()).await?;
     assert_eq!(res, Ok(9.into()));
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k3 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k3 >= k2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_amm_swap_fee() -> Result<()> {
+    let runtime = Runtime::new(RuntimeConfig::default()).await?;
+
+    let token_a = ContractAddress {
+        name: "token_a".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let token_b = ContractAddress {
+        name: "token_b".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let admin = "test_admin";
+    let minter = "test_minter";
+    token_a::mint(&runtime, minter, 1000.into()).await?;
+    token_b::mint(&runtime, minter, 1000.into()).await?;
+
+    token_a::transfer(&runtime, minter, admin, 100.into()).await??;
+    token_b::transfer(&runtime, minter, admin, 500.into()).await??;
+
+    amm::create(
+        &runtime,
+        admin,
+        token_a.clone(),
+        100.into(),
+        token_b.clone(),
+        500.into(),
+        30.into(),
+    )
+    .await??;
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k1 = bal_a.unwrap() * bal_b.unwrap();
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 10.into()).await?;
+    assert_eq!(res, Ok(41.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 100.into()).await?;
+    assert_eq!(res, Ok(248.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 1000.into()).await?;
+    assert_eq!(res, Ok(454.into())); // fee dominated by rounding effect
+
+    let res = amm::swap(&runtime, minter, token_a.clone(), 10.into(), 40.into()).await?;
+    assert_eq!(res, Ok(41.into()));
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k2 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k2 >= k1);
+
+    let res = amm::quote_swap(&runtime, token_b.clone(), 45.into()).await?;
+    assert_eq!(res, Ok(9.into()));
+    let res = amm::swap(&runtime, minter, token_b.clone(), 45.into(), 0.into()).await?;
+    assert_eq!(res, Ok(9.into()));
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k3 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k3 >= k2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_amm_swap_low_slippage() -> Result<()> {
+    let runtime = Runtime::new(RuntimeConfig::default()).await?;
+
+    let token_a = ContractAddress {
+        name: "token_a".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let token_b = ContractAddress {
+        name: "token_b".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let admin = "test_admin";
+    let minter = "test_minter";
+    token_a::mint(&runtime, minter, 110000.into()).await?;
+    token_b::mint(&runtime, minter, 510000.into()).await?;
+
+    token_a::transfer(&runtime, minter, admin, 100000.into()).await??;
+    token_b::transfer(&runtime, minter, admin, 500000.into()).await??;
+
+    amm::create(
+        &runtime,
+        admin,
+        token_a.clone(),
+        100000.into(),
+        token_b.clone(),
+        500000.into(),
+        30.into(),
+    )
+    .await??;
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k1 = bal_a.unwrap() * bal_b.unwrap();
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 10.into()).await?;
+    assert_eq!(res, Ok(44.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 100.into()).await?;
+    assert_eq!(res, Ok(494.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 1000.into()).await?;
+    assert_eq!(res, Ok(4935.into()));
+
+    let res = amm::quote_swap(&runtime, token_a.clone(), 10000.into()).await?;
+    assert_eq!(res, Ok(45330.into()));
+
+    let res = amm::swap(
+        &runtime,
+        minter,
+        token_a.clone(),
+        10000.into(),
+        45000.into(),
+    )
+    .await?;
+    assert_eq!(res, Ok(45330.into()));
+
+    let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
+    let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
+    let k2 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k2 >= k1 + (30 * 450000).into()); // grows with fee amount
+
+    let res = amm::quote_swap(&runtime, token_b.clone(), 45.into()).await?;
+    assert_eq!(res, Ok(10.into()));
+    let res = amm::swap(&runtime, minter, token_b.clone(), 45.into(), 0.into()).await?;
+    assert_eq!(res, Ok(10.into()));
 
     let bal_a = amm::token_balance(&runtime, token_a.clone()).await?;
     let bal_b = amm::token_balance(&runtime, token_b.clone()).await?;
@@ -120,6 +278,7 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
         100.into(),
         token_b.clone(),
         500.into(),
+        0.into(),
     )
     .await?;
     assert_eq!(res, Ok(223.into()));
@@ -237,6 +396,7 @@ async fn test_amm_limits() -> Result<()> {
         1000.into(),
         token_b.clone(),
         1000.into(),
+        0.into(),
     )
     .await?;
     assert_eq!(res, Ok(1000.into()));

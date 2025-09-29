@@ -20,17 +20,17 @@ world contract {
 
     export init: func(ctx: borrow<proc-context>);
 
-    export create: func(ctx: borrow<proc-context>, a: contract-address, amount-a: integer, b: contract-address, amount-b: integer) -> result<integer, error>;
+    export create: func(ctx: borrow<proc-context>, a: contract-address, amount-a: integer, b: contract-address, amount-b: integer, fee-bps: integer) -> result<integer, error>;
 
+	export fee: func(ctx: borrow<view-context>) -> integer;
+
+    export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
     export token-balance: func(ctx: borrow<view-context>, token: contract-address) -> result<integer, error>;
-    export custody-address: func(ctx: borrow<view-context>) -> string;
-
     export quote-deposit: func(ctx: borrow<view-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;
     export deposit: func(ctx: borrow<proc-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;
-    export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
-
     export quote-withdraw: func(ctx: borrow<view-context>, shares: integer) -> result<withdraw-result, error>;
     export withdraw: func(ctx: borrow<proc-context>, shares: integer) -> result<withdraw-result, error>;
+
 
     export swap: func(ctx: borrow<proc-context>, token-in: contract-address, amount-in: integer, min-out: integer) -> result<integer, error>;
     export quote-swap: func(ctx: borrow<view-context>, token-in: contract-address, amount-in: integer) -> result<integer, error>;
