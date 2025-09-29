@@ -22,14 +22,6 @@ Install cargo expand
 cargo install cargo-expand
 ```
 
-Build native contracts:
-```bash
-cd contracts
-./build.sh
-cd ..
-```
-This will generate the native contracts in the `contracts/target/wasm32-unknown-unknown/debug` directory.
-
 Set `core` as the working directory:
 ```bash
 cd core
