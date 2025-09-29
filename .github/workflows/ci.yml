@@ -57,13 +57,13 @@ jobs:
       - name: Run clippy (contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./contracts
+      - name: Install wasm-opt
+        run: cargo install wasm-opt
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
       - name: Install cargo-audit
         run: cargo install cargo-audit
-      - name: Install wasm-opt
-        run: cargo install wasm-opt
       - name: Audit contracts
         run: cargo audit
         working-directory: ./contracts
