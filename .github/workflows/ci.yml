@@ -46,8 +46,6 @@ jobs:
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
-      - name: check brotli
-        run: brotli --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Check formatting (contracts)
@@ -71,39 +69,6 @@ jobs:
         working-directory: ./contracts
       - name: Audit core
         run: cargo audit
-        working-directory: ./core
-
-  build:
-    name: Build
-    runs-on: ${{ matrix.os }}
-    environment: mainnet
-    strategy:
-      matrix:
-        os: [windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
-      - name: Build contracts
-        run: cargo build
-        working-directory: ./contracts
-      - name: Build core
-        run: cargo build
         working-directory: ./core
 
   test:
@@ -159,7 +124,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y brotli libzmq3-dev libboost-all-dev
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev libboost-all-dev
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install zmq boost
