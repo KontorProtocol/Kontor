@@ -25,6 +25,8 @@ world contract {
 	export fee: func(ctx: borrow<view-context>) -> integer;
 
     export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
+    export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
+
     export token-balance: func(ctx: borrow<view-context>, token: contract-address) -> result<integer, error>;
     export quote-deposit: func(ctx: borrow<view-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;
     export deposit: func(ctx: borrow<proc-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;

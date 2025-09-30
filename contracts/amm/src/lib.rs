@@ -201,6 +201,22 @@ impl Guest for Amm {
         ledger.get(ctx, acc)
     }
 
+    fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
+        let from = ctx.signer().to_string();
+        let ledger = storage(ctx).lp_ledger();
+
+        let from_balance = ledger.get(ctx, &from).unwrap_or_default();
+        let to_balance = ledger.get(ctx, &to).unwrap_or_default();
+
+        if from_balance < n {
+            return Err(Error::Message("insufficient funds".to_string()));
+        }
+
+        ledger.set(ctx, from, from_balance - n);
+        ledger.set(ctx, to, to_balance + n);
+        Ok(())
+    }
+
     fn token_balance(ctx: &ViewContext, token: ContractAddress) -> Result<Integer, Error> {
         Self::token_out(ctx, &token)?;
         let addr = storage(ctx).custody_addr(ctx);

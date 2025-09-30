@@ -168,6 +168,71 @@ async fn test_amm_swap_fee() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_amm_shares_token_interface() -> Result<()> {
+    let runtime = Runtime::new(RuntimeConfig::default()).await?;
+
+    let token_a = ContractAddress {
+        name: "token_a".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let token_b = ContractAddress {
+        name: "token_b".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    let admin = "test_admin";
+    let minter = "test_minter";
+    let holder = "test_holder";
+    token_a::mint(&runtime, minter, 1000.into()).await?;
+    token_b::mint(&runtime, minter, 1000.into()).await?;
+
+    token_a::transfer(&runtime, minter, admin, 100.into()).await??;
+    token_b::transfer(&runtime, minter, admin, 500.into()).await??;
+
+    let res = amm::create(
+        &runtime,
+        admin,
+        token_a.clone(),
+        100.into(),
+        token_b.clone(),
+        500.into(),
+        0.into(),
+    )
+    .await?;
+    assert_eq!(res, Ok(223.into()));
+
+    let shares = amm::balance(&runtime, admin).await?;
+    assert_eq!(shares, Some(223.into()));
+
+    amm::transfer(&runtime, admin, holder, 40.into()).await??;
+
+    let shares = amm::balance(&runtime, admin).await?;
+    assert_eq!(shares, Some(183.into()));
+    let shares = amm::balance(&runtime, holder).await?;
+    assert_eq!(shares, Some(40.into()));
+
+    // holder withdraws the tokens of the pair using the transferred shares
+    let res = amm::withdraw(&runtime, holder, 10.into()).await?;
+    assert_eq!(
+        res,
+        Ok(amm::WithdrawResult {
+            amount_a: 4.into(),
+            amount_b: 22.into(),
+        })
+    );
+
+    let bal_a = token_a::balance(&runtime, holder).await?;
+    assert_eq!(bal_a, Some(4.into()));
+    let bal_b = token_b::balance(&runtime, holder).await?;
+    assert_eq!(bal_b, Some(22.into()));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
