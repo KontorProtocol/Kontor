@@ -87,31 +87,41 @@ jobs:
           sudo dpkg-reconfigure man-db
       - name: Initial disk usage
         run: df -h
-      - name: Remove .NET SDK
-        if: runner.os == 'Linux'
-        run: |
-          echo "Removing .NET SDK..."
-          time sudo rm -rf /usr/share/dotnet
-          df -h
-      - name: Remove Android SDK
-        if: runner.os == 'Linux'
-        run: |
-          echo "Removing Android SDK..."
-          time sudo rm -rf /usr/local/lib/android
-          df -h
-      - name: Remove hosted tool cache
-        if: runner.os == 'Linux'
-        run: |
-          echo "Removing hosted tool cache..."
-          time sudo rm -rf /opt/hostedtoolcache
-          df -h
-      - name: Clean APT cache
-        if: runner.os == 'Linux'
-        run: |
-          echo "Cleaning APT cache..."
-          time sudo apt-get clean
-          time sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
-          df -h
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      # - name: Remove .NET SDK
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     echo "Removing .NET SDK..."
+      #     time sudo rm -rf /usr/share/dotnet
+      #     df -h
+      # - name: Remove Android SDK
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     echo "Removing Android SDK..."
+      #     time sudo rm -rf /usr/local/lib/android
+      #     df -h
+      # - name: Remove hosted tool cache
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     echo "Removing hosted tool cache..."
+      #     time sudo rm -rf /opt/hostedtoolcache
+      #     df -h
+      # - name: Clean APT cache
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     echo "Cleaning APT cache..."
+      #     time sudo apt-get clean
+      #     time sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
+      #     df -h
       - name: Final disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
