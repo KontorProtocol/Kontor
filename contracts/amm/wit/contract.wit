@@ -7,27 +7,27 @@ world contract {
     use kontor:built-in/foreign.{contract-address};
     use kontor:built-in/numbers.{integer, decimal};
 
-	record token-pair {
-		a: contract-address,
-		b: contract-address,
-	}
+  	record token-pair {
+  		a: contract-address,
+  		b: contract-address,
+  	}
 
-	record deposit-result {
-		lp-shares: integer,
-		deposit-a: integer,
-		deposit-b: integer,
-	}
+  	record deposit-result {
+  		lp-shares: integer,
+  		deposit-a: integer,
+  		deposit-b: integer,
+  	}
 
-	record withdraw-result {
-		amount-a: integer,
-		amount-b: integer,
-	}
+  	record withdraw-result {
+  		amount-a: integer,
+  		amount-b: integer,
+  	}
 
     export init: func(ctx: borrow<proc-context>);
 
     export create: func(ctx: borrow<proc-context>, pair: token-pair, amount-a: integer, amount-b: integer, fee-bps: integer) -> result<integer, error>;
 
-	export fee: func(ctx: borrow<view-context>, pair: token-pair) -> result<integer, error>;
+  	export fee: func(ctx: borrow<view-context>, pair: token-pair) -> result<integer, error>;
 
     export balance: func(ctx: borrow<view-context>, pair: token-pair, acc: string) -> option<integer>;
     export token-balance: func(ctx: borrow<view-context>, pair: token-pair, token: contract-address) -> result<integer, error>;
