@@ -69,7 +69,9 @@ fn pair_other_token(
 
 fn check_pair_order(pair: &TokenPair) -> Result<(), Error> {
     if pair.a.name.is_empty() || pair.b.name.is_empty() {
-        return Err(Error::Message("Token addresses must not be empty".to_string()));
+        return Err(Error::Message(
+            "Token addresses must not be empty".to_string(),
+        ));
     }
 
     if token_string(&pair.a) >= token_string(&pair.b) {
@@ -113,10 +115,7 @@ fn calc_swap_result(
 }
 
 impl Amm {
-    fn load_pool<C: ReadContext>(
-        ctx: &C,
-        pair: &TokenPair,
-    ) -> Result<Pool, Error> {
+    fn load_pool<C: ReadContext>(ctx: &C, pair: &TokenPair) -> Result<Pool, Error> {
         let id = pair_id(pair);
         let pools = storage(ctx).pools();
         let pool_wrapper = pools
@@ -166,7 +165,11 @@ impl Amm {
         })
     }
 
-    fn quote_withdraw<C: ReadContext>(ctx: &C, pair: &TokenPair, shares: Integer) -> Result<WithdrawResult, Error> {
+    fn quote_withdraw<C: ReadContext>(
+        ctx: &C,
+        pair: &TokenPair,
+        shares: Integer,
+    ) -> Result<WithdrawResult, Error> {
         check_amount_positive(shares)?;
 
         let pool = Self::load_pool(ctx, pair)?;
@@ -202,7 +205,9 @@ impl Guest for Amm {
         let id = pair_id(&pair);
         let pools = storage(ctx).pools();
         if pools.get(ctx, &id).is_some() {
-            return Err(Error::Message("pool for this pair already exists".to_string()));
+            return Err(Error::Message(
+                "pool for this pair already exists".to_string(),
+            ));
         }
 
         let lp_shares = numbers::sqrt_integer(amount_a * amount_b)?;
@@ -241,7 +246,11 @@ impl Guest for Amm {
         pool_wrapper.lp_ledger().get(ctx, acc)
     }
 
-    fn token_balance(ctx: &ViewContext, pair: TokenPair, token: ContractAddress) -> Result<Integer, Error> {
+    fn token_balance(
+        ctx: &ViewContext,
+        pair: TokenPair,
+        token: ContractAddress,
+    ) -> Result<Integer, Error> {
         pair_other_token(&pair, &token)?;
         let pool = Self::load_pool(ctx, &pair)?;
         if token_string(&token) == token_string(&pair.a) {
@@ -292,11 +301,19 @@ impl Guest for Amm {
         Ok(res)
     }
 
-    fn quote_withdraw(ctx: &ViewContext, pair: TokenPair, shares: Integer) -> Result<WithdrawResult, Error> {
+    fn quote_withdraw(
+        ctx: &ViewContext,
+        pair: TokenPair,
+        shares: Integer,
+    ) -> Result<WithdrawResult, Error> {
         Self::quote_withdraw(ctx, &pair, shares)
     }
 
-    fn withdraw(ctx: &ProcContext, pair: TokenPair, shares: Integer) -> Result<WithdrawResult, Error> {
+    fn withdraw(
+        ctx: &ProcContext,
+        pair: TokenPair,
+        shares: Integer,
+    ) -> Result<WithdrawResult, Error> {
         let res = Self::quote_withdraw(ctx, &pair, shares)?;
 
         let id = pair_id(&pair);
