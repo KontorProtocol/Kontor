@@ -238,7 +238,10 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
         &portal_info,
     ));
 
-    // Build compose inputs
+    // Build compose inputs with per-participant script datas (split evenly across participants)
+    let script_data = b"compose-mpsbt-flow-data-0123456789".to_vec();
+    let script_datas =
+        indexer::api::compose::split_even_chunks(&script_data, all_participants.len())?;
     let addr_inputs: Vec<ComposeAddressInputs> = all_participants
         .iter()
         .enumerate()
@@ -246,14 +249,12 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
             address: n.address.clone(),
             x_only_public_key: n.internal_key,
             funding_utxos: vec![utxos[i].clone()],
+            script_data: script_datas[i].clone(),
         })
         .collect();
 
-    // Provide script data longer than number of participants (split evenly)
-    let script_data = b"compose-mpsbt-flow-data-0123456789".to_vec();
     let compose_inputs = ComposeInputs::builder()
         .addresses(addr_inputs)
-        .script_data(script_data)
         .fee_rate(FeeRate::from_sat_per_vb(sat_per_vb).unwrap())
         .envelope(envelope_sat)
         .build();

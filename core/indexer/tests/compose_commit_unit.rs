@@ -51,20 +51,22 @@ fn test_compose_commit_unique_vout_mapping_even_with_identical_chunks() {
         },
     );
 
+    let chunks = indexer::api::compose::split_even_chunks(&data, 2).unwrap();
     let inputs = ComposeInputs::builder()
         .addresses(vec![
             ComposeAddressInputs {
                 address: addr.clone(),
                 x_only_public_key: xonly,
                 funding_utxos: vec![utxo0.clone()],
+                script_data: chunks[0].clone(),
             },
             ComposeAddressInputs {
                 address: addr.clone(),
                 x_only_public_key: xonly,
                 funding_utxos: vec![utxo1.clone()],
+                script_data: chunks[1].clone(),
             },
         ])
-        .script_data(data)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
@@ -112,8 +114,8 @@ fn test_compose_commit_psbt_inputs_have_metadata() {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],
+            script_data: b"x".to_vec(),
         }])
-        .script_data(b"x".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();

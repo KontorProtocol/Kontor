@@ -60,8 +60,8 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
+            script_data: serialized_token_balance,
         }])
-        .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(1).unwrap()) // Lower fee rate for regtest
         .envelope(546)
         .build();

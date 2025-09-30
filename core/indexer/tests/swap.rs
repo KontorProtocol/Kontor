@@ -99,8 +99,8 @@ async fn test_psbt_inscription() -> Result<()> {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(outpoint, txout)],
+            script_data: serialized_token_balance,
         }])
-        .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .chained_script_data(serialized_detach_data.clone())
         .envelope(546)

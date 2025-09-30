@@ -61,6 +61,12 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
         .with_state(env))
 }
 
+/// Helper to encode Vec<ComposeAddressQuery> as base64-encoded JSON
+fn encode_addresses(addresses: Vec<ComposeAddressQuery>) -> Result<String> {
+    let json_bytes = serde_json::to_vec(&addresses)?;
+    Ok(base64_engine.encode(json_bytes))
+}
+
 #[tokio::test]
 async fn test_compose() -> Result<()> {
     let bitcoin_client = Client::new_from_config(&Config::try_parse()?)?;
@@ -87,7 +93,8 @@ async fn test_compose() -> Result<()> {
         },
     };
 
-    let token_data_base64 = test_utils::base64_serialize(&token_data);
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let server = TestServer::new(app)?;
 
@@ -96,14 +103,14 @@ async fn test_compose() -> Result<()> {
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
             .to_string(),
+        script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 
@@ -226,7 +233,8 @@ async fn test_compose_all_fields() -> Result<()> {
         },
     };
 
-    let token_data_base64 = test_utils::base64_serialize(&token_data);
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let _chained_script_data_base64 = test_utils::base64_serialize(&b"Hello, World!");
 
@@ -237,14 +245,14 @@ async fn test_compose_all_fields() -> Result<()> {
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
             .to_string(),
+        script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2&envelope=600&chained_script_data={}",
+            "/compose?addresses={}&sat_per_vbyte=2&envelope=600&chained_script_data={}",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
             urlencoding::encode(&_chained_script_data_base64),
         ))
         .await;
@@ -420,28 +428,25 @@ async fn test_compose_missing_params() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
-            .to_string(),
-    }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    // Create a manually constructed JSON without script_data field to test missing field
+    let addresses_json = serde_json::json!([{
+        "address": seller_address.to_string(),
+        "x_only_public_key": internal_key.to_string(),
+        "funding_utxo_ids": "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0",
+        // no script_data on purpose
+    }]);
+    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_json)?);
 
     let response: TestResponse = server
         .get(&format!(
             "/compose?addresses={}&sat_per_vbyte=2&envelope=600&chained_script_data=",
             urlencoding::encode(&addresses_b64),
-            // no script_data on purpose
         ))
         .await;
 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error_body = response.text();
-    assert_eq!(
-        error_body,
-        "Failed to deserialize query string: missing field `script_data`"
-    );
+    assert!(error_body.contains("script_data") || error_body.contains("missing field"));
 
     Ok(())
 }
@@ -463,13 +468,15 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secp, &child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let token_data_base64 = test_utils::base64_serialize(&WitnessData::Attach {
+    let token_data = WitnessData::Attach {
         output_index: 0,
         token_balance: TokenBalance {
             value: 1,
             name: "T".to_string(),
         },
-    });
+    };
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let server = TestServer::new(app)?;
 
@@ -480,21 +487,22 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
                 .to_string(),
+            script_data: token_data_bytes.clone(),
         },
         ComposeAddressQuery {
             address: addr.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
                 .to_string(),
+            script_data: token_data_bytes.clone(),
         },
     ];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 
@@ -507,14 +515,14 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0,01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0".to_string(),
+        script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64_2 = base64_engine.encode(serde_json::to_vec(&addresses_vec2)?);
+    let addresses_b64_2 = encode_addresses(addresses_vec2)?;
 
     let response2: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64_2),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 
@@ -545,20 +553,19 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
 
     // Oversized script_data
     let oversized = vec![0u8; 16 * 1024 + 1];
-    let oversized_b64 = test_utils::base64_serialize(&oversized);
     let addresses_vec = vec![ComposeAddressQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
             .to_string(),
+        script_data: oversized,
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let resp: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&oversized_b64),
         ))
         .await;
     assert_eq!(resp.status_code(), StatusCode::BAD_REQUEST);
@@ -566,12 +573,18 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
 
     // Oversized chained_script_data
     let chained_oversized_b64 = test_utils::base64_serialize(&vec![0u8; 16 * 1024 + 1]);
-    let token_data_b64 = test_utils::base64_serialize(&b"x".to_vec());
+    let addresses_vec2 = vec![ComposeAddressQuery {
+        address: addr.to_string(),
+        x_only_public_key: internal_key.to_string(),
+        funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
+            .to_string(),
+        script_data: b"x".to_vec(),
+    }];
+    let addresses_b64_2 = encode_addresses(addresses_vec2.clone())?;
     let resp2: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&chained_script_data={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_b64),
+            "/compose?addresses={}&chained_script_data={}&sat_per_vbyte=2",
+            urlencoding::encode(&addresses_b64_2),
             urlencoding::encode(&chained_oversized_b64),
         ))
         .await;
@@ -579,11 +592,11 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
     assert!(resp2.text().contains("chained script data size invalid"));
 
     // Invalid fee rate (0)
+    let addresses_b64_3 = encode_addresses(addresses_vec2)?;
     let resp3: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=0",
-            urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_b64),
+            "/compose?addresses={}&sat_per_vbyte=0",
+            urlencoding::encode(&addresses_b64_3),
         ))
         .await;
     assert_eq!(resp3.status_code(), StatusCode::BAD_REQUEST);
@@ -622,8 +635,8 @@ async fn test_reveal_with_op_return_mempool_accept() -> Result<()> {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
+            script_data: b"Hello, world!".to_vec(),
         }])
-        .script_data(b"Hello, world!".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
@@ -714,13 +727,15 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let token_data_base64 = test_utils::base64_serialize(&WitnessData::Attach {
+    let token_data = WitnessData::Attach {
         output_index: 0,
         token_balance: TokenBalance {
             value: 1000,
             name: "Test Token".to_string(),
         },
-    });
+    };
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let server = TestServer::new(app)?;
 
@@ -729,14 +744,14 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e7:0"
             .to_string(),
+        script_data: token_data_bytes,
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 
@@ -762,13 +777,15 @@ async fn test_compose_invalid_address() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let token_data_base64 = test_utils::base64_serialize(&WitnessData::Attach {
+    let token_data = WitnessData::Attach {
         output_index: 0,
         token_balance: TokenBalance {
             value: 1000,
             name: "Test Token".to_string(),
         },
-    });
+    };
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let server = TestServer::new(app)?;
 
@@ -777,14 +794,14 @@ async fn test_compose_invalid_address() -> Result<()> {
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
             .to_string(),
+        script_data: token_data_bytes,
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=2",
+            "/compose?addresses={}&sat_per_vbyte=2",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 
@@ -812,13 +829,15 @@ async fn test_compose_insufficient_funds() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let token_data_base64 = test_utils::base64_serialize(&WitnessData::Attach {
+    let token_data = WitnessData::Attach {
         output_index: 0,
         token_balance: TokenBalance {
             value: 1000,
             name: "Test Token".to_string(),
         },
-    });
+    };
+    let mut token_data_bytes = Vec::new();
+    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
     let server = TestServer::new(app)?;
 
@@ -827,14 +846,14 @@ async fn test_compose_insufficient_funds() -> Result<()> {
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
             .to_string(),
+        script_data: token_data_bytes,
     }];
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_vec)?);
+    let addresses_b64 = encode_addresses(addresses_vec)?;
 
     let response: TestResponse = server
         .get(&format!(
-            "/compose?addresses={}&script_data={}&sat_per_vbyte=4",
+            "/compose?addresses={}&sat_per_vbyte=4",
             urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&token_data_base64),
         ))
         .await;
 

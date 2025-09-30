@@ -30,11 +30,14 @@ const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ComposeAddressQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
+    #[serde_as(as = "Base64")]
+    pub script_data: Vec<u8>,
 }
 
 #[serde_as]
@@ -43,9 +46,6 @@ pub struct ComposeQuery {
     // base64-encoded JSON Vec<ComposeAddressQuery>
     #[serde(with = "addresses_b64_json")]
     pub addresses: Vec<ComposeAddressQuery>,
-    // base64 string → Vec<u8>
-    #[serde_as(as = "Base64")]
-    pub script_data: Vec<u8>,
     pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
     // optional base64 string → Option<Vec<u8>>
@@ -84,12 +84,12 @@ pub struct ComposeAddressInputs {
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
+    pub script_data: Vec<u8>,
 }
 
 #[derive(Serialize, Builder)]
 pub struct ComposeInputs {
     pub addresses: Vec<ComposeAddressInputs>,
-    pub script_data: Vec<u8>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
     pub chained_script_data: Option<Vec<u8>>,
@@ -110,6 +110,33 @@ impl ComposeInputs {
             return Err(anyhow!("Invalid fee rate"));
         }
 
+        // Validate unique addresses early (before fetching UTXOs)
+        let mut addr_str_set: HashSet<String> = HashSet::with_capacity(query.addresses.len());
+        for addr_query in query.addresses.iter() {
+            if !addr_str_set.insert(addr_query.address.clone()) {
+                return Err(anyhow!("duplicate address provided"));
+            }
+        }
+
+        // Validate unique UTXOs within and across participants early
+        let mut global_utxo_set: HashSet<String> = HashSet::new();
+        for addr_query in query.addresses.iter() {
+            let utxo_ids: Vec<&str> = addr_query.funding_utxo_ids.split(',').collect();
+            let mut local_utxo_set: HashSet<&str> = HashSet::new();
+            for utxo_id in utxo_ids.iter() {
+                if !local_utxo_set.insert(utxo_id) {
+                    return Err(anyhow!(
+                        "duplicate funding outpoint provided for participant"
+                    ));
+                }
+                if !global_utxo_set.insert(utxo_id.to_string()) {
+                    return Err(anyhow!(
+                        "duplicate funding outpoint provided across participants"
+                    ));
+                }
+            }
+        }
+
         let addresses: Vec<ComposeAddressInputs> =
             try_join_all(query.addresses.iter().map(|address_query| async {
                 let address: Address = Address::from_str(&address_query.address)?
@@ -127,31 +154,21 @@ impl ComposeInputs {
                         MAX_UTXOS_PER_PARTICIPANT
                     ));
                 }
-                // Ensure no duplicate outpoints within a participant
-                let mut local_set: HashSet<(Txid, u32)> = HashSet::new();
-                for (op, _) in funding_utxos.iter() {
-                    let key = (op.txid, op.vout);
-                    if !local_set.insert(key) {
-                        return Err(anyhow!(
-                            "duplicate funding outpoint provided for participant"
-                        ));
-                    }
+                let script_data = address_query.script_data.clone();
+                if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
+                    return Err(anyhow!("script data size invalid"));
                 }
                 Ok(ComposeAddressInputs {
                     address,
                     x_only_public_key,
                     funding_utxos,
+                    script_data,
                 })
             }))
             .await?;
 
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
-
-        let script_data = query.script_data.clone();
-        if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
-            return Err(anyhow!("script data size invalid"));
-        }
 
         let chained_script_data_bytes = query.chained_script_data.clone();
         if chained_script_data_bytes
@@ -165,31 +182,8 @@ impl ComposeInputs {
             .unwrap_or(MIN_ENVELOPE_SATS)
             .max(MIN_ENVELOPE_SATS);
 
-        // Ensure unique addresses
-        let mut addr_set: HashSet<String> = HashSet::with_capacity(addresses.len());
-        for a in addresses.iter() {
-            let key = a.address.to_string();
-            if !addr_set.insert(key) {
-                return Err(anyhow!("duplicate address provided"));
-            }
-        }
-
-        // Ensure no duplicate outpoints across owners
-        let mut outpoint_set: HashSet<(Txid, u32)> = HashSet::new();
-        for a in addresses.iter() {
-            for (op, _) in a.funding_utxos.iter() {
-                let key = (op.txid, op.vout);
-                if !outpoint_set.insert(key) {
-                    return Err(anyhow!(
-                        "duplicate funding outpoint provided across participants"
-                    ));
-                }
-            }
-        }
-
         Ok(Self {
             addresses,
-            script_data,
             fee_rate,
             envelope,
             chained_script_data: chained_script_data_bytes,
@@ -236,7 +230,6 @@ pub struct ComposeOutputs {
 #[derive(Builder)]
 pub struct CommitInputs {
     pub addresses: Vec<ComposeAddressInputs>,
-    pub script_data: Vec<u8>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
 }
@@ -245,7 +238,6 @@ impl From<ComposeInputs> for CommitInputs {
     fn from(value: ComposeInputs) -> Self {
         Self {
             addresses: value.addresses,
-            script_data: value.script_data,
             fee_rate: value.fee_rate,
             envelope: value.envelope,
         }
@@ -385,7 +377,6 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
     // Build the commit tx
     let commit_outputs = compose_commit(CommitInputs {
         addresses: params.addresses,
-        script_data: params.script_data.clone(),
         fee_rate: params.fee_rate,
         envelope: params.envelope,
     })?;
@@ -431,20 +422,16 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         output: vec![],
     })?;
 
-    // Split script_data into N contiguous chunks
+    // Validate per-participant datas alignment
     let num_addrs = params.addresses.len();
     if num_addrs == 0 {
         return Err(anyhow!("No addresses provided"));
     }
-    if params.script_data.is_empty() {
-        return Err(anyhow!("script data cannot be empty"));
-    }
-    let chunks = split_even_chunks(&params.script_data, num_addrs)?;
 
     let mut per_participant_tap: Vec<TapScriptPair> = Vec::with_capacity(num_addrs);
 
-    for (i, addr) in params.addresses.iter().enumerate() {
-        let chunk = chunks[i].clone();
+    for addr in params.addresses.iter() {
+        let chunk = addr.script_data.clone();
 
         // Build tapscript for this address
         let (tap_script, tap_info, script_spendable_address) =

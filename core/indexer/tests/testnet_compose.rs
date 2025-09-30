@@ -65,8 +65,8 @@ async fn test_taproot_transaction_testnet() -> Result<()> {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
+            script_data: serialized_token_balance,
         }])
-        .script_data(serialized_token_balance)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
@@ -208,8 +208,8 @@ async fn test_compose_progressive_size_limit_testnet() -> Result<()> {
                 address: seller_address.clone(),
                 x_only_public_key: internal_key,
                 funding_utxos: available_utxos.clone(),
+                script_data: data,
             }])
-            .script_data(data)
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
             .envelope(546)
             .build();

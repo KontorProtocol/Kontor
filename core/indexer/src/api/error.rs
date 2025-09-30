@@ -1,7 +1,7 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
-use tracing::{Span, error};
+use tracing::Span;
 
 #[derive(ThisError, Debug)]
 pub enum HttpError {

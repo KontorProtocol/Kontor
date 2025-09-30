@@ -61,8 +61,8 @@ async fn test_taproot_transaction() -> Result<()> {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
+            script_data: b"Hello, world!".to_vec(),
         }])
-        .script_data(b"Hello, world!".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .chained_script_data(serialized_token_balance.clone())
@@ -180,12 +180,12 @@ fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
             address: n.address.clone(),
             x_only_public_key: n.internal_key,
             funding_utxos: vec![utxos[i].clone()],
+            script_data: b"hello-world".to_vec(),
         });
     }
 
     let params = ComposeInputs::builder()
         .addresses(addresses.clone())
-        .script_data(b"hello-world".to_vec())
         .fee_rate(bitcoin::FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(600)
         .build();

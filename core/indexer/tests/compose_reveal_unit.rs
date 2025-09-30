@@ -29,8 +29,8 @@ fn test_compose_reveal_psbt_inputs_have_tap_fields() {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],
+            script_data: b"d".to_vec(),
         }])
-        .script_data(b"d".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
@@ -69,8 +69,8 @@ fn test_compose_reveal_chained_output_and_change_thresholds() {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],
+            script_data: b"abc".to_vec(),
         }])
-        .script_data(b"abc".to_vec())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(600)
         .chained_script_data(b"xyz".to_vec())
