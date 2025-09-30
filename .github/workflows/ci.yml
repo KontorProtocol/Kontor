@@ -105,6 +105,13 @@ jobs:
           echo "Removing hosted tool cache..."
           time sudo rm -rf /opt/hostedtoolcache
           df -h
+      - name: Clean APT cache
+        if: runner.os == 'Linux'
+        run: |
+          echo "Cleaning APT cache..."
+          time sudo apt-get clean
+          time sudo rm -rf /var/cache/apt /var/lib/apt/lists/*
+          df -h
       - name: Final disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
