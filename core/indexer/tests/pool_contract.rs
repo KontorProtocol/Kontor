@@ -102,6 +102,12 @@ async fn test_amm_swaps() -> Result<()> {
 async fn test_amm_swap_fee() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
+    let pool_address = ContractAddress {
+        name: "pool".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
     let token_a = ContractAddress {
         name: "token-a".to_string(),
         height: 0,
@@ -163,6 +169,19 @@ async fn test_amm_swap_fee() -> Result<()> {
     let bal_b = pool::token_balance(&runtime, token_b.clone()).await?;
     let k3 = bal_a.unwrap() * bal_b.unwrap();
     assert!(k3 >= k2);
+
+    // use token interface to transfer shares
+    let res = token_dyn::balance(&runtime, &pool_address, admin).await?;
+    assert_eq!(res, Some(223.into()));
+    let res = token_dyn::balance(&runtime, &pool_address, minter).await?;
+    assert_eq!(res, None);
+
+    token_dyn::transfer(&runtime, &pool_address, admin, minter, 23.into()).await??;
+
+    let res = token_dyn::balance(&runtime, &pool_address, admin).await?;
+    assert_eq!(res, Some(200.into()));
+    let res = token_dyn::balance(&runtime, &pool_address, minter).await?;
+    assert_eq!(res, Some(23.into()));
 
     Ok(())
 }
