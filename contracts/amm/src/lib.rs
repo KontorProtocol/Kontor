@@ -2,8 +2,6 @@ use stdlib::*;
 
 contract!(name = "amm");
 
-import!(name = "token", height = 0, tx_index = 0, path = "token/wit");
-
 interface!(name = "token_dyn", path = "token/wit");
 
 #[derive(Clone, Storage)]
