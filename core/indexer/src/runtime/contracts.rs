@@ -21,6 +21,9 @@ const CRYPTO: &[u8] =
 const FIB: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
 
+const POOL: &[u8] =
+    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/pool.wasm.br");
+
 const PROXY: &[u8] =
     include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/proxy.wasm.br");
 
@@ -79,12 +82,13 @@ pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
             ("arith", ARITH),
             ("crypto", CRYPTO),
             ("fib", FIB),
+            ("pool", POOL),
             ("proxy", PROXY),
             ("shared-account", SHARED_ACCOUNT),
             ("token", TOKEN),
-            ("token_a", TOKEN),
-            ("token_b", TOKEN),
-            ("token_c", TOKEN),
+            ("token-a", TOKEN),
+            ("token-b", TOKEN),
+            ("token-c", TOKEN),
         ],
     )
     .await

@@ -1,16 +1,63 @@
+// use glob::glob;
+// use std::process::Command;
+
+// fn main() {
+//     let mut cd = std::env::current_dir().unwrap();
+//     cd.pop();
+//     cd.pop();
+//     let contract_dir = cd.join("contracts");
+
+//     println!("cargo:rerun-if-changed={}", contract_dir.display());
+
+//     println!("Debug: Starting build script");
+//     let status = Command::new("./build.sh")
+//         .current_dir(contract_dir)
+//         .status()
+//         .expect("Failed to execute build script");
+
+//     if !status.success() {
+//         panic!("Failed to build contract to WASM");
+//     }
+// }
+
+use glob::glob;
 use std::process::Command;
 
 fn main() {
+    // Get the path to the contracts directory
     let mut cd = std::env::current_dir().unwrap();
     cd.pop();
     cd.pop();
     let contract_dir = cd.join("contracts");
+    let target_dir = contract_dir.join("target");
 
-    println!("cargo:rerun-if-changed={}", contract_dir.display());
+    // Define patterns to monitor (all files in contracts, recursively)
+    let pattern = contract_dir.join("**").join("*");
 
-    println!("Debug: Starting build script");
-    let status = Command::new("./build.sh")
-        .current_dir(contract_dir)
+    // Tell Cargo to rerun the script only if relevant files change
+    let pattern_str = pattern.to_str().expect("Invalid path");
+    for path in glob(pattern_str)
+        .expect("Failed to read glob pattern")
+        .flatten()
+    {
+        // Skip directories and the target folder
+        if path.is_file() && !path.starts_with(&target_dir) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+
+    // Debugging output
+    println!("Debug: Starting build script for contracts");
+
+    // Verify build.sh exists
+    let build_script = contract_dir.join("build.sh");
+    if !build_script.exists() {
+        panic!("build.sh not found in {}", contract_dir.display());
+    }
+
+    // Execute the build script
+    let status = Command::new(&build_script)
+        .current_dir(&contract_dir)
         .status()
         .expect("Failed to execute build script");
 

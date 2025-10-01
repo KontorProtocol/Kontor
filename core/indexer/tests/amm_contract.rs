@@ -1,21 +1,21 @@
 use testlib::*;
 
 import!(
-    name = "token_a",
+    name = "token-a",
     height = 0,
     tx_index = 0,
     path = "../contracts/token/wit",
 );
 
 import!(
-    name = "token_b",
+    name = "token-b",
     height = 0,
     tx_index = 0,
     path = "../contracts/token/wit",
 );
 
 import!(
-    name = "token_c",
+    name = "token-c",
     height = 0,
     tx_index = 0,
     path = "../contracts/token/wit",
@@ -35,13 +35,13 @@ async fn test_amm_swaps() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
 
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -137,13 +137,13 @@ async fn test_amm_swap_fee() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
 
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -225,13 +225,13 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
 
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -316,13 +316,13 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
 
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -438,13 +438,13 @@ async fn test_amm_limits() -> Result<()> {
     let oversized_value = large_value + 1.into();
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
 
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
@@ -549,17 +549,17 @@ async fn test_amm_pools() -> Result<()> {
     let runtime = Runtime::new(RuntimeConfig::default()).await?;
 
     let token_a = ContractAddress {
-        name: "token_a".to_string(),
+        name: "token-a".to_string(),
         height: 0,
         tx_index: 0,
     };
     let token_b = ContractAddress {
-        name: "token_b".to_string(),
+        name: "token-b".to_string(),
         height: 0,
         tx_index: 0,
     };
     let token_c = ContractAddress {
-        name: "token_c".to_string(),
+        name: "token-c".to_string(),
         height: 0,
         tx_index: 0,
     };

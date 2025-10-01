@@ -196,9 +196,9 @@ impl Guest for Amm {
             },
         );
 
-        let custody_addr = ctx.contract_signer().to_string();
-        token_dyn::transfer(&pair.a, ctx.signer(), &custody_addr, amount_a)?;
-        token_dyn::transfer(&pair.b, ctx.signer(), &custody_addr, amount_b)?;
+        let custodian = ctx.contract_signer().to_string();
+        token_dyn::transfer(&pair.a, ctx.signer(), &custodian, amount_a)?;
+        token_dyn::transfer(&pair.b, ctx.signer(), &custodian, amount_b)?;
 
         Ok(lp_shares)
     }

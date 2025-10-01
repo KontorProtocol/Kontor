@@ -2201,6 +2201,7 @@ dependencies = [
  "deadpool",
  "fastnum",
  "futures-util",
+ "glob",
  "hex",
  "indexmap 2.11.1",
  "libsql",

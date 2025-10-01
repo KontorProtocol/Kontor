@@ -1,5 +1,5 @@
 [workspace]
-members = ["amm", "arith", "crypto", "fib", "proxy", "shared-account", "token"]
+members = ["amm", "arith", "crypto", "fib", "pool", "proxy", "shared-account", "token"]
 resolver = "2"
 
 [profile.release]
@@ -13,6 +13,7 @@ panic = "abort"
 new_without_default = "allow"
 uninlined_format_args = "allow"
 too_many_arguments = "allow"
+unit_arg = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
