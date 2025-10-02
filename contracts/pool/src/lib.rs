@@ -28,7 +28,7 @@ impl PoolStorage {
         validate_amount(amount_a)?;
         validate_amount(amount_b)?;
 
-        let lp_shares = numbers::sqrt_integer(amount_a * amount_b)?;
+        let lp_shares = (amount_a * amount_b).sqrt()?;
         let custodian = ctx.contract_signer().to_string();
         let pool = PoolStorage {
             token_a: token_a.clone(),

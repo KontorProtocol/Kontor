@@ -343,11 +343,11 @@ pub fn div_decimal(a: Decimal, b: Decimal) -> Result<Decimal, Error> {
     Ok(res.into())
 }
 
-pub fn log10(a: Decimal) -> Decimal {
+pub fn log10_decimal(a: Decimal) -> Result<Decimal, Error> {
     let dec_a: D256 = a.into();
     let res = (dec_a.log10()).with_ctx(CTX).quantize(MIN_DECIMAL);
     if res.is_op_invalid() {
-        panic!("invalid decimal number");
+        return Err(Error::Overflow("invalid decimal number".to_string()));
     }
-    res.into()
+    Ok(res.into())
 }

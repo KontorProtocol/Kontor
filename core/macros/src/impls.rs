@@ -84,6 +84,13 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         #[automatically_derived]
+        impl kontor::built_in::numbers::Integer {
+            pub fn sqrt(&self) -> Result<kontor::built_in::numbers::Integer, kontor::built_in::error::Error> {
+                #numerics_mod_name::sqrt_integer(*self)
+            }
+        }
+
+        #[automatically_derived]
         impl std::fmt::Display for kontor::built_in::numbers::Integer {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 let s = #numerics_mod_name::integer_to_string(*self);
@@ -243,6 +250,14 @@ pub fn generate(config: Config) -> TokenStream {
                 s.as_str().into()
             }
         }
+
+        #[automatically_derived]
+        impl kontor::built_in::numbers::Decimal {
+            pub fn log10(&self) -> Result<kontor::built_in::numbers::Decimal, kontor::built_in::error::Error> {
+                #numerics_mod_name::log10_decimal(*self)
+            }
+        }
+
 
         #[automatically_derived]
         impl std::fmt::Display for kontor::built_in::numbers::Decimal {

@@ -37,7 +37,7 @@ async fn test_token_contract() -> Result<()> {
     let result = token::balance(&runtime, "foo").await?;
     assert_eq!(result, None);
 
-    let result = token::balance_log10(&runtime, minter).await?;
+    let result = token::balance_log10(&runtime, minter).await??;
     assert_eq!(result, Some("2.981_365_509_078_544_415".into()));
 
     Ok(())
@@ -96,10 +96,10 @@ async fn test_token_contract_large_numbers() -> Result<()> {
         )
     );
 
-    let result = token::balance_log10(&runtime, minter).await?;
+    let result = token::balance_log10(&runtime, minter).await??;
     assert_eq!(result, Some("59.000_000_000_000_000_000".into()));
 
-    let result = token::balance_log10(&runtime, holder).await?;
+    let result = token::balance_log10(&runtime, holder).await??;
     assert_eq!(result, Some("30.000_000_000_000_000_000".into()));
 
     Ok(())

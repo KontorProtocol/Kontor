@@ -177,7 +177,7 @@ impl Guest for Amm {
             Err(_) => Ok(()),
         }?;
 
-        let lp_shares = numbers::sqrt_integer(amount_a * amount_b)?;
+        let lp_shares = (amount_a * amount_b).sqrt()?;
 
         let admin = ctx.signer().to_string();
         storage(ctx).pools().set(

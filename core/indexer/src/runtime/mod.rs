@@ -1384,8 +1384,11 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::div_decimal(a, b))
     }
 
-    async fn log10<T>(accessor: &Accessor<T, Self>, a: Decimal) -> Result<Decimal> {
-        Fuel::NumbersLog10
+    async fn log10_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        a: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersLog10Decimal
             .consume(
                 accessor,
                 accessor
@@ -1393,7 +1396,7 @@ impl built_in::numbers::HostWithStore for Runtime {
                     .as_ref(),
             )
             .await?;
-        Ok(numerics::log10(a))
+        Ok(numerics::log10_decimal(a))
     }
 
     async fn meta_force_generate_integer<T>(

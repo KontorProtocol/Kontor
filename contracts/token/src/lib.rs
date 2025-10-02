@@ -50,8 +50,11 @@ impl Guest for Token {
         ledger.get(ctx, acc)
     }
 
-    fn balance_log10(ctx: &ViewContext, acc: String) -> Option<Decimal> {
+    fn balance_log10(ctx: &ViewContext, acc: String) -> Result<Option<Decimal>, Error> {
         let ledger = storage(ctx).ledger();
-        ledger.get(ctx, acc).map(|i| numbers::log10(i.into()))
+        ledger
+            .get(ctx, acc)
+            .map(|i| Decimal::from(i).log10())
+            .transpose()
     }
 }

@@ -12,5 +12,5 @@ world contract {
     export mint-checked: func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
     export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
     export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
-    export balance-log10: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
+    export balance-log10: func(ctx: borrow<view-context>, acc: string) -> result<option<decimal>, error>;
 }
