@@ -35,7 +35,7 @@ pub use wit::kontor::built_in::numbers::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -130,11 +130,16 @@ impl Runtime {
                 .map(|g| g.set_starting_fuel(self.starting_fuel)),
         )
         .await;
-        let (call_result, results, fuel_result) = tokio::spawn(async move {
+        let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store.get_fuel())
         })
-        .await?;
+        .await
+        .context("Failed to join execution");
+        if result.is_err() {
+            self.storage.rollback().await?;
+        }
+        let (call_result, results, fuel_result) = result?;
         let remaining_fuel = fuel_result?;
         OptionFuture::from(
             self.gauge
@@ -286,14 +291,12 @@ impl Runtime {
         Ok((store, call.name() == fallback_name, params, results, func))
     }
 
-    async fn handle_call(
-        &self,
+    async fn extract_wave_expr(
         is_fallback: bool,
         call_result: Result<()>,
         mut results: Vec<Val>,
     ) -> Result<String> {
-        self.stack.pop().await;
-        call_result?;
+        call_result.context("Failed to execute call")?;
         if results.is_empty() {
             return Ok("()".to_string());
         }
@@ -305,7 +308,7 @@ impl Runtime {
         }
 
         let result = results.remove(0);
-        let expr = if is_fallback {
+        if is_fallback {
             if let wasmtime::component::Val::String(return_expr) = result {
                 Ok(return_expr)
             } else {
@@ -313,7 +316,23 @@ impl Runtime {
             }
         } else {
             result.to_wave()
-        }?;
+        }
+    }
+
+    async fn handle_call(
+        &self,
+        is_fallback: bool,
+        call_result: Result<()>,
+        results: Vec<Val>,
+    ) -> Result<String> {
+        self.stack.pop().await;
+
+        let result = Self::extract_wave_expr(is_fallback, call_result, results).await;
+
+        if result.is_err() {
+            self.storage.rollback().await?;
+        }
+        let expr = result?;
 
         if expr.starts_with("err(") {
             self.storage.rollback().await?;
@@ -341,14 +360,18 @@ impl Runtime {
         let (mut store, is_fallback, params, mut results, func) = self
             .prepare_call(&contract_address, signer, &expr, fuel)
             .await?;
-        let (call_result, results, fuel_result) = tokio::spawn(async move {
+        let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store.get_fuel())
         })
-        .await?;
+        .await
+        .context("Failed to join call");
+        if result.is_err() {
+            self.storage.rollback().await?;
+        }
+        let (call_result, results, fuel_result) = result?;
         let remaining_fuel = fuel_result?;
         accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
-
         self.handle_call(is_fallback, call_result, results).await
     }
 

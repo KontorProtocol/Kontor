@@ -104,6 +104,12 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn rollback_transaction(&self) -> Result<()> {
+        self.savepoint_stack.clear().await;
+        self.conn.execute("ROLLBACK", ()).await?;
+        Ok(())
+    }
+
     pub async fn rollback(&self) -> Result<()> {
         match self.savepoint_stack.pop().await {
             Some(0) => self.conn.execute("ROLLBACK", ()).await?,

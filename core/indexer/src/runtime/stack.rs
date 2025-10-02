@@ -23,6 +23,11 @@ impl<T: Send + PartialEq + Debug + Clone> Stack<T> {
         }
     }
 
+    pub async fn clear(&self) {
+        let mut stack = self.inner.lock().await;
+        stack.clear();
+    }
+
     pub async fn push(&self, item: T) -> Result<(), StackError> {
         let mut stack = self.inner.lock().await;
 
