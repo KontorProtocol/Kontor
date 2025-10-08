@@ -1,6 +1,6 @@
 mod component_cache;
 mod contracts;
-mod counter;
+pub mod counter;
 pub mod fuel;
 pub mod numerics;
 mod stack;

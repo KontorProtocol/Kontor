@@ -3,7 +3,7 @@ use anyhow::Result;
 use bitcoin::Network;
 use clap::Parser;
 use indexer::config::RegtestConfig;
-use indexer::reactor::events::EventSubscriber;
+use indexer::reactor::results::ResultSubscriber;
 use indexer::{api, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use tokio::sync::{mpsc, oneshot};
@@ -59,14 +59,14 @@ async fn main() -> Result<()> {
     init_rx.await?;
 
     let (_, event_rx) = mpsc::channel(10);
-    let event_subscriber = EventSubscriber::new();
-    handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
+    let result_subscriber = ResultSubscriber::default();
+    handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(
         api::run(Env {
             config: config.clone(),
             cancel_token: cancel_token.clone(),
             reader: reader.clone(),
-            event_subscriber,
+            result_subscriber,
             bitcoin: bitcoin.clone(),
         })
         .await?,

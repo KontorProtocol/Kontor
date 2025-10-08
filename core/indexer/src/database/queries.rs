@@ -4,7 +4,10 @@ use libsql::{Connection, de::from_row, named_params, params};
 use thiserror::Error as ThisError;
 
 use crate::{
-    database::types::{ContractRow, PaginationMeta, TransactionCursor, TransactionRow},
+    database::types::{
+        ContractResultId, ContractResultRow, ContractRow, PaginationMeta, TransactionCursor,
+        TransactionRow,
+    },
     runtime::ContractAddress,
 };
 
@@ -577,4 +580,65 @@ pub async fn get_transactions_paginated(
     };
 
     Ok((transactions, pagination))
+}
+
+pub async fn get_contract_result(
+    conn: &Connection,
+    contract_result_id: &ContractResultId,
+) -> Result<Option<ContractResultRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+             cr.id,
+             cr.tx_id,
+             cr.input_index,
+             cr.op_index,
+             cr.contract_id,
+             cr.height,
+             cr.ok,
+             cr.value
+           FROM contract_results cr
+           JOIN transactions t ON cr.tx_id = t.id
+           WHERE t.txid = :txid AND cr.input_index = :input_index AND cr.op_index = :op_index;
+        "#,
+            named_params! {
+                ":txid": contract_result_id.txid.clone(),
+                ":input_index": contract_result_id.input_index,
+                ":op_index": contract_result_id.op_index,
+            },
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn insert_contract_result(
+    conn: &Connection,
+    row: ContractResultRow,
+) -> Result<i64, Error> {
+    conn.execute(
+        r#"
+            INSERT OR REPLACE INTO contract_results (
+                tx_id,
+                input_index,
+                op_index,
+                contract_id,
+                height,
+                ok,
+                value
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#,
+        params![
+            row.tx_id,
+            row.input_index,
+            row.op_index,
+            row.contract_id,
+            row.height,
+            row.ok,
+            row.value
+        ],
+    )
+    .await?;
+
+    Ok(conn.last_insert_rowid())
 }

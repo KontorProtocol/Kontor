@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use base64::{Engine, engine::general_purpose};
 use bitcoin::BlockHash;
 use bon::Builder;
@@ -142,4 +144,36 @@ pub struct TransactionPaginationQuery {
     pub cursor: Option<String>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ContractResultRow {
+    #[builder(default = 1)]
+    pub id: i64,
+    pub tx_id: i64,
+    #[builder(default = 0)]
+    pub input_index: i64,
+    #[builder(default = 0)]
+    pub op_index: i64,
+    #[builder(default = 0)]
+    pub contract_id: i64,
+    pub height: i64,
+    #[builder(default = false)]
+    pub ok: bool,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Builder, Eq, PartialEq, Hash, Deserialize, Serialize)]
+pub struct ContractResultId {
+    pub txid: String,
+    #[builder(default = 0)]
+    pub input_index: i64,
+    #[builder(default = 0)]
+    pub op_index: i64,
+}
+
+impl Display for ContractResultId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}", self.txid, self.input_index, self.op_index)
+    }
 }

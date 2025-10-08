@@ -50,3 +50,18 @@ CREATE TABLE IF NOT EXISTS contract_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC, tx_id DESC);
+
+CREATE TABLE IF NOT EXISTS contract_results (
+  id INTEGER PRIMARY KEY,
+  tx_id INTEGER NOT NULL,
+  input_index INTEGER NOT NULL,
+  op_index INTEGER NOT NULL,
+  contract_id INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  ok BOOLEAN NOT NULL,
+  value TEXT,
+  UNIQUE (tx_id, input_index, op_index),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_results_lookup ON contract_results (tx_id, input_index, op_index);

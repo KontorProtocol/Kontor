@@ -4,14 +4,20 @@ use anyhow::Result;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use indexer::{
-    api::{self, Env, ws::Response},
+    api::{
+        self, Env,
+        ws::{Request, Response},
+    },
     bitcoin_client::Client,
     config::Config,
+    database::{
+        queries::{insert_block, insert_contract_result, insert_transaction},
+        types::{BlockRow, ContractResultId, ContractResultRow, TransactionRow},
+    },
     logging,
-    reactor::events::{Event, EventSubscriber},
-    test_utils::new_test_db,
+    reactor::results::{ResultEvent, ResultSubscriber},
+    test_utils::{new_mock_block_hash, new_test_db},
 };
-use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
@@ -24,11 +30,11 @@ async fn test_websocket_server() -> Result<()> {
     let (reader, _writer, _temp_dir) = new_test_db(&config).await?;
     let bitcoin = Client::new_from_config(&config)?;
     let (event_tx, event_rx) = mpsc::channel(10); // Channel to send test events
-    let event_subscriber = EventSubscriber::new();
+    let result_subscriber = ResultSubscriber::default();
     let mut handles = vec![];
 
     // Run the event subscriber
-    handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
+    handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
 
     // Run the API server
     handles.push(
@@ -36,7 +42,7 @@ async fn test_websocket_server() -> Result<()> {
             config: config.clone(),
             cancel_token: cancel_token.clone(),
             reader: reader.clone(),
-            event_subscriber: event_subscriber.clone(), // Clone for shared use
+            result_subscriber: result_subscriber.clone(), // Clone for shared use
             bitcoin: bitcoin.clone(),
         })
         .await?,
@@ -87,68 +93,56 @@ async fn test_websocket_server() -> Result<()> {
 
     // Test 2: Subscribe to two filters
     // Filter 1: All events
-    let subscribe_all = json!({"type": "Subscribe", "filter": {"type": "All"}});
-    ws_stream
-        .send(Message::Text(subscribe_all.to_string().into()))
-        .await?;
+    let foo_id = ContractResultId::builder().txid("foo".to_string()).build();
+    let subscribe = serde_json::to_string(&Request::Subscribe { id: foo_id.clone() })?;
+    ws_stream.send(Message::Text(subscribe.into())).await?;
     let received = ws_stream.next().await.unwrap()?;
     let subscribe_response: Response = serde_json::from_str(received.to_text()?)?;
-    let id_all = match subscribe_response {
+    let res_id = match subscribe_response {
         Response::SubscribeResponse { id } => id,
         _ => anyhow::bail!(
             "Expected SubscribeResponse for All, got {:?}",
             subscribe_response
         ),
     };
+    assert_eq!(foo_id, res_id);
 
-    // Filter 2: Specific contract and signature
-    let subscribe_specific = json!({
-        "type": "Subscribe",
-        "filter": {
-            "type": "Contract",
-            "contract_address": "0x123",
-            "event_signature": {"signature": "Test", "topic_values": null}
-        }
-    });
+    let bar_id = ContractResultId::builder().txid("bar".to_string()).build();
+    let subscribe = serde_json::to_string(&Request::Subscribe { id: bar_id.clone() })?;
     ws_stream
-        .send(Message::Text(subscribe_specific.to_string().into()))
+        .send(Message::Text(subscribe.to_string().into()))
         .await?;
     let received = ws_stream.next().await.unwrap()?;
     let subscribe_response: Response = serde_json::from_str(received.to_text()?)?;
-    let id_specific = match subscribe_response {
+    let res_id = match subscribe_response {
         Response::SubscribeResponse { id } => id,
         _ => anyhow::bail!(
             "Expected SubscribeResponse for Specific, got {:?}",
             subscribe_response
         ),
     };
+    assert_eq!(bar_id, res_id);
 
     // Test 3: Receive events
-    let event1 = Event {
-        contract_address: "0x123".to_string(),
-        event_signature: "Test".to_string(),
-        topic_keys: vec!["key1".to_string(), "key2".to_string()],
-        data: json!({"key1": "value1", "key2": "value2"}),
+    let event1 = ResultEvent::Ok {
+        value: Some("1".to_string()),
     };
-    let event2 = Event {
-        contract_address: "0x456".to_string(),
-        event_signature: "Other".to_string(),
-        topic_keys: vec!["key3".to_string()],
-        data: json!({"key3": "value3"}),
+    let event2 = ResultEvent::Err {
+        message: Some("failure".to_string()),
     };
 
-    // Send events
-    event_tx.send(event1.clone()).await?;
-    event_tx.send(event2.clone()).await?;
+    // // Send events
+    event_tx.send((foo_id.clone(), event1.clone())).await?;
+    event_tx.send((bar_id.clone(), event2.clone())).await?;
 
     // Receive first event for id_all
     let received = ws_stream.next().await.unwrap()?;
     let event_response: Response = serde_json::from_str(received.to_text()?)?;
     assert_eq!(
         event_response,
-        Response::Event {
-            id: id_all,
-            event: event1.data.clone()
+        Response::Result {
+            id: foo_id.clone(),
+            result: event1.clone()
         }
     );
 
@@ -157,44 +151,62 @@ async fn test_websocket_server() -> Result<()> {
     let event_response: Response = serde_json::from_str(received.to_text()?)?;
     assert_eq!(
         event_response,
-        Response::Event {
-            id: id_specific,
-            event: event1.data
+        Response::Result {
+            id: bar_id.clone(),
+            result: event2.clone()
         }
     );
 
-    // Receive second event for id_all
+    let conn = reader.connection().await?;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .build(),
+    )
+    .await?;
+    let tx_id = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .tx_index(1)
+            .txid("test".to_string())
+            .build(),
+    )
+    .await?;
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder().height(1).tx_id(tx_id).build(),
+    )
+    .await?;
+
+    let test_id = ContractResultId::builder().txid("test".to_string()).build();
+    let subscribe = serde_json::to_string(&Request::Subscribe {
+        id: test_id.clone(),
+    })?;
+    ws_stream
+        .send(Message::Text(subscribe.to_string().into()))
+        .await?;
+    let received = ws_stream.next().await.unwrap()?;
+    let subscribe_response: Response = serde_json::from_str(received.to_text()?)?;
+    let res_id = match subscribe_response {
+        Response::SubscribeResponse { id } => id,
+        _ => anyhow::bail!(
+            "Expected SubscribeResponse for Specific, got {:?}",
+            subscribe_response
+        ),
+    };
+    assert_eq!(test_id, res_id);
+
     let received = ws_stream.next().await.unwrap()?;
     let event_response: Response = serde_json::from_str(received.to_text()?)?;
     assert_eq!(
         event_response,
-        Response::Event {
-            id: id_all,
-            event: event2.data
+        Response::Result {
+            id: test_id.clone(),
+            result: ResultEvent::Err { message: None }
         }
-    );
-
-    // Test 4: Unsubscribe from both
-    let unsubscribe_all = json!({"type": "Unsubscribe", "id": id_all});
-    ws_stream
-        .send(Message::Text(unsubscribe_all.to_string().into()))
-        .await?;
-    let received = ws_stream.next().await.unwrap()?;
-    let unsubscribe_response: Response = serde_json::from_str(received.to_text()?)?;
-    assert_eq!(
-        unsubscribe_response,
-        Response::UnsubscribeResponse { id: id_all }
-    );
-
-    let unsubscribe_specific = json!({"type": "Unsubscribe", "id": id_specific});
-    ws_stream
-        .send(Message::Text(unsubscribe_specific.to_string().into()))
-        .await?;
-    let received = ws_stream.next().await.unwrap()?;
-    let unsubscribe_response: Response = serde_json::from_str(received.to_text()?)?;
-    assert_eq!(
-        unsubscribe_response,
-        Response::UnsubscribeResponse { id: id_specific }
     );
 
     // Test 5: Close the connection
@@ -207,5 +219,6 @@ async fn test_websocket_server() -> Result<()> {
     for handle in handles {
         handle.await?;
     }
+
     Ok(())
 }

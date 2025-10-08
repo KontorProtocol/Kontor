@@ -10,12 +10,11 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::{select, sync::broadcast, time::timeout};
 use tower_http::request_id::RequestId;
 use tracing::{Instrument, error, info, info_span, warn};
 
-use crate::reactor::events::{Event, EventFilter};
+use crate::{database::types::ContractResultId, reactor::results::ResultEvent};
 
 use super::Env;
 
@@ -29,17 +28,26 @@ pub enum ControlFlow {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Request {
-    Subscribe { filter: EventFilter },
-    Unsubscribe { id: usize },
+    Subscribe { id: ContractResultId },
+    Unsubscribe { id: ContractResultId },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Response {
-    SubscribeResponse { id: usize },
-    UnsubscribeResponse { id: usize },
-    Event { id: usize, event: Value },
-    Error { error: String },
+    SubscribeResponse {
+        id: ContractResultId,
+    },
+    UnsubscribeResponse {
+        id: ContractResultId,
+    },
+    Result {
+        id: ContractResultId,
+        result: ResultEvent,
+    },
+    Error {
+        error: String,
+    },
 }
 
 type Futures = FuturesUnordered<
@@ -47,9 +55,8 @@ type Futures = FuturesUnordered<
         Box<
             dyn std::future::Future<
                     Output = (
-                        usize,
-                        Result<Event, broadcast::error::RecvError>,
-                        broadcast::Receiver<Event>,
+                        ContractResultId,
+                        Result<ResultEvent, broadcast::error::RecvError>,
                     ),
                 > + Send,
         >,
@@ -58,7 +65,7 @@ type Futures = FuturesUnordered<
 
 #[derive(Default)]
 pub struct SocketState {
-    pub subscription_ids: HashSet<usize>,
+    pub subscription_ids: HashSet<ContractResultId>,
     pub futures: Futures,
 }
 
@@ -68,21 +75,38 @@ pub async fn handle_message(
     request: Request,
 ) -> Option<Response> {
     match request {
-        Request::Subscribe { filter } => {
+        Request::Subscribe { id } => {
             info!("Received subscribe request");
-            let (id, mut rx) = env.event_subscriber.subscribe(filter.clone()).await;
-            state.futures.push(Box::pin(async move {
-                let result = rx.recv().await;
-                (id, result, rx)
+            let conn = env.reader.connection().await;
+            if conn.is_err() {
+                warn!("Failed to connect to database");
+                return Some(Response::Error {
+                    error: "Failed to connect to database".to_string(),
+                });
+            }
+            let rx = env.result_subscriber.subscribe(&conn.unwrap(), &id).await;
+            if rx.is_err() {
+                warn!("Failed to subscribe to result");
+                return Some(Response::Error {
+                    error: "Failed to subscribe to result".to_string(),
+                });
+            }
+            let mut rx = rx.unwrap();
+            state.futures.push(Box::pin({
+                let id = id.clone();
+                async move {
+                    let result = rx.recv().await;
+                    (id, result)
+                }
             }));
-            state.subscription_ids.insert(id);
+            state.subscription_ids.insert(id.clone());
             info!("Subscribed with ID: {}", id);
             Some(Response::SubscribeResponse { id })
         }
         Request::Unsubscribe { id } => {
             info!("Received unsubscribe request for ID: {}", id);
             if state.subscription_ids.remove(&id) {
-                let _ = env.event_subscriber.unsubscribe(id).await;
+                let _ = env.result_subscriber.unsubscribe(&id).await;
                 info!("Unsubscribed ID: {}", id);
                 Some(Response::UnsubscribeResponse { id })
             } else {
@@ -195,16 +219,12 @@ pub async fn handle_socket(
                     info!("WebSocket connection cancelled");
                     break;
                 }
-                Some((id, result, mut rx)) = state.futures.next(), if !state.futures.is_empty() => {
+                Some((id, result)) = state.futures.next(), if !state.futures.is_empty() => {
                     match result {
-                        Ok(event) => {
-                            if state.subscription_ids.contains(&id) {
-                                state.futures.push(Box::pin(async move {
-                                    (id, rx.recv().await, rx)
-                                }));
-                            }
+                        Ok(result) => {
+                            state.subscription_ids.remove(&id);
 
-                            let msg = Response::Event { id, event: event.data };
+                            let msg = Response::Result { id,  result };
                             let json = serde_json::to_string(&msg).expect("Failed to serialize event");
                             if timeout(
                                 Duration::from_millis(MAX_SEND_MILLIS),
@@ -247,7 +267,7 @@ pub async fn handle_socket(
         }
 
         for id in state.subscription_ids.drain() {
-            let _ = env.event_subscriber.unsubscribe(id).await;
+            let _ = env.result_subscriber.unsubscribe(&id).await;
         }
         let _ = socket.close().await;
         info!("WebSocket connection closed");

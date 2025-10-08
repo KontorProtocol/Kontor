@@ -13,7 +13,7 @@ use indexer::{
         queries::{insert_block, insert_transaction},
         types::{BlockRow, TransactionListResponse, TransactionRow},
     },
-    reactor::events::EventSubscriber,
+    reactor::results::ResultSubscriber,
     test_utils::new_test_db,
 };
 use libsql::params;
@@ -114,7 +114,7 @@ async fn create_test_app() -> Result<Router> {
         reader,
         config,
         cancel_token: CancellationToken::new(),
-        event_subscriber: EventSubscriber::new(),
+        result_subscriber: ResultSubscriber::default(),
     };
 
     Ok(Router::new()

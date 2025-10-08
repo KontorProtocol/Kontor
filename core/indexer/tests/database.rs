@@ -8,13 +8,17 @@ use indexer::{
         queries::{
             contract_has_state, delete_contract_state, delete_matching_paths,
             exists_contract_state, get_contract_bytes_by_address, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state,
+            get_contract_id_from_address, get_contract_result, get_latest_contract_state,
             get_latest_contract_state_value, get_transaction_by_id, get_transaction_by_txid,
-            get_transactions_at_height, insert_block, insert_contract, insert_contract_state,
-            insert_transaction, matching_path, path_prefix_filter_contract_state,
-            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
+            get_transactions_at_height, insert_block, insert_contract, insert_contract_result,
+            insert_contract_state, insert_transaction, matching_path,
+            path_prefix_filter_contract_state, select_block_at_height,
+            select_block_by_height_or_hash, select_block_latest,
         },
-        types::{BlockRow, ContractRow, ContractStateRow, TransactionRow},
+        types::{
+            BlockRow, ContractResultId, ContractResultRow, ContractRow, ContractStateRow,
+            TransactionRow,
+        },
     },
     logging,
     runtime::ContractAddress,
@@ -529,6 +533,46 @@ async fn test_map_keys() -> Result<()> {
     )
     .await?;
     assert_eq!(result, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_contract_result_operations() -> Result<()> {
+    let config = Config::try_parse()?;
+    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let conn = writer.connection();
+
+    // Insert a block first
+    let height = 800000;
+    let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
+    let block = BlockRow { height, hash };
+    insert_block(&conn, block).await?;
+
+    let txid = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    let tx1 = TransactionRow::builder()
+        .height(height)
+        .txid(txid.to_string())
+        .tx_index(0)
+        .build();
+
+    let tx_id = insert_transaction(&conn, tx1).await?;
+
+    let result = ContractResultRow::builder()
+        .tx_id(tx_id)
+        .height(height)
+        .ok(true)
+        .build();
+
+    insert_contract_result(&conn, result.clone()).await?;
+
+    let row = get_contract_result(
+        &conn,
+        &ContractResultId::builder().txid(txid.to_string()).build(),
+    )
+    .await?;
+
+    assert_eq!(Some(result), row);
 
     Ok(())
 }

@@ -19,7 +19,7 @@ use indexer::api::compose::{
     RevealParticipantInputs, compose, compose_reveal,
 };
 use indexer::legacy_test_utils;
-use indexer::reactor::events::EventSubscriber;
+use indexer::reactor::results::ResultSubscriber;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer::{
     api::{
@@ -50,7 +50,7 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
         reader,
         config,
         cancel_token: CancellationToken::new(),
-        event_subscriber: EventSubscriber::new(),
+        result_subscriber: ResultSubscriber::default(),
     };
 
     // Create router with only the compose endpoints

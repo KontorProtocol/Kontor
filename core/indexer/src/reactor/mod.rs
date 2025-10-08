@@ -1,4 +1,4 @@
-pub mod events;
+pub mod results;
 
 use anyhow::{Result, bail};
 use tokio::{
