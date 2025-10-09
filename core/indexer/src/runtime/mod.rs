@@ -120,7 +120,7 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let (mut store, is_fallback, params, mut results, func) = self
+        let (mut store, contract_id, is_fallback, params, mut results, func, is_proc) = self
             .prepare_call(contract_address, signer, expr, self.starting_fuel)
             .await?;
 
@@ -132,23 +132,31 @@ impl Runtime {
         .await;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
-            (call_result, results, store.get_fuel())
+            (call_result, results, store)
         })
         .await
         .context("Failed to join execution");
-        if result.is_err() {
-            self.storage.rollback().await?;
+        let result = self
+            .handle_call(is_fallback, result, |remaining_fuel| async move {
+                OptionFuture::from(
+                    self.gauge
+                        .as_ref()
+                        .map(|g| g.set_ending_fuel(remaining_fuel)),
+                )
+                .await;
+                Ok(())
+            })
+            .await;
+        if is_proc {
+            self.storage
+                .insert_contract_result(
+                    contract_id,
+                    result.is_ok(),
+                    result.as_ref().map(|s| s.clone()).ok(),
+                )
+                .await?;
         }
-        let (call_result, results, fuel_result) = result?;
-        let remaining_fuel = fuel_result?;
-        OptionFuture::from(
-            self.gauge
-                .as_ref()
-                .map(|g| g.set_ending_fuel(remaining_fuel)),
-        )
-        .await;
-
-        self.handle_call(is_fallback, call_result, results).await
+        result
     }
 
     async fn load_component(&self, contract_id: i64) -> Result<Component> {
@@ -194,7 +202,7 @@ impl Runtime {
         signer: Option<Signer>,
         expr: &str,
         fuel: u64,
-    ) -> Result<(Store<Runtime>, bool, Vec<Val>, Vec<Val>, Func)> {
+    ) -> Result<(Store<Runtime>, i64, bool, Vec<Val>, Vec<Val>, Func, bool)> {
         let contract_id = self
             .storage
             .contract_id(contract_address)
@@ -230,17 +238,22 @@ impl Runtime {
             wasmtime::component::Type::Borrow(t) => Ok(*t),
             _ => Err(anyhow!("Unsupported context type")),
         }?;
+
+        if let Some(Signer::ContractId(id)) = signer
+            && self.stack.peek().await != Some(id)
         {
-            if let Some(Signer::ContractId(id)) = signer
-                && self.stack.peek().await != Some(id)
-            {
-                return Err(anyhow!("Invalid contract id signer"));
-            }
+            return Err(anyhow!("Invalid contract id signer"));
+        }
+
+        let mut is_proc = false;
+
+        {
             let mut table = self.table.lock().await;
             match (resource_type, signer) {
                 (t, Some(signer))
                     if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
                 {
+                    is_proc = true;
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -263,6 +276,7 @@ impl Runtime {
                         ),
                     ),
                 (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
+                    is_proc = signer.is_some();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -288,14 +302,30 @@ impl Runtime {
         self.stack.push(contract_id).await?;
         self.storage.savepoint().await?;
 
-        Ok((store, call.name() == fallback_name, params, results, func))
+        Ok((
+            store,
+            contract_id,
+            call.name() == fallback_name,
+            params,
+            results,
+            func,
+            is_proc,
+        ))
     }
 
-    async fn extract_wave_expr(
+    async fn extract_wave_expr<F, Fut>(
         is_fallback: bool,
-        call_result: Result<()>,
-        mut results: Vec<Val>,
-    ) -> Result<String> {
+        result: Result<(Result<()>, Vec<Val>, Store<Runtime>)>,
+        fuel_callback: F,
+    ) -> Result<String>
+    where
+        F: FnOnce(u64) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let (call_result, mut results, store) = result?;
+        let remaining_fuel = store.get_fuel()?;
+        fuel_callback(remaining_fuel).await?;
+
         call_result.context("Failed to execute call")?;
         if results.is_empty() {
             return Ok("()".to_string());
@@ -319,15 +349,19 @@ impl Runtime {
         }
     }
 
-    async fn handle_call(
+    async fn handle_call<F, Fut>(
         &self,
         is_fallback: bool,
-        call_result: Result<()>,
-        results: Vec<Val>,
-    ) -> Result<String> {
+        result: Result<(Result<()>, Vec<Val>, Store<Runtime>)>,
+        fuel_callback: F,
+    ) -> Result<String>
+    where
+        F: FnOnce(u64) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
         self.stack.pop().await;
 
-        let result = Self::extract_wave_expr(is_fallback, call_result, results).await;
+        let result = Self::extract_wave_expr(is_fallback, result, fuel_callback).await;
 
         if result.is_err() {
             self.storage.rollback().await?;
@@ -357,22 +391,19 @@ impl Runtime {
                 .await
                 .transpose()?;
 
-        let (mut store, is_fallback, params, mut results, func) = self
+        let (mut store, _contract_id, is_fallback, params, mut results, func, _is_proc) = self
             .prepare_call(&contract_address, signer, &expr, fuel)
             .await?;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
-            (call_result, results, store.get_fuel())
+            (call_result, results, store)
         })
         .await
         .context("Failed to join call");
-        if result.is_err() {
-            self.storage.rollback().await?;
-        }
-        let (call_result, results, fuel_result) = result?;
-        let remaining_fuel = fuel_result?;
-        accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))?;
-        self.handle_call(is_fallback, call_result, results).await
+        self.handle_call(is_fallback, result, |remaining_fuel| async move {
+            accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))
+        })
+        .await
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(

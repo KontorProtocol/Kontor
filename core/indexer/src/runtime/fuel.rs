@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexmap::IndexMap;
 use stdlib::DotPathBuf;
@@ -56,6 +56,7 @@ pub enum Fuel {
     NumbersMulDecimal,
     NumbersDivDecimal,
     NumbersLog10Decimal,
+    Result(u64),
 }
 
 impl Fuel {
@@ -68,7 +69,7 @@ impl Fuel {
             Self::GetKeys => 200,
             Self::Exists => 50,
             Self::MatchingPath(regexp_len) => 500 + 10 * regexp_len,
-            Self::Set(value_len) => 200 + 10 * value_len,
+            Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
             Self::DeleteMatchingPaths(regexp_len) => 1000 + 10 * regexp_len,
             Self::ProcSigner | Self::ProcContractSigner => 500,
             Self::ProcViewContext => 200,
@@ -111,7 +112,10 @@ impl Fuel {
         OptionFuture::from(gauge.map(|g| g.track(self))).await;
         accessor.with(|mut access| {
             let mut store = access.as_context_mut();
-            let fuel = store.get_fuel()? - self.cost();
+            let fuel = store
+                .get_fuel()?
+                .checked_sub(self.cost())
+                .ok_or(anyhow!("Insufficient fuel"))?;
             store.set_fuel(fuel)?;
             Ok(fuel)
         })

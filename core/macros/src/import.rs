@@ -159,7 +159,7 @@ pub fn generate_functions(
 
     if test {
         let runtime_name = Ident::new("runtime", Span::call_site());
-        let runtime_ty = quote! { &Runtime };
+        let runtime_ty = quote! { &mut Runtime };
         params[0] = quote! { #runtime_name: #runtime_ty};
         if is_proc_context {
             let signer_name = Ident::new("signer", Span::call_site());

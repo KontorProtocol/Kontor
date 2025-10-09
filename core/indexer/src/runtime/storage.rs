@@ -8,10 +8,10 @@ use crate::{
         queries::{
             delete_contract_state, delete_matching_paths, exists_contract_state,
             get_contract_bytes_by_id, get_contract_id_from_address,
-            get_latest_contract_state_value, insert_contract_state, matching_path,
-            path_prefix_filter_contract_state,
+            get_latest_contract_state_value, insert_contract_result, insert_contract_state,
+            matching_path, path_prefix_filter_contract_state,
         },
-        types::ContractStateRow,
+        types::{ContractResultRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
 };
@@ -27,6 +27,10 @@ pub struct Storage {
     pub tx_id: i64,
     #[builder(default = 1)]
     pub height: i64,
+    #[builder(default = 0)]
+    pub input_index: i64,
+    #[builder(default = 0)]
+    pub op_index: i64,
 }
 
 impl Storage {
@@ -71,6 +75,27 @@ impl Storage {
 
     pub async fn contract_bytes(&self, contract_id: i64) -> Result<Option<Vec<u8>>> {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
+    }
+
+    pub async fn insert_contract_result(
+        &self,
+        contract_id: i64,
+        ok: bool,
+        value: Option<String>,
+    ) -> Result<i64> {
+        Ok(insert_contract_result(
+            &self.conn,
+            ContractResultRow::builder()
+                .tx_id(self.tx_id)
+                .input_index(self.input_index)
+                .op_index(self.op_index)
+                .contract_id(contract_id)
+                .height(self.height)
+                .ok(ok)
+                .maybe_value(value)
+                .build(),
+        )
+        .await?)
     }
 
     pub async fn keys(

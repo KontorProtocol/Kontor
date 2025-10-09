@@ -137,18 +137,21 @@ impl Runtime {
     }
 
     pub async fn execute(
-        &self,
+        &mut self,
         signer: Option<&str>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        self.runtime
+        let result = self
+            .runtime
             .execute(
                 signer.map(|s| Signer::XOnlyPubKey(s.to_string())),
                 contract_address,
                 expr,
             )
-            .await
+            .await;
+        self.runtime.storage.op_index += 1;
+        result
     }
 
     pub fn fuel_gauge(&self) -> FuelGauge {
