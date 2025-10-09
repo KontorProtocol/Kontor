@@ -9,7 +9,7 @@ mod types;
 pub mod wit;
 
 pub use component_cache::ComponentCache;
-pub use contracts::{load_contracts, load_native_contracts};
+pub use contracts::load_contracts;
 use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};

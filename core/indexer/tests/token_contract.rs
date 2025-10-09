@@ -9,7 +9,13 @@ import!(
 
 #[tokio::test]
 async fn test_token_contract() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[("token", &contracts.read("token").await?.unwrap())])
+            .build(),
+    )
+    .await?;
 
     let minter = "test_minter";
     let holder = "test_holder";
@@ -45,7 +51,13 @@ async fn test_token_contract() -> Result<()> {
 
 #[tokio::test]
 async fn test_token_contract_large_numbers() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[("token", &contracts.read("token").await?.unwrap())])
+            .build(),
+    )
+    .await?;
 
     let minter = "test_minter";
     let holder = "test_holder";

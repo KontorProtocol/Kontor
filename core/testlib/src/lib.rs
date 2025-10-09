@@ -1,6 +1,7 @@
-use std::{env::current_dir, path::Path};
+use std::{collections::HashMap, path::PathBuf};
 
 use bon::Builder;
+use glob::Paths;
 pub use indexer::runtime::wit::kontor::built_in::{
     error::Error,
     foreign::ContractAddress,
@@ -12,62 +13,62 @@ use indexer::{
     database::{queries::insert_block, types::BlockRow},
     runtime::{
         ComponentCache, Runtime as IndexerRuntime, Storage, fuel::FuelGauge, load_contracts,
-        load_native_contracts, wit::Signer,
+        wit::Signer,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::Connection;
 pub use macros::{import_test as import, interface_test as interface};
 
-use anyhow::anyhow;
 pub use anyhow::{Error as AnyhowError, Result};
 use tokio::{fs::File, io::AsyncReadExt, task};
 
-async fn find_first_file_with_extension(dir: &Path, extension: &str) -> Option<String> {
-    let pattern = format!("{}/*.{}", dir.display(), extension.trim_start_matches('.'));
-
-    task::spawn_blocking(move || {
-        glob::glob(&pattern)
-            .expect("Invalid glob pattern")
-            .filter_map(Result::ok)
-            .find(|path| path.is_file())
-            .and_then(|path| path.file_name().map(|s| s.to_string_lossy().into_owned()))
-    })
-    .await
-    .unwrap_or_default()
+pub struct ContractReader {
+    contracts: HashMap<String, PathBuf>,
 }
 
-async fn read_file(path: &Path) -> Result<Vec<u8>> {
-    let mut file = File::open(path).await?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).await?;
-    Ok(buffer)
-}
+impl ContractReader {
+    pub async fn new(dir: &str) -> Result<Self> {
+        let paths = Self::find_contracts(dir).await?;
+        Ok(Self {
+            contracts: paths
+                .filter_map(Result::ok)
+                .filter(|p| p.is_file())
+                .map(|p| {
+                    {
+                        (
+                            p.file_name()
+                                .expect("File has no name")
+                                .to_string_lossy()
+                                .strip_suffix(".wasm.br")
+                                .unwrap()
+                                .to_string(),
+                            p,
+                        )
+                    }
+                })
+                .collect(),
+        })
+    }
 
-async fn read_wasm_file(cd: &Path) -> Result<Vec<u8>> {
-    let release_dir = cd.join("target/wasm32-unknown-unknown/release");
-    let ext = ".wasm.br";
-    let file_name = find_first_file_with_extension(&release_dir, ext)
-        .await
-        .ok_or(anyhow!(
-            "Could not find file with extension: {}@{:?}",
-            ext,
-            release_dir
-        ))?;
-    read_file(&release_dir.join(file_name)).await
-}
+    pub async fn read(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(if let Some(path) = self.contracts.get(name) {
+            let mut file = File::open(path).await?;
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer).await?;
+            Some(buffer)
+        } else {
+            None
+        })
+    }
 
-pub async fn contract_bytes() -> Result<Vec<u8>> {
-    let mut cd = current_dir()?;
-    cd.pop();
-    read_wasm_file(&cd).await
-}
-
-pub async fn dep_contract_bytes(dir_name: &str) -> Result<Vec<u8>> {
-    let mut cd = current_dir()?;
-    cd.pop();
-    cd.pop();
-    read_wasm_file(&cd.join(dir_name)).await
+    async fn find_contracts(dir: &str) -> Result<Paths> {
+        let pattern = format!("{}/**/target/wasm32-unknown-unknown/release/*.wasm.br", dir);
+        Ok(
+            task::spawn_blocking(move || glob::glob(&pattern).expect("Invalid glob pattern"))
+                .await?,
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -120,8 +121,6 @@ impl Runtime {
         let runtime = IndexerRuntime::new(storage, component_cache).await?;
         if let Some(contracts) = config.contracts {
             load_contracts(&runtime, contracts).await?;
-        } else {
-            load_native_contracts(&runtime).await?;
         }
         Ok(Self { runtime })
     }

@@ -9,7 +9,13 @@ import!(
 
 #[tokio::test]
 async fn test_crypto_contract() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[("crypto", &contracts.read("crypto").await?.unwrap())])
+            .build(),
+    )
+    .await?;
 
     let result = crypto::hash(&mut runtime, "foo").await?;
     assert_eq!(

@@ -39,7 +39,17 @@ import!(
 
 #[tokio::test]
 async fn test_fib_contract() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("arith", &contracts.read("arith").await?.unwrap()),
+                ("proxy", &contracts.read("proxy").await?.unwrap()),
+                ("fib", &contracts.read("fib").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let signer = "test_signer";
     let result = arith::last_op(&mut runtime).await?;
