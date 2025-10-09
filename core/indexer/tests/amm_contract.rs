@@ -32,7 +32,18 @@ interface!(name = "token-dyn", path = "../contracts/token/wit");
 
 #[tokio::test]
 async fn test_amm_swaps() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let token_a = ContractAddress {
         name: "token-a".to_string(),
@@ -134,7 +145,18 @@ async fn test_amm_swaps() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_swap_fee() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let token_a = ContractAddress {
         name: "token-a".to_string(),
@@ -222,7 +244,18 @@ async fn test_amm_swap_fee() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_swap_low_slippage() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let token_a = ContractAddress {
         name: "token-a".to_string(),
@@ -313,7 +346,18 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_deposit_withdraw() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let token_a = ContractAddress {
         name: "token-a".to_string(),
@@ -431,7 +475,18 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_limits() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
@@ -546,7 +601,18 @@ async fn test_amm_limits() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_pools() -> Result<()> {
-    let mut runtime = Runtime::new(RuntimeConfig::default()).await?;
+    let contracts = ContractReader::new("../../contracts").await?;
+    let mut runtime = Runtime::new(
+        RuntimeConfig::builder()
+            .contracts(&[
+                ("token-a", &contracts.read("token").await?.unwrap()),
+                ("token-b", &contracts.read("token").await?.unwrap()),
+                ("token-c", &contracts.read("token").await?.unwrap()),
+                ("amm", &contracts.read("amm").await?.unwrap()),
+            ])
+            .build(),
+    )
+    .await?;
 
     let token_a = ContractAddress {
         name: "token-a".to_string(),

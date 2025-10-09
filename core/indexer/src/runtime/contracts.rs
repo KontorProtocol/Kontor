@@ -9,31 +9,6 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-const AMM: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/amm.wasm.br");
-
-const ARITH: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/arith.wasm.br");
-
-const CRYPTO: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/crypto.wasm.br");
-
-const FIB: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/fib.wasm.br");
-
-const POOL: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/pool.wasm.br");
-
-const PROXY: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/proxy.wasm.br");
-
-const SHARED_ACCOUNT: &[u8] = include_bytes!(
-    "../../../../contracts/target/wasm32-unknown-unknown/release/shared_account.wasm.br"
-);
-
-const TOKEN: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
-
 pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> Result<()> {
     let height = 0;
     let tx_index = 0;
@@ -72,24 +47,4 @@ pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> R
         }
     }
     Ok(())
-}
-
-pub async fn load_native_contracts(runtime: &Runtime) -> Result<()> {
-    load_contracts(
-        runtime,
-        &[
-            ("amm", AMM),
-            ("arith", ARITH),
-            ("crypto", CRYPTO),
-            ("fib", FIB),
-            ("pool", POOL),
-            ("proxy", PROXY),
-            ("shared-account", SHARED_ACCOUNT),
-            ("token", TOKEN),
-            ("token-a", TOKEN),
-            ("token-b", TOKEN),
-            ("token-c", TOKEN),
-        ],
-    )
-    .await
 }
