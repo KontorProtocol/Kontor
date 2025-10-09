@@ -18,19 +18,14 @@ interface!(name = "token-dyn", path = "../contracts/token/wit");
 
 #[tokio::test]
 async fn test_shared_account_contract() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token", &contracts.read("token").await?.unwrap()),
-                (
-                    "shared-account",
-                    &contracts.read("shared_account").await?.unwrap(),
-                ),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
+    runtime.publish("token").await?;
+    runtime.publish("shared-account").await?;
 
     let alice = "alice";
     let bob = "bob";

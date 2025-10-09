@@ -39,17 +39,15 @@ import!(
 
 #[tokio::test]
 async fn test_fib_contract() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("arith", &contracts.read("arith").await?.unwrap()),
-                ("proxy", &contracts.read("proxy").await?.unwrap()),
-                ("fib", &contracts.read("fib").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
+    let fib = runtime.publish("fib").await?;
+    let arith = runtime.publish("arith").await?;
+    runtime.publish("proxy").await?;
 
     let signer = "test_signer";
     let result = arith::last_op(&mut runtime).await?;
@@ -70,25 +68,9 @@ async fn test_fib_contract() -> Result<()> {
     assert_eq!(result, 21);
 
     let result = proxy::get_contract_address(&mut runtime).await?;
-    assert_eq!(
-        result,
-        ContractAddress {
-            name: "fib".to_string(),
-            height: 0,
-            tx_index: 0
-        }
-    );
+    assert_eq!(result, fib);
 
-    proxy::set_contract_address(
-        &mut runtime,
-        signer,
-        ContractAddress {
-            name: "arith".to_string(),
-            height: 0,
-            tx_index: 0,
-        },
-    )
-    .await?;
+    proxy::set_contract_address(&mut runtime, signer, arith).await?;
 
     let result = arith_proxied::last_op(&mut runtime).await?;
     assert_eq!(

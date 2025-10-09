@@ -20,10 +20,11 @@ use indexer::{
 use libsql::Connection;
 pub use macros::{import_test as import, interface_test as interface};
 
-pub use anyhow::{Error as AnyhowError, Result};
+pub use anyhow::{Error as AnyhowError, Result, anyhow};
 use tokio::{fs::File, io::AsyncReadExt, task};
 
 pub struct ContractReader {
+    dir: String,
     contracts: HashMap<String, PathBuf>,
 }
 
@@ -31,6 +32,7 @@ impl ContractReader {
     pub async fn new(dir: &str) -> Result<Self> {
         let paths = Self::find_contracts(dir).await?;
         Ok(Self {
+            dir: dir.to_string(),
             contracts: paths
                 .filter_map(Result::ok)
                 .filter(|p| p.is_file())
@@ -42,6 +44,7 @@ impl ContractReader {
                                 .to_string_lossy()
                                 .strip_suffix(".wasm.br")
                                 .unwrap()
+                                .replace("_", "-")
                                 .to_string(),
                             p,
                         )
@@ -79,8 +82,8 @@ pub struct CallContext {
 
 #[derive(Default, Builder)]
 pub struct RuntimeConfig<'a> {
+    contracts_dir: &'a str,
     call_context: Option<CallContext>,
-    contracts: Option<&'a [(&'a str, &'a [u8])]>,
 }
 
 impl RuntimeConfig<'_> {
@@ -94,6 +97,7 @@ impl RuntimeConfig<'_> {
 
 pub struct Runtime {
     pub runtime: IndexerRuntime,
+    pub contract_reader: ContractReader,
 }
 
 impl Runtime {
@@ -117,12 +121,33 @@ impl Runtime {
         let (_, writer, _test_db_dir) = new_test_db(&Config::new_na()).await?;
         let conn = writer.connection();
         let storage = Runtime::make_storage(config.get_call_context(), conn).await?;
-        let component_cache: ComponentCache = ComponentCache::new();
+        let component_cache = ComponentCache::new();
+        let contract_reader = ContractReader::new(config.contracts_dir).await?;
         let runtime = IndexerRuntime::new(storage, component_cache).await?;
-        if let Some(contracts) = config.contracts {
-            load_contracts(&runtime, contracts).await?;
-        }
-        Ok(Self { runtime })
+        Ok(Self {
+            runtime,
+            contract_reader,
+        })
+    }
+
+    pub async fn publish(&self, name: &str) -> Result<ContractAddress> {
+        self.publish_as(name, name).await
+    }
+
+    pub async fn publish_as(&self, name: &str, alias: &str) -> Result<ContractAddress> {
+        let name = name.replace("_", "-");
+        let alias = alias.replace("_", "-");
+        let contract = self.contract_reader.read(&name).await?.ok_or(anyhow!(
+            "Contract not found: {} in {}",
+            name,
+            self.contract_reader.dir,
+        ))?;
+        load_contracts(&self.runtime, &[(&alias, &contract)]).await?;
+        Ok(ContractAddress {
+            name: alias,
+            height: 0,
+            tx_index: 0,
+        })
     }
 
     pub async fn set_call_context(&mut self, context: CallContext) -> Result<()> {
