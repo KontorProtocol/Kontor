@@ -25,35 +25,15 @@ interface!(name = "token-dyn", path = "../contracts/token/wit");
 
 #[tokio::test]
 async fn test_amm_swaps() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let pool_address = ContractAddress {
-        name: "pool".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    let pool = runtime.publish("pool").await?;
 
     let admin = "test_admin";
     let minter = "test_minter";
@@ -112,16 +92,16 @@ async fn test_amm_swaps() -> Result<()> {
     assert!(k3 >= k2);
 
     // use token interface to transfer shares
-    let res = token_dyn::balance(&mut runtime, &pool_address, admin).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, admin).await?;
     assert_eq!(res, Some(223.into()));
-    let res = token_dyn::balance(&mut runtime, &pool_address, minter).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, minter).await?;
     assert_eq!(res, None);
 
-    token_dyn::transfer(&mut runtime, &pool_address, admin, minter, 23.into()).await??;
+    token_dyn::transfer(&mut runtime, &pool, admin, minter, 23.into()).await??;
 
-    let res = token_dyn::balance(&mut runtime, &pool_address, admin).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, admin).await?;
     assert_eq!(res, Some(200.into()));
-    let res = token_dyn::balance(&mut runtime, &pool_address, minter).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, minter).await?;
     assert_eq!(res, Some(23.into()));
 
     Ok(())
@@ -129,35 +109,15 @@ async fn test_amm_swaps() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_swap_fee() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
-
-    let pool_address = ContractAddress {
-        name: "pool".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    let pool = runtime.publish("pool").await?;
 
     let admin = "test_admin";
     let minter = "test_minter";
@@ -210,16 +170,16 @@ async fn test_amm_swap_fee() -> Result<()> {
     assert!(k3 >= k2);
 
     // use token interface to transfer shares
-    let res = token_dyn::balance(&mut runtime, &pool_address, admin).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, admin).await?;
     assert_eq!(res, Some(223.into()));
-    let res = token_dyn::balance(&mut runtime, &pool_address, minter).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, minter).await?;
     assert_eq!(res, None);
 
-    token_dyn::transfer(&mut runtime, &pool_address, admin, minter, 23.into()).await??;
+    token_dyn::transfer(&mut runtime, &pool, admin, minter, 23.into()).await??;
 
-    let res = token_dyn::balance(&mut runtime, &pool_address, admin).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, admin).await?;
     assert_eq!(res, Some(200.into()));
-    let res = token_dyn::balance(&mut runtime, &pool_address, minter).await?;
+    let res = token_dyn::balance(&mut runtime, &pool, minter).await?;
     assert_eq!(res, Some(23.into()));
 
     Ok(())
@@ -227,29 +187,15 @@ async fn test_amm_swap_fee() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_shares_token_interface() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    runtime.publish("pool").await?;
 
     let admin = "test_admin";
     let minter = "test_minter";
@@ -302,29 +248,15 @@ async fn test_amm_shares_token_interface() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_swap_low_slippage() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    runtime.publish("pool").await?;
 
     let admin = "test_admin";
     let minter = "test_minter";
@@ -391,29 +323,15 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_deposit_withdraw() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    runtime.publish("pool").await?;
 
     let admin = "test_admin";
     let minter = "test_minter";
@@ -516,33 +434,19 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
 
 #[tokio::test]
 async fn test_amm_limits() -> Result<()> {
-    let contracts = ContractReader::new("../../contracts").await?;
     let mut runtime = Runtime::new(
         RuntimeConfig::builder()
-            .contracts(&[
-                ("token-a", &contracts.read("token").await?.unwrap()),
-                ("token-b", &contracts.read("token").await?.unwrap()),
-                ("pool", &contracts.read("pool").await?.unwrap()),
-            ])
+            .contracts_dir("../../contracts")
             .build(),
     )
     .await?;
+    let token_a = runtime.publish_as("token", "token-a").await?;
+    let token_b = runtime.publish_as("token", "token-b").await?;
+    runtime.publish("pool").await?;
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
     let oversized_value = large_value + 1.into();
-
-    let token_a = ContractAddress {
-        name: "token-a".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
-
-    let token_b = ContractAddress {
-        name: "token-b".to_string(),
-        height: 0,
-        tx_index: 0,
-    };
 
     let admin = "test_admin";
     let minter = "test_minter";

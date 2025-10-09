@@ -167,7 +167,7 @@ impl Runtime {
                     .storage
                     .contract_bytes(contract_id)
                     .await?
-                    .ok_or(anyhow!("Contract not found"))?;
+                    .ok_or(anyhow!("Contract not found when trying to load component"))?;
                 let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
                 let mut module_bytes = Vec::new();
                 decompressor.read_to_end(&mut module_bytes)?;
@@ -207,7 +207,7 @@ impl Runtime {
             .storage
             .contract_id(contract_address)
             .await?
-            .ok_or(anyhow!("Contract not found"))?;
+            .ok_or(anyhow!("Contract not found: {}", contract_address))?;
         let component = self.load_component(contract_id).await?;
         let linker = self.make_linker()?;
         let mut store = self.make_store(fuel)?;

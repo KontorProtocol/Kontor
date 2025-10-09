@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::{
     database::{
-        queries::{contract_has_state, insert_block, insert_contract},
+        queries::{contract_has_state, insert_block, insert_contract, select_block_at_height},
         types::{BlockRow, ContractRow},
     },
     runtime::{ContractAddress, Runtime, wit::Signer},
@@ -13,14 +13,16 @@ pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> R
     let height = 0;
     let tx_index = 0;
     let conn = runtime.get_storage_conn();
-    insert_block(
-        &conn,
-        BlockRow {
-            height,
-            hash: new_mock_block_hash(0),
-        },
-    )
-    .await?;
+    if select_block_at_height(&conn, 0).await?.is_none() {
+        insert_block(
+            &conn,
+            BlockRow {
+                height,
+                hash: new_mock_block_hash(0),
+            },
+        )
+        .await?;
+    }
     for (name, bytes) in contracts {
         let contract_id = insert_contract(
             &conn,
