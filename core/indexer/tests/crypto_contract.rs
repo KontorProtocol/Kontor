@@ -7,14 +7,8 @@ import!(
     path = "../contracts/crypto/wit",
 );
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_crypto_contract() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("crypto").await?;
 
     let result = crypto::hash(&mut runtime, "foo").await?;

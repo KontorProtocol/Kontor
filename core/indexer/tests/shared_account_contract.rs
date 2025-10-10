@@ -16,14 +16,8 @@ import!(
 
 interface!(name = "token-dyn", path = "../contracts/token/wit");
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_shared_account_contract() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("token").await?;
     runtime.publish("shared-account").await?;
 

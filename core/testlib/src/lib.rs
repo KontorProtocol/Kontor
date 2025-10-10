@@ -18,7 +18,7 @@ use indexer::{
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use libsql::Connection;
-pub use macros::{import_test as import, interface_test as interface};
+pub use macros::{import_test as import, interface_test as interface, runtime};
 
 pub use anyhow::{Error as AnyhowError, Result, anyhow};
 use tokio::{fs::File, io::AsyncReadExt, task};
@@ -128,6 +128,14 @@ impl Runtime {
             runtime,
             contract_reader,
         })
+    }
+
+    pub async fn run<F, Fut>(self, f: F) -> Result<()>
+    where
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        f(self).await
     }
 
     pub async fn publish(&self, name: &str) -> Result<ContractAddress> {

@@ -30,14 +30,8 @@ import!(
 
 interface!(name = "token-dyn", path = "../contracts/token/wit");
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swaps() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
@@ -128,14 +122,8 @@ async fn test_amm_swaps() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
@@ -212,14 +200,8 @@ async fn test_amm_swap_fee() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
@@ -299,14 +281,8 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
@@ -413,14 +389,8 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_limits() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
@@ -524,14 +494,8 @@ async fn test_amm_limits() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_pools() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("amm").await?;
     let token_a = runtime.publish_as("token", "token-a").await?;
     let token_b = runtime.publish_as("token", "token-b").await?;
