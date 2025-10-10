@@ -1,4 +1,4 @@
-use std::{fmt, pin::Pin};
+use std::{ops::Deref, pin::Pin};
 
 use futures_util::Stream;
 
@@ -19,14 +19,24 @@ impl HasContractId for ViewContext {
 #[derive(Clone)]
 pub enum Signer {
     XOnlyPubKey(String),
-    ContractId(i64),
+    ContractId { id: i64, id_str: String },
 }
 
-impl fmt::Display for Signer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Signer {
+    pub fn new_contract_id(id: i64) -> Self {
+        Self::ContractId {
+            id,
+            id_str: format!("__cid__{}", id),
+        }
+    }
+}
+
+impl Deref for Signer {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
         match self {
-            Self::XOnlyPubKey(s) => write!(f, "{}", s),
-            Self::ContractId(id) => write!(f, "__cid__{}", id),
+            Self::XOnlyPubKey(s) => s,
+            Self::ContractId { id_str, .. } => id_str,
         }
     }
 }
