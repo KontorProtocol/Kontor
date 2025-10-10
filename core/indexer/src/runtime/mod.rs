@@ -116,7 +116,7 @@ impl Runtime {
 
     pub async fn execute(
         &self,
-        signer: Option<Signer>,
+        signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
@@ -199,7 +199,7 @@ impl Runtime {
     async fn prepare_call(
         &self,
         contract_address: &ContractAddress,
-        signer: Option<Signer>,
+        signer: Option<&Signer>,
         expr: &str,
         fuel: u64,
     ) -> Result<(Store<Runtime>, i64, bool, Vec<Val>, Vec<Val>, Func, bool)> {
@@ -239,8 +239,8 @@ impl Runtime {
             _ => Err(anyhow!("Unsupported context type")),
         }?;
 
-        if let Some(Signer::ContractId(id)) = signer
-            && self.stack.peek().await != Some(id)
+        if let Some(Signer::ContractId { id, .. }) = signer
+            && self.stack.peek().await != Some(*id)
         {
             return Err(anyhow!("Invalid contract id signer"));
         }
@@ -259,7 +259,7 @@ impl Runtime {
                         wasmtime::component::Val::Resource(
                             table
                                 .push(ProcContext {
-                                    signer,
+                                    signer: signer.clone(),
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
@@ -282,7 +282,7 @@ impl Runtime {
                         wasmtime::component::Val::Resource(
                             table
                                 .push(FallContext {
-                                    signer,
+                                    signer: signer.cloned(),
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
@@ -392,7 +392,7 @@ impl Runtime {
                 .transpose()?;
 
         let (mut store, _contract_id, is_fallback, params, mut results, func, _is_proc) = self
-            .prepare_call(&contract_address, signer, &expr, fuel)
+            .prepare_call(&contract_address, signer.as_ref(), &expr, fuel)
             .await?;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
@@ -563,7 +563,7 @@ impl Runtime {
             .await?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
-        Ok(table.push(Signer::ContractId(contract_id))?)
+        Ok(table.push(Signer::new_contract_id(contract_id))?)
     }
 
     async fn _proc_view_context<T>(

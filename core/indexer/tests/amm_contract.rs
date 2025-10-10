@@ -32,17 +32,18 @@ interface!(name = "token-dyn", path = "../contracts/token/wit");
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swaps() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    token_a::mint(&mut runtime, minter, 1000.into()).await?;
-    token_b::mint(&mut runtime, minter, 1000.into()).await?;
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 100.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 500.into()).await??;
+    token_a::mint(&mut runtime, &minter, 1000.into()).await?;
+    token_b::mint(&mut runtime, &minter, 1000.into()).await?;
+
+    token_a::transfer(&mut runtime, &minter, &admin, 100.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 500.into()).await??;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -50,7 +51,7 @@ async fn test_amm_swaps() -> Result<()> {
     };
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair.clone(),
         100.into(),
         500.into(),
@@ -76,7 +77,7 @@ async fn test_amm_swaps() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         10.into(),
@@ -87,7 +88,7 @@ async fn test_amm_swaps() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         10.into(),
@@ -105,7 +106,7 @@ async fn test_amm_swaps() -> Result<()> {
     assert_eq!(res, Ok(9.into()));
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_b.clone(),
         45.into(),
@@ -124,17 +125,17 @@ async fn test_amm_swaps() -> Result<()> {
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    token_a::mint(&mut runtime, minter, 1000.into()).await?;
-    token_b::mint(&mut runtime, minter, 1000.into()).await?;
+    token_a::mint(&mut runtime, &minter, 1000.into()).await?;
+    token_b::mint(&mut runtime, &minter, 1000.into()).await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 100.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 500.into()).await??;
+    token_a::transfer(&mut runtime, &minter, &admin, 100.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 500.into()).await??;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -142,7 +143,7 @@ async fn test_amm_swap_fee() -> Result<()> {
     };
     amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair.clone(),
         100.into(),
         500.into(),
@@ -165,7 +166,7 @@ async fn test_amm_swap_fee() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         10.into(),
@@ -183,7 +184,7 @@ async fn test_amm_swap_fee() -> Result<()> {
     assert_eq!(res, Ok(9.into()));
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_b.clone(),
         45.into(),
@@ -202,17 +203,17 @@ async fn test_amm_swap_fee() -> Result<()> {
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    token_a::mint(&mut runtime, minter, 110000.into()).await?;
-    token_b::mint(&mut runtime, minter, 510000.into()).await?;
+    token_a::mint(&mut runtime, &minter, 110000.into()).await?;
+    token_b::mint(&mut runtime, &minter, 510000.into()).await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 100000.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 500000.into()).await??;
+    token_a::transfer(&mut runtime, &minter, &admin, 100000.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 500000.into()).await??;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -220,7 +221,7 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
     };
     amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair.clone(),
         100000.into(),
         500000.into(),
@@ -246,7 +247,7 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         10000.into(),
@@ -264,7 +265,7 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
     assert_eq!(res, Ok(10.into()));
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_b.clone(),
         45.into(),
@@ -283,18 +284,19 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
+    let holder = runtime.identity("test_holder").await?;
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    let holder = "test_holder";
-    token_a::mint(&mut runtime, minter, 1000.into()).await?;
-    token_b::mint(&mut runtime, minter, 1000.into()).await?;
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 100.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 500.into()).await??;
+    token_a::mint(&mut runtime, &minter, 1000.into()).await?;
+    token_b::mint(&mut runtime, &minter, 1000.into()).await?;
+
+    token_a::transfer(&mut runtime, &minter, &admin, 100.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 500.into()).await??;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -302,7 +304,7 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     };
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair.clone(),
         100.into(),
         500.into(),
@@ -311,8 +313,8 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     .await?;
     assert_eq!(res, Ok(223.into()));
 
-    token_a::transfer(&mut runtime, minter, holder, 200.into()).await??;
-    token_b::transfer(&mut runtime, minter, holder, 200.into()).await??;
+    token_a::transfer(&mut runtime, &minter, &holder, 200.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &holder, 200.into()).await??;
 
     let bal_a = amm::token_balance(&mut runtime, pair.clone(), token_a.clone()).await?;
     assert_eq!(bal_a, Ok(100.into()));
@@ -338,7 +340,7 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
         })
     );
 
-    let res = amm::deposit(&mut runtime, holder, pair.clone(), 50.into(), 100.into()).await?;
+    let res = amm::deposit(&mut runtime, &holder, pair.clone(), 50.into(), 100.into()).await?;
     assert_eq!(
         res,
         Ok(amm::DepositResult {
@@ -353,9 +355,9 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     let bal_b = amm::token_balance(&mut runtime, pair.clone(), token_b.clone()).await?;
     assert_eq!(bal_b, Ok(599.into()));
 
-    let bal = amm::balance(&mut runtime, pair.clone(), admin).await?;
+    let bal = amm::balance(&mut runtime, pair.clone(), &admin).await?;
     assert_eq!(bal, Some(223.into()));
-    let bal = amm::balance(&mut runtime, pair.clone(), holder).await?;
+    let bal = amm::balance(&mut runtime, pair.clone(), &holder).await?;
     assert_eq!(bal, Some(44.into()));
 
     let res = amm::quote_withdraw(&mut runtime, pair.clone(), 10.into()).await?;
@@ -367,7 +369,7 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
         })
     );
 
-    let res = amm::withdraw(&mut runtime, holder, pair.clone(), 44.into()).await?;
+    let res = amm::withdraw(&mut runtime, &holder, pair.clone(), 44.into()).await?;
     assert_eq!(
         res,
         Ok(amm::WithdrawResult {
@@ -381,9 +383,9 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     let bal_b = amm::token_balance(&mut runtime, pair.clone(), token_b.clone()).await?;
     assert_eq!(bal_b, Ok(501.into()));
 
-    let bal = amm::balance(&mut runtime, pair.clone(), admin).await?;
+    let bal = amm::balance(&mut runtime, pair.clone(), &admin).await?;
     assert_eq!(bal, Some(223.into()));
-    let bal = amm::balance(&mut runtime, pair.clone(), holder).await?;
+    let bal = amm::balance(&mut runtime, pair.clone(), &holder).await?;
     assert_eq!(bal, Some(0.into()));
 
     Ok(())
@@ -391,21 +393,22 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_limits() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
+
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
     let oversized_value = large_value + 1.into();
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    token_a::mint(&mut runtime, minter, max_int.into()).await?;
-    token_b::mint(&mut runtime, minter, max_int.into()).await?;
+    token_a::mint(&mut runtime, &minter, max_int.into()).await?;
+    token_b::mint(&mut runtime, &minter, max_int.into()).await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 1000.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 1000.into()).await??;
+    token_a::transfer(&mut runtime, &minter, &admin, 1000.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 1000.into()).await??;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -413,7 +416,7 @@ async fn test_amm_limits() -> Result<()> {
     };
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair.clone(),
         1000.into(),
         1000.into(),
@@ -433,7 +436,7 @@ async fn test_amm_limits() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         large_value,
@@ -446,7 +449,7 @@ async fn test_amm_limits() -> Result<()> {
     assert!(res.is_err());
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_a.clone(),
         1.into(),
@@ -464,7 +467,7 @@ async fn test_amm_limits() -> Result<()> {
     assert_eq!(res, Ok("340_282_366_920_938_463_463_374_607_429".into()));
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_b.clone(),
         large_value,
@@ -477,7 +480,7 @@ async fn test_amm_limits() -> Result<()> {
     assert!(res.is_err());
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair.clone(),
         token_b.clone(),
         1000.into(),
@@ -496,20 +499,21 @@ async fn test_amm_limits() -> Result<()> {
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_amm_pools() -> Result<()> {
-    runtime.publish("amm").await?;
-    let token_a = runtime.publish_as("token", "token-a").await?;
-    let token_b = runtime.publish_as("token", "token-b").await?;
-    let token_c = runtime.publish_as("token", "token-c").await?;
+    let admin = runtime.identity("test_admin").await?;
+    let minter = runtime.identity("test_minter").await?;
 
-    let admin = "test_admin";
-    let minter = "test_minter";
-    token_a::mint(&mut runtime, minter, 1000.into()).await?;
-    token_b::mint(&mut runtime, minter, 1000.into()).await?;
-    token_c::mint(&mut runtime, minter, 1000.into()).await?;
+    runtime.publish(&admin, "amm").await?;
+    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_c = runtime.publish_as(&admin, "token", "token-c").await?;
 
-    token_a::transfer(&mut runtime, minter, admin, 100.into()).await??;
-    token_b::transfer(&mut runtime, minter, admin, 600.into()).await??;
-    token_c::transfer(&mut runtime, minter, admin, 200.into()).await??;
+    token_a::mint(&mut runtime, &minter, 1000.into()).await?;
+    token_b::mint(&mut runtime, &minter, 1000.into()).await?;
+    token_c::mint(&mut runtime, &minter, 1000.into()).await?;
+
+    token_a::transfer(&mut runtime, &minter, &admin, 100.into()).await??;
+    token_b::transfer(&mut runtime, &minter, &admin, 600.into()).await??;
+    token_c::transfer(&mut runtime, &minter, &admin, 200.into()).await??;
 
     let bad_pair = amm::TokenPair {
         // wrong order
@@ -518,7 +522,7 @@ async fn test_amm_pools() -> Result<()> {
     };
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         bad_pair.clone(),
         100.into(),
         500.into(),
@@ -537,7 +541,7 @@ async fn test_amm_pools() -> Result<()> {
     };
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair1.clone(),
         100.into(),
         500.into(),
@@ -548,7 +552,7 @@ async fn test_amm_pools() -> Result<()> {
 
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair1.clone(),
         100.into(),
         500.into(),
@@ -559,7 +563,7 @@ async fn test_amm_pools() -> Result<()> {
 
     let res = amm::create(
         &mut runtime,
-        admin,
+        &admin,
         pair2.clone(),
         100.into(),
         200.into(),
@@ -591,7 +595,7 @@ async fn test_amm_pools() -> Result<()> {
 
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair1.clone(),
         token_a.clone(),
         10.into(),
@@ -614,7 +618,7 @@ async fn test_amm_pools() -> Result<()> {
     assert_eq!(res, Ok(9.into()));
     let res = amm::swap(
         &mut runtime,
-        minter,
+        &minter,
         pair1.clone(),
         token_b.clone(),
         45.into(),

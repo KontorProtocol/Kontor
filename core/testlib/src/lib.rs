@@ -7,13 +7,12 @@ pub use indexer::runtime::wit::kontor::built_in::{
     foreign::ContractAddress,
     numbers::{Decimal, Integer},
 };
-pub use indexer::runtime::{CheckedArithmetics, numerics as numbers};
+pub use indexer::runtime::{CheckedArithmetics, numerics as numbers, wit::Signer};
 use indexer::{
     config::Config,
     database::{queries::insert_block, types::BlockRow},
     runtime::{
         ComponentCache, Runtime as IndexerRuntime, Storage, fuel::FuelGauge, load_contracts,
-        wit::Signer,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
@@ -138,11 +137,20 @@ impl Runtime {
         f(self).await
     }
 
-    pub async fn publish(&self, name: &str) -> Result<ContractAddress> {
-        self.publish_as(name, name).await
+    pub async fn identity(&self, name: &str) -> Result<Signer> {
+        Ok(Signer::XOnlyPubKey(name.to_string()))
     }
 
-    pub async fn publish_as(&self, name: &str, alias: &str) -> Result<ContractAddress> {
+    pub async fn publish(&self, signer: &Signer, name: &str) -> Result<ContractAddress> {
+        self.publish_as(signer, name, name).await
+    }
+
+    pub async fn publish_as(
+        &self,
+        signer: &Signer,
+        name: &str,
+        alias: &str,
+    ) -> Result<ContractAddress> {
         let name = name.replace("_", "-");
         let alias = alias.replace("_", "-");
         let contract = self.contract_reader.read(&name).await?.ok_or(anyhow!(
@@ -150,7 +158,7 @@ impl Runtime {
             name,
             self.contract_reader.dir,
         ))?;
-        load_contracts(&self.runtime, &[(&alias, &contract)]).await?;
+        load_contracts(&self.runtime, signer, &[(&alias, &contract)]).await?;
         Ok(ContractAddress {
             name: alias,
             height: 0,
@@ -170,18 +178,11 @@ impl Runtime {
 
     pub async fn execute(
         &mut self,
-        signer: Option<&str>,
+        signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let result = self
-            .runtime
-            .execute(
-                signer.map(|s| Signer::XOnlyPubKey(s.to_string())),
-                contract_address,
-                expr,
-            )
-            .await;
+        let result = self.runtime.execute(signer, contract_address, expr).await;
         self.runtime.storage.op_index += 1;
         result
     }

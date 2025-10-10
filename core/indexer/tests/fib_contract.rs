@@ -39,16 +39,16 @@ import!(
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_fib_contract() -> Result<()> {
-    let fib = runtime.publish("fib").await?;
-    let arith = runtime.publish("arith").await?;
-    runtime.publish("proxy").await?;
+    let signer = runtime.identity("test_signer").await?;
+    let fib = runtime.publish(&signer, "fib").await?;
+    let arith = runtime.publish(&signer, "arith").await?;
+    runtime.publish(&signer, "proxy").await?;
 
-    let signer = "test_signer";
     let result = arith::last_op(&mut runtime).await?;
     assert_eq!(result, Some(arith::Op::Id));
 
     let n = 8;
-    let result = fib::fib(&mut runtime, signer, n).await?;
+    let result = fib::fib(&mut runtime, &signer, n).await?;
     assert_eq!(result, 21);
     let gauge = runtime.fuel_gauge();
     assert_eq!(gauge.starting_fuel().await, 1000000);
@@ -58,13 +58,13 @@ async fn test_fib_contract() -> Result<()> {
     let result = arith::last_op(&mut runtime).await?;
     assert_eq!(result, last_op);
 
-    let result = fib_proxied::fib(&mut runtime, signer, n).await?;
+    let result = fib_proxied::fib(&mut runtime, &signer, n).await?;
     assert_eq!(result, 21);
 
     let result = proxy::get_contract_address(&mut runtime).await?;
     assert_eq!(result, fib);
 
-    proxy::set_contract_address(&mut runtime, signer, arith).await?;
+    proxy::set_contract_address(&mut runtime, &signer, arith).await?;
 
     let result = arith_proxied::last_op(&mut runtime).await?;
     assert_eq!(
@@ -84,14 +84,14 @@ async fn test_fib_contract() -> Result<()> {
     // result through import
     let x = "18";
     let y = "10";
-    let result = fib::fib_of_sub(&mut runtime, signer, x, y).await?;
+    let result = fib::fib_of_sub(&mut runtime, &signer, x, y).await?;
     assert_eq!(result, Ok(21));
 
-    let result = fib::fib_of_sub(&mut runtime, signer, y, x).await?;
+    let result = fib::fib_of_sub(&mut runtime, &signer, y, x).await?;
     assert_eq!(result, Err(Error::Message("less than 0".to_string())));
 
     // reentrancy prevented
-    let result = arith::fib(&mut runtime, signer, 9).await;
+    let result = arith::fib(&mut runtime, &signer, 9).await;
     assert!(result.is_err_and(|e| e.root_cause().to_string().contains("reentrancy prevented")));
 
     let result = fib::cached_values(&mut runtime).await?;

@@ -9,7 +9,11 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> Result<()> {
+pub async fn load_contracts(
+    runtime: &Runtime,
+    signer: &Signer,
+    contracts: &[(&str, &[u8])],
+) -> Result<()> {
     let height = 0;
     let tx_index = 0;
     let conn = runtime.get_storage_conn();
@@ -37,7 +41,7 @@ pub async fn load_contracts(runtime: &Runtime, contracts: &[(&str, &[u8])]) -> R
         if !contract_has_state(&conn, contract_id).await? {
             runtime
                 .execute(
-                    Some(Signer::XOnlyPubKey("kontor".to_string())),
+                    Some(signer),
                     &ContractAddress {
                         name: name.to_string(),
                         height,

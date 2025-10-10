@@ -9,7 +9,8 @@ import!(
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_crypto_contract() -> Result<()> {
-    runtime.publish("crypto").await?;
+    let alice = runtime.identity("alice").await?;
+    runtime.publish(&alice, "crypto").await?;
 
     let result = crypto::hash(&mut runtime, "foo").await?;
     assert_eq!(

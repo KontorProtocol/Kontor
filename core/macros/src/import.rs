@@ -163,7 +163,7 @@ pub fn generate_functions(
         params[0] = quote! { #runtime_name: #runtime_ty};
         if is_proc_context {
             let signer_name = Ident::new("signer", Span::call_site());
-            let signer_ty = quote! { &str };
+            let signer_ty = quote! { &testlib::Signer };
             params.insert(1, quote! { #signer_name: #signer_ty });
         }
     } else if is_proc_context {
