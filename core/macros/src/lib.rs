@@ -3,13 +3,14 @@ extern crate proc_macro;
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, parse_macro_input, spanned::Spanned};
+use syn::{Data, DeriveInput, Error, ItemFn, parse_macro_input, spanned::Spanned};
 
 mod contract;
 mod impls;
 mod import;
 mod interface;
 mod root;
+mod runtime;
 mod store;
 mod transformers;
 mod utils;
@@ -239,4 +240,37 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+#[proc_macro_attribute]
+pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let config: runtime::Config = match syn::parse(attr) {
+        Ok(v) => v,
+        Err(e) => {
+            return e.to_compile_error().into();
+        }
+    };
+    let mut func = parse_macro_input!(item as ItemFn);
+
+    func.attrs = vec![];
+    let fn_name = &func.sig.ident;
+    let fn_generics = &func.sig.generics;
+    let fn_inputs = &func.sig.inputs;
+    let fn_vis = &func.vis;
+    let fn_block = &func.block;
+    let contracts_dir = config.contracts_dir;
+
+    let output = quote! {
+        #[tokio::test]
+        #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
+            let mut runtime = Runtime::new(
+                RuntimeConfig::builder()
+                    .contracts_dir(#contracts_dir)
+                    .build()
+            ).await?;
+            runtime.run(|mut runtime: Runtime| async move #fn_block).await
+        }
+    };
+
+    output.into()
 }

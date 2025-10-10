@@ -7,14 +7,8 @@ import!(
     path = "../contracts/token/wit",
 );
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_token_contract() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("token").await?;
 
     let minter = "test_minter";
@@ -49,14 +43,8 @@ async fn test_token_contract() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_token_contract_large_numbers() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     runtime.publish("token").await?;
 
     let minter = "test_minter";

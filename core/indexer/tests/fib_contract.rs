@@ -37,14 +37,8 @@ import!(
     path = "../contracts/arith/wit",
 );
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../contracts")]
 async fn test_fib_contract() -> Result<()> {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::builder()
-            .contracts_dir("../../contracts")
-            .build(),
-    )
-    .await?;
     let fib = runtime.publish("fib").await?;
     let arith = runtime.publish("arith").await?;
     runtime.publish("proxy").await?;
