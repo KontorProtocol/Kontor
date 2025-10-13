@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use bitcoin::{self, Transaction};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
     sync::{
@@ -154,7 +154,7 @@ pub fn run_fetcher<C: BitcoinRpc>(
 
 pub fn run_processor<T: Tx + 'static>(
     mut rx_in: Receiver<(u64, u64, bitcoin::Block)>,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     cancel_token: CancellationToken,
 ) -> (JoinHandle<()>, Receiver<(u64, Block<T>)>) {
     let (tx_out, rx_out) = mpsc::channel(10);
@@ -178,20 +178,29 @@ pub fn run_processor<T: Tx + 'static>(
                                     .acquire_owned()
                                     .await
                                     .expect("semaphore.acquired_owned failed despite never being closed");
-                                tokio::spawn(
-                                    async move {
-                                        let _ = tx.send((
+                                tokio::spawn(async move {
+                                    let _ = tx
+                                        .send((
                                             target_height,
                                             Block {
                                                 height,
                                                 hash: block.block_hash(),
                                                 prev_hash: block.header.prev_blockhash,
-                                                transactions: block.txdata.into_par_iter().filter_map(f).collect(),
-                                            })
-                                        ).await;
-                                        drop(permit);
-                                    }
-                                );
+                                                transactions: tokio::task::spawn_blocking(move || {
+                                                    block
+                                                        .txdata
+                                                        .into_par_iter()
+                                                        .enumerate()
+                                                        .filter_map(f)
+                                                        .collect()
+                                                })
+                                                .await
+                                                .expect("spawn_blocking failed in rpc block processing"),
+                                            },
+                                        ))
+                                        .await;
+                                    drop(permit);
+                                });
                             },
                             None => {
                                 info!("Processor received None message, exiting");
@@ -273,12 +282,16 @@ pub struct Fetcher<T: Tx, C: BitcoinRpc> {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     tx: Sender<(u64, Block<T>)>,
 }
 
 impl<T: Tx + 'static, C: BitcoinRpc> Fetcher<T, C> {
-    pub fn new(bitcoin: C, f: fn(Transaction) -> Option<T>, tx: Sender<(u64, Block<T>)>) -> Self {
+    pub fn new(
+        bitcoin: C,
+        f: fn((usize, Transaction)) -> Option<T>,
+        tx: Sender<(u64, Block<T>)>,
+    ) -> Self {
         Self {
             handle: None,
             cancel_token: CancellationToken::new(),
@@ -352,14 +365,14 @@ impl<T: Tx + 'static, C: BitcoinRpc> BlockFetcher for Fetcher<T, C> {
 pub struct MempoolFetcherImpl<T: Tx, C: BitcoinRpc> {
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
 }
 
 impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
     pub fn new(
         cancel_token: CancellationToken,
         bitcoin: C,
-        f: fn(Transaction) -> Option<T>,
+        f: fn((usize, Transaction)) -> Option<T>,
     ) -> Self {
         Self {
             cancel_token,
@@ -399,7 +412,11 @@ impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
             );
         }
 
-        Ok(txs.into_par_iter().filter_map(self.f).collect())
+        Ok(tokio::task::spawn_blocking({
+            let f = self.f;
+            move || txs.into_par_iter().enumerate().filter_map(f).collect()
+        })
+        .await?)
     }
 }
 

@@ -29,7 +29,7 @@ pub async fn ensure_wallet_setup(client: &Client) -> Result<()> {
     }
 
     // Check spendable funds
-    let unspent = client.list_unspent(1, 9999999, &[]).await?;
+    let unspent = client.list_unspent(1, &[]).await?;
 
     // If we have no spendable UTXOs, we need to generate and mature coins
     if unspent.is_empty() {
@@ -44,7 +44,7 @@ pub async fn ensure_wallet_setup(client: &Client) -> Result<()> {
         client.generate_to_address(10, &second_address).await?;
 
         // Check UTXOs
-        let new_unspent = client.list_unspent(1, 9999999, &[]).await?;
+        let new_unspent = client.list_unspent(1, &[]).await?;
 
         if new_unspent.is_empty() {
             return Err(anyhow::anyhow!("Failed to generate spendable UTXOs"));
@@ -64,7 +64,7 @@ pub async fn make_regtest_utxo(
     let amount = Amount::from_sat(5000);
 
     // Get list of spendable UTXOs
-    let unspent = client.list_unspent(1, 9999999, &[]).await?;
+    let unspent = client.list_unspent(1, &[]).await?;
 
     if unspent.is_empty() {
         return Err(anyhow::anyhow!("No spendable UTXOs available"));

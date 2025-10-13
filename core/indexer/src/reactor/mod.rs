@@ -1,4 +1,5 @@
 pub mod results;
+pub mod types;
 
 use anyhow::{Result, bail};
 use tokio::{
@@ -195,6 +196,8 @@ impl<T: Tx + 'static> Reactor<T> {
             },
         )
         .await?;
+
+        info!("# Block Kontor Transactions: {}", block.transactions.len());
 
         Ok(())
     }

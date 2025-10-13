@@ -2,7 +2,8 @@ use anyhow::Result;
 use indexer::{logging, reg_tester::RegTester};
 
 async fn run_test_regtest(reg_tester: &mut RegTester) -> Result<()> {
-    reg_tester.identity("alice").await?;
+    let mut alice = reg_tester.identity("alice").await?;
+    reg_tester.test(&mut alice).await?;
     Ok(())
 }
 

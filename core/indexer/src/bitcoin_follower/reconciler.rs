@@ -143,6 +143,14 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
                             "ZMQ BlockConnected at unexpected height {}, last height was {}",
                             block.height, last_height
                         );
+                        self.state.zmq_connected = false;
+                        if self.state.mode == Mode::Zmq {
+                            self.state.mode = Mode::Rpc;
+                            let Some(last_height) = self.state.latest_block_height else {
+                                bail!("must have start height before using ZMQ");
+                            };
+                            self.fetcher.start(last_height + 1);
+                        }
                         vec![]
                     }
                 } else {

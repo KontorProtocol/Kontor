@@ -120,16 +120,16 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let (mut store, contract_id, is_fallback, params, mut results, func, is_proc) = self
-            .prepare_call(contract_address, signer, expr, self.starting_fuel)
-            .await?;
-
         OptionFuture::from(
             self.gauge
                 .as_ref()
                 .map(|g| g.set_starting_fuel(self.starting_fuel)),
         )
         .await;
+
+        let (mut store, contract_id, is_fallback, params, mut results, func, is_proc) = self
+            .prepare_call(contract_address, signer, expr, self.starting_fuel)
+            .await?;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store)

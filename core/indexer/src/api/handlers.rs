@@ -38,7 +38,7 @@ pub async fn get_index(State(env): State<Env>) -> Result<Info> {
     let height = select_block_latest(&*env.reader.connection().await?)
         .await?
         .map(|b| b.height)
-        .unwrap_or_default();
+        .unwrap_or((env.config.starting_block_height - 1) as i64);
     Ok(Info {
         available: true,
         height,
@@ -92,7 +92,7 @@ pub async fn get_compose(
         return Err(HttpError::BadRequest("addresses too large".to_string()).into());
     }
 
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
@@ -109,7 +109,7 @@ pub async fn get_compose_commit(
         return Err(HttpError::BadRequest("addresses too large".to_string()).into());
     }
 
-    let inputs = ComposeInputs::from_query(query, &env.bitcoin)
+    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let commit_inputs = CommitInputs::from(inputs);
@@ -124,7 +124,7 @@ pub async fn get_compose_reveal(
     Query(query): Query<RevealQuery>,
     State(env): State<Env>,
 ) -> Result<RevealOutputs> {
-    let inputs = RevealInputs::from_query(query, &env.bitcoin)
+    let inputs = RevealInputs::from_query(query, env.config.network, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let outputs = compose_reveal(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;

@@ -27,7 +27,7 @@ async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
     addr: String,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     tx: UnboundedSender<events::ZmqEvent<T>>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
@@ -67,7 +67,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     zmq_address: String,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     ctrl_rx: Receiver<ctrl::StartMessage<T>>,
     init_tx: Option<oneshot::Sender<bool>>,
 ) -> Result<JoinHandle<()>> {
