@@ -3,7 +3,7 @@ use std::thread;
 use anyhow::{Context, Result, anyhow};
 use backon::Retryable;
 use bitcoin::Transaction;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use scopeguard::defer;
 use tokio::{
     select,
@@ -103,7 +103,7 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
     data_message: DataMessage,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     last_raw_transaction: Option<Transaction>,
 ) -> Result<(Option<ZmqEvent<T>>, Option<Transaction>)> {
     match data_message {
@@ -129,7 +129,15 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
                     height,
                     hash: block.block_hash(),
                     prev_hash: block.header.prev_blockhash,
-                    transactions: block.txdata.into_par_iter().filter_map(f).collect(),
+                    transactions: task::spawn_blocking(move || {
+                        block
+                            .txdata
+                            .into_par_iter()
+                            .enumerate()
+                            .filter_map(f)
+                            .collect()
+                    })
+                    .await?,
                 })),
                 None,
             ))
@@ -138,7 +146,10 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
             match last_raw_transaction {
                 Some(tx) => {
                     if txid == tx.compute_txid() {
-                        return Ok((f(tx).map(|t| ZmqEvent::MempoolTransactionAdded(t)), None));
+                        return Ok((
+                            f((0, tx)).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
+                            None,
+                        ));
                     } else {
                         warn!(
                             "TransactionAdded({}): not matching cached tx {}",
@@ -168,7 +179,7 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
                 .await
             {
                 Ok(transaction) => Ok((
-                    f(transaction).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
+                    f((0, transaction)).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
                     None,
                 )),
                 Err(e) => {
@@ -197,7 +208,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
     addr: &str,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn(Transaction) -> Option<T>,
+    f: fn((usize, Transaction)) -> Option<T>,
     tx: UnboundedSender<ZmqEvent<T>>,
 ) -> Result<JoinHandle<Result<()>>> {
     let (socket_tx, mut socket_rx) = mpsc::unbounded_channel();

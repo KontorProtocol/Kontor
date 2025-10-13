@@ -157,7 +157,7 @@ async fn test_processor() -> Result<()> {
     let tx: bitcoin::Transaction =
         bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
-    fn f(t: bitcoin::Transaction) -> Option<MockTransaction> {
+    fn f((_, t): (usize, bitcoin::Transaction)) -> Option<MockTransaction> {
         let raw_tx = hex::decode(SOME_TX).unwrap();
         let tx: bitcoin::Transaction =
             bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
@@ -306,7 +306,7 @@ async fn test_zmq_cache_raw_transaction() -> Result<()> {
     client.expect_get_raw_transaction_txid = Some(txid_fetched);
 
     let mock_tx = MockTransaction::new(123);
-    fn f(_t: bitcoin::Transaction) -> Option<MockTransaction> {
+    fn f(_: (usize, bitcoin::Transaction)) -> Option<MockTransaction> {
         Some(MockTransaction::new(123))
     }
 

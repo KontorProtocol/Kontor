@@ -1,9 +1,16 @@
 use anyhow::{Result, anyhow};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as base64_engine;
 use reqwest::{Client as HttpClient, ClientBuilder, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::{error::ErrorResponse, handlers::Info, result::ResultResponse},
+    api::{
+        compose::{ComposeAddressQuery, ComposeOutputs},
+        error::ErrorResponse,
+        handlers::Info,
+        result::ResultResponse,
+    },
     config::Config,
 };
 
@@ -46,6 +53,22 @@ impl Client {
         Self::handle_response(
             self.client
                 .get(format!("{}{}", &self.url, "/stop"))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn compose(&self, query: ComposeAddressQuery) -> Result<ComposeOutputs> {
+        let json_bytes = serde_json::to_vec(&[query])?;
+        let addresses_b64 = base64_engine.encode(json_bytes);
+        Self::handle_response(
+            self.client
+                .get(format!(
+                    "{}/compose?addresses={}&sat_per_vbyte=2",
+                    &self.url,
+                    urlencoding::encode(&addresses_b64),
+                ))
                 .send()
                 .await?,
         )

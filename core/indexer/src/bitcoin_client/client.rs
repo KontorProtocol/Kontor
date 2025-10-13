@@ -309,7 +309,6 @@ pub trait RegtestRpc: Send + Sync + Clone + 'static {
     fn list_unspent(
         &self,
         min_conf: u32,
-        max_conf: u32,
         addresses: &[String],
     ) -> impl Future<Output = Result<Vec<UnspentOutput>, Error>>;
 
@@ -379,10 +378,9 @@ impl RegtestRpc for Client {
     async fn list_unspent(
         &self,
         min_conf: u32,
-        max_conf: u32,
         addresses: &[String],
     ) -> Result<Vec<UnspentOutput>, Error> {
-        let params = vec![min_conf.into(), max_conf.into(), addresses.into()];
+        let params = vec![min_conf.into(), 9999999.into(), addresses.into()];
         self.call("listunspent", params).await
     }
 

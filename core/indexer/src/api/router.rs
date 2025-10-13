@@ -88,24 +88,32 @@ pub fn new(context: Env) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
     Router::new()
-        .route("/api", get(get_index))
         .nest(
             "/api",
             Router::new()
-                .route("/blocks/{height|hash}", get(get_block))
-                .route("/blocks/latest", get(get_block_latest))
-                .route("/blocks/{height}/transactions", get(get_transactions))
-                .route("/transactions", get(get_transactions))
-                .route("/transactions/{txid}", get(get_transaction))
+                .route("/", get(get_index))
+                .nest(
+                    "/blocks",
+                    Router::new()
+                        .route("/{height|hash}", get(get_block))
+                        .route("/latest", get(get_block_latest))
+                        .route("/{height}/transactions", get(get_transactions)),
+                )
+                .nest(
+                    "/transactions",
+                    Router::new()
+                        .route("/", get(get_transactions))
+                        .route("/{txid}", get(get_transaction)),
+                )
                 .route("/test_mempool_accept", get(test_mempool_accept))
-                .route("/stop", get(stop)),
-        )
-        .nest(
-            "/compose",
-            Router::new()
-                .route("/", get(get_compose))
-                .route("/commit", get(get_compose_commit))
-                .route("/reveal", get(get_compose_reveal)),
+                .route("/stop", get(stop))
+                .nest(
+                    "/compose",
+                    Router::new()
+                        .route("/", get(get_compose))
+                        .route("/commit", get(get_compose_commit))
+                        .route("/reveal", get(get_compose_reveal)),
+                ),
         )
         .route("/ws", any(ws::handler))
         .layer(

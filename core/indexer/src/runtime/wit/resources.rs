@@ -16,7 +16,7 @@ impl HasContractId for ViewContext {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Signer {
     XOnlyPubKey(String),
     ContractId { id: i64, id_str: String },

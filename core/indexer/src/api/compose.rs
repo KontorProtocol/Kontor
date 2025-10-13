@@ -12,6 +12,7 @@ use bitcoin::{
     taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo},
     transaction::{Transaction, TxIn, Version},
 };
+use futures_util::future::try_join_all;
 
 use bon::Builder;
 
@@ -96,9 +97,11 @@ pub struct ComposeInputs {
 }
 
 impl ComposeInputs {
-    pub async fn from_query(query: ComposeQuery, bitcoin_client: &Client) -> Result<Self> {
-        use futures_util::future::try_join_all;
-
+    pub async fn from_query(
+        query: ComposeQuery,
+        network: bitcoin::Network,
+        bitcoin_client: &Client,
+    ) -> Result<Self> {
         if query.addresses.is_empty() {
             return Err(anyhow!("No addresses provided"));
         }
@@ -139,8 +142,8 @@ impl ComposeInputs {
 
         let addresses: Vec<ComposeAddressInputs> =
             try_join_all(query.addresses.iter().map(|address_query| async {
-                let address: Address = Address::from_str(&address_query.address)?
-                    .require_network(bitcoin::Network::Bitcoin)?;
+                let address: Address =
+                    Address::from_str(&address_query.address)?.require_network(network)?;
                 match address.address_type() {
                     Some(AddressType::P2tr) => {}
                     _ => return Err(anyhow!("Invalid address type")),
@@ -297,7 +300,11 @@ pub struct RevealInputs {
 }
 
 impl RevealInputs {
-    pub async fn from_query(query: RevealQuery, bitcoin_client: &Client) -> Result<Self> {
+    pub async fn from_query(
+        query: RevealQuery,
+        network: bitcoin::Network,
+        bitcoin_client: &Client,
+    ) -> Result<Self> {
         if query.sat_per_vbyte == 0 {
             return Err(anyhow!("Invalid fee rate"));
         }
@@ -311,8 +318,7 @@ impl RevealInputs {
 
         let mut participants_inputs = Vec::with_capacity(query.participants.len());
         for p in query.participants.iter() {
-            let address =
-                Address::from_str(&p.address)?.require_network(bitcoin::Network::Bitcoin)?;
+            let address = Address::from_str(&p.address)?.require_network(network)?;
             match address.address_type() {
                 Some(AddressType::P2tr) => {}
                 _ => return Err(anyhow!("Invalid address type (must be P2TR)")),
@@ -429,6 +435,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     }
 
     let mut per_participant_tap: Vec<TapScriptPair> = Vec::with_capacity(num_addrs);
+    let mut per_participant_selected_tx_outs: Vec<Vec<TxOut>> = Vec::with_capacity(num_addrs);
 
     for addr in params.addresses.iter() {
         let chunk = addr.script_data.clone();
@@ -569,6 +576,8 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             tap_leaf_script: tap_leaf,
             script_data_chunk: chunk,
         });
+        per_participant_selected_tx_outs
+            .push(selected.into_iter().map(|(_, tx_out)| tx_out).collect());
     }
 
     let commit_transaction = commit_psbt.unsigned_tx.clone();
