@@ -16,8 +16,8 @@ use indexer::{
     database::queries,
     reactor,
     test_utils::{
-        MockBlockchain, MockTransaction, await_block_at_height, gen_random_blocks,
-        new_random_blockchain, new_test_db,
+        MockBlockchain, await_block_at_height, gen_random_blocks, new_random_blockchain,
+        new_test_db,
     },
 };
 
@@ -68,7 +68,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
     }));
 
     let start_height = 2; // will be overriden by stored blocks
-    handles.push(reactor::run::<MockTransaction>(
+    handles.push(reactor::run(
         start_height,
         cancel_token.clone(),
         reader.clone(),
@@ -171,7 +171,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
     }));
 
     let start_height = 1; // will be overriden by stored blocks
-    handles.push(reactor::run::<MockTransaction>(
+    handles.push(reactor::run(
         start_height,
         cancel_token.clone(),
         reader.clone(),
@@ -277,7 +277,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
     }));
 
     let start_height = 3;
-    handles.push(reactor::run::<MockTransaction>(
+    handles.push(reactor::run(
         start_height,
         cancel_token.clone(),
         reader.clone(),
@@ -384,7 +384,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
 
     // start-up at block height 3
     let (_rpc_tx, rpc_rx) = mpsc::channel(1);
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<MockTransaction>>();
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
 
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
@@ -413,7 +413,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     // start-up at block height 3 with mismatching hash for last block at 2
     let (_rpc_tx, rpc_rx) = mpsc::channel(1);
     let mock = MockBlockchain::new(blocks.clone());
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<MockTransaction>>();
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
         mock.clone(),
@@ -438,7 +438,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
     // start-up at block height 3 with matching hash for last block at 2
     let (_rpc_tx, rpc_rx) = mpsc::channel(1);
     let mock = MockBlockchain::new(blocks.clone());
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<MockTransaction>>();
+    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
     let mut rec = reconciler::Reconciler::new(
         cancel_token.clone(),
         mock.clone(),
@@ -510,7 +510,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
     }));
 
     let start_height = 3;
-    handles.push(reactor::run::<MockTransaction>(
+    handles.push(reactor::run(
         start_height,
         cancel_token.clone(),
         reader.clone(),
@@ -634,7 +634,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
     }));
 
     let start_height = 3;
-    handles.push(reactor::run::<MockTransaction>(
+    handles.push(reactor::run(
         start_height,
         cancel_token.clone(),
         reader.clone(),

@@ -13,8 +13,8 @@ use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
-    BlockHash, KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxOut,
-    Txid, Witness, XOnlyPublicKey, secp256k1,
+    BlockHash, KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid,
+    Witness, XOnlyPublicKey, secp256k1,
 };
 use bitcoin::{
     PrivateKey,
@@ -32,9 +32,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
 
+use crate::block::Transaction;
 use crate::{
     bitcoin_follower::{info, rpc},
-    block::{Block, HasTxid, Tx},
+    block::Block,
 };
 
 use crate::config::Config;
@@ -132,7 +133,7 @@ pub fn generate_taproot_address_from_mnemonic(
 
 pub fn sign_key_spend(
     secp: &Secp256k1<All>,
-    key_spend_tx: &mut Transaction,
+    key_spend_tx: &mut bitcoin::Transaction,
     prevouts: &[TxOut],
     keypair: &Keypair,
     input_index: usize,
@@ -163,7 +164,7 @@ pub fn sign_script_spend(
     secp: &Secp256k1<All>,
     taproot_spend_info: &TaprootSpendInfo,
     tap_script: &ScriptBuf,
-    script_spend_tx: &mut Transaction,
+    script_spend_tx: &mut bitcoin::Transaction,
     prevouts: &[TxOut],
     keypair: &Keypair,
     input_index: usize,
@@ -185,7 +186,7 @@ pub fn sign_script_spend_with_sighash(
     secp: &Secp256k1<All>,
     taproot_spend_info: &TaprootSpendInfo,
     tap_script: &ScriptBuf,
-    script_spend_tx: &mut Transaction,
+    script_spend_tx: &mut bitcoin::Transaction,
     prevouts: &[TxOut],
     keypair: &Keypair,
     input_index: usize,
@@ -223,7 +224,7 @@ pub fn sign_script_spend_with_sighash(
 
 pub fn sign_multiple_key_spend(
     secp: &Secp256k1<All>,
-    key_spend_tx: &mut Transaction,
+    key_spend_tx: &mut bitcoin::Transaction,
     prevouts: &[TxOut],
     keypair: &Keypair,
 ) -> Result<()> {
@@ -353,24 +354,13 @@ pub fn base64_serialize<T: ?Sized + Serialize>(data: &T) -> String {
     base64.encode(serialized)
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct MockTransaction {
-    txid: Txid,
-}
-
-impl MockTransaction {
-    pub fn new(txid_num: u32) -> Self {
-        let mut bytes = [0u8; 32];
-        bytes[0..4].copy_from_slice(&txid_num.to_le_bytes()); // Use the 4 bytes of txid_num
-        MockTransaction {
-            txid: Txid::from_slice(&bytes).unwrap(),
-        }
-    }
-}
-
-impl HasTxid for MockTransaction {
-    fn txid(&self) -> Txid {
-        self.txid
+pub fn new_mock_transaction(txid_num: u32) -> Transaction {
+    let mut bytes = [0u8; 32];
+    bytes[0..4].copy_from_slice(&txid_num.to_le_bytes()); // Use the 4 bytes of txid_num
+    Transaction {
+        txid: Txid::from_slice(&bytes).unwrap(),
+        tx_index: 0,
+        ops: vec![],
     }
 }
 
@@ -397,22 +387,18 @@ pub fn new_mock_block_hash(i: u32) -> BlockHash {
     BlockHash::from_slice(&bytes).unwrap()
 }
 
-pub fn gen_numbered_block(height: u64, prev_hash: &BlockHash) -> Block<MockTransaction> {
+pub fn gen_numbered_block(height: u64, prev_hash: &BlockHash) -> Block {
     let hash = BlockHash::from_byte_array([height as u8; 32]);
 
     Block {
         height,
         hash,
         prev_hash: *prev_hash,
-        transactions: vec![MockTransaction::new(height as u32)],
+        transactions: vec![new_mock_transaction(height as u32)],
     }
 }
 
-pub fn gen_numbered_blocks(
-    start: u64,
-    end: u64,
-    prev_hash: BlockHash,
-) -> Vec<Block<MockTransaction>> {
+pub fn gen_numbered_blocks(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block> {
     let mut blocks = vec![];
     let mut prev = prev_hash;
 
@@ -425,11 +411,11 @@ pub fn gen_numbered_blocks(
     blocks
 }
 
-pub fn new_numbered_blockchain(n: u64) -> Vec<Block<MockTransaction>> {
+pub fn new_numbered_blockchain(n: u64) -> Vec<Block> {
     gen_numbered_blocks(0, n, BlockHash::from_byte_array([0x00; 32]))
 }
 
-pub fn gen_random_block(height: u64, prev_hash: Option<BlockHash>) -> Block<MockTransaction> {
+pub fn gen_random_block(height: u64, prev_hash: Option<BlockHash>) -> Block {
     let mut hash = [0u8; 32];
     rand::rng().fill_bytes(&mut hash);
 
@@ -446,11 +432,7 @@ pub fn gen_random_block(height: u64, prev_hash: Option<BlockHash>) -> Block<Mock
     }
 }
 
-pub fn gen_random_blocks(
-    start: u64,
-    end: u64,
-    prev_hash: Option<BlockHash>,
-) -> Vec<Block<MockTransaction>> {
+pub fn gen_random_blocks(start: u64, end: u64, prev_hash: Option<BlockHash>) -> Vec<Block> {
     let mut blocks = vec![];
     let mut prev = prev_hash;
 
@@ -463,25 +445,25 @@ pub fn gen_random_blocks(
     blocks
 }
 
-pub fn new_random_blockchain(n: u64) -> Vec<Block<MockTransaction>> {
+pub fn new_random_blockchain(n: u64) -> Vec<Block> {
     gen_random_blocks(0, n, None)
 }
 
 #[derive(Clone, Debug)]
-struct State<T: Tx> {
+struct State {
     start_height: u64,
     running: bool,
-    blocks: Vec<Block<T>>,
-    mempool: Vec<T>,
+    blocks: Vec<Block>,
+    mempool: Vec<Transaction>,
 }
 
 #[derive(Clone, Debug)]
-pub struct MockBlockchain<T: Tx> {
-    state: Arc<Mutex<State<T>>>,
+pub struct MockBlockchain {
+    state: Arc<Mutex<State>>,
 }
 
-impl<T: Tx> MockBlockchain<T> {
-    pub fn new(blocks: Vec<Block<T>>) -> Self {
+impl MockBlockchain {
+    pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             state: Mutex::new(State {
                 start_height: 0,
@@ -493,27 +475,27 @@ impl<T: Tx> MockBlockchain<T> {
         }
     }
 
-    pub fn append_blocks(&mut self, more_blocks: Vec<Block<T>>) {
+    pub fn append_blocks(&mut self, more_blocks: Vec<Block>) {
         let mut state = self.state.lock().unwrap();
         state.blocks.extend(more_blocks.iter().cloned());
     }
 
-    pub fn replace_blocks(&mut self, blocks: Vec<Block<T>>) {
+    pub fn replace_blocks(&mut self, blocks: Vec<Block>) {
         let mut state = self.state.lock().unwrap();
         state.blocks = blocks;
     }
 
-    pub fn set_mempool(&mut self, mempool: Vec<T>) {
+    pub fn set_mempool(&mut self, mempool: Vec<Transaction>) {
         let mut state = self.state.lock().unwrap();
         state.mempool = mempool;
     }
 
-    pub fn get_mempool(&mut self) -> Result<Vec<T>> {
+    pub fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
         let state = self.state.lock().unwrap();
         Ok(state.mempool.clone())
     }
 
-    pub fn blocks(&self) -> Vec<Block<T>> {
+    pub fn blocks(&self) -> Vec<Block> {
         let state = self.state.lock().unwrap();
         state.blocks.clone()
     }
@@ -559,7 +541,7 @@ impl<T: Tx> MockBlockchain<T> {
     }
 }
 
-impl<T: Tx> rpc::BlockFetcher for MockBlockchain<T> {
+impl rpc::BlockFetcher for MockBlockchain {
     fn running(&self) -> bool {
         self.running()
     }
@@ -578,7 +560,7 @@ impl<T: Tx> rpc::BlockFetcher for MockBlockchain<T> {
     }
 }
 
-impl<T: Tx> info::BlockchainInfo for MockBlockchain<T> {
+impl info::BlockchainInfo for MockBlockchain {
     async fn get_blockchain_height(&self) -> Result<u64, Error> {
         self.get_blockchain_height().await
     }
@@ -589,8 +571,8 @@ impl<T: Tx> info::BlockchainInfo for MockBlockchain<T> {
     }
 }
 
-impl<T: Tx> rpc::MempoolFetcher<T> for MockBlockchain<T> {
-    async fn get_mempool(&mut self) -> Result<Vec<T>> {
+impl rpc::MempoolFetcher for MockBlockchain {
+    async fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
         self.get_mempool()
     }
 }

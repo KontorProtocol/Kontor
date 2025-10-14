@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 use crate::{
     bitcoin_follower::ctrl::StartMessage,
     bitcoin_follower::{info::BlockchainInfo, rpc::BlockFetcher, rpc::MempoolFetcher},
-    block::{Block, Tx},
+    block::Block,
 };
 
 use super::events::{BlockId, Event, ZmqEvent};
@@ -42,29 +42,27 @@ impl State {
     }
 }
 
-pub struct Reconciler<T: Tx, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>> {
+pub struct Reconciler<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> {
     pub cancel_token: CancellationToken,
     pub info: I,
     pub fetcher: F,
     pub mempool: M,
-    pub rpc_rx: Receiver<(u64, Block<T>)>,
-    pub zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
+    pub rpc_rx: Receiver<(u64, Block)>,
+    pub zmq_rx: UnboundedReceiver<ZmqEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
 
     pub state: State,
-    event_tx: Option<Sender<Event<T>>>,
+    event_tx: Option<Sender<Event>>,
 }
 
-impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
-    Reconciler<T, I, F, M>
-{
+impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> {
     pub fn new(
         cancel_token: CancellationToken,
         info: I,
         fetcher: F,
         mempool: M,
-        rpc_rx: Receiver<(u64, Block<T>)>,
-        zmq_rx: UnboundedReceiver<ZmqEvent<T>>,
+        rpc_rx: Receiver<(u64, Block)>,
+        zmq_rx: UnboundedReceiver<ZmqEvent>,
         init_tx: Option<oneshot::Sender<bool>>,
     ) -> Self {
         let state = State::new();
@@ -81,7 +79,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         }
     }
 
-    pub async fn handle_zmq_event(&mut self, zmq_event: ZmqEvent<T>) -> Result<Vec<Event<T>>> {
+    pub async fn handle_zmq_event(&mut self, zmq_event: ZmqEvent) -> Result<Vec<Event>> {
         let events = match zmq_event {
             ZmqEvent::Connected => {
                 info!("ZMQ connected");
@@ -176,8 +174,8 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
 
     pub async fn handle_rpc_event(
         &mut self,
-        (target_height, block): (u64, Block<T>),
-    ) -> Result<Vec<Event<T>>> {
+        (target_height, block): (u64, Block),
+    ) -> Result<Vec<Event>> {
         let height = block.height;
         self.state.latest_block_height = Some(height);
 
@@ -205,7 +203,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         Ok(events)
     }
 
-    async fn switch_to_zmq(&mut self) -> Result<Event<T>> {
+    async fn switch_to_zmq(&mut self) -> Result<Event> {
         let target_height = self.state.latest_block_height.unwrap();
         info!(
             "RPC Fetcher caught up to {}, switching to ZMQ",
@@ -225,7 +223,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         &mut self,
         start_height: u64,
         option_last_hash: Option<BlockHash>,
-    ) -> Result<Vec<Event<T>>> {
+    ) -> Result<Vec<Event>> {
         info!("Received Seek to height {}", start_height);
 
         // stop event handling and fetcher before (re)starting from new height
@@ -261,12 +259,12 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         Ok(vec![])
     }
 
-    pub async fn handle_start(&mut self, msg: StartMessage<T>) -> Result<Vec<Event<T>>> {
+    pub async fn handle_start(&mut self, msg: StartMessage) -> Result<Vec<Event>> {
         self.event_tx = Some(msg.event_tx);
         self.start(msg.start_height, msg.last_hash).await
     }
 
-    pub async fn run_event_loop(&mut self, mut ctrl_rx: Receiver<StartMessage<T>>) {
+    pub async fn run_event_loop(&mut self, mut ctrl_rx: Receiver<StartMessage>) {
         loop {
             let result = select! {
                 option_start = ctrl_rx.recv() => {
@@ -333,7 +331,7 @@ impl<T: Tx + 'static, I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher<T>>
         }
     }
 
-    pub async fn run(&mut self, ctrl_rx: Receiver<StartMessage<T>>) {
+    pub async fn run(&mut self, ctrl_rx: Receiver<StartMessage>) {
         self.run_event_loop(ctrl_rx).await;
 
         self.stop_fetcher().await;

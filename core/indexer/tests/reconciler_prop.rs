@@ -11,7 +11,7 @@ use indexer::{
         reconciler,
     },
     block::Block,
-    test_utils::{MockBlockchain, MockTransaction, gen_random_blocks, new_random_blockchain},
+    test_utils::{MockBlockchain, gen_random_blocks, new_random_blockchain},
 };
 
 #[derive(Debug)]
@@ -37,12 +37,12 @@ fn gen_segment_vec() -> impl Strategy<Value = Vec<Segment>> {
 
 #[derive(Debug)]
 enum Step {
-    RpcEvent((u64, Block<MockTransaction>)),
-    AppendBlocks(Vec<Block<MockTransaction>>),
-    ZmqEvent(ZmqEvent<MockTransaction>),
+    RpcEvent((u64, Block)),
+    AppendBlocks(Vec<Block>),
+    ZmqEvent(ZmqEvent),
 }
 
-fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain<MockTransaction>) {
+fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, MockBlockchain) {
     let initial_blocks = new_random_blockchain(5);
     let mut blocks = initial_blocks.clone();
     let mut stream = vec![];
@@ -137,7 +137,7 @@ proptest! {
         rt.block_on(async {
             let cancel_token = CancellationToken::new();
             let (_rpc_tx, rpc_rx) = mpsc::channel(1);
-            let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent<MockTransaction>>();
+            let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
 
             let (steps, mut mock) = create_steps(vec);
 

@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::Result;
-use bitcoin::{self, Transaction};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
@@ -22,7 +21,7 @@ use tracing::{error, info};
 
 use crate::{
     bitcoin_client::client::BitcoinRpc,
-    block::{Block, Tx},
+    block::{Block, Transaction, TransactionFilterMap},
     retry::{new_backoff_limited, new_backoff_unlimited, retry},
 };
 
@@ -152,11 +151,11 @@ pub fn run_fetcher<C: BitcoinRpc>(
     (fetcher, rx_out)
 }
 
-pub fn run_processor<T: Tx + 'static>(
+pub fn run_processor(
     mut rx_in: Receiver<(u64, u64, bitcoin::Block)>,
-    f: fn((usize, Transaction)) -> Option<T>,
+    f: TransactionFilterMap,
     cancel_token: CancellationToken,
-) -> (JoinHandle<()>, Receiver<(u64, Block<T>)>) {
+) -> (JoinHandle<()>, Receiver<(u64, Block)>) {
     let (tx_out, rx_out) = mpsc::channel(10);
 
     let processor = tokio::spawn({
@@ -220,10 +219,10 @@ pub fn run_processor<T: Tx + 'static>(
     (processor, rx_out)
 }
 
-pub fn run_orderer<T: Tx + 'static>(
+pub fn run_orderer(
     start_height: u64,
-    mut rx: Receiver<(u64, Block<T>)>,
-    tx: Sender<(u64, Block<T>)>,
+    mut rx: Receiver<(u64, Block)>,
+    tx: Sender<(u64, Block)>,
     cancel_token: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn({
@@ -278,20 +277,16 @@ pub fn run_orderer<T: Tx + 'static>(
 }
 
 #[derive(Debug)]
-pub struct Fetcher<T: Tx, C: BitcoinRpc> {
+pub struct Fetcher<C: BitcoinRpc> {
     handle: Option<JoinHandle<()>>,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
-    tx: Sender<(u64, Block<T>)>,
+    f: TransactionFilterMap,
+    tx: Sender<(u64, Block)>,
 }
 
-impl<T: Tx + 'static, C: BitcoinRpc> Fetcher<T, C> {
-    pub fn new(
-        bitcoin: C,
-        f: fn((usize, Transaction)) -> Option<T>,
-        tx: Sender<(u64, Block<T>)>,
-    ) -> Self {
+impl<C: BitcoinRpc> Fetcher<C> {
+    pub fn new(bitcoin: C, f: TransactionFilterMap, tx: Sender<(u64, Block)>) -> Self {
         Self {
             handle: None,
             cancel_token: CancellationToken::new(),
@@ -347,7 +342,7 @@ pub trait BlockFetcher {
     fn stop(&mut self) -> impl Future<Output = Result<()>>;
 }
 
-impl<T: Tx + 'static, C: BitcoinRpc> BlockFetcher for Fetcher<T, C> {
+impl<C: BitcoinRpc> BlockFetcher for Fetcher<C> {
     fn running(&self) -> bool {
         self.running()
     }
@@ -362,18 +357,14 @@ impl<T: Tx + 'static, C: BitcoinRpc> BlockFetcher for Fetcher<T, C> {
 }
 
 #[derive(Debug)]
-pub struct MempoolFetcherImpl<T: Tx, C: BitcoinRpc> {
+pub struct MempoolFetcherImpl<C: BitcoinRpc> {
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
+    f: TransactionFilterMap,
 }
 
-impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
-    pub fn new(
-        cancel_token: CancellationToken,
-        bitcoin: C,
-        f: fn((usize, Transaction)) -> Option<T>,
-    ) -> Self {
+impl<C: BitcoinRpc> MempoolFetcherImpl<C> {
+    pub fn new(cancel_token: CancellationToken, bitcoin: C, f: TransactionFilterMap) -> Self {
         Self {
             cancel_token,
             bitcoin,
@@ -381,7 +372,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
         }
     }
 
-    pub async fn get_mempool(&mut self) -> Result<Vec<T>> {
+    pub async fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
         let mempool_txids = retry(
             || self.bitcoin.get_raw_mempool(),
             "get raw mempool",
@@ -391,7 +382,7 @@ impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
         .await?;
 
         info!("Getting mempool transactions: {}", mempool_txids.len());
-        let mut txs: Vec<Transaction> = vec![];
+        let mut txs: Vec<bitcoin::Transaction> = vec![];
         for txids in mempool_txids.chunks(100) {
             if self.cancel_token.is_cancelled() {
                 break;
@@ -420,12 +411,12 @@ impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcherImpl<T, C> {
     }
 }
 
-pub trait MempoolFetcher<T: Tx> {
-    fn get_mempool(&mut self) -> impl Future<Output = Result<Vec<T>>>;
+pub trait MempoolFetcher {
+    fn get_mempool(&mut self) -> impl Future<Output = Result<Vec<Transaction>>>;
 }
 
-impl<T: Tx + 'static, C: BitcoinRpc> MempoolFetcher<T> for MempoolFetcherImpl<T, C> {
-    async fn get_mempool(&mut self) -> Result<Vec<T>> {
+impl<C: BitcoinRpc> MempoolFetcher for MempoolFetcherImpl<C> {
+    async fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
         self.get_mempool().await
     }
 }

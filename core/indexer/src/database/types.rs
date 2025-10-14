@@ -5,10 +5,7 @@ use bitcoin::BlockHash;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    block::{Block, Tx},
-    database::queries::Error,
-};
+use crate::{block::Block, database::queries::Error};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct BlockRow {
@@ -16,8 +13,8 @@ pub struct BlockRow {
     pub hash: BlockHash,
 }
 
-impl<T: Tx> From<&Block<T>> for BlockRow {
-    fn from(b: &Block<T>) -> Self {
+impl From<&Block> for BlockRow {
+    fn from(b: &Block) -> Self {
         BlockRow {
             height: b.height as i64,
             hash: b.hash,

@@ -8,7 +8,10 @@ use indexer::{
         events::{BlockId, Event, ZmqEvent},
         reconciler::{self},
     },
-    test_utils::{MockBlockchain, MockTransaction, gen_numbered_blocks, new_numbered_blockchain},
+    block::Transaction,
+    test_utils::{
+        MockBlockchain, gen_numbered_blocks, new_mock_transaction, new_numbered_blockchain,
+    },
 };
 
 #[tokio::test]
@@ -16,12 +19,12 @@ async fn test_reconciler_switch_to_zmq_after_catchup() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let mut blocks = new_numbered_blockchain(3);
-    let initial_mempool: Vec<MockTransaction> =
-        [1, 2, 3].iter().map(|i| MockTransaction::new(*i)).collect();
+    let initial_mempool: Vec<Transaction> =
+        [1, 2, 3].iter().map(|i| new_mock_transaction(*i)).collect();
 
     let mut mock = MockBlockchain::new(blocks.clone());
     mock.set_mempool(initial_mempool.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::<MockTransaction>::create();
+    let (ctrl, ctrl_rx) = CtrlChannel::create();
     let (rpc_tx, rpc_rx) = mpsc::channel(10);
     let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
 
@@ -126,12 +129,12 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
 
     let mut blocks = new_numbered_blockchain(3);
 
-    let initial_mempool: Vec<MockTransaction> =
-        [1, 2, 3].iter().map(|i| MockTransaction::new(*i)).collect();
+    let initial_mempool: Vec<Transaction> =
+        [1, 2, 3].iter().map(|i| new_mock_transaction(*i)).collect();
 
     let mut mock = MockBlockchain::new(blocks.clone());
     mock.set_mempool(initial_mempool.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::<MockTransaction>::create();
+    let (ctrl, ctrl_rx) = CtrlChannel::create();
     let (_rpc_tx, rpc_rx) = mpsc::channel(10);
     let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
 
@@ -174,7 +177,7 @@ async fn test_reconciler_zmq_rollback_message() -> Result<()> {
     let e = event_rx.recv().await.unwrap();
     assert_eq!(e, Event::BlockInsert((4, blocks[4 - 1].clone())));
 
-    let tx1 = MockTransaction::new(123);
+    let tx1 = new_mock_transaction(123);
     assert!(
         zmq_tx
             .send(ZmqEvent::MempoolTransactionAdded(tx1.clone()))

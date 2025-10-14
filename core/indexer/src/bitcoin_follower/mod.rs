@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bitcoin::Transaction;
 use std::time::Duration;
 use tokio::{
     select,
@@ -13,7 +12,11 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::{bitcoin_client::client::BitcoinRpc, block::Tx};
+use crate::{
+    bitcoin_client::client::BitcoinRpc,
+    bitcoin_follower::{ctrl::StartMessage, events::ZmqEvent},
+    block::TransactionFilterMap,
+};
 
 pub mod ctrl;
 pub mod events;
@@ -23,12 +26,12 @@ pub mod reconciler;
 pub mod rpc;
 pub mod zmq;
 
-async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
+async fn zmq_runner<C: BitcoinRpc>(
     addr: String,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
-    tx: UnboundedSender<events::ZmqEvent<T>>,
+    f: TransactionFilterMap,
+    tx: UnboundedSender<ZmqEvent>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         loop {
@@ -36,12 +39,12 @@ async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
                 Ok(handle) => match handle.await {
                     Ok(Ok(_)) => return Ok(()),
                     Ok(Err(e)) => {
-                        if tx.send(events::ZmqEvent::Disconnected(e)).is_err() {
+                        if tx.send(ZmqEvent::Disconnected(e)).is_err() {
                             return Ok(());
                         }
                     }
                     Err(e) => {
-                        if tx.send(events::ZmqEvent::Disconnected(e.into())).is_err() {
+                        if tx.send(ZmqEvent::Disconnected(e.into())).is_err() {
                             return Ok(());
                         }
                     }
@@ -63,12 +66,12 @@ async fn zmq_runner<T: Tx + 'static, C: BitcoinRpc>(
     })
 }
 
-pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
+pub async fn run<C: BitcoinRpc>(
     zmq_address: String,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
-    ctrl_rx: Receiver<ctrl::StartMessage<T>>,
+    f: TransactionFilterMap,
+    ctrl_rx: Receiver<StartMessage>,
     init_tx: Option<oneshot::Sender<bool>>,
 ) -> Result<JoinHandle<()>> {
     let info = info::Info::new(cancel_token.clone(), bitcoin.clone());

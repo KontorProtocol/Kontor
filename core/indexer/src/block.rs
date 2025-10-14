@@ -5,36 +5,26 @@ use bitcoin::{
 };
 
 use crate::{
-    reactor::types::{Inst, Op, OpMetadata, Transaction},
+    reactor::types::{Inst, Op, OpMetadata},
     runtime::{deserialize_cbor, wit::Signer},
 };
 
-pub trait HasTxid {
-    fn txid(&self) -> Txid;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transaction {
+    pub txid: Txid,
+    pub tx_index: i64,
+    pub ops: Vec<Op>,
 }
-
-impl HasTxid for bitcoin::Transaction {
-    fn txid(&self) -> Txid {
-        self.compute_txid()
-    }
-}
-
-impl HasTxid for Transaction {
-    fn txid(&self) -> Txid {
-        self.txid
-    }
-}
-
-pub trait Tx: std::fmt::Debug + Clone + HasTxid + Send + Sync {}
-impl<T> Tx for T where T: std::fmt::Debug + Clone + HasTxid + Send + Sync {}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Block<T: Tx> {
+pub struct Block {
     pub height: u64,
     pub hash: BlockHash,
     pub prev_hash: BlockHash,
-    pub transactions: Vec<T>,
+    pub transactions: Vec<Transaction>,
 }
+
+pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
 pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Transaction> {
     let ops = tx

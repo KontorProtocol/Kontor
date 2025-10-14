@@ -2,7 +2,6 @@ use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 use backon::Retryable;
-use bitcoin::Transaction;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use scopeguard::defer;
 use tokio::{
@@ -17,7 +16,7 @@ use zmq::Socket;
 use crate::{
     bitcoin_client::client::BitcoinRpc,
     bitcoin_follower::messages::{RAWTX, SEQUENCE},
-    block::{Block, Tx},
+    block::{Block, TransactionFilterMap},
     retry::{new_backoff_limited, notify, retry},
 };
 
@@ -99,13 +98,13 @@ fn run_socket(
     })
 }
 
-pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
+pub async fn process_data_message<C: BitcoinRpc>(
     data_message: DataMessage,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
-    last_raw_transaction: Option<Transaction>,
-) -> Result<(Option<ZmqEvent<T>>, Option<Transaction>)> {
+    f: TransactionFilterMap,
+    last_raw_transaction: Option<bitcoin::Transaction>,
+) -> Result<(Option<ZmqEvent>, Option<bitcoin::Transaction>)> {
     match data_message {
         DataMessage::BlockConnected(block_hash) => {
             let block = retry(
@@ -146,10 +145,7 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
             match last_raw_transaction {
                 Some(tx) => {
                     if txid == tx.compute_txid() {
-                        return Ok((
-                            f((0, tx)).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
-                            None,
-                        ));
+                        return Ok((f((0, tx)).map(ZmqEvent::MempoolTransactionAdded), None));
                     } else {
                         warn!(
                             "TransactionAdded({}): not matching cached tx {}",
@@ -179,7 +175,7 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
                 .await
             {
                 Ok(transaction) => Ok((
-                    f((0, transaction)).map(|t| ZmqEvent::MempoolTransactionAdded(t)),
+                    f((0, transaction)).map(ZmqEvent::MempoolTransactionAdded),
                     None,
                 )),
                 Err(e) => {
@@ -204,12 +200,12 @@ pub async fn process_data_message<T: Tx + 'static, C: BitcoinRpc>(
     }
 }
 
-pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
+pub async fn run<C: BitcoinRpc>(
     addr: &str,
     cancel_token: CancellationToken,
     bitcoin: C,
-    f: fn((usize, Transaction)) -> Option<T>,
-    tx: UnboundedSender<ZmqEvent<T>>,
+    f: TransactionFilterMap,
+    tx: UnboundedSender<ZmqEvent>,
 ) -> Result<JoinHandle<Result<()>>> {
     let (socket_tx, mut socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
@@ -257,7 +253,7 @@ pub async fn run<T: Tx + 'static, C: BitcoinRpc>(
         }
 
         let mut last_sequence_number: Option<u32> = None;
-        let mut last_raw_transaction: Option<Transaction> = None;
+        let mut last_raw_transaction: Option<bitcoin::Transaction> = None;
         loop {
             select! {
                 biased;

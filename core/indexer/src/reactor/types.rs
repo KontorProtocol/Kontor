@@ -1,4 +1,3 @@
-use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::{ContractAddress, wit::Signer};
@@ -39,11 +38,4 @@ pub enum Inst {
         #[serde(rename = "e")]
         expr: String,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Transaction {
-    pub txid: Txid,
-    pub tx_index: i64,
-    pub ops: Vec<Op>,
 }

@@ -3,22 +3,21 @@ use bitcoin::BlockHash;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use super::events::Event;
-use crate::block::Tx;
 
 #[derive(Debug)]
-pub struct StartMessage<T: Tx> {
+pub struct StartMessage {
     pub start_height: u64,
     pub last_hash: Option<BlockHash>,
-    pub event_tx: Sender<Event<T>>,
+    pub event_tx: Sender<Event>,
 }
 
 #[derive(Clone)]
-pub struct CtrlChannel<T: Tx> {
-    ctrl_tx: Sender<StartMessage<T>>,
+pub struct CtrlChannel {
+    ctrl_tx: Sender<StartMessage>,
 }
 
-impl<T: Tx + 'static> CtrlChannel<T> {
-    pub fn create() -> (Self, Receiver<StartMessage<T>>) {
+impl CtrlChannel {
+    pub fn create() -> (Self, Receiver<StartMessage>) {
         let (ctrl_tx, ctrl_rx) = mpsc::channel(1);
 
         (Self { ctrl_tx }, ctrl_rx)
@@ -28,7 +27,7 @@ impl<T: Tx + 'static> CtrlChannel<T> {
         self,
         start_height: u64,
         last_hash: Option<BlockHash>,
-    ) -> Result<Receiver<Event<T>>> {
+    ) -> Result<Receiver<Event>> {
         let (event_tx, event_rx) = mpsc::channel(10);
 
         self.ctrl_tx

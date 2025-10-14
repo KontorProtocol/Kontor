@@ -6,12 +6,14 @@ use bitcoin::{self, BlockHash, Network, Txid, hashes::Hash};
 
 use indexer::{
     bitcoin_client::{client, error, types},
-    bitcoin_follower::events::ZmqEvent,
-    bitcoin_follower::messages::DataMessage,
-    bitcoin_follower::rpc::{run_fetcher, run_orderer, run_processor, run_producer},
-    bitcoin_follower::zmq::process_data_message,
-    block::{Block, HasTxid},
-    test_utils::MockTransaction,
+    bitcoin_follower::{
+        events::ZmqEvent,
+        messages::DataMessage,
+        rpc::{run_fetcher, run_orderer, run_processor, run_producer},
+        zmq::process_data_message,
+    },
+    block::{Block, Transaction},
+    test_utils::new_mock_transaction,
 };
 
 #[derive(Clone)]
@@ -157,14 +159,14 @@ async fn test_processor() -> Result<()> {
     let tx: bitcoin::Transaction =
         bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
-    fn f((_, t): (usize, bitcoin::Transaction)) -> Option<MockTransaction> {
+    fn f((_, t): (usize, bitcoin::Transaction)) -> Option<Transaction> {
         let raw_tx = hex::decode(SOME_TX).unwrap();
         let tx: bitcoin::Transaction =
             bitcoin::consensus::Decodable::consensus_decode(&mut raw_tx.as_slice()).unwrap();
 
         assert_eq!(t, tx);
 
-        Some(MockTransaction::new(123))
+        Some(new_mock_transaction(123))
     }
 
     let (processor, mut rx_out) = run_processor(rx_in, f, cancel_token.clone());
@@ -193,7 +195,7 @@ async fn test_processor() -> Result<()> {
     let (target_height, block) = rx_out.recv().await.unwrap();
     assert_eq!(target_height, 1000);
     assert_eq!(block.height, 700);
-    assert_eq!(block.transactions, vec![MockTransaction::new(123)]);
+    assert_eq!(block.transactions, vec![new_mock_transaction(123)]);
 
     assert!(!processor.is_finished());
     cancel_token.cancel();
@@ -208,7 +210,7 @@ async fn test_orderer() -> Result<()> {
     let (tx_in, rx_in) = mpsc::channel(10);
     let (tx_out, mut rx_out) = mpsc::channel(10);
 
-    let orderer = run_orderer::<MockTransaction>(700, rx_in, tx_out, cancel_token.clone());
+    let orderer = run_orderer(700, rx_in, tx_out, cancel_token.clone());
 
     // send 3 blocks in mixed order
     assert!(
@@ -305,9 +307,9 @@ async fn test_zmq_cache_raw_transaction() -> Result<()> {
     let txid_fetched = Txid::from_byte_array([0x11; 32]);
     client.expect_get_raw_transaction_txid = Some(txid_fetched);
 
-    let mock_tx = MockTransaction::new(123);
-    fn f(_: (usize, bitcoin::Transaction)) -> Option<MockTransaction> {
-        Some(MockTransaction::new(123))
+    let mock_tx = new_mock_transaction(123);
+    fn f(_: (usize, bitcoin::Transaction)) -> Option<Transaction> {
+        Some(new_mock_transaction(123))
     }
 
     // send tx added to trigger rpc fetch
@@ -326,7 +328,7 @@ async fn test_zmq_cache_raw_transaction() -> Result<()> {
     let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else {
         panic!()
     };
-    assert_eq!(e.txid(), mock_tx.txid());
+    assert_eq!(e.txid, mock_tx.txid);
     assert_eq!(last_raw_tx, None);
 
     // send a raw transaction
@@ -363,7 +365,7 @@ async fn test_zmq_cache_raw_transaction() -> Result<()> {
     let ZmqEvent::MempoolTransactionAdded(e) = event.unwrap() else {
         panic!()
     };
-    assert_eq!(e.txid(), mock_tx.txid());
+    assert_eq!(e.txid, mock_tx.txid);
     assert_eq!(last_raw_tx, None);
 
     Ok(())

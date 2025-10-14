@@ -1,14 +1,14 @@
 use bitcoin::{BlockHash, Txid};
 
-use crate::block::{Block, Tx};
+use crate::block::{Block, Transaction};
 
 #[derive(Debug)]
-pub enum ZmqEvent<T: Tx> {
+pub enum ZmqEvent {
     Connected,
     Disconnected(anyhow::Error),
-    MempoolTransactionAdded(T),
+    MempoolTransactionAdded(Transaction),
     MempoolTransactionRemoved(Txid),
-    BlockConnected(Block<T>),
+    BlockConnected(Block),
     BlockDisconnected(BlockHash),
 }
 
@@ -19,10 +19,10 @@ pub enum BlockId {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Event<T: Tx> {
-    MempoolSet(Vec<T>),
-    MempoolInsert(Vec<T>),
+pub enum Event {
+    MempoolSet(Vec<Transaction>),
+    MempoolInsert(Vec<Transaction>),
     MempoolRemove(Vec<Txid>),
-    BlockInsert((u64, Block<T>)),
+    BlockInsert((u64, Block)),
     BlockRemove(BlockId),
 }

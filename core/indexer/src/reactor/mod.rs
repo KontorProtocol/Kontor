@@ -17,7 +17,7 @@ use crate::{
         ctrl::CtrlChannel,
         events::{BlockId, Event},
     },
-    block::{Block, Tx},
+    block::Block,
     database::{
         self,
         queries::{
@@ -28,24 +28,24 @@ use crate::{
     },
 };
 
-struct Reactor<T: Tx + 'static> {
+struct Reactor {
     reader: database::Reader,
     writer: database::Writer,
     cancel_token: CancellationToken, // currently not used due to relaxed error handling
-    ctrl: CtrlChannel<T>,
-    event_rx: Option<Receiver<Event<T>>>,
+    ctrl: CtrlChannel,
+    event_rx: Option<Receiver<Event>>,
     init_tx: Option<oneshot::Sender<bool>>,
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
 }
 
-impl<T: Tx + 'static> Reactor<T> {
+impl Reactor {
     pub async fn new(
         starting_block_height: u64,
         reader: database::Reader,
         writer: database::Writer,
-        ctrl: CtrlChannel<T>,
+        ctrl: CtrlChannel,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
     ) -> Result<Self> {
@@ -142,7 +142,7 @@ impl<T: Tx + 'static> Reactor<T> {
         }
     }
 
-    async fn handle_block(&mut self, block: Block<T>) -> Result<()> {
+    async fn handle_block(&mut self, block: Block) -> Result<()> {
         let height = block.height;
         let hash = block.hash;
         let prev_hash = block.prev_hash;
@@ -283,12 +283,12 @@ impl<T: Tx + 'static> Reactor<T> {
     }
 }
 
-pub fn run<T: Tx + 'static>(
+pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
     reader: database::Reader,
     writer: database::Writer,
-    ctrl: CtrlChannel<T>,
+    ctrl: CtrlChannel,
     init_rx: Option<oneshot::Sender<bool>>,
 ) -> JoinHandle<()> {
     tokio::spawn({

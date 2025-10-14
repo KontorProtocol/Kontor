@@ -20,7 +20,7 @@ use indexer::{
     config::Config,
     database::{self, queries},
     reactor,
-    test_utils::{MockTransaction, await_block_at_height, gen_random_block, new_test_db},
+    test_utils::{await_block_at_height, gen_random_block, new_test_db},
 };
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ struct StartMsg {
 
 #[derive(Debug)]
 struct Step {
-    event: Event<MockTransaction>,
+    event: Event,
     expect_start: Option<StartMsg>,
 }
 
@@ -102,7 +102,7 @@ fn gen_segment_vec() -> impl Strategy<Value = Vec<Segment>> {
     prop::collection::vec(gen_segment(), 1..6)
 }
 
-fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block<MockTransaction>>) {
+fn create_steps(segs: Vec<Segment>) -> (Vec<Step>, Vec<Block>) {
     let mut stream = vec![];
     let mut model = vec![];
     let mut height = 0;
@@ -243,7 +243,7 @@ proptest! {
             let cancel_token = CancellationToken::new();
             let (ctrl, mut ctrl_rx) = CtrlChannel::create();
 
-            let handle = reactor::run::<MockTransaction>(
+            let handle = reactor::run(
                 1,
                 cancel_token.clone(),
                 db.reader.clone(),

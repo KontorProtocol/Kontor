@@ -3,11 +3,11 @@ use tokio_util::sync::CancellationToken;
 
 use bitcoin::{self, BlockHash, hashes::Hash};
 
-use indexer::{bitcoin_follower::rpc::run_orderer, block::Block, test_utils::MockTransaction};
+use indexer::{bitcoin_follower::rpc::run_orderer, block::Block};
 
 use proptest::prelude::*;
 
-fn gen_block(height: u64) -> Block<MockTransaction> {
+fn gen_block(height: u64) -> Block {
     Block {
         height,
 
@@ -24,7 +24,7 @@ fn arb_vec_numbers(max: u64) -> impl Strategy<Value = Vec<u64>> {
         .prop_shuffle()
 }
 
-fn arb_vec_blocks(max: u64) -> impl Strategy<Value = Vec<Block<MockTransaction>>> {
+fn arb_vec_blocks(max: u64) -> impl Strategy<Value = Vec<Block>> {
     arb_vec_numbers(max).prop_map(|v| v.into_iter().map(gen_block).collect())
 }
 
@@ -44,7 +44,7 @@ proptest! {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let orderer = run_orderer::<MockTransaction>(1, rx_in, tx_out, cancel_token.clone());
+            let orderer = run_orderer(1, rx_in, tx_out, cancel_token.clone());
 
             let len = v.len();
             for b in v {

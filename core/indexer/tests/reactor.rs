@@ -13,7 +13,7 @@ use indexer::{
     config::Config,
     database::queries,
     reactor,
-    test_utils::{MockTransaction, await_block_at_height, new_numbered_blockchain, new_test_db},
+    test_utils::{await_block_at_height, new_numbered_blockchain, new_test_db},
 };
 
 #[tokio::test]
@@ -22,7 +22,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
-    let handle = reactor::run::<MockTransaction>(
+    let handle = reactor::run(
         91,
         cancel_token.clone(),
         reader.clone(),
@@ -146,7 +146,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
-    let handle = reactor::run::<MockTransaction>(
+    let handle = reactor::run(
         81,
         cancel_token.clone(),
         reader.clone(),
@@ -187,7 +187,7 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
-    let handle = reactor::run::<MockTransaction>(
+    let handle = reactor::run(
         91,
         cancel_token.clone(),
         reader.clone(),
@@ -288,7 +288,7 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
     let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
 
-    let handle = reactor::run::<MockTransaction>(
+    let handle = reactor::run(
         91,
         cancel_token.clone(),
         reader.clone(),
@@ -420,7 +420,7 @@ async fn test_reactor_rollback_hash_event() -> Result<()> {
             .is_ok()
     );
 
-    let handle = reactor::run::<MockTransaction>(
+    let handle = reactor::run(
         4,
         cancel_token.clone(),
         reader.clone(),
