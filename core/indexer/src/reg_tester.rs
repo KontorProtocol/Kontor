@@ -1,9 +1,12 @@
 use std::{path::Path, str::FromStr};
 
 use crate::{
-    api::{client::Client as KontorClient, compose::ComposeAddressQuery},
+    api::{
+        client::Client as KontorClient, compose::ComposeAddressQuery, ws_client::WebSocketClient,
+    },
     bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
     config::{Config, RegtestConfig},
+    database::types::ContractResultId,
     reactor::types::Inst,
     retry::retry_simple,
     runtime::serialize_cbor,
@@ -65,6 +68,9 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 }
 
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
+    let config = Config::try_parse()?;
+    tokio::fs::copy(config.data_dir.join("cert.pem"), data_dir.join("cert.pem")).await?;
+    tokio::fs::copy(config.data_dir.join("key.pem"), data_dir.join("key.pem")).await?;
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
@@ -74,7 +80,7 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
         .arg("102")
         .arg("--use-local-regtest")
         .spawn()?;
-    let client = KontorClient::new_from_config(&Config::try_parse()?)?;
+    let client = KontorClient::new_from_config(&config)?;
     retry_simple(async || {
         let i = client.index().await?;
         if !i.available {
@@ -116,6 +122,7 @@ impl Identity {
 
 pub struct RegTester {
     identity: Identity,
+    ws_client: WebSocketClient,
     _bitcoin_data_dir: TempDir,
     bitcoin_child: Child,
     pub bitcoin_client: BitcoinClient,
@@ -146,6 +153,7 @@ impl RegTester {
         };
         let tx_out = block.txdata[0].output[0].clone();
         let (kontor_child, kontor_client) = run_kontor(_kontor_data_dir.path()).await?;
+        let ws_client = WebSocketClient::new().await?;
         Ok(Self {
             identity: Identity {
                 name: "self".to_string(),
@@ -153,6 +161,7 @@ impl RegTester {
                 keypair,
                 next_funding_utxo: (out_point, tx_out),
             },
+            ws_client,
             _bitcoin_data_dir,
             bitcoin_child,
             bitcoin_client,
@@ -224,6 +233,11 @@ impl RegTester {
             .bitcoin_client
             .send_raw_transaction(&commit_tx_hex)
             .await?;
+        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let id = ContractResultId::builder()
+            .txid(reveal_txid.to_string())
+            .build();
+        self.ws_client.subscribe(&id).await?;
         self.bitcoin_client
             .send_raw_transaction(&reveal_tx_hex)
             .await?;
@@ -246,6 +260,8 @@ impl RegTester {
                 .clone(),
         );
 
+        let expr = self.ws_client.next().await?;
+        info!("Received expression: {:?}", expr);
         Ok(())
     }
 

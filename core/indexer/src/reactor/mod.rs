@@ -4,7 +4,10 @@ pub mod types;
 use anyhow::{Result, bail};
 use tokio::{
     select,
-    sync::{mpsc::Receiver, oneshot},
+    sync::{
+        mpsc::{self, Receiver},
+        oneshot,
+    },
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -24,9 +27,9 @@ use crate::{
             insert_block, insert_transaction, rollback_to_height, select_block_at_height,
             select_block_latest, select_block_with_hash, set_block_processed,
         },
-        types::{BlockRow, TransactionRow},
+        types::{BlockRow, ContractResultId, TransactionRow},
     },
-    reactor::types::Op,
+    reactor::{results::ResultEvent, types::Op},
     runtime::{ComponentCache, Runtime, Storage},
 };
 
@@ -35,8 +38,9 @@ struct Reactor {
     writer: database::Writer,
     cancel_token: CancellationToken, // currently not used due to relaxed error handling
     ctrl: CtrlChannel,
-    event_rx: Option<Receiver<Event>>,
+    bitcoin_event_rx: Option<Receiver<Event>>,
     init_tx: Option<oneshot::Sender<bool>>,
+    event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
     runtime: Runtime,
 
     last_height: u64,
@@ -51,6 +55,7 @@ impl Reactor {
         ctrl: CtrlChannel,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
+        event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
     ) -> Result<Self> {
         let conn = &*reader.connection().await?;
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
@@ -89,10 +94,11 @@ impl Reactor {
             writer,
             cancel_token,
             ctrl,
-            event_rx: None,
+            bitcoin_event_rx: None,
             last_height,
             option_last_hash,
             init_tx,
+            event_tx,
             runtime,
         })
     }
@@ -117,13 +123,13 @@ impl Reactor {
             .start(self.last_height + 1, self.option_last_hash)
             .await
         {
-            Ok(event_rx) => {
+            Ok(bitcoin_event_rx) => {
                 // close and drain old channel before switching to the new one
-                if let Some(rx) = self.event_rx.as_mut() {
+                if let Some(rx) = self.bitcoin_event_rx.as_mut() {
                     rx.close();
                     while rx.recv().await.is_some() {}
                 }
-                self.event_rx = Some(event_rx);
+                self.bitcoin_event_rx = Some(bitcoin_event_rx);
                 Ok(())
             }
             Err(e) => {
@@ -223,9 +229,20 @@ impl Reactor {
                         name,
                         bytes,
                     } => {
-                        self.runtime
+                        let address_expr = self
+                            .runtime
                             .publish(&metadata.signer, &name, &bytes)
                             .await?;
+                        let id = ContractResultId::builder()
+                            .txid(t.txid.to_string())
+                            .input_index(input_index)
+                            .build();
+                        let result = ResultEvent::Ok {
+                            value: Some(address_expr),
+                        };
+                        if let Some(tx) = self.event_tx.clone() {
+                            tx.send((id, result)).await?;
+                        }
                     }
                     _ => todo!(),
                 }
@@ -250,11 +267,11 @@ impl Reactor {
             }
         };
 
-        self.event_rx = Some(rx);
+        self.bitcoin_event_rx = Some(rx);
         self.init_tx.take().map(|tx| tx.send(true));
 
         loop {
-            let event_rx = match self.event_rx.as_mut() {
+            let bitcoin_event_rx = match self.bitcoin_event_rx.as_mut() {
                 Some(rx) => rx,
                 None => {
                     bail!("handler loop started with missing event channel");
@@ -266,7 +283,7 @@ impl Reactor {
                     info!("Cancelled");
                     break;
                 }
-                option_event = event_rx.recv() => {
+                option_event = bitcoin_event_rx.recv() => {
                     match option_event {
                         Some(event) => {
                             match event {
@@ -309,7 +326,7 @@ impl Reactor {
     pub async fn run(&mut self) -> Result<()> {
         let res = self.run_event_loop().await;
 
-        if let Some(rx) = self.event_rx.as_mut() {
+        if let Some(rx) = self.bitcoin_event_rx.as_mut() {
             rx.close();
             while rx.recv().await.is_some() {}
         }
@@ -324,7 +341,8 @@ pub fn run(
     reader: database::Reader,
     writer: database::Writer,
     ctrl: CtrlChannel,
-    init_rx: Option<oneshot::Sender<bool>>,
+    init_tx: Option<oneshot::Sender<bool>>,
+    event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -334,7 +352,8 @@ pub fn run(
                 writer,
                 ctrl.clone(),
                 cancel_token.clone(),
-                init_rx,
+                init_tx,
+                event_tx,
             )
             .await
             {

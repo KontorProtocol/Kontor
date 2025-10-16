@@ -75,6 +75,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
         writer.clone(),
         ctrl,
         None,
+        None,
     ));
 
     mock.clone().await_running().await;
@@ -177,6 +178,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
         None,
     ));
 
@@ -283,6 +285,7 @@ async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
         None,
     ));
 
@@ -517,6 +520,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
         writer.clone(),
         ctrl,
         None,
+        None,
     ));
 
     mock.await_running().await;
@@ -640,6 +644,7 @@ async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Resu
         reader.clone(),
         writer.clone(),
         ctrl,
+        None,
         None,
     ));
 

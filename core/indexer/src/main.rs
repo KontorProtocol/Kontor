@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
     let writer = database::Writer::new(&config, filename).await?;
     delete_unprocessed_blocks(&writer.connection()).await?;
 
+    let (event_tx, event_rx) = mpsc::channel(10);
     let (ctrl, ctrl_rx) = bitcoin_follower::ctrl::CtrlChannel::create();
     let (init_tx, init_rx) = oneshot::channel();
     handles.push(reactor::run(
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
         writer,
         ctrl,
         Some(init_tx),
+        Some(event_tx),
     ));
     init_rx.await?;
     let (init_tx, init_rx) = oneshot::channel();
@@ -57,7 +59,6 @@ async fn main() -> Result<()> {
     );
     init_rx.await?;
 
-    let (_, event_rx) = mpsc::channel(10);
     let result_subscriber = ResultSubscriber::default();
     handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(

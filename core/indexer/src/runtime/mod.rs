@@ -121,12 +121,7 @@ impl Runtime {
         self.starting_fuel = starting_fuel
     }
 
-    pub async fn publish(
-        &self,
-        _signer: &Signer,
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<ContractAddress> {
+    pub async fn publish(&self, _signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
         let id = self
             .storage
             .insert_contract(name, bytes)
@@ -138,7 +133,11 @@ impl Runtime {
             .await
             .expect("Failed to get contract address")
             .expect("Contract doesn't exist");
-        Ok(address)
+        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address))?;
+        self.storage
+            .insert_contract_result(id, true, Some(value.clone()))
+            .await?;
+        Ok(value)
     }
 
     pub async fn execute(

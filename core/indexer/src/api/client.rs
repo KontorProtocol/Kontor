@@ -32,7 +32,7 @@ impl Client {
     }
 
     pub fn new_from_config(config: &Config) -> Result<Self> {
-        Self::new(format!("http://localhost:{}/api", config.api_port))
+        Self::new(format!("https://localhost:{}/api", config.api_port))
     }
 
     async fn handle_response<T: Serialize + for<'a> Deserialize<'a>>(res: Response) -> Result<T> {
