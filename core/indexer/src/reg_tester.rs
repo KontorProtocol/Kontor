@@ -2,12 +2,13 @@ use std::{path::Path, str::FromStr};
 
 use crate::{
     api::{
-        client::Client as KontorClient, compose::ComposeAddressQuery, ws_client::WebSocketClient,
+        client::Client as KontorClient, compose::ComposeAddressQuery, ws::Response,
+        ws_client::WebSocketClient,
     },
     bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
     config::{Config, RegtestConfig},
     database::types::ContractResultId,
-    reactor::types::Inst,
+    reactor::{results::ResultEvent, types::Inst},
     retry::retry_simple,
     runtime::serialize_cbor,
     test_utils,
@@ -28,7 +29,6 @@ use tokio::{
     io::AsyncWriteExt,
     process::{Child, Command},
 };
-use tracing::info;
 
 const REGTEST_CONF: &str = r#"
 regtest=1
@@ -182,14 +182,8 @@ impl RegTester {
         Ok(())
     }
 
-    pub async fn test(&mut self, ident: &mut Identity) -> Result<()> {
-        info!("In Test!");
-        info!("Identity: {:?}", ident);
-        let payload = Inst::Publish {
-            name: "test".to_string(),
-            bytes: b"test".to_vec(),
-        };
-        let script_data = serialize_cbor(&payload)?;
+    pub async fn instruction(&mut self, ident: &mut Identity, inst: Inst) -> Result<String> {
+        let script_data = serialize_cbor(&inst)?;
         let mut compose_res = self
             .kontor_client
             .compose(ComposeAddressQuery {
@@ -259,10 +253,17 @@ impl RegTester {
                 .unwrap()
                 .clone(),
         );
-
-        let expr = self.ws_client.next().await?;
-        info!("Received expression: {:?}", expr);
-        Ok(())
+        if let Response::Result { result, .. } = self.ws_client.next().await? {
+            match result {
+                ResultEvent::Ok { value } => Ok(value.unwrap()),
+                ResultEvent::Err {
+                    message: Some(message),
+                } => Err(anyhow!("{}", message)),
+                ResultEvent::Err { message: None } => Err(anyhow!("Instruction failed to process")),
+            }
+        } else {
+            Err(anyhow!("Unexpected response from websocket"))
+        }
     }
 
     pub async fn identity(&mut self, name: &str) -> Result<Identity> {
