@@ -47,11 +47,14 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::{
-    counter::Counter,
-    fuel::{Fuel, FuelGauge},
-    stack::Stack,
-    wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
+use crate::{
+    database::Reader,
+    runtime::{
+        counter::Counter,
+        fuel::{Fuel, FuelGauge},
+        stack::Stack,
+        wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
+    },
 };
 
 impls!(host = true);
@@ -100,6 +103,16 @@ impl Runtime {
             gauge: Some(FuelGauge::new()),
             starting_fuel: 1000000,
         })
+    }
+
+    pub async fn new_read_only(reader: &Reader) -> Result<Self> {
+        Runtime::new(
+            Storage::builder()
+                .conn(reader.connection().await?.clone())
+                .build(),
+            ComponentCache::new(),
+        )
+        .await
     }
 
     pub fn set_context(&mut self, height: i64, tx_id: i64, input_index: i64, op_index: i64) {

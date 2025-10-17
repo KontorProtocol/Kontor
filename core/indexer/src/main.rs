@@ -5,6 +5,7 @@ use clap::Parser;
 use indexer::config::RegtestConfig;
 use indexer::database::queries::delete_unprocessed_blocks;
 use indexer::reactor::results::ResultSubscriber;
+use indexer::runtime::Runtime;
 use indexer::{api, block, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use tokio::sync::{mpsc, oneshot};
@@ -68,6 +69,7 @@ async fn main() -> Result<()> {
             reader: reader.clone(),
             result_subscriber,
             bitcoin: bitcoin.clone(),
+            runtime: Runtime::new_read_only(&reader).await?,
         })
         .await?,
     );
