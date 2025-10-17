@@ -7,8 +7,7 @@ interface!(
     path = "../contracts/shared-account/wit",
 );
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_shared_account_contract() -> Result<()> {
+async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     let alice = runtime.identity().await?;
     let bob = runtime.identity().await?;
     let claire = runtime.identity().await?;
@@ -112,4 +111,14 @@ async fn test_shared_account_contract() -> Result<()> {
     assert!(result.contains(&bob.to_string()));
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_shared_account_contract() -> Result<()> {
+    run_test_shared_account_contract(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_shared_account_contract_regtest() -> Result<()> {
+    run_test_shared_account_contract(runtime).await
 }

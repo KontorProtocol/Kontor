@@ -2,34 +2,30 @@ use stdlib::*;
 
 contract!(name = "proxy");
 
-#[derive(Clone, StorageRoot)]
+#[derive(Clone, StorageRoot, Default)]
 struct ProxyStorage {
-    contract_address: ContractAddress,
+    contract_address: Option<ContractAddress>,
 }
 
 impl Guest for Proxy {
     fn fallback(ctx: &FallContext, expr: String) -> String {
         let _ctx = &ctx.view_context();
-        let contract_address = storage(_ctx).contract_address(_ctx);
-        foreign::call(ctx.signer(), &contract_address, &expr)
+        if let Some(contract_address) = storage(_ctx).contract_address(_ctx) {
+            foreign::call(ctx.signer(), &contract_address, &expr)
+        } else {
+            "".to_string()
+        }
     }
 
     fn init(ctx: &ProcContext) {
-        ProxyStorage {
-            contract_address: ContractAddress {
-                name: "fib".to_string(),
-                height: 0,
-                tx_index: 0,
-            },
-        }
-        .init(ctx)
+        ProxyStorage::default().init(ctx)
     }
 
-    fn get_contract_address(ctx: &ViewContext) -> ContractAddress {
+    fn get_contract_address(ctx: &ViewContext) -> Option<ContractAddress> {
         storage(ctx).contract_address(ctx)
     }
 
     fn set_contract_address(ctx: &ProcContext, contract_address: ContractAddress) {
-        storage(ctx).set_contract_address(ctx, contract_address);
+        storage(ctx).set_contract_address(ctx, Some(contract_address));
     }
 }

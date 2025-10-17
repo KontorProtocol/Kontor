@@ -9,6 +9,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config, tungstenite::Message,
 };
+use tracing::info;
 
 use crate::{
     api::ws::{Request, Response},
@@ -29,7 +30,9 @@ where
 }
 
 pub fn from_message(m: Message) -> Result<Response> {
-    Ok(serde_json::from_str(m.to_text()?)?)
+    let text = m.to_text()?;
+    info!("Received message: {}", text);
+    Ok(serde_json::from_str(text)?)
 }
 
 impl WebSocketClient {

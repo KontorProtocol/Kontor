@@ -6,8 +6,7 @@ interface!(name = "fib", path = "../contracts/fib/wit",);
 
 interface!(name = "proxy", path = "../contracts/proxy/wit",);
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_fib_contract() -> Result<()> {
+async fn run_test_fib_contract(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
     let fib = runtime.publish(&signer, "fib").await?;
     let arith = runtime.publish(&signer, "arith").await?;
@@ -24,11 +23,13 @@ async fn test_fib_contract() -> Result<()> {
     let result = arith::last_op(runtime, &arith).await?;
     assert_eq!(result, last_op);
 
-    let result = fib::fib(runtime, &proxy, &signer, arith.clone(), n).await?;
-    assert_eq!(result, 21);
+    proxy::set_contract_address(runtime, &proxy, &signer, fib.clone()).await?;
 
     let result = proxy::get_contract_address(runtime, &proxy).await?;
-    assert_eq!(result, fib);
+    assert_eq!(result, Some(fib.clone()));
+
+    let result = fib::fib(runtime, &proxy, &signer, arith.clone(), n).await?;
+    assert_eq!(result, 21);
 
     proxy::set_contract_address(runtime, &proxy, &signer, arith.clone()).await?;
 
@@ -61,4 +62,14 @@ async fn test_fib_contract() -> Result<()> {
     assert_eq!(result, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_fib_contract() -> Result<()> {
+    run_test_fib_contract(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_fib_contract_regtest() -> Result<()> {
+    run_test_fib_contract(runtime).await
 }

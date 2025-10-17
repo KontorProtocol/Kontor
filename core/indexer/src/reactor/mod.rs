@@ -246,7 +246,7 @@ impl Reactor {
                 let event = match result {
                     Ok(value) => ResultEvent::Ok { value },
                     Err(e) => ResultEvent::Err {
-                        message: e.to_string(),
+                        message: format!("{:?}", e),
                     },
                 };
                 if let Some(tx) = self.event_tx.clone() {

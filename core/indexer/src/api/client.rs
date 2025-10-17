@@ -6,10 +6,12 @@ use crate::{
     api::{
         compose::{ComposeAddressQuery, ComposeOutputs, ComposeQuery},
         error::ErrorResponse,
-        handlers::Info,
+        handlers::{Info, ViewExpr},
         result::ResultResponse,
     },
     config::Config,
+    reactor::results::ResultEvent,
+    runtime::ContractAddress,
 };
 
 #[derive(Clone, Debug)]
@@ -68,6 +70,30 @@ impl Client {
             self.client
                 .post(format!("{}/compose", &self.url))
                 .json(&query)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn view(
+        &self,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<ResultEvent> {
+        let view_expr = ViewExpr {
+            expr: expr.to_string(),
+        };
+        Self::handle_response(
+            self.client
+                .post(format!(
+                    "{}/view/{}_{}_{}",
+                    &self.url,
+                    contract_address.name,
+                    contract_address.height,
+                    contract_address.tx_index
+                ))
+                .json(&view_expr)
                 .send()
                 .await?,
         )

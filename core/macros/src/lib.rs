@@ -292,8 +292,17 @@ pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    let serial = if mode == "regtest" {
+        quote! {
+            #[serial_test::serial]
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         #[tokio::test]
+        #serial
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
             #body
         }

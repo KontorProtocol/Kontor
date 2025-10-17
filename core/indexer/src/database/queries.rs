@@ -306,28 +306,22 @@ pub async fn path_prefix_filter_contract_state(
     Ok(stream)
 }
 
-fn base_matching_path_contract_state_query() -> String {
-    BASE_CONTRACT_STATE_QUERY
-        .replace("{{path_operator}}", "REGEXP")
-        .replace("{{path_prefix}}", "")
-        .replace("{{path_suffix}}", "")
-}
+const MATCHING_PATH_CONTRACT_STATE_QUERY: &str = include_str!("sql/matching_path_query.sql");
 
 pub async fn matching_path(
     conn: &Connection,
     contract_id: i64,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
+    let base_path = &regexp[1..(regexp.find('(').unwrap() - 1)];
     let mut rows = conn
         .query(
-            &format!(
-                r#"
-                SELECT path
-                {}
-                "#,
-                base_matching_path_contract_state_query()
+            MATCHING_PATH_CONTRACT_STATE_QUERY,
+            (
+                (":contract_id", contract_id),
+                (":base_path", base_path),
+                (":path", regexp),
             ),
-            ((":contract_id", contract_id), (":path", regexp)),
         )
         .await?;
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)

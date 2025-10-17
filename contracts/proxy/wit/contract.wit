@@ -9,7 +9,7 @@ world contract {
 
     export init: func(ctx: borrow<proc-context>);
 
-    export get-contract-address: func(ctx: borrow<view-context>) -> contract-address;
+    export get-contract-address: func(ctx: borrow<view-context>) -> option<contract-address>;
 
     export set-contract-address: func(ctx: borrow<proc-context>, contract-address: contract-address);
 }

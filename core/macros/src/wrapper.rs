@@ -76,7 +76,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if ctx.__exists(&base_path.push("none")) {
+                                if ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, ["none"].join("|"))).is_some() {
                                     None
                                 } else {
                                     ctx.__get(base_path.push("some"))
@@ -93,7 +93,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if ctx.__exists(&base_path.push("none")) {
+                                if ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, ["none"].join("|"))).is_some() {
                                     None
                                 } else {
                                     Some(#inner_wrapper_ty::new(ctx, base_path.push("some"))#load)

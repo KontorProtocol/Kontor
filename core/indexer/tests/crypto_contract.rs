@@ -2,8 +2,7 @@ use testlib::*;
 
 interface!(name = "crypto", path = "../contracts/crypto/wit",);
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_crypto_contract() -> Result<()> {
+async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<()> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;
 
@@ -32,4 +31,14 @@ async fn test_crypto_contract() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_crypto_contract() -> Result<()> {
+    run_test_crypto_contract(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_crypto_contract_regtest() -> Result<()> {
+    run_test_crypto_contract(runtime).await
 }

@@ -14,5 +14,8 @@ async fn test_regtests() -> Result<()> {
     token::mint(runtime, &token, &minter, 900.into()).await?;
     token::mint(runtime, &token, &minter, 100.into()).await?;
 
+    let result = token::balance(runtime, &token, &minter).await?;
+    assert_eq!(result, Some(1000.into()));
+
     Ok(())
 }
