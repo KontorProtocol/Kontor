@@ -2,8 +2,7 @@ use testlib::*;
 
 interface!(name = "token", path = "../contracts/token/wit",);
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_token_contract() -> Result<()> {
+async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
 
@@ -40,7 +39,16 @@ async fn test_token_contract() -> Result<()> {
 }
 
 #[runtime(contracts_dir = "../../contracts")]
-async fn test_token_contract_large_numbers() -> Result<()> {
+async fn test_token_contract() -> Result<()> {
+    run_test_token_contract(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_token_contract_regtest() -> Result<()> {
+    run_test_token_contract(runtime).await
+}
+
+async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
 
@@ -102,4 +110,14 @@ async fn test_token_contract_large_numbers() -> Result<()> {
     assert_eq!(result, Some("30.000_000_000_000_000_000".into()));
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_token_contract_large_numbers() -> Result<()> {
+    run_test_token_contract_large_numbers(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_token_contract_large_numbers_regtest() -> Result<()> {
+    run_test_token_contract_large_numbers(runtime).await
 }

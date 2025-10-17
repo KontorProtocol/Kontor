@@ -2,7 +2,7 @@ use stdlib::*;
 
 contract!(name = "fib");
 
-import!(name = "arith", height = 0, tx_index = 0, path = "arith/wit");
+interface!(name = "arith", path = "arith/wit");
 
 #[derive(Clone, Default, Storage)]
 struct FibValue {
@@ -15,7 +15,7 @@ struct FibStorage {
 }
 
 impl Fib {
-    fn raw_fib(ctx: &ProcContext, n: u64) -> u64 {
+    fn raw_fib(ctx: &ProcContext, arith_address: ContractAddress, n: u64) -> u64 {
         let cache = storage(ctx).cache();
         if let Some(v) = cache.get(ctx, n).map(|v| v.value(ctx)) {
             return v;
@@ -25,10 +25,11 @@ impl Fib {
             0 | 1 => n,
             _ => {
                 arith::eval(
+                    &arith_address,
                     ctx.signer(),
-                    Self::raw_fib(ctx, n - 1),
+                    Self::raw_fib(ctx, arith_address.clone(), n - 1),
                     arith::Op::Sum(arith::Operand {
-                        y: Self::raw_fib(ctx, n - 2),
+                        y: Self::raw_fib(ctx, arith_address.clone(), n - 2),
                     }),
                 )
                 .value
@@ -47,13 +48,18 @@ impl Guest for Fib {
         .init(ctx);
     }
 
-    fn fib(ctx: &ProcContext, n: u64) -> u64 {
-        Self::raw_fib(ctx, n)
+    fn fib(ctx: &ProcContext, arith_address: ContractAddress, n: u64) -> u64 {
+        Self::raw_fib(ctx, arith_address, n)
     }
 
-    fn fib_of_sub(ctx: &ProcContext, x: String, y: String) -> Result<u64, Error> {
-        let n = arith::checked_sub(&x, &y)?;
-        Ok(Fib::fib(ctx, n))
+    fn fib_of_sub(
+        ctx: &ProcContext,
+        arith_address: ContractAddress,
+        x: String,
+        y: String,
+    ) -> Result<u64, Error> {
+        let n = arith::checked_sub(&arith_address, &x, &y)?;
+        Ok(Self::fib(ctx, arith_address, n))
     }
 
     fn cached_values(ctx: &ViewContext) -> Vec<u64> {

@@ -235,7 +235,7 @@ impl RuntimeImpl for RuntimeRegtest {
                 )
                 .await
         } else {
-            todo!()
+            self.reg_tester.view(contract_address, expr).await
         }
     }
 }

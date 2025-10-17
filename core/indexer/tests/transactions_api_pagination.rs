@@ -14,6 +14,7 @@ use indexer::{
         types::{BlockRow, TransactionListResponse, TransactionRow},
     },
     reactor::results::ResultSubscriber,
+    runtime::Runtime,
     test_utils::new_test_db,
 };
 use libsql::params;
@@ -111,10 +112,11 @@ async fn create_test_app() -> Result<Router> {
 
     let env = Env {
         bitcoin: bitcoin_client,
-        reader,
         config,
         cancel_token: CancellationToken::new(),
         result_subscriber: ResultSubscriber::default(),
+        runtime: Runtime::new_read_only(&reader).await?,
+        reader,
     };
 
     Ok(Router::new()

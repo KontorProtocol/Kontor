@@ -9,11 +9,11 @@ world contract {
 
     export init: func(ctx: borrow<proc-context>);
 
-    export open: func(ctx: borrow<proc-context>, n: integer, other-tenants: list<string>) -> result<string, error>;
+    export open: func(ctx: borrow<proc-context>, token: contract-address, n: integer, other-tenants: list<string>) -> result<string, error>;
 
-    export deposit: func(ctx: borrow<proc-context>, account-id: string, n: integer) -> result<_, error>;
+    export deposit: func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
 
-    export withdraw: func(ctx: borrow<proc-context>, account-id: string, n: integer) -> result<_, error>;
+    export withdraw: func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
 
     export balance: func(ctx: borrow<view-context>, account-id: string) -> option<integer>;
 

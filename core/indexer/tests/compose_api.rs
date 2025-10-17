@@ -22,6 +22,7 @@ use indexer::api::compose::{
 use indexer::api::handlers::post_compose;
 use indexer::legacy_test_utils;
 use indexer::reactor::results::ResultSubscriber;
+use indexer::runtime::Runtime;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer::{
     api::{
@@ -49,10 +50,11 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
 
     let env = Env {
         bitcoin: bitcoin_client,
-        reader,
         config,
         cancel_token: CancellationToken::new(),
         result_subscriber: ResultSubscriber::default(),
+        runtime: Runtime::new_read_only(&reader).await?,
+        reader,
     };
 
     // Create router with only the compose endpoints

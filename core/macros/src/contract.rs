@@ -25,7 +25,7 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
-        use kontor::built_in::foreign::ContractAddressWrapper;
+        use kontor::built_in::foreign::{ContractAddressWrapper, get_contract_address};
         use kontor::built_in::numbers::IntegerWrapper;
         use kontor::built_in::numbers::DecimalWrapper;
 

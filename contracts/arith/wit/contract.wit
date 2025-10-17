@@ -2,6 +2,7 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
+    use kontor:built-in/foreign.{contract-address};
     use kontor:built-in/context.{view-context, proc-context};
     use kontor:built-in/error.{error};
 
@@ -28,5 +29,5 @@ world contract {
 
     export checked-sub: func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 
-    export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
+    export fib: func(ctx: borrow<proc-context>, contract-address: contract-address, n: u64) -> u64;
 }

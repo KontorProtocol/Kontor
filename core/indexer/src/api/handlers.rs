@@ -12,6 +12,8 @@ use crate::{
         },
         types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
     },
+    reactor::results::ResultEvent,
+    runtime::ContractAddress,
 };
 
 use super::{
@@ -194,4 +196,41 @@ pub async fn get_transaction(
         Some(transaction) => Ok(transaction.into()),
         None => Err(HttpError::NotFound(format!("transaction: {}", txid)).into()),
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewExpr {
+    pub expr: String,
+}
+
+pub async fn post_view(
+    Path(address): Path<String>,
+    State(env): State<Env>,
+    Json(ViewExpr { expr }): Json<ViewExpr>,
+) -> Result<ResultEvent> {
+    let address_parts = address.split("_").collect::<Vec<_>>();
+    if address_parts.len() != 3 {
+        return Err(HttpError::BadRequest("Invalid contract address format".to_string()).into());
+    }
+    let name = address_parts[0].to_string();
+    if let Ok(height) = address_parts[1].parse::<i64>()
+        && let Ok(tx_index) = address_parts[2].parse::<i64>()
+    {
+        let contract_address = ContractAddress {
+            name,
+            height,
+            tx_index,
+        };
+
+        let result = env.runtime.execute(None, &contract_address, &expr).await;
+        return Ok(match result {
+            Ok(value) => ResultEvent::Ok { value },
+            Err(e) => ResultEvent::Err {
+                message: format!("{:?}", e),
+            },
+        }
+        .into());
+    }
+
+    Err(HttpError::BadRequest("Invalid parts in contract address".to_string()).into())
 }

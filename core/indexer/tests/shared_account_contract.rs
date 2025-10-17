@@ -7,8 +7,7 @@ interface!(
     path = "../contracts/shared-account/wit",
 );
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_shared_account_contract() -> Result<()> {
+async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     let alice = runtime.identity().await?;
     let bob = runtime.identity().await?;
     let claire = runtime.identity().await?;
@@ -23,6 +22,7 @@ async fn test_shared_account_contract() -> Result<()> {
         runtime,
         &shared_account,
         &alice,
+        token.clone(),
         50.into(),
         vec![&bob, &dara],
     )
@@ -31,30 +31,68 @@ async fn test_shared_account_contract() -> Result<()> {
     let result = shared_account::balance(runtime, &shared_account, &account_id).await?;
     assert_eq!(result, Some(50.into()));
 
-    shared_account::deposit(runtime, &shared_account, &alice, &account_id, 25.into()).await??;
+    shared_account::deposit(
+        runtime,
+        &shared_account,
+        &alice,
+        token.clone(),
+        &account_id,
+        25.into(),
+    )
+    .await??;
 
     let result = shared_account::balance(runtime, &shared_account, &account_id).await?;
     assert_eq!(result, Some(75.into()));
 
-    shared_account::withdraw(runtime, &shared_account, &bob, &account_id, 25.into()).await??;
+    shared_account::withdraw(
+        runtime,
+        &shared_account,
+        &bob,
+        token.clone(),
+        &account_id,
+        25.into(),
+    )
+    .await??;
 
     let result = shared_account::balance(runtime, &shared_account, &account_id).await?;
     assert_eq!(result, Some(50.into()));
 
-    shared_account::withdraw(runtime, &shared_account, &alice, &account_id, 50.into()).await??;
+    shared_account::withdraw(
+        runtime,
+        &shared_account,
+        &alice,
+        token.clone(),
+        &account_id,
+        50.into(),
+    )
+    .await??;
 
     let result = shared_account::balance(runtime, &shared_account, &account_id).await?;
     assert_eq!(result, Some(0.into()));
 
-    let result =
-        shared_account::withdraw(runtime, &shared_account, &bob, &account_id, 1.into()).await?;
+    let result = shared_account::withdraw(
+        runtime,
+        &shared_account,
+        &bob,
+        token.clone(),
+        &account_id,
+        1.into(),
+    )
+    .await?;
     assert_eq!(
         result,
         Err(Error::Message("insufficient balance".to_string()))
     );
 
-    let result =
-        shared_account::withdraw(runtime, &shared_account, &claire, &account_id, 1.into()).await?;
+    let result = shared_account::withdraw(
+        runtime,
+        &shared_account,
+        &claire,
+        token.clone(),
+        &account_id,
+        1.into(),
+    )
+    .await?;
     assert_eq!(result, Err(Error::Message("unauthorized".to_string())));
 
     let result =
@@ -73,4 +111,14 @@ async fn test_shared_account_contract() -> Result<()> {
     assert!(result.contains(&bob.to_string()));
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_shared_account_contract() -> Result<()> {
+    run_test_shared_account_contract(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_shared_account_contract_regtest() -> Result<()> {
+    run_test_shared_account_contract(runtime).await
 }

@@ -2,14 +2,15 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
+    use kontor:built-in/foreign.{contract-address};
     use kontor:built-in/context.{fall-context, view-context, proc-context, signer};
     use kontor:built-in/error.{error};
 
     export init: func(ctx: borrow<proc-context>);
 
-    export fib: func(ctx: borrow<proc-context>, n: u64) -> u64;
+    export fib: func(ctx: borrow<proc-context>, arith-address: contract-address, n: u64) -> u64;
 
-    export fib-of-sub: func(ctx: borrow<proc-context>, x: string, y: string) -> result<u64, error>;
+    export fib-of-sub: func(ctx: borrow<proc-context>, arith-address: contract-address, x: string, y: string) -> result<u64, error>;
 
     export cached-values: func(ctx: borrow<view-context>) -> list<u64>;
 }

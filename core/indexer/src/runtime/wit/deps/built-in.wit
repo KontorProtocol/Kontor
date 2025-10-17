@@ -57,6 +57,8 @@ interface foreign {
     }
 
     call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+
+    get-contract-address: func() -> contract-address;
 }
 
 interface crypto {

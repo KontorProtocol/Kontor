@@ -10,6 +10,7 @@ use indexer::{
     },
     logging,
     reactor::results::{ResultEvent, ResultSubscriber},
+    runtime::Runtime,
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use tokio::sync::mpsc;
@@ -35,6 +36,7 @@ async fn test_websocket_server() -> Result<()> {
             reader: reader.clone(),
             result_subscriber: result_subscriber.clone(), // Clone for shared use
             bitcoin: bitcoin.clone(),
+            runtime: Runtime::new_read_only(&reader).await?,
         })
         .await?,
     );

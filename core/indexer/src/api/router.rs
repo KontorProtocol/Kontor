@@ -17,7 +17,9 @@ use tower_http::{
 };
 use tracing::{Level, Span, error, field, info, span};
 
-use crate::api::handlers::{get_index, get_transaction, get_transactions, post_compose, stop};
+use crate::api::handlers::{
+    get_index, get_transaction, get_transactions, post_compose, post_view, stop,
+};
 
 use super::{
     Env,
@@ -114,7 +116,8 @@ pub fn new(context: Env) -> Router {
                         .route("/", post(post_compose))
                         .route("/commit", get(get_compose_commit))
                         .route("/reveal", get(get_compose_reveal)),
-                ),
+                )
+                .route("/view/{address}", post(post_view)),
         )
         .route("/ws", any(ws::handler))
         .layer(

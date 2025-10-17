@@ -20,7 +20,18 @@ impl ArithStorageWrapper {
     }
     pub fn last_op(&self, ctx: &impl stdlib::ReadContext) -> Option<OpWrapper> {
         let base_path = self.base_path.push("last_op");
-        if ctx.__exists(&base_path.push("none")) {
+        if ctx
+            .__matching_path(
+                &::alloc::__export::must_use({
+                    ::alloc::fmt::format(
+                        format_args!(
+                            "^{0}.({1})(\\..*|$)", base_path, ["none"].join("|"),
+                        ),
+                    )
+                }),
+            )
+            .is_some()
+        {
             None
         } else {
             Some(OpWrapper::new(ctx, base_path.push("some")))

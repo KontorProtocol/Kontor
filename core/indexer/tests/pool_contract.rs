@@ -5,8 +5,7 @@ interface!(name = "token", path = "../contracts/token/wit",);
 
 interface!(name = "pool", path = "../contracts/pool/wit",);
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_swaps() -> Result<()> {
+async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -109,8 +108,7 @@ async fn test_amm_swaps() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_swap_fee() -> Result<()> {
+async fn run_test_amm_swap_fee(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -199,8 +197,7 @@ async fn test_amm_swap_fee() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_shares_token_interface() -> Result<()> {
+async fn run_test_amm_shares_token_interface(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
@@ -256,8 +253,7 @@ async fn test_amm_shares_token_interface() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_swap_low_slippage() -> Result<()> {
+async fn run_test_amm_swap_low_slippage(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -336,8 +332,7 @@ async fn test_amm_swap_low_slippage() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_deposit_withdraw() -> Result<()> {
+async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
@@ -443,8 +438,7 @@ async fn test_amm_deposit_withdraw() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
-async fn test_amm_limits() -> Result<()> {
+async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -537,4 +531,64 @@ async fn test_amm_limits() -> Result<()> {
     assert!(k3 >= k2);
 
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_swaps() -> Result<()> {
+    run_test_amm_swaps(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_swaps_regtest() -> Result<()> {
+    run_test_amm_swaps(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_swap_fee() -> Result<()> {
+    run_test_amm_swap_fee(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_swap_fee_regtest() -> Result<()> {
+    run_test_amm_swap_fee(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_shares_token_interface() -> Result<()> {
+    run_test_amm_shares_token_interface(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_shares_token_interface_regtest() -> Result<()> {
+    run_test_amm_shares_token_interface(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_swap_low_slippage() -> Result<()> {
+    run_test_amm_swap_low_slippage(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_swap_low_slippage_regtest() -> Result<()> {
+    run_test_amm_swap_low_slippage(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_deposit_withdraw() -> Result<()> {
+    run_test_amm_deposit_withdraw(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_deposit_withdraw_regtest() -> Result<()> {
+    run_test_amm_deposit_withdraw(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_amm_limits() -> Result<()> {
+    run_test_amm_limits(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_amm_limits_regtest() -> Result<()> {
+    run_test_amm_limits(runtime).await
 }

@@ -2,9 +2,7 @@ use stdlib::*;
 
 contract!(name = "shared-account");
 
-import!(name = "token", height = 0, tx_index = 0, path = "token/wit");
-
-interface!(name = "token_dyn", path = "token/wit");
+interface!(name = "token", path = "token/wit");
 
 #[derive(Clone, Default, Storage)]
 struct Account {
@@ -43,9 +41,14 @@ impl Guest for SharedAccount {
         SharedAccountStorage::default().init(ctx);
     }
 
-    fn open(ctx: &ProcContext, n: Integer, other_tenants: Vec<String>) -> Result<String, Error> {
+    fn open(
+        ctx: &ProcContext,
+        token: ContractAddress,
+        n: Integer,
+        other_tenants: Vec<String>,
+    ) -> Result<String, Error> {
         let balance =
-            token::balance(&ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
+            token::balance(&token, &ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -64,13 +67,18 @@ impl Guest for SharedAccount {
                 ),
             },
         );
-        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)?;
+        token::transfer(&token, ctx.signer(), &ctx.contract_signer().to_string(), n)?;
         Ok(account_id)
     }
 
-    fn deposit(ctx: &ProcContext, account_id: String, n: Integer) -> Result<(), Error> {
+    fn deposit(
+        ctx: &ProcContext,
+        token: ContractAddress,
+        account_id: String,
+        n: Integer,
+    ) -> Result<(), Error> {
         let balance =
-            token::balance(&ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
+            token::balance(&token, &ctx.signer().to_string()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -82,10 +90,15 @@ impl Guest for SharedAccount {
             return Err(unauthorized_error());
         }
         account.set_balance(ctx, account.balance(ctx) + n);
-        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), n)
+        token::transfer(&token, ctx.signer(), &ctx.contract_signer().to_string(), n)
     }
 
-    fn withdraw(ctx: &ProcContext, account_id: String, n: Integer) -> Result<(), Error> {
+    fn withdraw(
+        ctx: &ProcContext,
+        token: ContractAddress,
+        account_id: String,
+        n: Integer,
+    ) -> Result<(), Error> {
         let account = storage(ctx)
             .accounts()
             .get(ctx, account_id)
@@ -98,7 +111,7 @@ impl Guest for SharedAccount {
             return Err(insufficient_balance_error());
         }
         account.set_balance(ctx, balance - n);
-        token::transfer(ctx.contract_signer(), &ctx.signer().to_string(), n)
+        token::transfer(&token, ctx.contract_signer(), &ctx.signer().to_string(), n)
     }
 
     fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
@@ -113,7 +126,7 @@ impl Guest for SharedAccount {
         token: ContractAddress,
         holder: String,
     ) -> Option<Integer> {
-        token_dyn::balance(&token, &holder)
+        token::balance(&token, &holder)
     }
 
     fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {

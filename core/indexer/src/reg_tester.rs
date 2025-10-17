@@ -10,7 +10,7 @@ use crate::{
     database::types::ContractResultId,
     reactor::{results::ResultEvent, types::Inst},
     retry::retry_simple,
-    runtime::{serialize_cbor, wit::Signer},
+    runtime::{ContractAddress, serialize_cbor, wit::Signer},
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -359,5 +359,13 @@ impl RegTester {
             keypair,
             next_funding_utxo,
         })
+    }
+
+    pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
+        let result = self.kontor_client.view(contract_address, expr).await?;
+        match result {
+            ResultEvent::Ok { value } => Ok(value),
+            ResultEvent::Err { message } => Err(anyhow!("{}", message)),
+        }
     }
 }

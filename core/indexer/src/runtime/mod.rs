@@ -47,11 +47,14 @@ use wasmtime::{
 };
 use wit_component::ComponentEncoder;
 
-use crate::runtime::{
-    counter::Counter,
-    fuel::{Fuel, FuelGauge},
-    stack::Stack,
-    wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
+use crate::{
+    database::Reader,
+    runtime::{
+        counter::Counter,
+        fuel::{Fuel, FuelGauge},
+        stack::Stack,
+        wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
+    },
 };
 
 impls!(host = true);
@@ -100,6 +103,16 @@ impl Runtime {
             gauge: Some(FuelGauge::new()),
             starting_fuel: 1000000,
         })
+    }
+
+    pub async fn new_read_only(reader: &Reader) -> Result<Self> {
+        Runtime::new(
+            Storage::builder()
+                .conn(reader.connection().await?.clone())
+                .build(),
+            ComponentCache::new(),
+        )
+        .await
     }
 
     pub fn set_context(&mut self, height: i64, tx_id: i64, input_index: i64, op_index: i64) {
@@ -723,6 +736,21 @@ impl Runtime {
         Ok(table.push(ViewContext { contract_id })?)
     }
 
+    async fn _get_contract_address<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+    ) -> Result<ContractAddress> {
+        Fuel::ContractAddress
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let id = self.stack.peek().await.expect("Stack is empty");
+        Ok(self
+            .storage
+            .contract_address(id)
+            .await?
+            .expect("Failed to get contract address"))
+    }
+
     async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {
         self.table.lock().await.delete(rep)?;
         Ok(())
@@ -780,6 +808,13 @@ impl built_in::foreign::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._call(accessor, signer, contract_address, expr)
+            .await
+    }
+
+    async fn get_contract_address<T>(accessor: &Accessor<T, Self>) -> Result<ContractAddress> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_contract_address(accessor)
             .await
     }
 }

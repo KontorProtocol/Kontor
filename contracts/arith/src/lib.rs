@@ -2,7 +2,7 @@ use stdlib::*;
 
 contract!(name = "arith");
 
-import!(name = "fib", height = 0, tx_index = 0, path = "fib/wit");
+interface!(name = "fib", path = "fib/wit");
 
 #[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {
@@ -41,7 +41,7 @@ impl Guest for Arith {
     }
 
     // for cycle detection test
-    fn fib(ctx: &ProcContext, n: u64) -> u64 {
-        fib::fib(ctx.signer(), n)
+    fn fib(ctx: &ProcContext, contract_address: ContractAddress, n: u64) -> u64 {
+        fib::fib(&contract_address, ctx.signer(), get_contract_address(), n)
     }
 }
