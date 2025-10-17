@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use axum::routing::post;
 use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
 
@@ -15,9 +16,10 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::api::compose::{
-    ComposeAddressInputs, ComposeAddressQuery, ComposeInputs, ComposeOutputs, RevealInputs,
-    RevealParticipantInputs, compose, compose_reveal,
+    ComposeAddressInputs, ComposeAddressQuery, ComposeInputs, ComposeOutputs, ComposeQuery,
+    RevealInputs, RevealParticipantInputs, compose, compose_reveal,
 };
+use indexer::api::handlers::post_compose;
 use indexer::legacy_test_utils;
 use indexer::reactor::results::ResultSubscriber;
 use indexer::witness_data::{TokenBalance, WitnessData};
@@ -56,6 +58,7 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
     // Create router with only the compose endpoints
     Ok(Router::new()
         .route("/compose", get(get_compose))
+        .route("/compose", post(post_compose))
         .route("/compose/commit", get(get_compose_commit))
         .route("/compose/reveal", get(get_compose_reveal))
         .with_state(env))
@@ -552,7 +555,7 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
     let server = TestServer::new(app)?;
 
     // Oversized script_data
-    let oversized = vec![0u8; 16 * 1024 + 1];
+    let oversized = vec![0u8; 387 * 1024 + 1];
     let addresses_vec = vec![ComposeAddressQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
@@ -560,19 +563,19 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
             .to_string(),
         script_data: oversized,
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
+    let query = ComposeQuery {
+        addresses: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
 
-    let resp: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let resp: TestResponse = server.post("/compose").json(&query).await;
     assert_eq!(resp.status_code(), StatusCode::BAD_REQUEST);
     assert!(resp.text().contains("script data size invalid"));
 
     // Oversized chained_script_data
-    let chained_oversized_b64 = test_utils::base64_serialize(&vec![0u8; 16 * 1024 + 1]);
+    let chained_oversized_b64 = vec![0u8; 387 * 1024 + 1];
     let addresses_vec2 = vec![ComposeAddressQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
@@ -580,14 +583,14 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
             .to_string(),
         script_data: b"x".to_vec(),
     }];
-    let addresses_b64_2 = encode_addresses(addresses_vec2.clone())?;
-    let resp2: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&chained_script_data={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64_2),
-            urlencoding::encode(&chained_oversized_b64),
-        ))
-        .await;
+    let query = ComposeQuery {
+        addresses: addresses_vec2.clone(),
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: Some(chained_oversized_b64),
+    };
+
+    let resp2: TestResponse = server.post("/compose").json(&query).await;
     assert_eq!(resp2.status_code(), StatusCode::BAD_REQUEST);
     assert!(resp2.text().contains("chained script data size invalid"));
 

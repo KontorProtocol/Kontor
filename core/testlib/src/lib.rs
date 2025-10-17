@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use bon::Builder;
 use glob::Paths;
@@ -8,18 +9,24 @@ pub use indexer::runtime::wit::kontor::built_in::{
     foreign::ContractAddress,
     numbers::{Decimal, Integer},
 };
-pub use indexer::runtime::{CheckedArithmetics, numerics as numbers, wit::Signer};
 use indexer::{
     config::Config,
     database::{queries::insert_processed_block, types::BlockRow},
-    reg_tester::generate_taproot_address,
+    reactor::types::Inst,
+    reg_tester::{self, generate_taproot_address},
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, load_contracts},
     test_utils::{new_mock_block_hash, new_test_db},
+};
+pub use indexer::{
+    logging,
+    reg_tester::RegTester,
+    runtime::{CheckedArithmetics, numerics as numbers, wit::Signer},
 };
 use libsql::Connection;
 pub use macros::{import_test as import, interface_test as interface, runtime};
 
 pub use anyhow::{Error as AnyhowError, Result, anyhow};
+use tempfile::TempDir;
 use tokio::{fs::File, io::AsyncReadExt, task};
 
 pub struct ContractReader {
@@ -73,33 +80,16 @@ impl ContractReader {
     }
 }
 
-#[derive(Clone)]
-pub struct CallContext {
-    height: i64,
-    tx_id: i64,
-}
-
 #[derive(Default, Builder)]
 pub struct RuntimeConfig<'a> {
-    contracts_dir: &'a str,
-    call_context: Option<CallContext>,
-    mode: Option<String>,
-}
-
-impl RuntimeConfig<'_> {
-    pub fn get_call_context(&self) -> CallContext {
-        self.call_context.clone().unwrap_or(CallContext {
-            height: 1,
-            tx_id: 1,
-        })
-    }
+    pub contracts_dir: &'a str,
 }
 
 #[async_trait]
-pub trait RuntimeImpl {
-    async fn identity(&self) -> Result<Signer>;
+pub trait RuntimeImpl: Send {
+    async fn identity(&mut self) -> Result<Signer>;
     async fn publish(
-        &self,
+        &mut self,
         signer: &Signer,
         name: &str,
         contract: &[u8],
@@ -114,44 +104,41 @@ pub trait RuntimeImpl {
 
 pub struct RuntimeLocal {
     runtime: IndexerRuntime,
+    _db_dir: TempDir,
 }
 
 impl RuntimeLocal {
-    async fn make_storage(call_context: CallContext, conn: Connection) -> Result<Storage> {
+    async fn make_storage(conn: Connection) -> Result<Storage> {
         insert_processed_block(
             &conn,
             BlockRow::builder()
-                .height(call_context.height)
-                .hash(new_mock_block_hash(call_context.height as u32))
+                .height(1)
+                .hash(new_mock_block_hash(1))
                 .build(),
         )
         .await?;
-        Ok(Storage::builder()
-            .height(call_context.height)
-            .tx_id(call_context.tx_id)
-            .conn(conn)
-            .build())
+        Ok(Storage::builder().height(1).tx_id(1).conn(conn).build())
     }
 
-    pub async fn new(config: &RuntimeConfig<'_>) -> Result<Self> {
-        let (_, writer, _test_db_dir) = new_test_db(&Config::new_na()).await?;
+    pub async fn new() -> Result<Self> {
+        let (_, writer, _db_dir) = new_test_db(&Config::new_na()).await?;
         let conn = writer.connection();
-        let storage = Self::make_storage(config.get_call_context(), conn).await?;
+        let storage = Self::make_storage(conn).await?;
         let component_cache = ComponentCache::new();
         let runtime = IndexerRuntime::new(storage, component_cache).await?;
-        Ok(Self { runtime })
+        Ok(Self { runtime, _db_dir })
     }
 }
 
 #[async_trait]
 impl RuntimeImpl for RuntimeLocal {
-    async fn identity(&self) -> Result<Signer> {
+    async fn identity(&mut self) -> Result<Signer> {
         let (address, ..) = generate_taproot_address();
         Ok(Signer::XOnlyPubKey(address.to_string()))
     }
 
     async fn publish(
-        &self,
+        &mut self,
         signer: &Signer,
         name: &str,
         contract: &[u8],
@@ -176,34 +163,115 @@ impl RuntimeImpl for RuntimeLocal {
     }
 }
 
+pub struct RuntimeRegtest {
+    reg_tester: RegTester,
+    identities: HashMap<Signer, reg_tester::Identity>,
+}
+
+impl RuntimeRegtest {
+    pub fn new(reg_tester: RegTester) -> Self {
+        let identities = HashMap::new();
+        Self {
+            reg_tester,
+            identities,
+        }
+    }
+}
+
+#[async_trait]
+impl RuntimeImpl for RuntimeRegtest {
+    async fn identity(&mut self) -> Result<Signer> {
+        let identity = self.reg_tester.identity().await?;
+        let signer = identity.signer();
+        self.identities.insert(signer.clone(), identity);
+        Ok(signer)
+    }
+
+    async fn publish(
+        &mut self,
+        signer: &Signer,
+        name: &str,
+        contract: &[u8],
+    ) -> Result<ContractAddress> {
+        let identity = self
+            .identities
+            .get_mut(signer)
+            .ok_or_else(|| anyhow!("Identity not found"))?;
+        let expr = self
+            .reg_tester
+            .instruction(
+                identity,
+                Inst::Publish {
+                    name: name.to_string(),
+                    bytes: contract.to_vec(),
+                },
+            )
+            .await
+            .context("Failed to publish contract")?;
+        Ok(
+            wasm_wave::from_str::<wasm_wave::value::Value>(&ContractAddress::wave_type(), &expr)?
+                .into(),
+        )
+    }
+
+    async fn execute(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String> {
+        if let Some(signer) = signer {
+            let identity = self
+                .identities
+                .get_mut(signer)
+                .ok_or_else(|| anyhow!("Identity not found"))?;
+            self.reg_tester
+                .instruction(
+                    identity,
+                    Inst::Call {
+                        contract: contract_address.clone(),
+                        expr: expr.to_string(),
+                    },
+                )
+                .await
+        } else {
+            todo!()
+        }
+    }
+}
+
 pub struct Runtime {
     pub contract_reader: ContractReader,
     pub runtime: Box<dyn RuntimeImpl>,
 }
 
 impl Runtime {
-    pub async fn new(config: RuntimeConfig<'_>) -> Result<Self> {
-        if config.mode.is_none() {
-            let runtime = RuntimeLocal::new(&config).await?;
-            Ok(Runtime {
-                contract_reader: ContractReader::new(config.contracts_dir).await?,
-                runtime: Box::new(runtime),
-            })
-        } else {
-            todo!()
-        }
+    pub async fn new_local(config: RuntimeConfig<'_>) -> Result<Self> {
+        let runtime = RuntimeLocal::new().await?;
+        Ok(Runtime {
+            contract_reader: ContractReader::new(config.contracts_dir).await?,
+            runtime: Box::new(runtime),
+        })
     }
 
-    pub async fn identity(&self) -> Result<Signer> {
+    pub async fn new_regtest(config: RuntimeConfig<'_>, reg_tester: RegTester) -> Result<Self> {
+        let runtime = Box::new(RuntimeRegtest::new(reg_tester));
+        Ok(Runtime {
+            contract_reader: ContractReader::new(config.contracts_dir).await?,
+            runtime,
+        })
+    }
+
+    pub async fn identity(&mut self) -> Result<Signer> {
         self.runtime.identity().await
     }
 
-    pub async fn publish(&self, signer: &Signer, name: &str) -> Result<ContractAddress> {
+    pub async fn publish(&mut self, signer: &Signer, name: &str) -> Result<ContractAddress> {
         self.publish_as(signer, name, name).await
     }
 
     pub async fn publish_as(
-        &self,
+        &mut self,
         signer: &Signer,
         name: &str,
         alias: &str,

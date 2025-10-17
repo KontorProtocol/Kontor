@@ -10,7 +10,7 @@ use crate::{
     database::types::ContractResultId,
     reactor::{results::ResultEvent, types::Inst},
     retry::retry_simple,
-    runtime::serialize_cbor,
+    runtime::{serialize_cbor, wit::Signer},
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -108,7 +108,6 @@ fn outpoint_to_utxo_id(outpoint: &OutPoint) -> String {
 
 #[derive(Debug, Clone)]
 pub struct Identity {
-    pub name: String,
     pub address: Address,
     pub keypair: Keypair,
     pub next_funding_utxo: (OutPoint, TxOut),
@@ -117,6 +116,10 @@ pub struct Identity {
 impl Identity {
     pub fn x_only_public_key(&self) -> XOnlyPublicKey {
         self.keypair.x_only_public_key().0
+    }
+
+    pub fn signer(&self) -> Signer {
+        Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
 }
 
@@ -157,7 +160,6 @@ impl RegTester {
         };
         let tx_out = block.txdata[0].output[0].clone();
         let identity = Identity {
-            name: "self".to_string(),
             address,
             keypair,
             next_funding_utxo: (out_point, tx_out),
@@ -301,7 +303,7 @@ impl RegTester {
         }
     }
 
-    pub async fn identity(&mut self, name: &str) -> Result<Identity> {
+    pub async fn identity(&mut self) -> Result<Identity> {
         let (address, keypair) = generate_taproot_address();
         let mut tx = Transaction {
             version: Version(2),
@@ -353,7 +355,6 @@ impl RegTester {
             tx.output[0].clone(),
         );
         Ok(Identity {
-            name: name.to_string(),
             address,
             keypair,
             next_funding_utxo,

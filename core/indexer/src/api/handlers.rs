@@ -1,4 +1,7 @@
-use axum::extract::{Path, Query, State};
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+};
 
 use crate::{
     bitcoin_client::types::TestMempoolAcceptResult,
@@ -81,6 +84,23 @@ pub async fn test_mempool_accept(
 
     let results = env.bitcoin.test_mempool_accept(&txs).await?;
     Ok(results.into())
+}
+
+pub async fn post_compose(
+    State(env): State<Env>,
+    Json(query): Json<ComposeQuery>,
+) -> Result<ComposeOutputs> {
+    if query.addresses.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    }
+
+    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let outputs = compose(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    Ok(outputs.into())
 }
 
 pub async fn get_compose(

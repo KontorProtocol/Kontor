@@ -221,7 +221,6 @@ impl Reactor {
                 let input_index = op.metadata().input_index;
                 self.runtime
                     .set_context(height as i64, tx_id, input_index, 0);
-                info!("Op: {:#?}", op);
                 let id = ContractResultId::builder()
                     .txid(t.txid.to_string())
                     .input_index(input_index)

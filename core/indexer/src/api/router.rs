@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     http::{HeaderName, Request, Response},
     response::IntoResponse,
-    routing::{any, get},
+    routing::{any, get, post},
 };
 use reqwest::StatusCode;
 use tower::ServiceBuilder;
@@ -17,7 +17,7 @@ use tower_http::{
 };
 use tracing::{Level, Span, error, field, info, span};
 
-use crate::api::handlers::{get_index, get_transaction, get_transactions, stop};
+use crate::api::handlers::{get_index, get_transaction, get_transactions, post_compose, stop};
 
 use super::{
     Env,
@@ -111,6 +111,7 @@ pub fn new(context: Env) -> Router {
                     "/compose",
                     Router::new()
                         .route("/", get(get_compose))
+                        .route("/", post(post_compose))
                         .route("/commit", get(get_compose_commit))
                         .route("/reveal", get(get_compose_reveal)),
                 ),

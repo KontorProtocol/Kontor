@@ -259,16 +259,43 @@ pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_vis = &func.vis;
     let fn_block = &func.block;
     let contracts_dir = config.contracts_dir;
+    let mode = config.mode.unwrap_or("local".to_string());
+
+    let body = if mode == "regtest" {
+        quote! {
+            let (
+                _bitcoin_data_dir,
+                bitcoin_child,
+                bitcoin_client,
+                _kontor_data_dir,
+                kontor_child,
+                kontor_client,
+                identity,
+            ) = RegTester::setup().await?;
+            let result = tokio::spawn({
+                let bitcoin_client = bitcoin_client.clone();
+                let kontor_client = kontor_client.clone();
+                async move {
+                    let reg_tester = RegTester::new(identity, bitcoin_client, kontor_client).await?;
+                    let mut runtime = &mut Runtime::new_regtest(RuntimeConfig::builder().contracts_dir(#contracts_dir).build(), reg_tester).await?;
+                    #fn_block
+                }
+            })
+            .await;
+            RegTester::teardown(bitcoin_client, bitcoin_child, kontor_client, kontor_child).await?;
+            result?
+        }
+    } else {
+        quote! {
+            let mut runtime = &mut Runtime::new_local(RuntimeConfig::builder().contracts_dir(#contracts_dir).build()).await?;
+            #fn_block
+        }
+    };
 
     let output = quote! {
         #[tokio::test]
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
-            let mut runtime = &mut Runtime::new(
-                RuntimeConfig::builder()
-                    .contracts_dir(#contracts_dir)
-                    .build()
-            ).await?;
-            #fn_block
+            #body
         }
     };
 

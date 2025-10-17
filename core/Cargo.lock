@@ -4115,8 +4115,10 @@ dependencies = [
  "indexer",
  "libsql",
  "macros",
+ "tempfile",
  "tokio",
  "tracing",
+ "wasm-wave 0.240.0",
 ]
 
 [[package]]
