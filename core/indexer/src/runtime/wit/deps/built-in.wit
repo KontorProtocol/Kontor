@@ -16,7 +16,7 @@ interface context {
         get-bool: func(path: string) -> option<bool>;
         get-keys: func(path: string) -> keys;
         exists: func(path: string) -> bool;
-        matching-path: func(regexp: string) -> option<string>;
+        extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
     }
 
     resource proc-context {
@@ -26,7 +26,7 @@ interface context {
         get-bool: func(path: string) -> option<bool>;
         get-keys: func(path: string) -> keys;
         exists: func(path: string) -> bool;
-        matching-path: func(regexp: string) -> option<string>;
+        extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
 
         set-str: func(path: string, value: string);
         set-u64: func(path: string, value: u64);

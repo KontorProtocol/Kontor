@@ -76,7 +76,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, ["none"].join("|"))).is_some() {
+                                if ctx.__extend_path_with_match(&base_path, &["none"]).is_some() {
                                     None
                                 } else {
                                     ctx.__get(base_path.push("some"))
@@ -93,7 +93,7 @@ pub fn generate_struct_wrapper(data_struct: &DataStruct, type_name: &Ident) -> R
                         Ok(quote! {
                             pub fn #field_name(&self, ctx: &impl stdlib::ReadContext) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, ["none"].join("|"))).is_some() {
+                                if ctx.__extend_path_with_match(&base_path, &["none"]).is_some() {
                                     None
                                 } else {
                                     Some(#inner_wrapper_ty::new(ctx, base_path.push("some"))#load)
@@ -330,7 +330,7 @@ pub fn generate_enum_wrapper(data_enum: &DataEnum, type_name: &Ident) -> Result<
 
         impl #wrapper_name {
             pub fn new(ctx: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
-                ctx.__matching_path(&format!(r"^{}.({})(\..*|$)", base_path, [#(#variant_names),*].join("|")))
+                ctx.__extend_path_with_match(&base_path, &[#(#variant_names),*])
                     .map(|path| match path {
                         #(#new_arms,)*
                         _ => {

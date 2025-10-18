@@ -128,7 +128,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(exists_contract_state(&conn, contract_id, "test.").await?);
 
     assert_eq!(
-        matching_path(&conn, contract_id, r"^test.(path|foo|bar)(\..*|$)")
+        matching_path(&conn, contract_id, "test", r"^test.(path|foo|bar)(\..*|$)")
             .await?
             .unwrap(),
         path

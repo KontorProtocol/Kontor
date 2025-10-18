@@ -31,16 +31,7 @@ impl ::core::clone::Clone for OpWrapper {
 }
 impl OpWrapper {
     pub fn new(ctx: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
-        ctx.__matching_path(
-                &::alloc::__export::must_use({
-                    ::alloc::fmt::format(
-                        format_args!(
-                            "^{0}.({1})(\\..*|$)", base_path, ["id", "sum", "mul", "div"]
-                            .join("|"),
-                        ),
-                    )
-                }),
-            )
+        ctx.__extend_path_with_match(&base_path, &["id", "sum", "mul", "div"])
             .map(|path| match path {
                 p if p.starts_with(base_path.push("id").as_ref()) => OpWrapper::Id,
                 p if p.starts_with(base_path.push("sum").as_ref()) => {

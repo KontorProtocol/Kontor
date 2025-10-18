@@ -14,7 +14,7 @@ pub trait ReadContext {
         path: &'a str,
     ) -> impl Iterator<Item = T> + 'a;
     fn __exists(&self, path: &str) -> bool;
-    fn __matching_path(&self, regexp: &str) -> Option<String>;
+    fn __extend_path_with_match(&self, path: &str, variants: &[&str]) -> Option<String>;
     fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T>;
 }
 

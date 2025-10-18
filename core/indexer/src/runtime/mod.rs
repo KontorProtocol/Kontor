@@ -537,19 +537,24 @@ impl Runtime {
         self.storage.exists(_self.get_contract_id(), &path).await
     }
 
-    async fn _matching_path<S, T: HasContractId>(
+    async fn _extend_path_with_match<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
-        regexp: String,
+        path: String,
+        variants: Vec<String>,
     ) -> Result<Option<String>> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::MatchingPath(regexp.len() as u64)
+        Fuel::ExtendPathWithMatch(variants.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage
-            .matching_path(_self.get_contract_id(), &regexp)
+            .extend_path_with_match(
+                _self.get_contract_id(),
+                &path,
+                &format!(r"^{}.({})(\..*|$)", path, variants.join("|")),
+            )
             .await
     }
 
@@ -897,14 +902,15 @@ impl built_in::context::HostViewContextWithStore for Runtime {
             .await
     }
 
-    async fn matching_path<T>(
+    async fn extend_path_with_match<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewContext>,
-        regexp: String,
+        path: String,
+        variants: Vec<String>,
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._matching_path(accessor, self_, regexp)
+            ._extend_path_with_match(accessor, self_, path, variants)
             .await
     }
 }
@@ -1003,14 +1009,15 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn matching_path<T>(
+    async fn extend_path_with_match<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
-        regexp: String,
+        path: String,
+        variants: Vec<String>,
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._matching_path(accessor, self_, regexp)
+            ._extend_path_with_match(accessor, self_, path, variants)
             .await
     }
 

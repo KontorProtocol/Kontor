@@ -74,8 +74,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.exists(path)
             }
 
-            fn __matching_path(&self, regexp: &str) -> Option<String> {
-                self.matching_path(regexp)
+            fn __extend_path_with_match(&self, path: &str, variants: &[&str]) -> Option<String> {
+                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
             fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {
@@ -109,8 +109,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.exists(path)
             }
 
-            fn __matching_path(&self, regexp: &str) -> Option<String> {
-                self.matching_path(regexp)
+            fn __extend_path_with_match(&self, path: &str, variants: &[&str]) -> Option<String> {
+                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
             fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {

@@ -18,15 +18,7 @@ impl ::core::clone::Clone for ErrorWrapper {
 }
 impl ErrorWrapper {
     pub fn new(ctx: &impl stdlib::ReadContext, base_path: stdlib::DotPathBuf) -> Self {
-        ctx.__matching_path(
-                &::alloc::__export::must_use({
-                    ::alloc::fmt::format(
-                        format_args!(
-                            "^{0}.({1})(\\..*|$)", base_path, ["message"].join("|"),
-                        ),
-                    )
-                }),
-            )
+        ctx.__extend_path_with_match(&base_path, &["message"])
             .map(|path| match path {
                 p if p.starts_with(base_path.push("message").as_ref()) => {
                     ErrorWrapper::Message(ctx.__get(base_path.push("message")).unwrap())

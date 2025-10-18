@@ -311,9 +311,9 @@ const MATCHING_PATH_CONTRACT_STATE_QUERY: &str = include_str!("sql/matching_path
 pub async fn matching_path(
     conn: &Connection,
     contract_id: i64,
+    base_path: &str,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
-    let base_path = &regexp[1..(regexp.find('(').unwrap() - 1)];
     let mut rows = conn
         .query(
             MATCHING_PATH_CONTRACT_STATE_QUERY,

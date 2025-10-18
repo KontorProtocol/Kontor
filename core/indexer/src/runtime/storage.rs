@@ -61,8 +61,13 @@ impl Storage {
         Ok(exists_contract_state(&self.conn, contract_id, path).await?)
     }
 
-    pub async fn matching_path(&self, contract_id: i64, regexp: &str) -> Result<Option<String>> {
-        Ok(matching_path(&self.conn, contract_id, regexp).await?)
+    pub async fn extend_path_with_match(
+        &self,
+        contract_id: i64,
+        path: &str,
+        regexp: &str,
+    ) -> Result<Option<String>> {
+        Ok(matching_path(&self.conn, contract_id, path, regexp).await?)
     }
 
     pub async fn delete_matching_paths(&self, contract_id: i64, regexp: &str) -> Result<u64> {
