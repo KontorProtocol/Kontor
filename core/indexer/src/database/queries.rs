@@ -134,8 +134,8 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
         r#"
             INSERT OR REPLACE INTO contract_state (
                 contract_id,
-                tx_id,
                 height,
+                tx_index,
                 size,
                 path,
                 value,
@@ -144,8 +144,8 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
         "#,
         params![
             row.contract_id,
-            row.tx_id,
             row.height,
+            row.tx_index,
             row.size(),
             row.path,
             row.value,
@@ -178,8 +178,8 @@ pub async fn get_latest_contract_state(
                 SELECT
                     id,
                     contract_id,
-                    tx_id,
                     height,
+                    tx_index,
                     path,
                     value,
                     deleted
@@ -234,7 +234,7 @@ pub async fn get_latest_contract_state_value(
 pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
-    tx_id: i64,
+    tx_index: i64,
     contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
@@ -243,7 +243,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_id = tx_id;
+                row.tx_index = tx_index;
                 insert_contract_state(conn, row).await?;
                 true
             }
@@ -333,7 +333,6 @@ pub async fn delete_matching_paths(
     conn: &Connection,
     contract_id: i64,
     height: i64,
-    tx_id: i64,
     path_regexp: &str,
 ) -> Result<u64, Error> {
     Ok(conn
@@ -342,7 +341,6 @@ pub async fn delete_matching_paths(
             (
                 (":contract_id", contract_id),
                 (":height", height),
-                (":tx_id", tx_id),
                 (":path_regexp", path_regexp),
             ),
         )
@@ -367,11 +365,11 @@ pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<b
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT OR REPLACE INTO contracts (name, height, tx_id, size, bytes) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO contracts (name, height, tx_index, size, bytes) VALUES (?, ?, ?, ?, ?)",
         params![
             row.name.clone(),
             row.height,
-            row.tx_id,
+            row.tx_index,
             row.size(),
             row.bytes
         ],
@@ -388,11 +386,10 @@ pub async fn get_contract_bytes_by_address(
     let mut rows = conn
         .query(
             r#"
-        SELECT c.bytes FROM contracts c
-        JOIN transactions t ON c.tx_id = t.id
-        WHERE t.tx_index = :tx_index
-        AND c.name = :name
-        AND c.height = :height
+        SELECT bytes FROM contracts
+        WHERE name = :name
+        AND height = :height
+        AND tx_index = :tx_index
         "#,
             (
                 (":name", address.name.clone()),
@@ -411,9 +408,8 @@ pub async fn get_contract_address_from_id(
     let mut rows = conn
         .query(
             r#"
-        SELECT c.name, c.height, t.tx_index FROM contracts c
-        JOIN transactions t ON c.tx_id = t.id
-        WHERE c.id = ?
+        SELECT name, height, tx_index FROM contracts
+        WHERE id = ?
         "#,
             params![id],
         )
@@ -441,11 +437,10 @@ pub async fn get_contract_id_from_address(
     let mut rows = conn
         .query(
             r#"
-        SELECT c.id FROM contracts c
-        JOIN transactions t ON c.tx_id = t.id
-        WHERE t.tx_index = :tx_index
-        AND c.name = :name
-        AND c.height = :height
+        SELECT id FROM contracts
+        WHERE name = :name
+        AND height = :height
+        AND tx_index = :tx_index
         "#,
             (
                 (":name", address.name.clone()),
@@ -467,28 +462,13 @@ pub async fn get_contract_bytes_by_id(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<(), Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid, tx_index) VALUES (?, ?, ?)",
         params![row.height, row.txid, row.tx_index],
     )
     .await?;
-
-    Ok(conn.last_insert_rowid())
-}
-
-pub async fn get_transaction_by_id(
-    conn: &Connection,
-    id: i64,
-) -> Result<Option<TransactionRow>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE id = ?",
-            params![id],
-        )
-        .await?;
-
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    Ok(())
 }
 
 pub async fn get_transaction_by_txid(
@@ -497,7 +477,7 @@ pub async fn get_transaction_by_txid(
 ) -> Result<Option<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE txid = ?",
+            "SELECT txid, height, tx_index FROM transactions WHERE txid = ?",
             params![txid],
         )
         .await?;
@@ -511,7 +491,7 @@ pub async fn get_transactions_at_height(
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE height = ?",
+            "SELECT txid, height, tx_index FROM transactions WHERE height = ?",
             params![height],
         )
         .await?;
@@ -649,18 +629,18 @@ pub async fn get_contract_result(
 ) -> Result<Option<ContractResultRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT
-             cr.id,
-             cr.tx_id,
-             cr.input_index,
-             cr.op_index,
-             cr.contract_id,
-             cr.height,
-             cr.value
-           FROM contract_results cr
-           JOIN transactions t ON cr.tx_id = t.id
-           WHERE t.txid = :txid AND cr.input_index = :input_index AND cr.op_index = :op_index;
-        "#,
+            r#"
+            SELECT
+                c.contract_id,
+                c.height,
+                c.tx_index,
+                c.input_index,
+                c.op_index,
+                c.value
+            FROM contract_results c
+            JOIN transactions t ON c.height = t.height AND c.tx_index = t.tx_index
+            WHERE t.txid = :txid AND c.input_index = :input_index AND c.op_index = :op_index;
+            "#,
             named_params! {
                 ":txid": contract_result_id.txid.clone(),
                 ":input_index": contract_result_id.input_index,
@@ -679,20 +659,20 @@ pub async fn insert_contract_result(
     conn.execute(
         r#"
             INSERT OR REPLACE INTO contract_results (
-                tx_id,
-                input_index,
-                op_index,
                 contract_id,
                 height,
+                tx_index,
+                input_index,
+                op_index,
                 value
             ) VALUES (?, ?, ?, ?, ?, ?)
         "#,
         params![
-            row.tx_id,
-            row.input_index,
-            row.op_index,
             row.contract_id,
             row.height,
+            row.tx_index,
+            row.input_index,
+            row.op_index,
             row.value
         ],
     )

@@ -4,7 +4,7 @@ SELECT path FROM (
   FROM (
     SELECT
       *,
-      ROW_NUMBER() OVER (ORDER BY height DESC, tx_id DESC) AS rank
+      ROW_NUMBER() OVER (ORDER BY height DESC) AS rank
     FROM
       contract_state
     WHERE

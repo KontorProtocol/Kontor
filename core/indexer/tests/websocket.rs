@@ -86,7 +86,7 @@ async fn test_websocket_server() -> Result<()> {
             .build(),
     )
     .await?;
-    let tx_id = insert_transaction(
+    insert_transaction(
         &conn,
         TransactionRow::builder()
             .height(1)
@@ -97,7 +97,7 @@ async fn test_websocket_server() -> Result<()> {
     .await?;
     insert_contract_result(
         &conn,
-        ContractResultRow::builder().height(1).tx_id(tx_id).build(),
+        ContractResultRow::builder().height(1).tx_index(1).build(),
     )
     .await?;
 

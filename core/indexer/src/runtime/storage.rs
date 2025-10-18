@@ -24,7 +24,7 @@ pub struct Storage {
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
     #[builder(default = 1)]
-    pub tx_id: i64,
+    pub tx_index: i64,
     #[builder(default = 1)]
     pub height: i64,
     #[builder(default = 0)]
@@ -43,7 +43,7 @@ impl Storage {
             &self.conn,
             ContractStateRow::builder()
                 .contract_id(contract_id)
-                .tx_id(self.tx_id)
+                .tx_index(self.tx_index)
                 .height(self.height)
                 .path(path.to_string())
                 .value(value.to_vec())
@@ -54,7 +54,10 @@ impl Storage {
     }
 
     pub async fn delete(&self, contract_id: i64, path: &str) -> Result<bool> {
-        Ok(delete_contract_state(&self.conn, self.height, self.tx_id, contract_id, path).await?)
+        Ok(
+            delete_contract_state(&self.conn, self.height, self.tx_index, contract_id, path)
+                .await?,
+        )
     }
 
     pub async fn exists(&self, contract_id: i64, path: &str) -> Result<bool> {
@@ -71,7 +74,7 @@ impl Storage {
     }
 
     pub async fn delete_matching_paths(&self, contract_id: i64, regexp: &str) -> Result<u64> {
-        Ok(delete_matching_paths(&self.conn, contract_id, self.height, self.tx_id, regexp).await?)
+        Ok(delete_matching_paths(&self.conn, contract_id, self.height, regexp).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<i64>> {
@@ -91,7 +94,7 @@ impl Storage {
             &self.conn,
             ContractRow::builder()
                 .height(self.height)
-                .tx_id(self.tx_id)
+                .tx_index(self.tx_index)
                 .name(name.to_string())
                 .bytes(bytes.to_vec())
                 .build(),
@@ -107,11 +110,11 @@ impl Storage {
         Ok(insert_contract_result(
             &self.conn,
             ContractResultRow::builder()
-                .tx_id(self.tx_id)
-                .input_index(self.input_index)
-                .op_index(self.op_index)
                 .contract_id(contract_id)
                 .height(self.height)
+                .tx_index(self.tx_index)
+                .input_index(self.input_index)
+                .op_index(self.op_index)
                 .maybe_value(value)
                 .build(),
         )

@@ -208,7 +208,7 @@ impl Reactor {
         info!("# Block Kontor Transactions: {}", block.transactions.len());
 
         for t in block.transactions {
-            let tx_id = insert_transaction(
+            insert_transaction(
                 &conn,
                 TransactionRow::builder()
                     .height(height as i64)
@@ -220,7 +220,7 @@ impl Reactor {
             for op in t.ops {
                 let input_index = op.metadata().input_index;
                 self.runtime
-                    .set_context(height as i64, tx_id, input_index, 0);
+                    .set_context(height as i64, t.index, input_index, 0);
                 let id = ContractResultId::builder()
                     .txid(t.txid.to_string())
                     .input_index(input_index)

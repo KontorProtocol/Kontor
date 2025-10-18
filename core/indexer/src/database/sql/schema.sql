@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
-  id INTEGER PRIMARY KEY,
   txid TEXT NOT NULL UNIQUE,
   height INTEGER NOT NULL,
   tx_index INTEGER NOT NULL,
@@ -28,20 +27,20 @@ CREATE TABLE IF NOT EXISTS contracts (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   height INTEGER NOT NULL,
-  tx_id INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
   size INTEGER NOT NULL,
   bytes BLOB NOT NULL,
-  UNIQUE (name, height, tx_id),
+  UNIQUE (name, height, tx_index),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_contracts_lookup ON contracts (name, height, tx_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_lookup ON contracts (name, height, tx_index);
 
 CREATE TABLE IF NOT EXISTS contract_state (
   id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,
-  tx_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
   size INTEGER NOT NULL,
   path TEXT NOT NULL,
   value BLOB NOT NULL,
@@ -50,18 +49,17 @@ CREATE TABLE IF NOT EXISTS contract_state (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC, tx_id DESC);
+CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC);
 
 CREATE TABLE IF NOT EXISTS contract_results (
-  id INTEGER PRIMARY KEY,
-  tx_id INTEGER NOT NULL,
-  input_index INTEGER NOT NULL,
-  op_index INTEGER NOT NULL,
   contract_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
+  input_index INTEGER NOT NULL,
+  op_index INTEGER NOT NULL,
   value TEXT,
-  UNIQUE (tx_id, input_index, op_index),
+  UNIQUE (height, tx_index, input_index, op_index),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_contract_results_lookup ON contract_results (tx_id, input_index, op_index);
+CREATE INDEX IF NOT EXISTS idx_contract_results_lookup ON contract_results (height, tx_index, input_index, op_index);

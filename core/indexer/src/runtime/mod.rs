@@ -115,9 +115,9 @@ impl Runtime {
         .await
     }
 
-    pub fn set_context(&mut self, height: i64, tx_id: i64, input_index: i64, op_index: i64) {
+    pub fn set_context(&mut self, height: i64, tx_index: i64, input_index: i64, op_index: i64) {
         self.storage.height = height;
-        self.storage.tx_id = tx_id;
+        self.storage.tx_index = tx_index;
         self.storage.input_index = input_index;
         self.storage.op_index = op_index;
     }
@@ -612,7 +612,10 @@ impl Runtime {
             .await?;
         let count = self.id_generation_counter.get().await;
         self.id_generation_counter.increment().await;
-        let s = format!("{}-{}-{}", self.storage.height, self.storage.tx_id, count);
+        let s = format!(
+            "{}-{}-{}",
+            self.storage.height, self.storage.tx_index, count
+        );
         self._hash(accessor, s).await.map(|(s, _)| s)
     }
 

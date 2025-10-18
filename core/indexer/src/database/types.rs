@@ -31,12 +31,13 @@ pub struct CheckpointRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
-    pub id: Option<i64>,
+    #[builder(default = 0)]
+    pub id: i64,
     pub contract_id: i64,
-    pub tx_id: i64,
     pub height: i64,
+    pub tx_index: i64,
     pub path: String,
-    #[builder(default = vec![246])] // cbor serialized null
+    #[builder(default = vec![])]
     pub value: Vec<u8>,
     #[builder(default = false)]
     pub deleted: bool,
@@ -50,8 +51,6 @@ impl ContractStateRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct TransactionRow {
-    #[serde(skip_serializing)]
-    pub id: Option<i64>,
     pub txid: String,
     pub height: i64,
     pub tx_index: i64,
@@ -63,7 +62,7 @@ pub struct ContractRow {
     pub id: i64,
     pub name: String,
     pub height: i64,
-    pub tx_id: i64,
+    pub tx_index: i64,
     pub bytes: Vec<u8>,
 }
 
@@ -145,16 +144,14 @@ pub struct TransactionPaginationQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultRow {
-    #[builder(default = 1)]
-    pub id: i64,
-    pub tx_id: i64,
+    pub height: i64,
+    pub tx_index: i64,
     #[builder(default = 0)]
     pub input_index: i64,
     #[builder(default = 0)]
     pub op_index: i64,
     #[builder(default = 0)]
     pub contract_id: i64,
-    pub height: i64,
     pub value: Option<String>,
 }
 

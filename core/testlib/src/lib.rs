@@ -117,7 +117,7 @@ impl RuntimeLocal {
                 .build(),
         )
         .await?;
-        Ok(Storage::builder().height(1).tx_id(1).conn(conn).build())
+        Ok(Storage::builder().height(1).tx_index(1).conn(conn).build())
     }
 
     pub async fn new() -> Result<Self> {

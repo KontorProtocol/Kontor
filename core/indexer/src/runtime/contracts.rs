@@ -32,9 +32,10 @@ pub async fn load_contracts(
     }
 
     let tx = new_mock_transaction(1);
-    let tx_id = if let Some(tx) = get_transaction_by_txid(&conn, &tx.txid.to_string()).await? {
-        tx.id.unwrap()
-    } else {
+    if get_transaction_by_txid(&conn, &tx.txid.to_string())
+        .await?
+        .is_none()
+    {
         insert_transaction(
             &conn,
             TransactionRow::builder()
@@ -43,7 +44,7 @@ pub async fn load_contracts(
                 .txid(tx.txid.to_string())
                 .build(),
         )
-        .await?
+        .await?;
     };
 
     for (name, bytes) in contracts {
@@ -51,7 +52,7 @@ pub async fn load_contracts(
             &conn,
             ContractRow::builder()
                 .height(height)
-                .tx_id(tx_id)
+                .tx_index(tx_index)
                 .name(name.to_string())
                 .bytes(bytes.to_vec())
                 .build(),

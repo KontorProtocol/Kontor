@@ -29,7 +29,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 1: First insertion creates a checkpoint with ID 1
     let contract_state1 = ContractStateRow::builder()
         .contract_id(1)
-        .tx_id(1)
+        .tx_index(1)
         .height(10)
         .path("/test/path1".to_string())
         .value(b"test value 1".to_vec())
@@ -50,7 +50,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 2: Second insertion within same interval updates the checkpoint
     let contract_state2 = ContractStateRow::builder()
         .contract_id(1)
-        .tx_id(2)
+        .tx_index(2)
         .height(20)
         .path("/test/path2".to_string())
         .build();
@@ -70,7 +70,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 3: Insertion in a new interval creates a new checkpoint
     let contract_state3 = ContractStateRow::builder()
         .contract_id(2)
-        .tx_id(3)
+        .tx_index(3)
         .height(60)
         .path("/test/path3".to_string())
         .value(b"test value 3".to_vec())
@@ -91,7 +91,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 4: Another insertion in the same new interval updates that checkpoint
     let contract_state4 = ContractStateRow::builder()
         .contract_id(2)
-        .tx_id(4)
+        .tx_index(4)
         .height(75)
         .path("/test/path4".to_string())
         .value(b"test value 4".to_vec())
@@ -112,7 +112,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 5: Insertion in yet another new interval creates another checkpoint
     let contract_state5 = ContractStateRow::builder()
         .contract_id(3)
-        .tx_id(5)
+        .tx_index(5)
         .height(120)
         .path("/test/path5".to_string())
         .value(b"test value 5".to_vec())
@@ -133,7 +133,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 6: Insertion in another new interval creates another checkpoint without a value
     let contract_state6 = ContractStateRow::builder()
         .contract_id(4)
-        .tx_id(6)
+        .tx_index(6)
         .height(190)
         .path("/test/path6".to_string())
         .build();
@@ -153,7 +153,7 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 7: Insertion in the same interval overwrites previous checkpoint
     let contract_state7 = ContractStateRow::builder()
         .contract_id(4)
-        .tx_id(7)
+        .tx_index(7)
         .height(199)
         .path("/test/path7".to_string())
         .value(b"test value 7".to_vec())

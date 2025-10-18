@@ -3,10 +3,9 @@ FROM (
   SELECT
     path,
     height,
-    tx_id,
     ROW_NUMBER() OVER (
       PARTITION BY regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)
-      ORDER BY height DESC, tx_id DESC
+      ORDER BY height DESC
     ) AS rank
   FROM
     contract_state
