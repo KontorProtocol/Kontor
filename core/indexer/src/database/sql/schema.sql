@@ -37,7 +37,6 @@ CREATE TABLE IF NOT EXISTS contracts (
 CREATE INDEX IF NOT EXISTS idx_contracts_lookup ON contracts (name, height, tx_index);
 
 CREATE TABLE IF NOT EXISTS contract_state (
-  id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
   tx_index INTEGER NOT NULL,

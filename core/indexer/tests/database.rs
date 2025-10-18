@@ -123,7 +123,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Insert contract state
     let id = insert_contract_state(&conn, contract_state.clone()).await?;
-    assert!(id > 0, "Contract state insertion should return a valid ID");
+    assert!(id > 0, "Contract state insertion should succeed");
 
     // check existence
     assert!(contract_has_state(&conn, contract_id).await?);

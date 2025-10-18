@@ -129,9 +129,10 @@ pub async fn select_block_with_hash(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<i64, Error> {
-    conn.execute(
-        r#"
+pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
+    Ok(conn
+        .execute(
+            r#"
             INSERT OR REPLACE INTO contract_state (
                 contract_id,
                 height,
@@ -142,19 +143,17 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 deleted
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
-        params![
-            row.contract_id,
-            row.height,
-            row.tx_index,
-            row.size(),
-            row.path,
-            row.value,
-            row.deleted
-        ],
-    )
-    .await?;
-
-    Ok(conn.last_insert_rowid())
+            params![
+                row.contract_id,
+                row.height,
+                row.tx_index,
+                row.size(),
+                row.path,
+                row.value,
+                row.deleted
+            ],
+        )
+        .await?)
 }
 
 const BASE_CONTRACT_STATE_QUERY: &str = include_str!("sql/base_contract_state_query.sql");
@@ -176,7 +175,6 @@ pub async fn get_latest_contract_state(
             &format!(
                 r#"
                 SELECT
-                    id,
                     contract_id,
                     height,
                     tx_index,

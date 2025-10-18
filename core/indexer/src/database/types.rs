@@ -31,8 +31,6 @@ pub struct CheckpointRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
-    #[builder(default = 0)]
-    pub id: i64,
     pub contract_id: i64,
     pub height: i64,
     pub tx_index: i64,
