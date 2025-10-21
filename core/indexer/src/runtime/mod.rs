@@ -196,24 +196,27 @@ impl Runtime {
         .await
     }
 
-    async fn load_component(&self, contract_id: i64) -> Result<Component> {
+    pub async fn get_component_bytes(&self, contract_id: i64) -> Result<Vec<u8>> {
+        let compressed_bytes = self
+            .storage
+            .contract_bytes(contract_id)
+            .await?
+            .ok_or(anyhow!("Contract not found when trying to load component"))?;
+        let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
+        let mut module_bytes = Vec::new();
+        decompressor.read_to_end(&mut module_bytes)?;
+
+        ComponentEncoder::default()
+            .module(&module_bytes)?
+            .validate(true)
+            .encode()
+    }
+
+    pub async fn load_component(&self, contract_id: i64) -> Result<Component> {
         Ok(match self.component_cache.get(&contract_id) {
             Some(component) => component,
             None => {
-                let compressed_bytes = self
-                    .storage
-                    .contract_bytes(contract_id)
-                    .await?
-                    .ok_or(anyhow!("Contract not found when trying to load component"))?;
-                let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
-                let mut module_bytes = Vec::new();
-                decompressor.read_to_end(&mut module_bytes)?;
-
-                let component_bytes = ComponentEncoder::default()
-                    .module(&module_bytes)?
-                    .validate(true)
-                    .encode()?;
-
+                let component_bytes = self.get_component_bytes(contract_id).await?;
                 let component = Component::from_binary(&self.engine, &component_bytes)?;
                 self.component_cache.put(contract_id, component.clone());
                 component

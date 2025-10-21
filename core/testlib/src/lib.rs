@@ -94,6 +94,7 @@ pub trait RuntimeImpl: Send {
         name: &str,
         contract: &[u8],
     ) -> Result<ContractAddress>;
+    async fn wit(&self, contract_address: &ContractAddress) -> Result<String>;
     async fn execute(
         &mut self,
         signer: Option<&Signer>,
@@ -149,6 +150,10 @@ impl RuntimeImpl for RuntimeLocal {
             height: 0,
             tx_index: 0,
         })
+    }
+
+    async fn wit(&self, _contract_address: &ContractAddress) -> Result<String> {
+        todo!()
     }
 
     async fn execute(
@@ -214,6 +219,10 @@ impl RuntimeImpl for RuntimeRegtest {
         )
     }
 
+    async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
+        self.reg_tester.wit(contract_address).await
+    }
+
     async fn execute(
         &mut self,
         signer: Option<&Signer>,
@@ -268,6 +277,10 @@ impl Runtime {
 
     pub async fn publish(&mut self, signer: &Signer, name: &str) -> Result<ContractAddress> {
         self.publish_as(signer, name, name).await
+    }
+
+    pub async fn wit(&mut self, contract_address: &ContractAddress) -> Result<String> {
+        self.runtime.wit(contract_address).await
     }
 
     pub async fn publish_as(

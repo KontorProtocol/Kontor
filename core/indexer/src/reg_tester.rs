@@ -368,4 +368,9 @@ impl RegTester {
             ResultEvent::Err { message } => Err(anyhow!("{}", message)),
         }
     }
+
+    pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
+        let response = self.kontor_client.wit(contract_address).await?;
+        Ok(response.wit)
+    }
 }

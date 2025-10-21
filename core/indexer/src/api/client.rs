@@ -6,7 +6,7 @@ use crate::{
     api::{
         compose::{ComposeAddressQuery, ComposeOutputs, ComposeQuery},
         error::ErrorResponse,
-        handlers::{Info, ViewExpr},
+        handlers::{Info, ViewExpr, WitResponse},
         result::ResultResponse,
     },
     config::Config,
@@ -76,6 +76,13 @@ impl Client {
         .await
     }
 
+    fn contract_address_string(contract_address: &ContractAddress) -> String {
+        format!(
+            "{}_{}_{}",
+            contract_address.name, contract_address.height, contract_address.tx_index
+        )
+    }
+
     pub async fn view(
         &self,
         contract_address: &ContractAddress,
@@ -87,13 +94,25 @@ impl Client {
         Self::handle_response(
             self.client
                 .post(format!(
-                    "{}/view/{}_{}_{}",
+                    "{}/view/{}",
                     &self.url,
-                    contract_address.name,
-                    contract_address.height,
-                    contract_address.tx_index
+                    Self::contract_address_string(contract_address)
                 ))
                 .json(&view_expr)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn wit(&self, contract_address: &ContractAddress) -> Result<WitResponse> {
+        Self::handle_response(
+            self.client
+                .get(format!(
+                    "{}/wit/{}",
+                    &self.url,
+                    Self::contract_address_string(contract_address)
+                ))
                 .send()
                 .await?,
         )
