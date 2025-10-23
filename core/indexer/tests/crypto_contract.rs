@@ -1,8 +1,8 @@
 use testlib::*;
 
-interface!(name = "crypto", path = "../contracts/crypto/wit",);
+interface!(name = "crypto", path = "../contracts/crypto/wit");
 
-async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<()> {
+async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<(Signer, ContractAddress)> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;
 
@@ -18,27 +18,32 @@ async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<()> {
         "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2"
     );
 
-    let result = crypto::generate_id(runtime, &crypto).await?;
-    assert_eq!(
-        result,
-        "26eab58ebc163556b05d60d774a7cf9d726e6ebf3e8e945d9088424a3c255271"
-    );
-
-    let result = crypto::generate_id(runtime, &crypto).await?;
-    assert_eq!(
-        result,
-        "d793e0c6d5bf864ccb0e64b1aaa6b9bc0fb02b2c64faa5b8aabb97f9f54a5b90"
-    );
-
-    Ok(())
+    Ok((alice, crypto))
 }
 
 #[runtime(contracts_dir = "../../contracts")]
 async fn test_crypto_contract() -> Result<()> {
-    run_test_crypto_contract(runtime).await
+    let (alice, crypto) = run_test_crypto_contract(runtime).await?;
+
+    let result = crypto::generate_id(runtime, &crypto, &alice).await?;
+    assert_eq!(result, "af5570f5a1810b7a");
+
+    let result = crypto::generate_id(runtime, &crypto, &alice).await?;
+    assert_eq!(result, "7c9fa136d4413fa6");
+
+    Ok(())
 }
 
 #[runtime(contracts_dir = "../../contracts", mode = "regtest")]
 async fn test_crypto_contract_regtest() -> Result<()> {
-    run_test_crypto_contract(runtime).await
+    let (alice, crypto) = run_test_crypto_contract(runtime).await?;
+
+    let id = crypto::generate_id(runtime, &crypto, &alice).await?;
+    assert_eq!(id.len(), 16);
+
+    let next_id = crypto::generate_id(runtime, &crypto, &alice).await?;
+    assert_eq!(next_id.len(), 16);
+    assert_ne!(id, next_id);
+
+    Ok(())
 }

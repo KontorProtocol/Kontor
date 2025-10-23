@@ -69,6 +69,13 @@ pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> 
     Ok(ciborium::from_reader(&mut Cursor::new(buffer))?)
 }
 
+pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let result = hasher.finalize();
+    result.into()
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
@@ -79,6 +86,7 @@ pub struct Runtime {
     pub stack: Stack<i64>,
     pub gauge: Option<FuelGauge>,
     pub starting_fuel: u64,
+    pub txid: Vec<u8>,
 }
 
 impl Runtime {
@@ -102,6 +110,7 @@ impl Runtime {
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
             starting_fuel: 1000000,
+            txid: Vec::new(),
         })
     }
 
@@ -115,11 +124,20 @@ impl Runtime {
         .await
     }
 
-    pub fn set_context(&mut self, height: i64, tx_index: i64, input_index: i64, op_index: i64) {
+    pub async fn set_context(
+        &mut self,
+        height: i64,
+        tx_index: i64,
+        input_index: i64,
+        op_index: i64,
+        txid: Vec<u8>,
+    ) {
         self.storage.height = height;
         self.storage.tx_index = tx_index;
         self.storage.input_index = input_index;
         self.storage.op_index = op_index;
+        self.id_generation_counter.reset().await;
+        self.txid = txid;
     }
 
     pub fn get_storage_conn(&self) -> Connection {
@@ -602,11 +620,9 @@ impl Runtime {
         Fuel::CryptoHash(input.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        let bs = hasher.finalize().to_vec();
-        let s = hex::encode(&bs);
-        Ok((s, bs))
+        let bs = hash_bytes(input.as_bytes());
+        let s = hex::encode(bs);
+        Ok((s, bs.to_vec()))
     }
 
     async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
@@ -615,11 +631,9 @@ impl Runtime {
             .await?;
         let count = self.id_generation_counter.get().await;
         self.id_generation_counter.increment().await;
-        let s = format!(
-            "{}-{}-{}",
-            self.storage.height, self.storage.tx_index, count
-        );
-        self._hash(accessor, s).await.map(|(s, _)| s)
+        Ok(hex::encode(
+            &hash_bytes(&[self.txid.clone(), count.to_le_bytes().to_vec()].concat())[0..8],
+        ))
     }
 
     async fn _signer_to_string<T>(
@@ -796,13 +810,6 @@ impl built_in::crypto::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._hash(accessor, input + &salt)
-            .await
-    }
-
-    async fn generate_id<T>(accessor: &Accessor<T, Self>) -> Result<String> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._generate_id(accessor)
             .await
     }
 }
@@ -1124,6 +1131,16 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._proc_view_context(accessor, self_)
+            .await
+    }
+
+    async fn generate_id<T>(
+        accessor: &Accessor<T, Self>,
+        _self: Resource<ProcContext>,
+    ) -> Result<String> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._generate_id(accessor)
             .await
     }
 }

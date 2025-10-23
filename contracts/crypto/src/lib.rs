@@ -2,6 +2,10 @@ use stdlib::*;
 
 contract!(name = "crypto");
 
+fn _generate_id(ctx: &impl ReadWriteContext) -> String {
+    ctx.generate_id()
+}
+
 impl Guest for Crypto {
     fn init(_ctx: &ProcContext) {}
 
@@ -13,7 +17,7 @@ impl Guest for Crypto {
         crypto::hash_with_salt(&input, &salt).0
     }
 
-    fn generate_id(_ctx: &ViewContext) -> String {
-        crypto::generate_id()
+    fn generate_id(ctx: &ProcContext) -> String {
+        ctx.generate_id()
     }
 }
