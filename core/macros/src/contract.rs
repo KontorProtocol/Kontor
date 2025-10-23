@@ -147,6 +147,10 @@ pub fn generate(config: Config) -> TokenStream {
             fn __delete_matching_paths(&self, regexp: &str) -> u64 {
                 self.delete_matching_paths(regexp)
             }
+
+            fn generate_id(&self) -> String {
+                self.generate_id()
+            }
         }
 
         #[automatically_derived]

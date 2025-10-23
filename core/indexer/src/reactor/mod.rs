@@ -12,7 +12,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -220,7 +220,14 @@ impl Reactor {
             for op in t.ops {
                 let input_index = op.metadata().input_index;
                 self.runtime
-                    .set_context(height as i64, t.index, input_index, 0);
+                    .set_context(
+                        height as i64,
+                        t.index,
+                        input_index,
+                        0,
+                        t.txid.to_raw_hash().to_byte_array().to_vec(),
+                    )
+                    .await;
                 let id = ContractResultId::builder()
                     .txid(t.txid.to_string())
                     .input_index(input_index)

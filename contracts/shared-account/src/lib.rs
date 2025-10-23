@@ -52,7 +52,7 @@ impl Guest for SharedAccount {
         if balance < n {
             return Err(insufficient_balance_error());
         }
-        let account_id = crypto::generate_id();
+        let account_id = ctx.generate_id();
         storage(ctx).accounts().set(
             ctx,
             account_id.clone(),

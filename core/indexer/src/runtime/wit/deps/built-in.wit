@@ -38,6 +38,7 @@ interface context {
         signer: func() -> signer;
         contract-signer: func() -> signer;
         view-context: func() -> view-context;
+        generate-id: func() -> string;
     }
 
     resource fall-context {
@@ -64,7 +65,6 @@ interface foreign {
 interface crypto {
     hash: func(input: string) -> tuple<string, list<u8>>;
     hash-with-salt: func(input: string, salt: string) -> tuple<string, list<u8>>;
-    generate-id: func() -> string;
 }
 
 interface error {

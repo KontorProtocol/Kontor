@@ -10,5 +10,5 @@ world contract {
 
     export hash-with-salt: func(ctx: borrow<view-context>, input: string, salt: string) -> string;
 
-    export generate-id: func(ctx: borrow<view-context>) -> string;
+    export generate-id: func(ctx: borrow<proc-context>) -> string;
 }
