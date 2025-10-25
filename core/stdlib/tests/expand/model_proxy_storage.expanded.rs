@@ -1,16 +1,6 @@
-use stdlib::StorageRoot;
+use stdlib::Model;
 struct ProxyStorage {
     contract_address: ContractAddress,
-}
-#[automatically_derived]
-impl stdlib::Store for ProxyStorage {
-    fn __set(
-        ctx: &impl stdlib::WriteContext,
-        base_path: stdlib::DotPathBuf,
-        value: ProxyStorage,
-    ) {
-        ctx.__set(base_path.push("contract_address"), value.contract_address);
-    }
 }
 pub struct ProxyStorageModel {
     pub base_path: stdlib::DotPathBuf,
@@ -79,20 +69,5 @@ impl std::ops::Deref for ProxyStorageWriteModel {
     type Target = ProxyStorageModel;
     fn deref(&self) -> &Self::Target {
         &self.model
-    }
-}
-impl ProxyStorage {
-    pub fn init(self, ctx: &crate::ProcContext) {
-        ctx.storage().__set(stdlib::DotPathBuf::new(), self)
-    }
-}
-impl crate::ProcContext {
-    pub fn model(&self) -> ProxyStorageWriteModel {
-        ProxyStorageWriteModel::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
-    }
-}
-impl crate::ViewContext {
-    pub fn model(&self) -> ProxyStorageModel {
-        ProxyStorageModel::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
     }
 }

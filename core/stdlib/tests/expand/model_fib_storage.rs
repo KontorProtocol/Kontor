@@ -1,11 +1,11 @@
-use stdlib::Wrapper;
+use stdlib::Model;
 
-#[derive(Wrapper)]
+#[derive(Model)]
 struct FibValue {
     pub value: u64,
 }
 
-#[derive(Wrapper)]
+#[derive(Model)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }

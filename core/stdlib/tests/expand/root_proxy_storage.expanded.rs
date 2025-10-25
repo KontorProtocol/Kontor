@@ -3,10 +3,17 @@ struct ProxyStorage {
     contract_address: ContractAddress,
 }
 impl ProxyStorage {
-    pub fn init(self, ctx: &impl stdlib::WriteContext) {
-        ctx.__set(stdlib::DotPathBuf::new(), self)
+    pub fn init(self, ctx: &crate::ProcContext) {
+        ctx.storage().__set(stdlib::DotPathBuf::new(), self)
     }
 }
-pub fn storage(ctx: &impl stdlib::ReadContext) -> ProxyStorageWrapper {
-    ProxyStorageWrapper::new(ctx, stdlib::DotPathBuf::new())
+impl crate::ProcContext {
+    pub fn model(&self) -> ProxyStorageWriteModel {
+        ProxyStorageWriteModel::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
+    }
+}
+impl crate::ViewContext {
+    pub fn model(&self) -> ProxyStorageModel {
+        ProxyStorageModel::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
+    }
 }

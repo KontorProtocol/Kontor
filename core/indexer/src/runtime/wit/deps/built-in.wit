@@ -38,33 +38,10 @@ interface context {
     }
 
     resource view-context {
-        get-str: func(path: string) -> option<string>;
-        get-u64: func(path: string) -> option<u64>;
-        get-s64: func(path: string) -> option<s64>;
-        get-bool: func(path: string) -> option<bool>;
-        get-keys: func(path: string) -> keys;
-        exists: func(path: string) -> bool;
-        extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
-
         storage: func() -> view-storage;
     }
 
     resource proc-context {
-        get-str: func(path: string) -> option<string>;
-        get-u64: func(path: string) -> option<u64>;
-        get-s64: func(path: string) -> option<s64>;
-        get-bool: func(path: string) -> option<bool>;
-        get-keys: func(path: string) -> keys;
-        exists: func(path: string) -> bool;
-        extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
-
-        set-str: func(path: string, value: string);
-        set-u64: func(path: string, value: u64);
-        set-s64: func(path: string, value: s64);
-        set-bool: func(path: string, value: bool);
-        set-void: func(path: string);
-        delete-matching-paths: func(base-path: string, variants: list<string>) -> u64;
-
         signer: func() -> signer;
         contract-signer: func() -> signer;
         view-context: func() -> view-context;

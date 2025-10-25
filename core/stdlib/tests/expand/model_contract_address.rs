@@ -1,6 +1,6 @@
-use stdlib::WrapperNext;
+use stdlib::Model;
 
-#[derive(WrapperNext)]
+#[derive(Model)]
 pub struct ContractAddress {
     pub name: String,
     pub height: i64,

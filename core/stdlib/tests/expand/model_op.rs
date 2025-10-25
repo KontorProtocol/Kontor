@@ -1,6 +1,6 @@
-use stdlib::WrapperNext;
+use stdlib::Model;
 
-#[derive(WrapperNext)]
+#[derive(Model)]
 pub enum Op {
     Id,
     Sum(Operand),

@@ -1,6 +1,6 @@
-use stdlib::Wrapper;
+use stdlib::Model;
 
-#[derive(Wrapper)]
+#[derive(Model)]
 struct TokenStorage {
     pub ledger: Map<String, u64>,
 }

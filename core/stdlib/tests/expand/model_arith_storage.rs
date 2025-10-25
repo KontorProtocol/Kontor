@@ -1,6 +1,6 @@
-use stdlib::Wrapper;
+use stdlib::Model;
 
-#[derive(Wrapper)]
+#[derive(Model)]
 struct ArithStorage {
     pub last_op: Option<Op>,
 }

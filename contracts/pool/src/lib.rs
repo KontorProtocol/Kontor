@@ -123,29 +123,29 @@ impl Guest for Pool {
         fee: Integer,
     ) -> Result<Integer, Error> {
         PoolStorage::new(ctx, token_a, amount_a, token_b, amount_b, fee)?.init(ctx);
-        Ok(storage(ctx).lp_total_supply(ctx))
+        Ok(ctx.model().lp_total_supply())
     }
 
     fn fee(ctx: &ViewContext) -> Integer {
-        storage(ctx).fee_bps(ctx)
+        ctx.model().fee_bps()
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
-        storage(ctx).lp_ledger().get(ctx, acc)
+        ctx.model().lp_ledger().get(acc)
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
         let from = ctx.signer().to_string();
-        let ledger = storage(ctx).lp_ledger();
+        let ledger = ctx.model().lp_ledger();
 
-        let from_balance = ledger.get(ctx, &from).unwrap_or_default();
-        let to_balance = ledger.get(ctx, &to).unwrap_or_default();
+        let from_balance = ledger.get(&from).unwrap_or_default();
+        let to_balance = ledger.get(&to).unwrap_or_default();
         if from_balance < n {
             return Err(Error::Message("insufficient funds".to_string()));
         }
 
-        ledger.set(ctx, from, from_balance - n);
-        ledger.set(ctx, to, to_balance + n);
+        ledger.set(from, from_balance - n);
+        ledger.set(to, to_balance + n);
         Ok(())
     }
 
@@ -264,7 +264,7 @@ impl Guest for Pool {
             &custodian,
         )
         .unwrap_or_default();
-        calc_swap_result(amount_in, bal_in, bal_out, storage(ctx).fee_bps(ctx))
+        calc_swap_result(amount_in, bal_in, bal_out, model.fee_bps())
     }
 
     fn swap(
@@ -284,12 +284,7 @@ impl Guest for Pool {
             )));
         }
 
-        token_dyn::transfer(
-            &token_in,
-            ctx.signer(),
-            &storage(ctx).custodian(ctx),
-            amount_in,
-        )?;
+        token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),

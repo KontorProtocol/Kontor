@@ -331,11 +331,8 @@ impl Guest for Amm {
             )));
         }
 
-        let pool = ctx
-            .model()
-            .pools()
-            .get(pair_id(&pair))
-            .ok_or(pool_not_found())?;
+        let model = ctx.model();
+        let pool = model.pools().get(pair_id(&pair)).ok_or(pool_not_found())?;
         if token_in == pair.a {
             pool.set_balance_a(pool.balance_a() + amount_in);
             pool.set_balance_b(pool.balance_b() - amount_out);
@@ -344,12 +341,7 @@ impl Guest for Amm {
             pool.set_balance_b(pool.balance_b() + amount_in);
         }
 
-        token_dyn::transfer(
-            &token_in,
-            ctx.signer(),
-            &storage(ctx).custodian(ctx),
-            amount_in,
-        )?;
+        token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),
