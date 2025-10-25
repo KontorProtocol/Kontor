@@ -22,9 +22,9 @@ pub fn generate_struct(
                 type_name.span(),
             );
             let context_param = if write {
-                quote! { crate::ProcContext }
+                quote! { crate::context::ProcStorage }
             } else {
-                quote! { crate::ViewContext }
+                quote! { crate::context::ViewStorage }
             };
 
             let mut special_models = vec![];
@@ -43,9 +43,9 @@ pub fn generate_struct(
                     } else {
                         let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
                         if utils::is_built_in_type(&v_ty) {
-                            (quote! { Option<#v_ty> }, quote! { self.ctx.__exists(&base_path).then(|| #v_model_ty::new(self.ctx, base_path).load()) })
+                            (quote! { Option<#v_ty> }, quote! { self.ctx.__exists(&base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path).load()) })
                         } else {
-                            (quote! { Option<#v_model_ty> }, quote! { self.ctx.__exists(&base_path).then(|| #v_model_ty::new(self.ctx, base_path)) })
+                            (quote! { Option<#v_model_ty> }, quote! { self.ctx.__exists(&base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)) })
                         }
                     };
 
@@ -61,12 +61,12 @@ pub fn generate_struct(
 
                     special_models.push(quote! {
                         #[derive(Clone)]
-                        pub struct #field_model_name<'a> {
+                        pub struct #field_model_name {
                             pub base_path: stdlib::DotPathBuf,
-                            ctx: &'a #context_param,
+                            ctx: std::rc::Rc<#context_param>,
                         }
 
-                        impl<'a> #field_model_name<'a> {
+                        impl #field_model_name {
                             pub fn get(&self, key: impl ToString) -> #get_return {
                                 let base_path = self.base_path.push(key.to_string());
                                 #get_body
@@ -78,9 +78,9 @@ pub fn generate_struct(
                                 Map::new(&[])
                             }
 
-                            pub fn keys<'b, T: ToString + FromString + Clone + 'b>(
-                                &'b self,
-                            ) -> impl Iterator<Item = T> + 'b {
+                            pub fn keys<'a, T: ToString + FromString + Clone + 'a>(
+                                &'a self,
+                            ) -> impl Iterator<Item = T> + 'a {
                                 self.ctx.__get_keys(&self.base_path)
                             }
                         }
@@ -88,7 +88,7 @@ pub fn generate_struct(
 
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_model_name {
-                            #field_model_name { base_path: self.base_path.push(#field_name_str), ctx: self.ctx }
+                            #field_model_name { base_path: self.base_path.push(#field_name_str), ctx: self.ctx.clone() }
                         }
                     })
                 } else if utils::is_option_type(field_ty) {
@@ -118,7 +118,7 @@ pub fn generate_struct(
                                 if self.ctx.__extend_path_with_match(&base_path, &["none"]).is_some() {
                                     None
                                 } else {
-                                    Some(#inner_model_ty::new(self.ctx, base_path.push("some"))#load)
+                                    Some(#inner_model_ty::new(self.ctx.clone(), base_path.push("some"))#load)
                                 }
                             }
                         })
@@ -134,13 +134,13 @@ pub fn generate_struct(
                     Ok(if utils::is_built_in_type(field_ty) {
                         quote! {
                             pub fn #field_name(&self) -> #field_ty {
-                                #field_model_ty::new(self.ctx, self.base_path.push(#field_name_str)).load()
+                                #field_model_ty::new(self.ctx.clone(), self.base_path.push(#field_name_str)).load()
                             }
                         }
                     } else {
                         quote! {
                             pub fn #field_name(&self) -> #field_model_ty {
-                                #field_model_ty::new(self.ctx, self.base_path.push(#field_name_str))
+                                #field_model_ty::new(self.ctx.clone(), self.base_path.push(#field_name_str))
                             }
                         }
                     })
@@ -224,7 +224,7 @@ pub fn generate_struct(
 
             let proc_props = if write {
                 quote! {
-                    view_context: crate::ViewContext,
+                    model: #read_only_model_name,
                 }
             } else {
                 quote! {}
@@ -232,7 +232,7 @@ pub fn generate_struct(
 
             let proc_prelude = if write {
                 quote! {
-                    let view_context = ctx.view_context();
+                    let view_storage = ctx.view_storage();
                 }
             } else {
                 quote! {}
@@ -240,34 +240,48 @@ pub fn generate_struct(
 
             let proc_assigns = if write {
                 quote! {
-                    view_context,
+                    model: #read_only_model_name::new(std::rc::Rc::new(view_storage), base_path.clone()),
                 }
             } else {
                 quote! {}
             };
 
-            let proc_methods = if write {
+            let proc_impls = if write {
                 quote! {
-                    pub fn read_only(&'a self) -> #read_only_model_name<'a> {
-                        #read_only_model_name::new(&self.view_context, self.base_path.clone())
+                    impl std::ops::Deref for #model_name {
+                        type Target = #read_only_model_name;
+
+                        fn deref(&self) -> &Self::Target {
+                            &self.model
+                        }
                     }
                 }
             } else {
                 quote! {}
             };
 
+            // let proc_methods = if write {
+            //     quote! {
+            //         pub fn read_only(&'a self) -> #read_only_model_name<'a> {
+            //             #read_only_model_name::new(&self.view_context, self.base_path.clone())
+            //         }
+            //     }
+            // } else {
+            //     quote! {}
+            // };
+
             let result = quote! {
-                pub struct #model_name<'a> {
+                pub struct #model_name {
                     pub base_path: stdlib::DotPathBuf,
-                    ctx: &'a #context_param,
+                    ctx: std::rc::Rc<#context_param>,
                     #proc_props
                 }
 
-                impl<'a> #model_name<'a> {
-                    pub fn new(ctx: &'a #context_param, base_path: stdlib::DotPathBuf) -> Self {
+                impl #model_name {
+                    pub fn new(ctx: std::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
                         #proc_prelude
                         Self {
-                            base_path,
+                            base_path: base_path.clone(),
                             ctx,
                             #proc_assigns
                         }
@@ -282,9 +296,9 @@ pub fn generate_struct(
                             #(#load_fields,)*
                         }
                     }
-
-                    #proc_methods
                 }
+
+                #proc_impls
 
                 #(#special_models)*
             };
@@ -305,13 +319,11 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         type_name.span(),
     );
     let context_param = if write {
-        quote! { crate::ProcContext }
+        quote! { crate::context::ProcStorage }
     } else {
-        quote! { crate::ViewContext }
+        quote! { crate::context::ViewStorage }
     };
 
-    let mut lifetime = quote! {};
-    let mut lifetime_param = quote! {};
     let model_variants: Result<Vec<_>> = data_enum
         .variants
         .iter()
@@ -324,11 +336,9 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
                     if utils::is_primitive_type(inner_ty) {
                         Ok(quote! { #variant_ident(#inner_ty) })
                     } else {
-                        lifetime = quote! { <'a> };
-                        lifetime_param = quote! { 'a };
                         let inner_model_ty =
                             get_model_ident(write, inner_ty, variant.ident.span())?;
-                        Ok(quote! { #variant_ident(#inner_model_ty<'a>) })
+                        Ok(quote! { #variant_ident(#inner_model_ty) })
                     }
                 }
                 _ => Err(Error::new(
@@ -367,7 +377,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(#inner_model_ty::new(ctx, base_path.push(#variant_name)))
+                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
                     })
                 }
             }
@@ -398,12 +408,12 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
     }).collect::<Vec<_>>();
 
     Ok(quote! {
-        pub enum #model_name #lifetime {
+        pub enum #model_name {
             #(#model_variants,)*
         }
 
-        impl #lifetime #model_name #lifetime {
-            pub fn new(ctx: & #lifetime_param #context_param, base_path: stdlib::DotPathBuf) -> Self {
+        impl #model_name {
+            pub fn new(ctx: std::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
                 ctx.__extend_path_with_match(&base_path, &[#(#variant_names),*])
                     .map(|path| match path {
                         #(#new_arms,)*

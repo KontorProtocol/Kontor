@@ -18,7 +18,7 @@ impl Guest for Arith {
     }
 
     fn eval(ctx: &ProcContext, x: u64, op: Op) -> ArithReturn {
-        storage(ctx).set_last_op(ctx, Some(op));
+        ctx.model().set_last_op(Some(op));
         ArithReturn {
             value: match op {
                 Op::Id => x,
@@ -30,7 +30,7 @@ impl Guest for Arith {
     }
 
     fn last_op(ctx: &ViewContext) -> Option<Op> {
-        storage(ctx).last_op(ctx).map(|op| op.load(ctx))
+        ctx.model().last_op().map(|op| op.load())
     }
 
     fn checked_sub(_: &ViewContext, x: String, y: String) -> Result<u64, Error> {

@@ -16,6 +16,26 @@ impl HasContractId for ViewContext {
     }
 }
 
+pub struct ViewStorage {
+    pub contract_id: i64,
+}
+
+impl HasContractId for ViewStorage {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
+
+pub struct ProcStorage {
+    pub contract_id: i64,
+}
+
+impl HasContractId for ProcStorage {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Signer {
     XOnlyPubKey(String),

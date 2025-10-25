@@ -8,7 +8,9 @@ use serde::{
     ser::SerializeMap,
 };
 
-pub use resources::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext};
+pub use resources::{
+    FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext, ViewStorage,
+};
 
 wasmtime::component::bindgen!({
     world: "contract",
@@ -18,6 +20,8 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context/view-context": ViewContext,
         "kontor:built-in/context/proc-context": ProcContext,
         "kontor:built-in/context/fall-context": FallContext,
+        "kontor:built-in/context/view-storage": ViewStorage,
+        "kontor:built-in/context/proc-storage": ProcStorage,
         "kontor:built-in/context/keys": Keys,
     },
     additional_derives: [stdlib::Wavey],

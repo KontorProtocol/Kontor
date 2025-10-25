@@ -21,14 +21,14 @@ pub fn generate_root_struct(data_struct: &DataStruct, type_name: &Ident) -> Resu
                 }
 
                 impl crate::ProcContext {
-                    pub fn storage<'a>(&'a self) -> #write_model_name<'a> {
-                        #write_model_name::new(self, DotPathBuf::new())
+                    pub fn model(&self) -> #write_model_name {
+                        #write_model_name::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
                     }
                 }
 
                 impl crate::ViewContext {
-                    pub fn storage<'a>(&'a self) -> #model_name<'a> {
-                        #model_name::new(self, DotPathBuf::new())
+                    pub fn model(&self) -> #model_name {
+                        #model_name::new(std::rc::Rc::new(self.storage()), DotPathBuf::new())
                     }
                 }
             })

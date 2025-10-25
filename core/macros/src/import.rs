@@ -76,8 +76,10 @@ pub fn import(
             ![
                 "contract-address",
                 "view-context",
+                "view-storage",
                 "fall-context",
                 "proc-context",
+                "proc-storage",
                 "signer",
                 "error",
                 "keys",

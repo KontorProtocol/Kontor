@@ -53,7 +53,10 @@ use crate::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
         stack::Stack,
-        wit::{FallContext, HasContractId, Keys, ProcContext, Signer, ViewContext},
+        wit::{
+            FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
+            ViewStorage,
+        },
     },
 };
 
@@ -579,29 +582,29 @@ impl Runtime {
             .await
     }
 
-    async fn _delete_matching_paths<T>(
+    async fn _delete_matching_paths<S, T: HasContractId>(
         &self,
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcContext>,
+        accessor: &Accessor<S, Self>,
+        self_: Resource<T>,
         regexp: String,
     ) -> Result<u64> {
         Fuel::DeleteMatchingPaths(regexp.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let contract_id = self.table.lock().await.get(&self_)?.contract_id;
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage
             .delete_matching_paths(contract_id, &regexp)
             .await
     }
 
-    async fn _set_primitive<S, T: Serialize>(
+    async fn _set_primitive<S, T: HasContractId, V: Serialize>(
         &self,
         accessor: &Accessor<S, Self>,
-        resource: Resource<ProcContext>,
+        resource: Resource<T>,
         path: String,
-        value: T,
+        value: V,
     ) -> Result<()> {
-        let contract_id = self.table.lock().await.get(&resource)?.contract_id;
+        let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
         Fuel::Path(path.clone())
             .consume(accessor, self.gauge.as_ref())
             .await?;
@@ -684,6 +687,45 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    async fn _proc_view_storage<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+    ) -> Result<Resource<ViewStorage>> {
+        Fuel::ProcViewContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewStorage { contract_id })?)
+    }
+
+    async fn _view_storage<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+    ) -> Result<Resource<ViewStorage>> {
+        Fuel::ViewStorage
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewStorage { contract_id })?)
+    }
+
+    async fn _proc_storage<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<ProcStorage>> {
+        Fuel::ProcStorage
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ProcStorage { contract_id })?)
     }
 
     async fn _next<T>(
@@ -839,6 +881,95 @@ impl built_in::foreign::HostWithStore for Runtime {
 
 impl built_in::context::Host for Runtime {}
 
+impl built_in::context::HostViewStorage for Runtime {}
+
+impl built_in::context::HostViewStorageWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ViewStorage>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn get_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Option<u64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Option<i64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_keys<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_keys(accessor, self_, path)
+            .await
+    }
+
+    async fn exists<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<bool> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._exists(accessor, self_, path)
+            .await
+    }
+
+    async fn extend_path_with_match<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+        variants: Vec<String>,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._extend_path_with_match(accessor, self_, path, variants)
+            .await
+    }
+}
+
 impl built_in::context::HostViewContext for Runtime {}
 
 impl built_in::context::HostViewContextWithStore for Runtime {
@@ -926,6 +1057,16 @@ impl built_in::context::HostViewContextWithStore for Runtime {
             ._extend_path_with_match(accessor, self_, path, variants)
             .await
     }
+
+    async fn storage<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+    ) -> Result<Resource<ViewStorage>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._view_storage(accessor, self_)
+            .await
+    }
 }
 
 impl built_in::context::HostSigner for Runtime {}
@@ -942,6 +1083,180 @@ impl built_in::context::HostSignerWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._signer_to_string(accessor, self_)
+            .await
+    }
+}
+
+impl built_in::context::HostProcStorage for Runtime {}
+
+impl built_in::context::HostProcStorageWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ProcStorage>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn get_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Option<u64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Option<i64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Option<bool>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
+    async fn get_keys<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Resource<Keys>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_keys(accessor, self_, path)
+            .await
+    }
+
+    async fn exists<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<bool> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._exists(accessor, self_, path)
+            .await
+    }
+
+    async fn extend_path_with_match<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        variants: Vec<String>,
+    ) -> Result<Option<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._extend_path_with_match(accessor, self_, path, variants)
+            .await
+    }
+
+    async fn set_str<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        value: String,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, value)
+            .await
+    }
+
+    async fn set_u64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        value: u64,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, value)
+            .await
+    }
+
+    async fn set_s64<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        value: i64,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, value)
+            .await
+    }
+
+    async fn set_bool<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        value: bool,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, value)
+            .await
+    }
+
+    async fn set_void<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, ())
+            .await
+    }
+
+    async fn delete_matching_paths<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        base_path: String,
+        variants: Vec<String>,
+    ) -> Result<u64> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._delete_matching_paths(
+                accessor,
+                self_,
+                format!(r"^{}.({})(\..*|$)", base_path, variants.join("|")),
+            )
+            .await
+    }
+
+    async fn view_storage<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+    ) -> Result<Resource<ViewStorage>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_view_storage(accessor, self_)
             .await
     }
 }
@@ -1146,6 +1461,16 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._generate_id(accessor)
+            .await
+    }
+
+    async fn storage<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<ProcStorage>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_storage(accessor, self_)
             .await
     }
 }

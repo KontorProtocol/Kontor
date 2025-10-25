@@ -16,8 +16,8 @@ struct FibStorage {
 
 impl Fib {
     fn raw_fib(ctx: &ProcContext, arith_address: ContractAddress, n: u64) -> u64 {
-        let cache = storage(ctx).cache();
-        if let Some(v) = cache.get(ctx, n).map(|v| v.value(ctx)) {
+        let cache = ctx.model().cache();
+        if let Some(v) = cache.get(n).map(|v| v.value()) {
             return v;
         }
 
@@ -35,7 +35,7 @@ impl Fib {
                 .value
             }
         };
-        cache.set(ctx, n, FibValue { value });
+        cache.set(n, FibValue { value });
         value
     }
 }
@@ -63,6 +63,6 @@ impl Guest for Fib {
     }
 
     fn cached_values(ctx: &ViewContext) -> Vec<u64> {
-        storage(ctx).cache().keys(ctx).collect()
+        ctx.model().cache().keys().collect()
     }
 }
