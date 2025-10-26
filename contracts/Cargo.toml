@@ -17,6 +17,6 @@ unit_arg = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wit-bindgen = "=0.46.0"
+wit-bindgen = "=0.47.0"
 
 stdlib = { path = "../core/stdlib" }
