@@ -4,29 +4,29 @@ use tokio::fs;
 use crate::config::Config;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-arm64/crypto.dylib");
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/macos-arm64/crypto.dylib");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-arm64/regexp.dylib");
+const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/macos-arm64/regexp.dylib");
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-x86/crypto.dylib");
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/macos-x64/crypto.dylib");
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/macos-x86/regexp.dylib");
+const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/macos-x64/regexp.dylib");
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-x86/crypto.so");
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/linux-x64/crypto.so");
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-x86/regexp.so");
+const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/linux-x64/regexp.so");
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-arm64/crypto.so");
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/linux-arm64/crypto.so");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/linux-arm64/regexp.so");
+const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/linux-arm64/regexp.so");
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/windows-x64/crypto.dll");
+const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/windows-x64/crypto.dll");
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.27.2/windows-x64/regexp.dll");
+const REGEXP_LIB: &[u8] = include_bytes!("../../sqlean-0.28.0/windows-x64/regexp.dll");
 
 #[cfg(target_os = "macos")]
 const LIB_FILE_EXT: &str = "dylib";
