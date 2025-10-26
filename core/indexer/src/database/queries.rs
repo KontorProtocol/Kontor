@@ -630,14 +630,18 @@ pub async fn get_contract_result(
             r#"
             SELECT
                 c.contract_id,
+                c.func_name,
                 c.height,
                 c.tx_index,
                 c.input_index,
                 c.op_index,
+                c.result_index,
                 c.value
             FROM contract_results c
             JOIN transactions t ON c.height = t.height AND c.tx_index = t.tx_index
-            WHERE t.txid = :txid AND c.input_index = :input_index AND c.op_index = :op_index;
+            WHERE t.txid = :txid AND c.input_index = :input_index AND c.op_index = :op_index
+            ORDER BY c.result_index DESC
+            LIMIT 1
             "#,
             named_params! {
                 ":txid": contract_result_id.txid.clone(),
@@ -658,19 +662,25 @@ pub async fn insert_contract_result(
         r#"
             INSERT OR REPLACE INTO contract_results (
                 contract_id,
+                size,
+                func_name,
                 height,
                 tx_index,
                 input_index,
                 op_index,
+                result_index,
                 value
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         params![
             row.contract_id,
+            row.size(),
+            row.func_name,
             row.height,
             row.tx_index,
             row.input_index,
             row.op_index,
+            row.result_index,
             row.value
         ],
     )

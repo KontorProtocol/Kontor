@@ -19,10 +19,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_transactions_height_tx_index ON transactions (height DESC, tx_index DESC);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_tx_index ON transactions (tx_index);
-
 CREATE TABLE IF NOT EXISTS contracts (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -33,8 +29,6 @@ CREATE TABLE IF NOT EXISTS contracts (
   UNIQUE (name, height, tx_index),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS idx_contracts_lookup ON contracts (name, height, tx_index);
 
 CREATE TABLE IF NOT EXISTS contract_state (
   contract_id INTEGER NOT NULL,
@@ -52,13 +46,14 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract
 
 CREATE TABLE IF NOT EXISTS contract_results (
   contract_id INTEGER NOT NULL,
+  func_name TEXT NOT NULL,
   height INTEGER NOT NULL,
   tx_index INTEGER NOT NULL,
   input_index INTEGER NOT NULL,
   op_index INTEGER NOT NULL,
+  result_index INTEGER NOT NULL,
+  size INTEGER NOT NULL,
   value TEXT,
-  UNIQUE (height, tx_index, input_index, op_index),
+  UNIQUE (height, tx_index, input_index, result_index)
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS idx_contract_results_lookup ON contract_results (height, tx_index, input_index, op_index);

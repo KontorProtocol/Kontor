@@ -86,6 +86,7 @@ pub struct Runtime {
     pub component_cache: ComponentCache,
     pub storage: Storage,
     pub id_generation_counter: Counter,
+    pub result_id_counter: Counter,
     pub stack: Stack<i64>,
     pub gauge: Option<FuelGauge>,
     pub starting_fuel: u64,
@@ -110,6 +111,7 @@ impl Runtime {
             component_cache,
             storage,
             id_generation_counter: Counter::new(),
+            result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
             starting_fuel: 1000000,
@@ -140,6 +142,7 @@ impl Runtime {
         self.storage.input_index = input_index;
         self.storage.op_index = op_index;
         self.id_generation_counter.reset().await;
+        self.result_id_counter.reset().await;
         self.txid = txid;
     }
 
@@ -171,7 +174,12 @@ impl Runtime {
         let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address))
             .expect("Failed to convert address to string");
         self.storage
-            .insert_contract_result(id, Some(value.clone()))
+            .insert_contract_result(
+                self.result_id_counter.get().await as i64 - 1,
+                id,
+                "init".to_string(),
+                Some(value.clone()),
+            )
             .await
             .expect("Failed to insert contract result");
         Ok(value)
@@ -190,9 +198,9 @@ impl Runtime {
         )
         .await;
 
-        let (mut store, contract_id, is_fallback, params, mut results, func, is_proc) = self
-            .prepare_call(contract_address, signer, expr, self.starting_fuel)
-            .await?;
+        let (mut store, contract_id, func_name, is_fallback, params, mut results, func, is_proc) =
+            self.prepare_call(contract_address, signer, expr, self.starting_fuel)
+                .await?;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store)
@@ -203,6 +211,7 @@ impl Runtime {
             is_fallback,
             is_proc,
             contract_id,
+            &func_name,
             result,
             |remaining_fuel| async move {
                 OptionFuture::from(
@@ -263,7 +272,16 @@ impl Runtime {
         signer: Option<&Signer>,
         expr: &str,
         fuel: u64,
-    ) -> Result<(Store<Runtime>, i64, bool, Vec<Val>, Vec<Val>, Func, bool)> {
+    ) -> Result<(
+        Store<Runtime>,
+        i64,
+        String,
+        bool,
+        Vec<Val>,
+        Vec<Val>,
+        Func,
+        bool,
+    )> {
         let contract_id = self
             .storage
             .contract_id(contract_address)
@@ -289,6 +307,7 @@ impl Runtime {
             return Err(anyhow!("Expression does not refer to any known function"));
         };
 
+        let func_name = call.name();
         let func_params = func.params(&store);
         let func_param_types = func_params.iter().map(|(_, t)| t).collect::<Vec<_>>();
         let (func_ctx_param_type, func_param_types) = func_param_types
@@ -366,7 +385,8 @@ impl Runtime {
         Ok((
             store,
             contract_id,
-            call.name() == fallback_name,
+            func_name.to_string(),
+            func_name == fallback_name,
             params,
             results,
             func,
@@ -379,6 +399,7 @@ impl Runtime {
         is_fallback: bool,
         write_result: bool,
         contract_id: i64,
+        func_name: &str,
         result: Result<(Result<()>, Vec<Val>, Store<Runtime>)>,
         fuel_callback: F,
     ) -> Result<String>
@@ -418,9 +439,15 @@ impl Runtime {
                 result = Err(e);
             } else {
                 self.storage
-                    .insert_contract_result(contract_id, value)
+                    .insert_contract_result(
+                        self.result_id_counter.get().await as i64,
+                        contract_id,
+                        func_name.to_string(),
+                        value,
+                    )
                     .await
                     .expect("Failed to insert contract result");
+                self.result_id_counter.increment().await;
             }
         }
 
@@ -435,6 +462,7 @@ impl Runtime {
         is_fallback: bool,
         write_result: bool,
         contract_id: i64,
+        func_name: &str,
         result: Result<(Result<()>, Vec<Val>, Store<Runtime>)>,
         fuel_callback: F,
     ) -> Result<String>
@@ -449,6 +477,7 @@ impl Runtime {
                 is_fallback,
                 write_result,
                 contract_id,
+                func_name,
                 result,
                 fuel_callback,
             )
@@ -491,9 +520,9 @@ impl Runtime {
                 .await
                 .transpose()?;
 
-        let (mut store, contract_id, is_fallback, params, mut results, func, _is_proc) = self
-            .prepare_call(&contract_address, signer.as_ref(), &expr, fuel)
-            .await?;
+        let (mut store, contract_id, func_name, is_fallback, params, mut results, func, is_proc) =
+            self.prepare_call(&contract_address, signer.as_ref(), &expr, fuel)
+                .await?;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store)
@@ -502,8 +531,9 @@ impl Runtime {
         .context("Failed to join call");
         self.handle_call(
             is_fallback,
-            false,
+            is_proc,
             contract_id,
+            &func_name,
             result,
             |remaining_fuel| async move {
                 accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))

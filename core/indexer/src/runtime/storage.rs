@@ -104,7 +104,9 @@ impl Storage {
 
     pub async fn insert_contract_result(
         &self,
+        result_index: i64,
         contract_id: i64,
+        func_name: String,
         value: Option<String>,
     ) -> Result<i64> {
         Ok(insert_contract_result(
@@ -115,6 +117,8 @@ impl Storage {
                 .tx_index(self.tx_index)
                 .input_index(self.input_index)
                 .op_index(self.op_index)
+                .result_index(result_index)
+                .func_name(func_name)
                 .maybe_value(value)
                 .build(),
         )

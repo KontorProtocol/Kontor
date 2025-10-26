@@ -149,8 +149,18 @@ pub struct ContractResultRow {
     #[builder(default = 0)]
     pub op_index: i64,
     #[builder(default = 0)]
+    pub result_index: i64,
+    #[builder(default = 0)]
     pub contract_id: i64,
+    #[builder(default = "".to_string())]
+    pub func_name: String,
     pub value: Option<String>,
+}
+
+impl ContractResultRow {
+    pub fn size(&self) -> u64 {
+        self.value.as_ref().map_or(0, |v| v.len() as u64)
+    }
 }
 
 #[derive(Debug, Clone, Builder, Eq, PartialEq, Hash, Deserialize, Serialize)]
