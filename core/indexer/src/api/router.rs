@@ -112,9 +112,9 @@ pub fn new(context: Env) -> Router {
                 .nest(
                     "/compose",
                     Router::new()
-                        .route("/", get(get_compose))
+                        .route("/", get(get_compose)) // get rid of gets! 
                         .route("/", post(post_compose))
-                        .route("/commit", get(get_compose_commit))
+                        .route("/commit", get(get_compose_commit)) // get rid of gets! 
                         .route("/reveal", get(get_compose_reveal)),
                 )
                 .route("/view/{address}", post(post_view))

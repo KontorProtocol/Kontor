@@ -94,8 +94,8 @@ pub async fn post_compose(
     State(env): State<Env>,
     Json(query): Json<ComposeQuery>,
 ) -> Result<ComposeOutputs> {
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    if query.instructions.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
     let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
@@ -112,8 +112,8 @@ pub async fn get_compose(
     State(env): State<Env>,
 ) -> Result<ComposeOutputs> {
     // Hard cap addresses payload
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    if query.instructions.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
     let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
@@ -129,8 +129,8 @@ pub async fn get_compose_commit(
     Query(query): Query<ComposeQuery>,
     State(env): State<Env>, // TODO
 ) -> Result<CommitOutputs> {
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    if query.instructions.len() > 64 * 1024 {
+        return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
     let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)

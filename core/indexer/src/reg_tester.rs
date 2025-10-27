@@ -2,7 +2,7 @@ use std::{path::Path, str::FromStr};
 
 use crate::{
     api::{
-        client::Client as KontorClient, compose::ComposeAddressQuery, ws::Response,
+        client::Client as KontorClient, compose::InstructionQuery, ws::Response,
         ws_client::WebSocketClient,
     },
     bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
@@ -218,7 +218,7 @@ impl RegTester {
         let script_data = serialize_cbor(&inst)?;
         let mut compose_res = self
             .kontor_client
-            .compose(ComposeAddressQuery {
+            .compose(InstructionQuery {
                 address: ident.address.to_string(),
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 funding_utxo_ids: outpoint_to_utxo_id(&ident.next_funding_utxo.0),

@@ -1,7 +1,7 @@
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Address, FeeRate, KnownHrp, transaction::TxOut};
 use bitcoin::{Amount, OutPoint, Txid};
-use indexer::api::compose::{CommitInputs, ComposeAddressInputs, ComposeInputs, compose_commit};
+use indexer::api::compose::{CommitInputs, InstructionInputs, ComposeInputs, compose_commit};
 use std::str::FromStr;
 
 fn fixed_keypair() -> (Secp256k1<bitcoin::secp256k1::All>, Keypair) {
@@ -53,14 +53,14 @@ fn test_compose_commit_unique_vout_mapping_even_with_identical_chunks() {
 
     let chunks = indexer::api::compose::split_even_chunks(&data, 2).unwrap();
     let inputs = ComposeInputs::builder()
-        .addresses(vec![
-            ComposeAddressInputs {
+        .instructions(vec![
+            InstructionInputs {
                 address: addr.clone(),
                 x_only_public_key: xonly,
                 funding_utxos: vec![utxo0.clone()],
                 script_data: chunks[0].clone(),
             },
-            ComposeAddressInputs {
+            InstructionInputs {
                 address: addr.clone(),
                 x_only_public_key: xonly,
                 funding_utxos: vec![utxo1.clone()],
@@ -110,7 +110,7 @@ fn test_compose_commit_psbt_inputs_have_metadata() {
         },
     );
     let inputs = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],

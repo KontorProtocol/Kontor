@@ -29,7 +29,7 @@ use bitcoin::{
 use clap::Parser;
 use indexer::api::compose::compose;
 use indexer::api::compose::compose_reveal;
-use indexer::api::compose::{ComposeAddressInputs, ComposeInputs};
+use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs};
 use indexer::config::TestConfig;
 use indexer::op_return::OpReturnData;
@@ -95,7 +95,7 @@ async fn test_psbt_inscription() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(outpoint, txout)],

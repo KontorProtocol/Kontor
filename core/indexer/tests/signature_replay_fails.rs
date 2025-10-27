@@ -15,7 +15,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::api::compose::{
-    ComposeAddressInputs, ComposeInputs, RevealInputs, RevealParticipantInputs, compose,
+    InstructionInputs, ComposeInputs, RevealInputs, RevealParticipantInputs, compose,
     compose_reveal,
 };
 use indexer::config::TestConfig;
@@ -64,7 +64,7 @@ async fn test_signature_replay_failse() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: seller_internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
@@ -140,7 +140,7 @@ async fn test_signature_replay_failse() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: seller_internal_key,
             funding_utxos: vec![(buyer_out_point, buyer_utxo_for_output.clone())],
@@ -244,7 +244,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(outpoint, txout)],

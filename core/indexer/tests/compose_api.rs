@@ -16,8 +16,8 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::api::compose::{
-    ComposeAddressInputs, ComposeAddressQuery, ComposeInputs, ComposeOutputs, ComposeQuery,
-    RevealInputs, RevealParticipantInputs, compose, compose_reveal,
+    ComposeInputs, ComposeOutputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
+    RevealParticipantInputs, compose, compose_reveal,
 };
 use indexer::api::handlers::post_compose;
 use indexer::legacy_test_utils;
@@ -66,8 +66,8 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
         .with_state(env))
 }
 
-/// Helper to encode Vec<ComposeAddressQuery> as base64-encoded JSON
-fn encode_addresses(addresses: Vec<ComposeAddressQuery>) -> Result<String> {
+/// Helper to encode Vec<InstructionQuery> as base64-encoded JSON
+fn encode_addresses(addresses: Vec<InstructionQuery>) -> Result<String> {
     let json_bytes = serde_json::to_vec(&addresses)?;
     Ok(base64_engine.encode(json_bytes))
 }
@@ -103,7 +103,7 @@ async fn test_compose() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: seller_address.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
@@ -245,7 +245,7 @@ async fn test_compose_all_fields() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: seller_address.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
@@ -487,14 +487,14 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
 
     // duplicate address provided twice
     let addresses_vec = vec![
-        ComposeAddressQuery {
+        InstructionQuery {
             address: addr.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
                 .to_string(),
             script_data: token_data_bytes.clone(),
         },
-        ComposeAddressQuery {
+        InstructionQuery {
             address: addr.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
@@ -516,7 +516,7 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
     assert!(error_body.contains("duplicate address provided"));
 
     // duplicate utxo within a participant
-    let addresses_vec2 = vec![ComposeAddressQuery {
+    let addresses_vec2 = vec![InstructionQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0,01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0".to_string(),
@@ -558,7 +558,7 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
 
     // Oversized script_data
     let oversized = vec![0u8; 387 * 1024 + 1];
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
@@ -566,7 +566,7 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
         script_data: oversized,
     }];
     let query = ComposeQuery {
-        addresses: addresses_vec,
+        instructions: addresses_vec,
         sat_per_vbyte: 2,
         envelope: None,
         chained_script_data: None,
@@ -578,7 +578,7 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
 
     // Oversized chained_script_data
     let chained_oversized_b64 = vec![0u8; 387 * 1024 + 1];
-    let addresses_vec2 = vec![ComposeAddressQuery {
+    let addresses_vec2 = vec![InstructionQuery {
         address: addr.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
@@ -586,7 +586,7 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
         script_data: b"x".to_vec(),
     }];
     let query = ComposeQuery {
-        addresses: addresses_vec2.clone(),
+        instructions: addresses_vec2.clone(),
         sat_per_vbyte: 2,
         envelope: None,
         chained_script_data: Some(chained_oversized_b64),
@@ -636,7 +636,7 @@ async fn test_reveal_with_op_return_mempool_accept() -> Result<()> {
     };
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
@@ -744,7 +744,7 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: seller_address.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e7:0"
@@ -794,7 +794,7 @@ async fn test_compose_invalid_address() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: seller_address.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0"
@@ -846,7 +846,7 @@ async fn test_compose_insufficient_funds() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    let addresses_vec = vec![ComposeAddressQuery {
+    let addresses_vec = vec![InstructionQuery {
         address: seller_address.to_string(),
         x_only_public_key: internal_key.to_string(),
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"

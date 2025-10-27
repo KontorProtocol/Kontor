@@ -10,7 +10,7 @@ use clap::Parser;
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
 use bitcoin::Psbt;
-use indexer::api::compose::{ComposeAddressInputs, ComposeInputs};
+use indexer::api::compose::{InstructionInputs, ComposeInputs};
 use indexer::config::TestConfig;
 use indexer::multi_psbt_test_utils::{get_node_addresses, mock_fetch_utxos_for_addresses};
 use indexer::test_utils;
@@ -57,7 +57,7 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
@@ -176,7 +176,7 @@ fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
 
     let mut addresses = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
-        addresses.push(indexer::api::compose::ComposeAddressInputs {
+        addresses.push(indexer::api::compose::InstructionInputs {
             address: n.address.clone(),
             x_only_public_key: n.internal_key,
             funding_utxos: vec![utxos[i].clone()],
@@ -185,7 +185,7 @@ fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
     }
 
     let params = ComposeInputs::builder()
-        .addresses(addresses.clone())
+        .instructions(addresses.clone())
         .fee_rate(bitcoin::FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(600)
         .build();
