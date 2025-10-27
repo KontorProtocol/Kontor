@@ -10,11 +10,13 @@ use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config, tungstenite::Message,
 };
 use tracing::info;
+use uuid::Uuid;
 
 use crate::{
     api::ws::{Request, Response},
     config::Config,
-    database::types::ContractResultId,
+    database::types::OpResultId,
+    reactor::results::ResultEventFilter,
 };
 
 pub struct WebSocketClient {
@@ -84,15 +86,18 @@ impl WebSocketClient {
         }
     }
 
-    pub async fn subscribe(&mut self, id: &ContractResultId) -> Result<()> {
+    pub async fn subscribe(&mut self, id: &OpResultId) -> Result<Uuid> {
         self.stream
-            .send(to_message(&Request::Subscribe { id: id.clone() })?)
+            .send(to_message(&Request::Subscribe {
+                filter: ResultEventFilter::OpResultId(id.clone()),
+            })?)
             .await?;
-        if let Response::SubscribeResponse { id: id_ } =
-            from_message(self.stream.next().await.unwrap()?)?
-            && id_ == *id
+        if let Response::SubscribeResponse {
+            id: subscription_id,
+        } = from_message(self.stream.next().await.unwrap()?)?
         {
-            Ok(())
+            info!("Subscribed to op result id {} @ {}", id, subscription_id);
+            Ok(subscription_id)
         } else {
             Err(anyhow!("Unexpected subscribe response from server"))
         }

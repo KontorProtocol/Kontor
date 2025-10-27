@@ -7,7 +7,7 @@ use crate::{
     },
     bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
     config::{Config, RegtestConfig},
-    database::types::ContractResultId,
+    database::types::OpResultId,
     reactor::{results::ResultEvent, types::Inst},
     retry::retry_simple,
     runtime::{ContractAddress, serialize_cbor, wit::Signer},
@@ -260,9 +260,7 @@ impl RegTester {
             .send_raw_transaction(&commit_tx_hex)
             .await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
-        let id = ContractResultId::builder()
-            .txid(reveal_txid.to_string())
-            .build();
+        let id = OpResultId::builder().txid(reveal_txid.to_string()).build();
         self.ws_client
             .subscribe(&id)
             .await

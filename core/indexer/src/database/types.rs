@@ -164,7 +164,7 @@ impl ContractResultRow {
 }
 
 #[derive(Debug, Clone, Builder, Eq, PartialEq, Hash, Deserialize, Serialize)]
-pub struct ContractResultId {
+pub struct OpResultId {
     pub txid: String,
     #[builder(default = 0)]
     pub input_index: i64,
@@ -172,7 +172,7 @@ pub struct ContractResultId {
     pub op_index: i64,
 }
 
-impl Display for ContractResultId {
+impl Display for OpResultId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}:{}", self.txid, self.input_index, self.op_index)
     }
