@@ -26,10 +26,10 @@ async fn test_crypto_contract() -> Result<()> {
     let (alice, crypto) = run_test_crypto_contract(runtime).await?;
 
     let result = crypto::generate_id(runtime, &crypto, &alice).await?;
-    assert_eq!(result, "af5570f5a1810b7a");
+    assert_eq!(result, "2c34ce1df23b838c");
 
     let result = crypto::generate_id(runtime, &crypto, &alice).await?;
-    assert_eq!(result, "7c9fa136d4413fa6");
+    assert_eq!(result, "19ea44be89eece0f");
 
     Ok(())
 }

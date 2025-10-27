@@ -582,17 +582,37 @@ impl Runtime {
         })
         .await
         .context("Failed to join call");
-        self.handle_call(
-            is_fallback,
-            is_proc,
-            contract_id,
-            &func_name,
-            result,
-            |remaining_fuel| async move {
-                accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))
-            },
-        )
-        .await
+        let result = self
+            .handle_call(
+                is_fallback,
+                is_proc,
+                contract_id,
+                &func_name,
+                result,
+                |remaining_fuel| async move {
+                    accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))
+                },
+            )
+            .await;
+        if is_proc {
+            self.events
+                .push(
+                    ResultEventWrapper::builder()
+                        .contract_id(contract_id)
+                        .func_name(func_name)
+                        .event(match &result {
+                            Ok(value) => ResultEvent::Ok {
+                                value: value.clone(),
+                            },
+                            Err(e) => ResultEvent::Err {
+                                message: format!("{:?}", e),
+                            },
+                        })
+                        .build(),
+                )
+                .await;
+        }
+        result
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
