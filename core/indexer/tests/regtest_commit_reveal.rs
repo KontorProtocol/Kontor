@@ -1,43 +1,29 @@
 use anyhow::Result;
 use bitcoin::{
-    FeeRate, TapSighashType,
-    consensus::encode::serialize as serialize_tx,
+    FeeRate, TapSighashType, consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
     taproot::{LeafVersion, TaprootBuilder},
 };
 use indexer::{
     api::compose::{ComposeInputs, InstructionInputs, compose},
-    reg_tester::RegTester,
     test_utils,
     witness_data::TokenBalance,
 };
 
-#[tokio::test]
+use testlib::*;
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
 async fn test_taproot_transaction_regtest() -> Result<()> {
-    // Initialize regtest client
-    let (
-        _bitcoin_data_dir,
-        bitcoin_child,
-        bitcoin_client,
-        _kontor_data_dir,
-        kontor_child,
-        kontor_client,
-        identity,
-    ) = RegTester::setup().await?;
-
-    let secp = Secp256k1::new();
-
-    // Generate taproot address
+    
+    let reg = runtime.reg_tester_mut()?;
+    let identity = reg.identity().await?;
     let seller_address = identity.address;
-
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-
-    // Get a UTXO from the regtest wallet - use a smaller amount (5000 sats)
-    let (out_point, utxo_for_output) = identity.next_funding_utxo;
-
-    // Create token balance data
+    let (out_point, utxo_for_output) = identity.next_funding_utxo; // Create token balance data
     let token_value = 500;
+    let secp = Secp256k1::new();
+
     let token_balance = TokenBalance {
         value: token_value,
         name: "token_name".to_string(),
@@ -95,8 +81,8 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let spend_tx_hex = hex::encode(serialize_tx(&spend_tx));
 
-    let result = bitcoin_client
-        .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
+    let result = reg
+        .mempool_accept_result(&[attach_tx_hex, spend_tx_hex])
         .await?;
 
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
@@ -134,8 +120,6 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
             .serialize(),
         "Control block in witness doesn't match expected control block"
     );
-
-    RegTester::teardown(bitcoin_client, bitcoin_child, kontor_client, kontor_child).await?;
 
     Ok(())
 }

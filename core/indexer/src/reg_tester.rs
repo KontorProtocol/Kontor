@@ -5,7 +5,7 @@ use crate::{
         client::Client as KontorClient, compose::InstructionQuery, ws::Response,
         ws_client::WebSocketClient,
     },
-    bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc},
+    bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult},
     config::{Config, RegtestConfig},
     database::types::OpResultId,
     reactor::{results::ResultEvent, types::Inst},
@@ -212,6 +212,11 @@ impl RegTester {
             }
         }
         Ok(())
+    }
+
+    pub async fn mempool_accept_result(&self, raw_txs: &[String]) -> Result<Vec<TestMempoolAcceptResult>> {
+        let result = self.bitcoin_client.test_mempool_accept(raw_txs).await?;
+        Ok(result)
     }
 
     pub async fn instruction(&mut self, ident: &mut Identity, inst: Inst) -> Result<String> {

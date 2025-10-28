@@ -94,7 +94,7 @@ pub async fn post_compose(
     State(env): State<Env>,
     Json(query): Json<ComposeQuery>,
 ) -> Result<ComposeOutputs> {
-    if query.instructions.len() > 64 * 1024 {
+    if query.instructions.len() > 400 * 1024 {
         return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
@@ -111,7 +111,7 @@ pub async fn post_compose_commit(
     State(env): State<Env>,
     Json(query): Json<ComposeQuery>,
 ) -> Result<CommitOutputs> {
-    if query.instructions.len() > 64 * 1024 {
+    if query.instructions.len() > 400 * 1024 {
         return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
