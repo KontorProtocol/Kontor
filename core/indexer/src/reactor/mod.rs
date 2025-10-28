@@ -12,7 +12,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::BlockHash;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -27,9 +27,9 @@ use crate::{
             insert_block, insert_transaction, rollback_to_height, select_block_at_height,
             select_block_latest, select_block_with_hash, set_block_processed,
         },
-        types::{BlockRow, ContractResultId, TransactionRow},
+        types::{BlockRow, TransactionRow},
     },
-    reactor::{results::ResultEvent, types::Op},
+    reactor::{results::ResultEventWrapper, types::Op},
     runtime::{ComponentCache, Runtime, Storage},
 };
 
@@ -40,7 +40,7 @@ struct Reactor {
     ctrl: CtrlChannel,
     bitcoin_event_rx: Option<Receiver<Event>>,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
+    event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
     runtime: Runtime,
 
     last_height: u64,
@@ -55,7 +55,7 @@ impl Reactor {
         ctrl: CtrlChannel,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
-        event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
+        event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
     ) -> Result<Self> {
         let conn = &*reader.connection().await?;
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
@@ -220,20 +220,10 @@ impl Reactor {
             for op in t.ops {
                 let input_index = op.metadata().input_index;
                 self.runtime
-                    .set_context(
-                        height as i64,
-                        t.index,
-                        input_index,
-                        0,
-                        t.txid.to_raw_hash().to_byte_array().to_vec(),
-                    )
+                    .set_context(height as i64, t.index, input_index, 0, t.txid)
                     .await;
-                let id = ContractResultId::builder()
-                    .txid(t.txid.to_string())
-                    .input_index(input_index)
-                    .build();
 
-                let result = match op {
+                let _ = match op {
                     Op::Publish {
                         metadata,
                         name,
@@ -250,14 +240,10 @@ impl Reactor {
                     }
                 };
 
-                let event = match result {
-                    Ok(value) => ResultEvent::Ok { value },
-                    Err(e) => ResultEvent::Err {
-                        message: format!("{:?}", e),
-                    },
-                };
                 if let Some(tx) = self.event_tx.clone() {
-                    tx.send((id, event)).await?;
+                    for event in self.runtime.events.take_all().await {
+                        tx.send(event).await?;
+                    }
                 }
             }
         }
@@ -355,7 +341,7 @@ pub fn run(
     writer: database::Writer,
     ctrl: CtrlChannel,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<(ContractResultId, ResultEvent)>>,
+    event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {

@@ -2,9 +2,9 @@ pub struct ArithStorage {
     pub last_op: Option<Op>,
 }
 #[automatically_derived]
-impl stdlib::Store for ArithStorage {
+impl stdlib::Store<crate::context::ProcStorage> for ArithStorage {
     fn __set(
-        ctx: &impl stdlib::WriteContext,
+        ctx: &crate::context::ProcStorage,
         base_path: stdlib::DotPathBuf,
         value: ArithStorage,
     ) {

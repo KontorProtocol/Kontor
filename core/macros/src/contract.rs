@@ -50,41 +50,6 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         #[automatically_derived]
-        impl ReadContext for context::ViewStorage {
-            fn __get_str(&self, path: &str) -> Option<String> {
-                self.get_str(path)
-            }
-
-            fn __get_u64(&self, path: &str) -> Option<u64> {
-                self.get_u64(path)
-            }
-
-            fn __get_s64(&self, path: &str) -> Option<i64> {
-                self.get_s64(path)
-            }
-
-            fn __get_bool(&self, path: &str) -> Option<bool> {
-                self.get_bool(path)
-            }
-
-            fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a {
-                make_keys_iterator(self.get_keys(path))
-            }
-
-            fn __exists(&self, path: &str) -> bool {
-                self.exists(path)
-            }
-
-            fn __extend_path_with_match(&self, path: &str, variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-            }
-
-            fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {
-                T::__get(self, path)
-            }
-        }
-
-        #[automatically_derived]
         impl context::ViewStorage {
             fn __get_str(&self, path: &str) -> Option<String> {
                 self.get_str(path)
@@ -114,42 +79,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
-            fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {
-                T::__get(self, path)
-            }
-        }
-
-        #[automatically_derived]
-        impl ReadContext for context::ProcStorage {
-            fn __get_str(&self, path: &str) -> Option<String> {
-                self.get_str(path)
-            }
-
-            fn __get_u64(&self, path: &str) -> Option<u64> {
-                self.get_u64(path)
-            }
-
-            fn __get_s64(&self, path: &str) -> Option<i64> {
-                self.get_s64(path)
-            }
-
-            fn __get_bool(&self, path: &str) -> Option<bool> {
-                self.get_bool(path)
-            }
-
-            fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(&self, path: &'a str) -> impl Iterator<Item = T> + 'a{
-                make_keys_iterator(self.get_keys(path))
-            }
-
-            fn __exists(&self, path: &str) -> bool {
-                self.exists(path)
-            }
-
-            fn __extend_path_with_match(&self, path: &str, variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-            }
-
-            fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {
+            fn __get<T: Retrieve<Self>>(&self, path: DotPathBuf) -> Option<T> {
                 T::__get(self, path)
             }
         }
@@ -184,13 +114,10 @@ pub fn generate(config: Config) -> TokenStream {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
-            fn __get<T: Retrieve>(&self, path: DotPathBuf) -> Option<T> {
+            fn __get<T: Retrieve<Self>>(&self, path: DotPathBuf) -> Option<T> {
                 T::__get(self, path)
             }
-        }
 
-        #[automatically_derived]
-        impl WriteContext for context::ProcStorage {
             fn __set_str(&self, path: &str, value: &str) {
                 self.set_str(path, value)
             }
@@ -211,42 +138,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.set_void(path)
             }
 
-            fn __set<T: stdlib::Store>(&self, path: DotPathBuf, value: T) {
-                T::__set(self, path, value)
-            }
-
-            fn __delete_matching_paths(&self, base_path: &str, variants: &[&str]) -> u64 {
-                self.delete_matching_paths(base_path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-            }
-
-            fn generate_id(&self) -> String {
-                unimplemented!()
-            }
-        }
-
-        #[automatically_derived]
-        impl context::ProcStorage {
-            fn __set_str(&self, path: &str, value: &str) {
-                self.set_str(path, value)
-            }
-
-            fn __set_u64(&self, path: &str, value: u64) {
-                self.set_u64(path, value)
-            }
-
-            fn __set_s64(&self, path: &str, value: i64) {
-                self.set_s64(path, value)
-            }
-
-            fn __set_bool(&self, path: &str, value: bool) {
-                self.set_bool(path, value)
-            }
-
-            fn __set_void(&self, path: &str) {
-                self.set_void(path)
-            }
-
-            fn __set<T: stdlib::Store>(&self, path: DotPathBuf, value: T) {
+            fn __set<T: stdlib::Store<Self>>(&self, path: DotPathBuf, value: T) {
                 T::__set(self, path, value)
             }
 
@@ -255,8 +147,128 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
-        #[automatically_derived]
-        impl ReadWriteContext for context::ProcStorage {}
+        impl Retrieve<context::ViewStorage> for u64 {
+            fn __get(ctx: &context::ViewStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_u64(&path)
+            }
+        }
+
+        impl Retrieve<context::ViewStorage> for i64 {
+            fn __get(ctx: &context::ViewStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_s64(&path)
+            }
+        }
+
+        impl Retrieve<context::ViewStorage> for String {
+            fn __get(ctx: &context::ViewStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_str(&path)
+            }
+        }
+
+        impl Retrieve<context::ViewStorage> for bool {
+            fn __get(ctx: &context::ViewStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_bool(&path)
+            }
+        }
+
+        impl Retrieve<context::ProcStorage> for u64 {
+            fn __get(ctx: &context::ProcStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_u64(&path)
+            }
+        }
+
+        impl Retrieve<context::ProcStorage> for i64 {
+            fn __get(ctx: &context::ProcStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_s64(&path)
+            }
+        }
+
+        impl Retrieve<context::ProcStorage> for String {
+            fn __get(ctx: &context::ProcStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_str(&path)
+            }
+        }
+
+        impl Retrieve<context::ProcStorage> for bool {
+            fn __get(ctx: &context::ProcStorage, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_bool(&path)
+            }
+        }
+
+        impl Store<context::ProcStorage> for u64 {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: u64) {
+                ctx.__set_u64(&path, value);
+            }
+        }
+
+        impl Store<context::ProcStorage> for i64 {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: i64) {
+                ctx.__set_s64(&path, value);
+            }
+        }
+
+        impl Store<context::ProcStorage> for &str {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: &str) {
+                ctx.__set_str(&path, value);
+            }
+        }
+
+        impl Store<context::ProcStorage> for String {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: String) {
+                ctx.__set_str(&path, &value);
+            }
+        }
+
+        impl Store<context::ProcStorage> for bool {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: bool) {
+                ctx.__set_bool(&path, value);
+            }
+        }
+
+        impl<T: Store<context::ProcStorage>> Store<context::ProcStorage> for Option<T> {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, value: Self) {
+                ctx.__delete_matching_paths(&path, &["none", "some"]);
+                match value {
+                    Some(inner) => ctx.__set(path.push("some"), inner),
+                    None => ctx.__set(path.push("none"), ()),
+                }
+            }
+        }
+
+        impl Store<context::ProcStorage> for () {
+            fn __set(ctx: &context::ProcStorage, path: DotPathBuf, _: ()) {
+                ctx.__set_void(&path);
+            }
+        }
+
+        #[derive(Clone)]
+        pub struct Map<K: ToString + FromString + Clone, V: Store<context::ProcStorage>> {
+            pub entries: Vec<(K, V)>,
+        }
+
+        impl<K: ToString + FromString + Clone, V: Store<context::ProcStorage>> Map<K, V> {
+            pub fn new(entries: &[(K, V)]) -> Self {
+                Map {
+                    entries: entries.to_vec(),
+                }
+            }
+        }
+
+        impl<K: ToString + FromString + Clone, V: Store<context::ProcStorage>> Default for Map<K, V> {
+            fn default() -> Self {
+                Self {
+                    entries: Default::default(),
+                }
+            }
+        }
+
+        impl<K: ToString + FromString + Clone, V: Store<context::ProcStorage>> Store<context::ProcStorage> for Map<K, V> {
+            fn __set(ctx: &context::ProcStorage, base_path: DotPathBuf, value: Map<K, V>) {
+                for (k, v) in value.entries.into_iter() {
+                    ctx.__set(base_path.push(k.to_string()), v)
+                }
+            }
+        }
 
         impls!();
 

@@ -19,7 +19,7 @@ use tracing::{error, info};
 pub async fn run(env: Env) -> Result<JoinHandle<()>> {
     let cert_path = env.config.data_dir.join("cert.pem");
     let key_path = env.config.data_dir.join("key.pem");
-    let addr = SocketAddr::from(([127, 0, 0, 1], env.config.api_port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], env.config.api_port));
     let handle = Handle::new();
 
     tokio::spawn({

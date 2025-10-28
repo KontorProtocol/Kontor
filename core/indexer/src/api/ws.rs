@@ -1,4 +1,4 @@
-use std::{collections::HashSet, net::SocketAddr, pin::Pin, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, time::Duration};
 
 use axum::{
     Extension,
@@ -10,11 +10,16 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::broadcast, time::timeout};
+use tokio::{
+    select,
+    sync::broadcast::{self, Receiver},
+    time::timeout,
+};
 use tower_http::request_id::RequestId;
 use tracing::{Instrument, error, info, info_span, warn};
+use uuid::Uuid;
 
-use crate::{database::types::ContractResultId, reactor::results::ResultEvent};
+use crate::reactor::results::{ResultEvent, ResultEventFilter};
 
 use super::Env;
 
@@ -28,26 +33,17 @@ pub enum ControlFlow {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Request {
-    Subscribe { id: ContractResultId },
-    Unsubscribe { id: ContractResultId },
+    Subscribe { filter: ResultEventFilter },
+    Unsubscribe { id: Uuid },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Response {
-    SubscribeResponse {
-        id: ContractResultId,
-    },
-    UnsubscribeResponse {
-        id: ContractResultId,
-    },
-    Result {
-        id: ContractResultId,
-        result: ResultEvent,
-    },
-    Error {
-        error: String,
-    },
+    SubscribeResponse { id: Uuid },
+    UnsubscribeResponse { id: Uuid },
+    Result { id: Uuid, result: ResultEvent },
+    Error { error: String },
 }
 
 type Futures = FuturesUnordered<
@@ -55,18 +51,44 @@ type Futures = FuturesUnordered<
         Box<
             dyn std::future::Future<
                     Output = (
-                        ContractResultId,
+                        Uuid,
                         Result<ResultEvent, broadcast::error::RecvError>,
+                        Receiver<ResultEvent>,
                     ),
                 > + Send,
         >,
     >,
 >;
 
+#[derive(PartialEq, Eq)]
+pub enum SubscriptionType {
+    Recurring,
+    OneShot,
+}
+
+impl From<ResultEventFilter> for SubscriptionType {
+    fn from(filter: ResultEventFilter) -> Self {
+        match filter {
+            ResultEventFilter::All => SubscriptionType::Recurring,
+            ResultEventFilter::Contract { .. } => SubscriptionType::Recurring,
+            ResultEventFilter::OpResultId(_) => SubscriptionType::OneShot,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SocketState {
-    pub subscription_ids: HashSet<ContractResultId>,
+    pub subscriptions: HashMap<Uuid, SubscriptionType>,
     pub futures: Futures,
+}
+
+impl SocketState {
+    fn push_future(&mut self, id: Uuid, mut rx: Receiver<ResultEvent>) {
+        self.futures.push(Box::pin(async move {
+            let result = rx.recv().await;
+            (id, result, rx)
+        }));
+    }
 }
 
 pub async fn handle_message(
@@ -74,46 +96,44 @@ pub async fn handle_message(
     state: &mut SocketState,
     request: Request,
 ) -> Option<Response> {
+    let conn = env.reader.connection().await;
+    if conn.is_err() {
+        warn!("Failed to connect to database");
+        return Some(Response::Error {
+            error: "Failed to connect to database".to_string(),
+        });
+    }
+    let conn = conn.unwrap();
     match request {
-        Request::Subscribe { id } => {
+        Request::Subscribe { filter } => {
             info!("Received subscribe request");
-            let conn = env.reader.connection().await;
-            if conn.is_err() {
-                warn!("Failed to connect to database");
-                return Some(Response::Error {
-                    error: "Failed to connect to database".to_string(),
-                });
-            }
-            let rx = env.result_subscriber.subscribe(&conn.unwrap(), &id).await;
-            if rx.is_err() {
+            let result = env.result_subscriber.subscribe(&conn, filter.clone()).await;
+            if result.is_err() {
                 warn!("Failed to subscribe to result");
                 return Some(Response::Error {
                     error: "Failed to subscribe to result".to_string(),
                 });
             }
-            let mut rx = rx.unwrap();
-            state.futures.push(Box::pin({
-                let id = id.clone();
-                async move {
-                    let result = rx.recv().await;
-                    (id, result)
-                }
-            }));
-            state.subscription_ids.insert(id.clone());
+            let (id, rx) = result.unwrap();
+            state.push_future(id, rx);
+            state.subscriptions.insert(id, filter.into());
             info!("Subscribed with ID: {}", id);
             Some(Response::SubscribeResponse { id })
         }
         Request::Unsubscribe { id } => {
             info!("Received unsubscribe request for ID: {}", id);
-            if state.subscription_ids.remove(&id) {
-                let _ = env.result_subscriber.unsubscribe(&id).await;
-                info!("Unsubscribed ID: {}", id);
-                Some(Response::UnsubscribeResponse { id })
-            } else {
-                warn!("Unsubscribe failed: ID {} not found", id);
-                Some(Response::Error {
-                    error: format!("Subscription ID {} not found", id),
-                })
+            match state.subscriptions.remove(&id) {
+                Some(_) => {
+                    let _ = env.result_subscriber.unsubscribe(&conn, id).await;
+                    info!("Unsubscribed ID: {}", id);
+                    Some(Response::UnsubscribeResponse { id })
+                }
+                None => {
+                    warn!("Unsubscribe failed: ID {} not found", id);
+                    Some(Response::Error {
+                        error: format!("Subscription ID {} not found", id),
+                    })
+                }
             }
         }
     }
@@ -219,26 +239,37 @@ pub async fn handle_socket(
                     info!("WebSocket connection cancelled");
                     break;
                 }
-                Some((id, result)) = state.futures.next(), if !state.futures.is_empty() => {
+                Some((id, result, rx)) = state.futures.next(), if !state.futures.is_empty() => {
                     match result {
                         Ok(result) => {
-                            state.subscription_ids.remove(&id);
+                            if let Some(subscription_type) = state.subscriptions.get(&id) {
 
-                            let msg = Response::Result { id,  result };
-                            let json = serde_json::to_string(&msg).expect("Failed to serialize event");
-                            if timeout(
-                                Duration::from_millis(MAX_SEND_MILLIS),
-                                socket.send(ws::Message::Text(json.into())),
-                            )
-                            .await
-                            .is_err()
-                            {
-                                warn!("Failed to send event: connection closed");
-                                break;
+                                let msg = Response::Result { id,  result };
+                                let json = serde_json::to_string(&msg).expect("Failed to serialize event");
+                                info!("Sending event: {:#?}", json.clone());
+                                if timeout(
+                                    Duration::from_millis(MAX_SEND_MILLIS),
+                                    socket.send(ws::Message::Text(json.into())),
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    warn!("Failed to send event: connection closed");
+                                    break;
+                                }
+
+                                match *subscription_type {
+                                    SubscriptionType::Recurring => {
+                                        state.push_future(id, rx);
+                                    },
+                                    SubscriptionType::OneShot => {
+                                        state.subscriptions.remove(&id);
+                                    },
+                                };
                             }
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            state.subscription_ids.remove(&id);
+                            state.subscriptions.remove(&id);
                             warn!("Subscription channel {} closed", id);
                         }
                         Err(e) => error!("Error receiving event: {}", e),
@@ -266,8 +297,10 @@ pub async fn handle_socket(
             }
         }
 
-        for id in state.subscription_ids.drain() {
-            let _ = env.result_subscriber.unsubscribe(&id).await;
+        if let Ok(conn) = env.reader.connection().await {
+            for (id, ..) in state.subscriptions.drain() {
+                let _ = env.result_subscriber.unsubscribe(&conn, id).await;
+            }
         }
         let _ = socket.close().await;
         info!("WebSocket connection closed");

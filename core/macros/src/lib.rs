@@ -91,8 +91,8 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let expanded = quote! {
         #[automatically_derived]
-        impl #impl_generics stdlib::Store for #name #ty_generics #where_clause {
-            fn __set(ctx: &impl stdlib::WriteContext, base_path: stdlib::DotPathBuf, value: #name #ty_generics) {
+        impl #impl_generics stdlib::Store<crate::context::ProcStorage> for #name #ty_generics #where_clause {
+            fn __set(ctx: &crate::context::ProcStorage, base_path: stdlib::DotPathBuf, value: #name #ty_generics) {
                 #body
             }
         }

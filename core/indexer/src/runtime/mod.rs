@@ -3,11 +3,13 @@ mod contracts;
 pub mod counter;
 pub mod fuel;
 pub mod numerics;
+pub mod queue;
 mod stack;
 mod storage;
 mod types;
 pub mod wit;
 
+use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
 pub use contracts::load_contracts;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -48,16 +50,19 @@ use wasmtime::{
 use wit_component::ComponentEncoder;
 
 use crate::{
-    database::Reader,
+    database::{Reader, types::OpResultId},
+    reactor::results::{ResultEvent, ResultEventWrapper},
     runtime::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
+        queue::Queue,
         stack::Stack,
         wit::{
             FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
             ViewStorage,
         },
     },
+    test_utils::new_mock_transaction,
 };
 
 impls!(host = true);
@@ -90,7 +95,8 @@ pub struct Runtime {
     pub stack: Stack<i64>,
     pub gauge: Option<FuelGauge>,
     pub starting_fuel: u64,
-    pub txid: Vec<u8>,
+    pub txid: Txid,
+    pub events: Queue<ResultEventWrapper>,
 }
 
 impl Runtime {
@@ -115,7 +121,8 @@ impl Runtime {
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
             starting_fuel: 1000000,
-            txid: Vec::new(),
+            txid: new_mock_transaction(0).txid,
+            events: Queue::new(),
         })
     }
 
@@ -135,7 +142,7 @@ impl Runtime {
         tx_index: i64,
         input_index: i64,
         op_index: i64,
-        txid: Vec<u8>,
+        txid: Txid,
     ) {
         self.storage.height = height;
         self.storage.tx_index = tx_index;
@@ -182,6 +189,25 @@ impl Runtime {
             )
             .await
             .expect("Failed to insert contract result");
+
+        self.events
+            .replace_last(
+                ResultEventWrapper::builder()
+                    .contract_id(id)
+                    .func_name("init".to_string())
+                    .op_result_id(
+                        OpResultId::builder()
+                            .txid(self.txid.to_string())
+                            .input_index(self.storage.input_index)
+                            .op_index(self.storage.op_index)
+                            .build(),
+                    )
+                    .event(ResultEvent::Ok {
+                        value: value.clone(),
+                    })
+                    .build(),
+            )
+            .await;
         Ok(value)
     }
 
@@ -207,23 +233,50 @@ impl Runtime {
         })
         .await
         .context("Failed to join execution");
-        self.handle_call(
-            is_fallback,
-            is_proc,
-            contract_id,
-            &func_name,
-            result,
-            |remaining_fuel| async move {
-                OptionFuture::from(
-                    self.gauge
-                        .as_ref()
-                        .map(|g| g.set_ending_fuel(remaining_fuel)),
+        let result = self
+            .handle_call(
+                is_fallback,
+                is_proc,
+                contract_id,
+                &func_name,
+                result,
+                |remaining_fuel| async move {
+                    OptionFuture::from(
+                        self.gauge
+                            .as_ref()
+                            .map(|g| g.set_ending_fuel(remaining_fuel)),
+                    )
+                    .await;
+                    Ok(())
+                },
+            )
+            .await;
+        if is_proc {
+            self.events
+                .push(
+                    ResultEventWrapper::builder()
+                        .contract_id(contract_id)
+                        .func_name(func_name)
+                        .op_result_id(
+                            OpResultId::builder()
+                                .txid(self.txid.to_string())
+                                .input_index(self.storage.input_index)
+                                .op_index(self.storage.op_index)
+                                .build(),
+                        )
+                        .event(match &result {
+                            Ok(value) => ResultEvent::Ok {
+                                value: value.clone(),
+                            },
+                            Err(e) => ResultEvent::Err {
+                                message: format!("{:?}", e),
+                            },
+                        })
+                        .build(),
                 )
                 .await;
-                Ok(())
-            },
-        )
-        .await
+        }
+        result
     }
 
     pub async fn get_component_bytes(&self, contract_id: i64) -> Result<Vec<u8>> {
@@ -529,17 +582,37 @@ impl Runtime {
         })
         .await
         .context("Failed to join call");
-        self.handle_call(
-            is_fallback,
-            is_proc,
-            contract_id,
-            &func_name,
-            result,
-            |remaining_fuel| async move {
-                accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))
-            },
-        )
-        .await
+        let result = self
+            .handle_call(
+                is_fallback,
+                is_proc,
+                contract_id,
+                &func_name,
+                result,
+                |remaining_fuel| async move {
+                    accessor.with(|mut access| access.as_context_mut().set_fuel(remaining_fuel))
+                },
+            )
+            .await;
+        if is_proc {
+            self.events
+                .push(
+                    ResultEventWrapper::builder()
+                        .contract_id(contract_id)
+                        .func_name(func_name)
+                        .event(match &result {
+                            Ok(value) => ResultEvent::Ok {
+                                value: value.clone(),
+                            },
+                            Err(e) => ResultEvent::Err {
+                                message: format!("{:?}", e),
+                            },
+                        })
+                        .build(),
+                )
+                .await;
+        }
+        result
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -665,7 +738,13 @@ impl Runtime {
         let count = self.id_generation_counter.get().await;
         self.id_generation_counter.increment().await;
         Ok(hex::encode(
-            &hash_bytes(&[self.txid.clone(), count.to_le_bytes().to_vec()].concat())[0..8],
+            &hash_bytes(
+                &[
+                    self.txid.to_raw_hash().to_byte_array().to_vec(),
+                    count.to_le_bytes().to_vec(),
+                ]
+                .concat(),
+            )[0..8],
         ))
     }
 

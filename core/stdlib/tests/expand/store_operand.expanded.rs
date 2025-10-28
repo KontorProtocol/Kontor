@@ -2,9 +2,9 @@ pub struct Operand {
     pub y: u64,
 }
 #[automatically_derived]
-impl stdlib::Store for Operand {
+impl stdlib::Store<crate::context::ProcStorage> for Operand {
     fn __set(
-        ctx: &impl stdlib::WriteContext,
+        ctx: &crate::context::ProcStorage,
         base_path: stdlib::DotPathBuf,
         value: Operand,
     ) {

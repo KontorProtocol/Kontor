@@ -4,9 +4,9 @@ enum Error {
     Overflow,
 }
 #[automatically_derived]
-impl stdlib::Store for Error {
+impl stdlib::Store<crate::context::ProcStorage> for Error {
     fn __set(
-        ctx: &impl stdlib::WriteContext,
+        ctx: &crate::context::ProcStorage,
         base_path: stdlib::DotPathBuf,
         value: Error,
     ) {

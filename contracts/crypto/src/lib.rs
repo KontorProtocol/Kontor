@@ -2,7 +2,7 @@ use stdlib::*;
 
 contract!(name = "crypto");
 
-fn _generate_id(ctx: &impl ReadWriteContext) -> String {
+fn _generate_id(ctx: &ProcContext) -> String {
     ctx.generate_id()
 }
 

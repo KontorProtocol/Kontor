@@ -5,7 +5,7 @@ use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        ContractResultId, ContractResultRow, ContractRow, PaginationMeta, TransactionCursor,
+        ContractResultRow, ContractRow, OpResultId, PaginationMeta, TransactionCursor,
         TransactionRow,
     },
     runtime::ContractAddress,
@@ -621,9 +621,9 @@ pub async fn get_transactions_paginated(
     Ok((transactions, pagination))
 }
 
-pub async fn get_contract_result(
+pub async fn get_op_result(
     conn: &Connection,
-    contract_result_id: &ContractResultId,
+    op_result_id: &OpResultId,
 ) -> Result<Option<ContractResultRow>, Error> {
     let mut rows = conn
         .query(
@@ -644,9 +644,9 @@ pub async fn get_contract_result(
             LIMIT 1
             "#,
             named_params! {
-                ":txid": contract_result_id.txid.clone(),
-                ":input_index": contract_result_id.input_index,
-                ":op_index": contract_result_id.op_index,
+                ":txid": op_result_id.txid.clone(),
+                ":input_index": op_result_id.input_index,
+                ":op_index": op_result_id.op_index,
             },
         )
         .await?;

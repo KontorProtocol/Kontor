@@ -3,9 +3,9 @@ struct ProxyStorage {
     contract_address: ContractAddress,
 }
 #[automatically_derived]
-impl stdlib::Store for ProxyStorage {
+impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     fn __set(
-        ctx: &impl stdlib::WriteContext,
+        ctx: &crate::context::ProcStorage,
         base_path: stdlib::DotPathBuf,
         value: ProxyStorage,
     ) {

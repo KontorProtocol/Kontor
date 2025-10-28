@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use indexer::{
     config::Config,
-    database::types::ContractResultId,
-    reactor::results::{ResultEvent, ResultSubscriber},
+    database::types::OpResultId,
+    reactor::results::{ResultEvent, ResultEventWrapper, ResultSubscriber},
     test_utils::new_test_db,
 };
 use std::time::Duration;
@@ -15,7 +15,7 @@ async fn test_subscriber_subscribe_and_receive_event() -> Result<()> {
     let mut subscriber = ResultSubscriber::default();
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
-    let id = ContractResultId::builder()
+    let id = OpResultId::builder()
         .txid("tx1".to_string())
         .input_index(1)
         .op_index(2)
@@ -28,13 +28,19 @@ async fn test_subscriber_subscribe_and_receive_event() -> Result<()> {
     let handle = subscriber.run(cancel_token.clone(), rx);
 
     // Subscribe
-    let mut receiver = subscriber.subscribe(&conn, &id).await?;
+    let (_, mut receiver) = subscriber.subscribe(&conn, id.clone().into()).await?;
 
     // Send an event through the mpsc channel
     let event = ResultEvent::Ok {
         value: "success".to_string(),
     };
-    tx.send((id.clone(), event.clone())).await?;
+    tx.send(
+        ResultEventWrapper::builder()
+            .op_result_id(id)
+            .event(event.clone())
+            .build(),
+    )
+    .await?;
 
     // Receive the event
     let received = tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await??;
@@ -51,7 +57,7 @@ async fn test_subscriber_multiple_subscribers() -> Result<()> {
     let mut subscriber = ResultSubscriber::default();
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
-    let id = ContractResultId::builder().txid("tx1".to_string()).build();
+    let id = OpResultId::builder().txid("tx1".to_string()).build();
 
     let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
     let conn = reader.connection().await?;
@@ -60,14 +66,20 @@ async fn test_subscriber_multiple_subscribers() -> Result<()> {
     let handle = subscriber.run(cancel_token.clone(), rx);
 
     // Subscribe multiple times
-    let mut receiver1 = subscriber.subscribe(&conn, &id).await?;
-    let mut receiver2 = subscriber.subscribe(&conn, &id).await?;
+    let (_, mut receiver1) = subscriber.subscribe(&conn, id.clone().into()).await?;
+    let (_, mut receiver2) = subscriber.subscribe(&conn, id.clone().into()).await?;
 
     // Send an event
     let event = ResultEvent::Ok {
         value: "success".to_string(),
     };
-    tx.send((id.clone(), event.clone())).await?;
+    tx.send(
+        ResultEventWrapper::builder()
+            .op_result_id(id)
+            .event(event.clone())
+            .build(),
+    )
+    .await?;
 
     // Both receivers should get the event
     let received1 = tokio::time::timeout(Duration::from_secs(1), receiver1.recv()).await??;
@@ -84,19 +96,19 @@ async fn test_subscriber_multiple_subscribers() -> Result<()> {
 #[tokio::test]
 async fn test_subscriber_unsubscribe() -> Result<()> {
     let mut subscriber = ResultSubscriber::default();
-    let id = ContractResultId::builder().txid("tx1".to_string()).build();
+    let id = OpResultId::builder().txid("tx1".to_string()).build();
 
     let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
     let conn = reader.connection().await?;
 
     // Subscribe
-    subscriber.subscribe(&conn, &id).await?;
+    let (subscription_id, ..) = subscriber.subscribe(&conn, id.into()).await?;
 
     // Unsubscribe
-    assert!(subscriber.unsubscribe(&id).await);
+    assert!(subscriber.unsubscribe(&conn, subscription_id).await?);
 
     // Unsubscribe non-existent ID
-    assert!(!subscriber.unsubscribe(&id).await);
+    assert!(!subscriber.unsubscribe(&conn, subscription_id).await?);
 
     Ok(())
 }
@@ -106,7 +118,7 @@ async fn test_subscriber_dispatch_nonexistent_id() -> Result<()> {
     let subscriber = ResultSubscriber::default();
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
-    let id = ContractResultId::builder().txid("tx1".to_string()).build();
+    let id = OpResultId::builder().txid("tx1".to_string()).build();
 
     // Start the run task
     let handle = subscriber.run(cancel_token.clone(), rx);
@@ -115,7 +127,13 @@ async fn test_subscriber_dispatch_nonexistent_id() -> Result<()> {
     let event = ResultEvent::Err {
         message: "error".to_string(),
     };
-    tx.send((id.clone(), event)).await?;
+    tx.send(
+        ResultEventWrapper::builder()
+            .op_result_id(id.clone())
+            .event(event.clone())
+            .build(),
+    )
+    .await?;
 
     // Give the run task time to process
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -131,7 +149,7 @@ async fn test_subscriber_cancellation() -> Result<()> {
     let mut subscriber = ResultSubscriber::default();
     let (tx, rx) = mpsc::channel(10);
     let cancel_token = CancellationToken::new();
-    let id = ContractResultId::builder().txid("tx1".to_string()).build();
+    let id = OpResultId::builder().txid("tx1".to_string()).build();
 
     let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
     let conn = reader.connection().await?;
@@ -140,7 +158,7 @@ async fn test_subscriber_cancellation() -> Result<()> {
     let handle = subscriber.run(cancel_token.clone(), rx);
 
     // Subscribe
-    let mut receiver = subscriber.subscribe(&conn, &id).await?;
+    let (_, mut receiver) = subscriber.subscribe(&conn, id.clone().into()).await?;
 
     // Cancel the task
     cancel_token.cancel();
@@ -152,7 +170,14 @@ async fn test_subscriber_cancellation() -> Result<()> {
     let event = ResultEvent::Ok {
         value: "success".to_string(),
     };
-    let send_result = tx.send((id.clone(), event.clone())).await;
+    let send_result = tx
+        .send(
+            ResultEventWrapper::builder()
+                .op_result_id(id.clone())
+                .event(event.clone())
+                .build(),
+        )
+        .await;
     assert!(send_result.is_err()); // Send succeeds, but no processing
 
     // Try to receive (should fail due to no active sender)
