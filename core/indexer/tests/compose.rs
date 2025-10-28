@@ -10,7 +10,7 @@ use clap::Parser;
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
 use bitcoin::Psbt;
-use indexer::api::compose::{InstructionInputs, ComposeInputs};
+use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::config::TestConfig;
 use indexer::multi_psbt_test_utils::{get_node_addresses, mock_fetch_utxos_for_addresses};
 use indexer::test_utils;

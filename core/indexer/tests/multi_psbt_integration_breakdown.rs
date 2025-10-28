@@ -16,7 +16,7 @@ use rand::Rng;
 use tracing::info;
 
 use bitcoin::{FeeRate, TapSighashType};
-use indexer::api::compose::{InstructionInputs, ComposeInputs, compose};
+use indexer::api::compose::{ComposeInputs, InstructionInputs, compose};
 
 /*
 Portal entity sends out a message node entities saying "who wants to join my agreement?"

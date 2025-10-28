@@ -1,7 +1,7 @@
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Address, FeeRate, KnownHrp, transaction::TxOut};
 use bitcoin::{Amount, OutPoint, Txid};
-use indexer::api::compose::{CommitInputs, InstructionInputs, ComposeInputs, compose_commit};
+use indexer::api::compose::{CommitInputs, ComposeInputs, InstructionInputs, compose_commit};
 use std::str::FromStr;
 
 fn fixed_keypair() -> (Secp256k1<bitcoin::secp256k1::All>, Keypair) {

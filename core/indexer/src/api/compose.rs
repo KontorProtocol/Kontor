@@ -45,40 +45,12 @@ pub struct InstructionQuery {
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct ComposeQuery {
-    // base64-encoded JSON Vec<Instruction>
-    #[serde(with = "instructions_b64_json")]
     pub instructions: Vec<InstructionQuery>,
     pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
     // optional base64 string → Option<Vec<u8>>
     #[serde_as(as = "Option<Base64>")]
     pub chained_script_data: Option<Vec<u8>>,
-}
-
-mod instructions_b64_json {
-    use super::*;
-    use base64::prelude::*;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn deserialize<'de, D>(de: D) -> Result<Vec<InstructionQuery>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(de)?;
-        let bytes = BASE64_STANDARD
-            .decode(s)
-            .map_err(serde::de::Error::custom)?;
-        serde_json::from_slice(&bytes).map_err(serde::de::Error::custom)
-    }
-
-    pub fn serialize<S>(value: &Vec<InstructionQuery>, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = serde_json::to_vec(value).map_err(serde::ser::Error::custom)?;
-        let s = BASE64_STANDARD.encode(bytes);
-        ser.serialize_str(&s)
-    }
 }
 
 #[derive(Serialize, Builder, Clone)]

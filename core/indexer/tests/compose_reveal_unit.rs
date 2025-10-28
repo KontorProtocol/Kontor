@@ -1,7 +1,7 @@
 use bitcoin::FeeRate;
 use bitcoin::{Amount, OutPoint, TxOut, Txid};
 use indexer::api::compose::{
-    CommitInputs, InstructionInputs, ComposeInputs, build_tap_script_and_script_address,
+    CommitInputs, ComposeInputs, InstructionInputs, build_tap_script_and_script_address,
     compose_commit, compose_reveal,
 };
 use std::str::FromStr;

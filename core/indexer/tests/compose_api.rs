@@ -1,10 +1,8 @@
 use anyhow::{Result, anyhow};
 use axum::routing::post;
-use axum::{Router, http::StatusCode, routing::get};
+use axum::{Router, http::StatusCode};
 use axum_test::{TestResponse, TestServer};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as base64_engine;
 use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
@@ -19,16 +17,13 @@ use indexer::api::compose::{
     ComposeInputs, ComposeOutputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
     RevealParticipantInputs, compose, compose_reveal,
 };
-use indexer::api::handlers::post_compose;
+use indexer::api::handlers::{post_compose, post_compose_commit, post_compose_reveal};
 use indexer::legacy_test_utils;
 use indexer::reactor::results::ResultSubscriber;
 use indexer::runtime::Runtime;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer::{
-    api::{
-        Env,
-        handlers::{get_compose, get_compose_commit, get_compose_reveal},
-    },
+    api::Env,
     bitcoin_client::Client,
     config::{Config, TestConfig},
     test_utils,
@@ -59,17 +54,10 @@ async fn create_test_app(bitcoin_client: Client) -> Result<Router> {
 
     // Create router with only the compose endpoints
     Ok(Router::new()
-        .route("/compose", get(get_compose))
         .route("/compose", post(post_compose))
-        .route("/compose/commit", get(get_compose_commit))
-        .route("/compose/reveal", get(get_compose_reveal))
+        .route("/compose/commit", post(post_compose_commit))
+        .route("/compose/reveal", post(post_compose_reveal))
         .with_state(env))
-}
-
-/// Helper to encode Vec<InstructionQuery> as base64-encoded JSON
-fn encode_addresses(addresses: Vec<InstructionQuery>) -> Result<String> {
-    let json_bytes = serde_json::to_vec(&addresses)?;
-    Ok(base64_engine.encode(json_bytes))
 }
 
 #[tokio::test]
@@ -110,14 +98,15 @@ async fn test_compose() -> Result<()> {
             .to_string(),
         script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
+
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: ComposeResponse = serde_json::from_slice(response.as_bytes()).unwrap();
@@ -252,15 +241,15 @@ async fn test_compose_all_fields() -> Result<()> {
             .to_string(),
         script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2&envelope=600&chained_script_data={}",
-            urlencoding::encode(&addresses_b64),
-            urlencoding::encode(&_chained_script_data_base64),
-        ))
-        .await;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: Some(600),
+        chained_script_data: Some(b"Hello, World!".to_vec()),
+    };
+
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: ComposeResponse = serde_json::from_slice(response.as_bytes()).unwrap();
@@ -317,8 +306,7 @@ async fn test_compose_all_fields() -> Result<()> {
         .tap_script
         .clone();
 
-    let mut derived_chained_tap_script = Vec::new();
-    ciborium::into_writer(&b"Hello, World!", &mut derived_chained_tap_script).unwrap();
+    let derived_chained_tap_script = b"Hello, World!".to_vec();
 
     let derived_chained_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -433,25 +421,23 @@ async fn test_compose_missing_params() -> Result<()> {
 
     let server = TestServer::new(app)?;
 
-    // Create a manually constructed JSON without script_data field to test missing field
-    let addresses_json = serde_json::json!([{
-        "address": seller_address.to_string(),
-        "x_only_public_key": internal_key.to_string(),
-        "funding_utxo_ids": "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0",
-        // no script_data on purpose
-    }]);
-    let addresses_b64 = base64_engine.encode(serde_json::to_vec(&addresses_json)?);
-
     let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2&envelope=600&chained_script_data=",
-            urlencoding::encode(&addresses_b64),
-        ))
+        .post("/compose")
+        .json(&serde_json::json!({
+            "instructions": [{
+                "address": seller_address.to_string(),
+                "x_only_public_key": internal_key.to_string(),
+                "funding_utxo_ids": "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8:0",
+                // no script_data on purpose
+            }],
+            "sat_per_vbyte": 2,
+            "envelope": 600
+        }))
         .await;
 
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY); // axum defaults to this status code for deserialization failures; missing a param will result in 422
     let error_body = response.text();
-    assert!(error_body.contains("script_data") || error_body.contains("missing field"));
+    assert!(error_body.contains("missing field `script_data`"));
 
     Ok(())
 }
@@ -502,18 +488,18 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
             script_data: token_data_bytes.clone(),
         },
     ];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error_body = response.text();
-    assert!(error_body.contains("duplicate address provided"));
+    assert!(error_body.contains("duplicate funding outpoint provided across participants"));
 
     // duplicate utxo within a participant
     let addresses_vec2 = vec![InstructionQuery {
@@ -522,14 +508,15 @@ async fn test_compose_duplicate_address_and_duplicate_utxo() -> Result<()> {
         funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0,01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0".to_string(),
         script_data: token_data_bytes.clone(),
     }];
-    let addresses_b64_2 = encode_addresses(addresses_vec2)?;
 
-    let response2: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64_2),
-        ))
-        .await;
+    let query2 = ComposeQuery {
+        instructions: addresses_vec2,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
+
+    let response2: TestResponse = server.post("/compose").json(&query2).await;
 
     assert_eq!(response2.status_code(), StatusCode::BAD_REQUEST);
     let error_body2 = response2.text();
@@ -597,13 +584,20 @@ async fn test_compose_param_bounds_and_fee_rate() -> Result<()> {
     assert!(resp2.text().contains("chained script data size invalid"));
 
     // Invalid fee rate (0)
-    let addresses_b64_3 = encode_addresses(addresses_vec2)?;
-    let resp3: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=0",
-            urlencoding::encode(&addresses_b64_3),
-        ))
-        .await;
+    let addresses_vec3 = vec![InstructionQuery {
+        address: addr.to_string(),
+        x_only_public_key: internal_key.to_string(),
+        funding_utxo_ids: "01587d31f4144ab80432d8a48641ff6a0db29dc397ced675823791368e6eac7b:0"
+            .to_string(),
+        script_data: b"x".to_vec(),
+    }];
+    let query = ComposeQuery {
+        instructions: addresses_vec3,
+        sat_per_vbyte: 0,
+        envelope: None,
+        chained_script_data: None,
+    };
+    let resp3: TestResponse = server.post("/compose").json(&query).await;
     assert_eq!(resp3.status_code(), StatusCode::BAD_REQUEST);
     assert!(resp3.text().contains("Invalid fee rate"));
 
@@ -751,14 +745,14 @@ async fn test_compose_nonexistent_utxo() -> Result<()> {
             .to_string(),
         script_data: token_data_bytes,
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
@@ -801,14 +795,14 @@ async fn test_compose_invalid_address() -> Result<()> {
             .to_string(),
         script_data: token_data_bytes,
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 2,
+        envelope: None,
+        chained_script_data: None,
+    };
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=2",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error_body = response.text();
@@ -853,14 +847,14 @@ async fn test_compose_insufficient_funds() -> Result<()> {
             .to_string(),
         script_data: token_data_bytes,
     }];
-    let addresses_b64 = encode_addresses(addresses_vec)?;
+    let query = ComposeQuery {
+        instructions: addresses_vec,
+        sat_per_vbyte: 4,
+        envelope: None,
+        chained_script_data: None,
+    };
 
-    let response: TestResponse = server
-        .get(&format!(
-            "/compose?addresses={}&sat_per_vbyte=4",
-            urlencoding::encode(&addresses_b64),
-        ))
-        .await;
+    let response: TestResponse = server.post("/compose").json(&query).await;
 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error_body = response.text();

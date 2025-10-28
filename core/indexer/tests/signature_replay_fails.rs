@@ -15,7 +15,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::api::compose::{
-    InstructionInputs, ComposeInputs, RevealInputs, RevealParticipantInputs, compose,
+    ComposeInputs, InstructionInputs, RevealInputs, RevealParticipantInputs, compose,
     compose_reveal,
 };
 use indexer::config::TestConfig;

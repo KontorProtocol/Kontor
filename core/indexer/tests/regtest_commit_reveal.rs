@@ -7,7 +7,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::{
-    api::compose::{InstructionInputs, ComposeInputs, compose},
+    api::compose::{ComposeInputs, InstructionInputs, compose},
     bitcoin_client::Client,
     config::{Config, TestConfig},
     regtest_utils, test_utils,
