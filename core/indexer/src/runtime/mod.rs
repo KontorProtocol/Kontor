@@ -1,5 +1,4 @@
 mod component_cache;
-mod contracts;
 pub mod counter;
 pub mod fuel;
 pub mod numerics;
@@ -11,7 +10,6 @@ pub mod wit;
 
 use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
-pub use contracts::load_contracts;
 use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};

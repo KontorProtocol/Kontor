@@ -11,11 +11,17 @@ pub use indexer::runtime::wit::kontor::built_in::{
 };
 use indexer::{
     config::Config,
-    database::{queries::insert_processed_block, types::BlockRow},
+    database::{
+        queries::{
+            contract_has_state, get_transaction_by_txid, insert_block, insert_contract,
+            insert_processed_block, insert_transaction, select_block_at_height,
+        },
+        types::{BlockRow, ContractRow, TransactionRow},
+    },
     reactor::types::Inst,
     reg_tester::{self, generate_taproot_address},
-    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, load_contracts},
-    test_utils::{new_mock_block_hash, new_test_db},
+    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
+    test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
 pub use indexer::{
     logging,
@@ -109,6 +115,65 @@ pub struct RuntimeLocal {
 }
 
 impl RuntimeLocal {
+    pub async fn load_contracts(&self, signer: &Signer, contracts: &[(&str, &[u8])]) -> Result<()> {
+        let height = 0;
+        let tx_index = 0;
+        let conn = self.runtime.get_storage_conn();
+        if select_block_at_height(&conn, 0).await?.is_none() {
+            insert_block(
+                &conn,
+                BlockRow {
+                    height,
+                    hash: new_mock_block_hash(0),
+                },
+            )
+            .await?;
+        }
+
+        let tx = new_mock_transaction(1);
+        if get_transaction_by_txid(&conn, &tx.txid.to_string())
+            .await?
+            .is_none()
+        {
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .tx_index(0)
+                    .txid(tx.txid.to_string())
+                    .build(),
+            )
+            .await?;
+        };
+
+        for (name, bytes) in contracts {
+            let contract_id = insert_contract(
+                &conn,
+                ContractRow::builder()
+                    .height(height)
+                    .tx_index(tx_index)
+                    .name(name.to_string())
+                    .bytes(bytes.to_vec())
+                    .build(),
+            )
+            .await?;
+            if !contract_has_state(&conn, contract_id).await? {
+                self.runtime
+                    .execute(
+                        Some(signer),
+                        &ContractAddress {
+                            name: name.to_string(),
+                            height,
+                            tx_index,
+                        },
+                        "init()",
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn make_storage(conn: Connection) -> Result<Storage> {
         insert_processed_block(
             &conn,
@@ -144,7 +209,7 @@ impl RuntimeImpl for RuntimeLocal {
         name: &str,
         contract: &[u8],
     ) -> Result<ContractAddress> {
-        load_contracts(&self.runtime, signer, &[(name, contract)]).await?;
+        self.load_contracts(signer, &[(name, contract)]).await?;
         Ok(ContractAddress {
             name: name.to_string(),
             height: 0,
