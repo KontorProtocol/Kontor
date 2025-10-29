@@ -164,7 +164,44 @@ interface TestMempoolAcceptResultWrapper {
   result: TestMempoolAcceptResult[];
 }
 
+interface OpMetadata {
+  input_index: number;
+  signer:
+    | { XOnlyPubKey: string }
+    | { MultiSig: { pubkeys: string[]; threshold: number } };
+}
+
+interface ContractAddress {
+  name: string;
+  height: number;
+  tx_index: number;
+}
+
+type Op =
+  | {
+      Publish: {
+        metadata: OpMetadata;
+        name: string;
+        bytes: number[];
+      };
+    }
+  | {
+      Call: {
+        metadata: OpMetadata;
+        contract: ContractAddress;
+        expr: string;
+      };
+    };
+
+interface OpWithResult {
+  op: Op;
+  result: any | null;
+}
+
 // --- Helper Functions ---
+const isTaprootAddress = (addr: string): boolean =>
+  /^(bc1p|tb1p|bcrt1p)/i.test(addr);
+
 const convertKebabToSnake = (obj: Record<string, any>): Record<string, any> => {
   return Object.entries(obj).reduce((acc, [key, value]) => {
     const snakeKey = key.replace(/-([a-z])/g, (_, letter) => `_${letter}`);
@@ -186,18 +223,53 @@ async function composeCommitReveal(
   utxos: Utxo[],
   inputData: string
 ): Promise<ComposeResult> {
-  const base64EncodedData = btoa(inputData || "");
   const fundingUtxoIds = utxos
     .map((utxo) => `${utxo.txid}:${utxo.vout}`)
     .join(",");
-  const url = `${kontorUrl}/compose?address=${address.address}&x_only_public_key=${address.xOnlyPublicKey}&funding_utxo_ids=${fundingUtxoIds}&sat_per_vbyte=2&script_data=${base64EncodedData}`;
 
-  const response = await fetch(url);
+  // Serialize script data as bytes (Vec<u8> in backend JSON)
+  const scriptBytes = Array.from(new TextEncoder().encode(inputData || ""));
+
+  const body = {
+    instructions: [
+      {
+        address: address.address,
+        x_only_public_key: address.xOnlyPublicKey,
+        funding_utxo_ids: fundingUtxoIds,
+        script_data: scriptBytes,
+      },
+    ],
+    sat_per_vbyte: 2,
+  };
+
+  const response = await fetch(`${kontorUrl}/api/compose`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
   const data = await response.json();
-  if (data.error) {
-    throw new Error(data.error);
+  if (!response.ok) {
+    throw new Error(data?.error || "Failed to compose transactions");
   }
-  return data.result;
+
+  const r = data.result;
+  const first = r?.per_participant?.[0];
+  if (!first || !first.commit) {
+    throw new Error("Compose response missing participant tap script data");
+  }
+
+  return {
+    commit_transaction: r.commit_transaction,
+    commit_transaction_hex: r.commit_transaction_hex,
+    reveal_transaction: r.reveal_transaction,
+    reveal_transaction_hex: r.reveal_transaction_hex,
+    commit_psbt_hex: r.commit_psbt_hex,
+    reveal_psbt_hex: r.reveal_psbt_hex,
+    tap_script: first.commit.tap_script,
+    tap_leaf_script: first.commit.tap_leaf_script,
+    chained_tap_script: first.chained ? first.chained.tap_script : null,
+  } as ComposeResult;
 }
 
 async function broadcastTestMempoolAccept(
@@ -211,6 +283,73 @@ async function broadcastTestMempoolAccept(
     result: rawData.result.map((item: any) => convertKebabToSnake(item)),
   };
   return convertedData.result;
+}
+
+async function fetchOps(txHex: string): Promise<OpWithResult[]> {
+  const response = await fetch(`${kontorUrl}/api/transactions/ops`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hex: txHex }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData?.error || "Failed to fetch ops");
+  }
+
+  const data = await response.json();
+  return data.result || [];
+}
+
+// Helper to encode witness stack
+function encodeWitness(witness: Buffer[]): Buffer {
+  const buffers: Buffer[] = [];
+
+  // Encode witness item count
+  buffers.push(Buffer.from([witness.length]));
+
+  // Encode each witness item with its length prefix
+  witness.forEach((item) => {
+    if (item.length < 253) {
+      buffers.push(Buffer.from([item.length]));
+    } else if (item.length <= 0xffff) {
+      const buf = Buffer.allocUnsafe(3);
+      buf.writeUInt8(253, 0);
+      buf.writeUInt16LE(item.length, 1);
+      buffers.push(buf);
+    } else {
+      throw new Error("Witness item too large");
+    }
+    buffers.push(item);
+  });
+
+  return Buffer.concat(buffers);
+}
+
+function finalizeScriptSpend(
+  signedPsbt: bitcoin.Psbt,
+  scriptLeafData: TapLeafScript
+): void {
+  const input = signedPsbt.data.inputs[0];
+
+  if (!input.tapScriptSig || input.tapScriptSig.length === 0) {
+    throw new Error("No taproot script signature found");
+  }
+
+  // Build witness stack for script-path: [signature, script, control_block]
+  const witness: Buffer[] = [
+    input.tapScriptSig[0].signature,
+    Buffer.from(scriptLeafData.script, "hex"),
+    Buffer.from(scriptLeafData.controlBlock, "hex"),
+  ];
+
+  // OVERRIDE the finalScriptWitness
+  signedPsbt.data.inputs[0].finalScriptWitness = encodeWitness(witness);
+
+  // Clear the partial signatures to prevent conflicts
+  delete signedPsbt.data.inputs[0].tapScriptSig;
+  delete signedPsbt.data.inputs[0].tapKeySig;
+  delete signedPsbt.data.inputs[0].tapLeafScript;
 }
 
 async function signPsbtWithXverse(
@@ -253,8 +392,21 @@ async function signPsbtWithXverse(
   }
 
   const signedPsbt = bitcoin.Psbt.fromBase64(res.result.psbt);
-  signedPsbt.finalizeAllInputs();
+
+  // FORCE script-path spend by overriding the pre-finalized witness
+  if (scriptLeafData) {
+    finalizeScriptSpend(signedPsbt, scriptLeafData);
+  } else {
+    signedPsbt.finalizeAllInputs();
+  }
+
   const tx = signedPsbt.extractTransaction();
+
+  console.log("Final TX witness length:", tx.ins[0].witness.length);
+  console.log(
+    "Final TX witness items:",
+    tx.ins[0].witness.map((w) => w.toString("hex"))
+  );
 
   return tx.toHex();
 }
@@ -300,7 +452,12 @@ async function signPsbtWithLeather(
 
   const signedPsbt = bitcoin.Psbt.fromHex((res.result as any).hex);
 
-  signedPsbt.finalizeAllInputs();
+  // FORCE script-path spend by overriding the pre-finalized witness
+  if (scriptLeafData) {
+    finalizeScriptSpend(signedPsbt, scriptLeafData);
+  } else {
+    signedPsbt.finalizeAllInputs();
+  }
   const tx = signedPsbt.extractTransaction();
   return tx.toHex();
 }
@@ -342,37 +499,55 @@ async function signPsbtWithOKX(
 
     const signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
 
-    // Manually create witness for all inputs
-    for (let i = 0; i < signedPsbt.inputCount; i++) {
-      const input = signedPsbt.data.inputs[i];
+    // NOTE: the signing for script-spends is BROKEN with OKX
+    // we can still sign and parse the data but the signature is invalid
+    const input = signedPsbt.data.inputs[0];
 
-      if (input.tapKeySig && !scriptLeafData) {
-        // Key spend: create witness with just the signature
-        signedPsbt.updateInput(i, {
-          finalScriptWitness: Buffer.concat([
-            Buffer.from([input.tapKeySig.length]),
-            input.tapKeySig,
-          ]),
-        });
-      } else if (input.tapScriptSig && scriptLeafData) {
-        // Script spend: create witness with signature + script + control block
-        const scriptSig = input.tapScriptSig[0];
-        signedPsbt.updateInput(i, {
-          finalScriptWitness: Buffer.concat([
-            Buffer.from([scriptSig.signature.length]),
-            scriptSig.signature,
-            Buffer.from([Buffer.from(scriptLeafData.script, "hex").length]),
-            Buffer.from(scriptLeafData.script, "hex"),
-            Buffer.from([
-              Buffer.from(scriptLeafData.controlBlock, "hex").length,
-            ]),
-            Buffer.from(scriptLeafData.controlBlock, "hex"),
-          ]),
-        });
+    if (scriptLeafData) {
+      // OKX doesn't populate tapScriptSig, so we need to extract the signature
+      // from the pre-finalized witness or tapKeySig
+      let signature: Buffer;
+
+      if (input.tapScriptSig && input.tapScriptSig.length > 0) {
+        // Ideal case: tapScriptSig is populated
+        signature = input.tapScriptSig[0].signature;
+      } else if (input.tapKeySig) {
+        // OKX signed with key-path, use that signature for script-path
+        signature = input.tapKeySig;
+      } else if (input.finalScriptWitness) {
+        // Extract signature from the finalized witness
+        // Format: [witness_count, sig_length, signature_bytes...]
+        const witnessBuffer = input.finalScriptWitness;
+        // Skip first byte (witness count) and second byte (signature length)
+        signature = witnessBuffer.slice(2, 66); // 64-byte Schnorr signature
+      } else {
+        throw new Error("No signature found in OKX signed PSBT");
       }
+
+      // Build witness stack for script-path: [signature, script, control_block]
+      const witness: Buffer[] = [
+        signature,
+        Buffer.from(scriptLeafData.script, "hex"),
+        Buffer.from(scriptLeafData.controlBlock, "hex"),
+      ];
+
+      // Override with script-path witness
+      signedPsbt.data.inputs[0].finalScriptWitness = encodeWitness(witness);
+
+      // Clear partial signatures
+      delete signedPsbt.data.inputs[0].tapScriptSig;
+      delete signedPsbt.data.inputs[0].tapKeySig;
+      delete signedPsbt.data.inputs[0].tapLeafScript;
+    } else if (!input.finalScriptWitness) {
+      // Key-path spend without pre-finalization
+      signedPsbt.finalizeAllInputs();
     }
+    // else: already finalized by OKX for key-path, do nothing
 
     const tx = signedPsbt.extractTransaction();
+
+    // NOTE: OKX does not return a valid script-spend sig (tapScriptSig)
+    // therefore the reveal transaction will fail on broadcat
     return tx.toHex();
   } catch (err) {
     throw new Error(`OKX signing failed: ${err}`);
@@ -421,8 +596,12 @@ async function signPsbtWithPhantom(
     const signedPsbtHex = Buffer.from(signedPsbtBytes).toString("hex");
 
     const signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
+    if (scriptLeafData) {
+      finalizeScriptSpend(signedPsbt, scriptLeafData);
+    } else {
+      signedPsbt.finalizeAllInputs();
+    }
 
-    signedPsbt.finalizeAllInputs();
     const tx = signedPsbt.extractTransaction();
     return tx.toHex();
   } catch (err) {
@@ -521,6 +700,34 @@ const AddressInfo: React.FC<{
   </div>
 );
 
+const OpsResultDisplay: React.FC<{ ops: OpWithResult[] | null }> = ({
+  ops,
+}) => {
+  if (!ops) {
+    return null;
+  }
+
+  const content =
+    ops.length === 0
+      ? "No Kontor operations found in the transaction."
+      : JSON.stringify(ops, null, 2);
+
+  return (
+    <div className="transaction-details">
+      <h4>Ops from Reveal Transaction:</h4>
+      <pre
+        style={{
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+          textAlign: "left",
+        }}
+      >
+        {content}
+      </pre>
+    </div>
+  );
+};
+
 const TransactionDetails: React.FC<{ tx: Transaction; title: string }> = ({
   tx,
   title,
@@ -608,24 +815,59 @@ const Composer: React.FC<{
 );
 
 const Signer: React.FC<{
-  signedTx: string;
+  signedCommitTx: string;
+  signedRevealTx: string;
   onSign: () => void;
   onBroadcast: () => void;
-}> = ({ signedTx, onSign, onBroadcast }) => (
-  <div className="sign-transaction">
-    <button onClick={onSign}>Sign Transactions</button>
-    {signedTx && (
-      <>
-        <div className="signed-transaction">
-          <h3>Signed Transactions (Commit, Reveal):</h3>
-          <p className="tx-hex">{signedTx}</p>
-        </div>
-        <button onClick={onBroadcast}>Test Broadcast Transactions</button>
-        <p>Note: Transaction will not be broadcasted to the network.</p>
-      </>
-    )}
-  </div>
-);
+  provider: string;
+}> = ({ signedCommitTx, signedRevealTx, onSign, onBroadcast, provider }) => {
+  const [opsResult, setOpsResult] = useState<OpWithResult[] | null>(null);
+
+  useEffect(() => {
+    const getOps = async () => {
+      if (signedRevealTx) {
+        try {
+          const ops = await fetchOps(signedRevealTx);
+          setOpsResult(ops);
+        } catch (e) {
+          console.error("Fetch ops error:", e);
+          setOpsResult([]);
+        }
+      } else {
+        setOpsResult(null);
+      }
+    };
+    getOps();
+  }, [signedRevealTx]);
+
+  return (
+    <div className="sign-transaction">
+      <button onClick={onSign}>Sign Transactions</button>
+      {signedCommitTx && signedRevealTx && (
+        <>
+          <div className="signed-transaction">
+            <h3>Signed Commit Transaction:</h3>
+            <p className="tx-hex">{signedCommitTx}</p>
+          </div>
+          <div className="signed-transaction">
+            <h3>Signed Reveal Transaction:</h3>
+            <p className="tx-hex">{signedRevealTx}</p>
+          </div>
+          <OpsResultDisplay ops={opsResult} />
+          <button onClick={onBroadcast}>Test Broadcast Transactions</button>
+          <p>Note: Transaction will not be broadcasted to the network.</p>
+          {provider === PROVIDER_ID_OKX && (
+            <p className="error">
+              Heads up: OKX currently signs only key-path for this flow; the
+              reveal transaction will fail to broadcast due to improper
+              script-path signing.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
 
 const BroadcastResultDisplay: React.FC<{
   broadcastedTx: TestMempoolAcceptResult[];
@@ -657,7 +899,8 @@ function WalletComponent() {
     ComposeResult | undefined
   >();
   const [error, setError] = useState<string>("");
-  const [signedTx, setSignedTx] = useState<string>("");
+  const [signedCommitTx, setSignedCommitTx] = useState<string>("");
+  const [signedRevealTx, setSignedRevealTx] = useState<string>("");
   const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>(
     []
   );
@@ -670,7 +913,8 @@ function WalletComponent() {
     setAddress(undefined);
     setUtxos([]);
     setInputData("");
-    setSignedTx("");
+    setSignedCommitTx("");
+    setSignedRevealTx("");
     setBroadcastedTx([]);
     setComposeResult(undefined);
     setError("");
@@ -716,6 +960,12 @@ function WalletComponent() {
                 address: accounts[0],
                 xOnlyPublicKey: publicKey,
               };
+              if (!isTaprootAddress(paymentAddress.address)) {
+                setError(
+                  `Selected address ${paymentAddress.address} is not Taproot. Please switch to a bc1p address.`
+                );
+                return;
+              }
               setAddress(paymentAddress);
               handleFetchUtxos(paymentAddress.address);
             }
@@ -730,6 +980,12 @@ function WalletComponent() {
               address,
               xOnlyPublicKey: publicKey,
             };
+            if (!isTaprootAddress(paymentAddress.address)) {
+              setError(
+                `Selected address ${paymentAddress.address} is not Taproot. Please switch to a bc1p address.`
+              );
+              return;
+            }
             setAddress(paymentAddress);
             handleFetchUtxos(paymentAddress.address);
           }
@@ -895,18 +1151,21 @@ function WalletComponent() {
         provider,
         composeResult.tap_leaf_script
       );
-
-      setSignedTx([commitSignResult, revealSignResult].join(","));
+      setSignedCommitTx(commitSignResult);
+      setSignedRevealTx(revealSignResult);
     } catch (err) {
+      console.log("ERROR:", err);
       setError(`An error occurred while signing: ${err}`);
     }
   };
 
   const handleBroadcastTransaction = async () => {
-    if (!signedTx) return;
+    if (!signedCommitTx || !signedRevealTx) return;
     setError("");
     try {
-      const result = await broadcastTestMempoolAccept(signedTx);
+      const result = await broadcastTestMempoolAccept(
+        [signedCommitTx, signedRevealTx].join(",")
+      );
       setBroadcastedTx(result);
     } catch (err) {
       setError(`An error occurred while broadcasting: ${err}`);
@@ -950,9 +1209,11 @@ function WalletComponent() {
 
       {composeResult && (
         <Signer
-          signedTx={signedTx}
+          signedCommitTx={signedCommitTx}
+          signedRevealTx={signedRevealTx}
           onSign={handleSignTransaction}
           onBroadcast={handleBroadcastTransaction}
+          provider={provider}
         />
       )}
 
