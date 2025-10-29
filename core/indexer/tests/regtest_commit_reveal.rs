@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bitcoin::{
-    FeeRate, TapSighashType, consensus::encode::serialize as serialize_tx,
+    FeeRate, TapSighashType,
+    consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
     taproot::{LeafVersion, TaprootBuilder},
 };
@@ -14,9 +15,7 @@ use testlib::*;
 
 #[runtime(contracts_dir = "../../contracts", mode = "regtest")]
 async fn test_taproot_transaction_regtest() -> Result<()> {
-    
-    let reg = runtime.reg_tester_mut()?;
-    let identity = reg.identity().await?;
+    let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
@@ -81,7 +80,7 @@ async fn test_taproot_transaction_regtest() -> Result<()> {
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let spend_tx_hex = hex::encode(serialize_tx(&spend_tx));
 
-    let result = reg
+    let result = reg_tester
         .mempool_accept_result(&[attach_tx_hex, spend_tx_hex])
         .await?;
 

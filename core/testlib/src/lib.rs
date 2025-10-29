@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -87,7 +87,6 @@ pub struct RuntimeConfig<'a> {
 
 #[async_trait]
 pub trait RuntimeImpl: Send {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
     async fn identity(&mut self) -> Result<Signer>;
     async fn publish(
         &mut self,
@@ -134,9 +133,6 @@ impl RuntimeLocal {
 
 #[async_trait]
 impl RuntimeImpl for RuntimeLocal {
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
     async fn identity(&mut self) -> Result<Signer> {
         let (address, ..) = generate_taproot_address();
         Ok(Signer::XOnlyPubKey(address.to_string()))
@@ -185,16 +181,10 @@ impl RuntimeRegtest {
             identities,
         }
     }
-    pub fn reg_tester_mut(&mut self) -> &mut RegTester {
-        &mut self.reg_tester
-    }
 }
 
 #[async_trait]
 impl RuntimeImpl for RuntimeRegtest {
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
     async fn identity(&mut self) -> Result<Signer> {
         let identity = self.reg_tester.identity().await?;
         let signer = identity.signer();
@@ -316,13 +306,5 @@ impl Runtime {
         expr: &str,
     ) -> Result<String> {
         self.runtime.execute(signer, contract_address, expr).await
-    }
-
-    pub fn reg_tester_mut(&mut self) -> Result<&mut RegTester> {
-        if let Some(rt) = self.runtime.as_any_mut().downcast_mut::<RuntimeRegtest>() {
-            Ok(rt.reg_tester_mut())
-        } else {
-            Err(anyhow!("reg_tester only available in regtest mode"))
-        }
     }
 }

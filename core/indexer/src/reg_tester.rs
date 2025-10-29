@@ -1,11 +1,13 @@
-use std::{path::Path, str::FromStr};
+use std::{path::Path, str::FromStr, sync::Arc};
 
 use crate::{
     api::{
         client::Client as KontorClient, compose::InstructionQuery, ws::Response,
         ws_client::WebSocketClient,
     },
-    bitcoin_client::{self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult},
+    bitcoin_client::{
+        self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
+    },
     config::{Config, RegtestConfig},
     database::types::OpResultId,
     reactor::{results::ResultEvent, types::Inst},
@@ -28,6 +30,7 @@ use tokio::{
     fs,
     io::AsyncWriteExt,
     process::{Child, Command},
+    sync::Mutex,
 };
 
 const REGTEST_CONF: &str = r#"
@@ -123,7 +126,7 @@ impl Identity {
     }
 }
 
-pub struct RegTester {
+pub struct RegTesterInner {
     pub bitcoin_client: BitcoinClient,
     kontor_client: KontorClient,
     ws_client: WebSocketClient,
@@ -131,64 +134,7 @@ pub struct RegTester {
     pub height: i64,
 }
 
-impl RegTester {
-    pub async fn setup() -> Result<(
-        TempDir,
-        Child,
-        BitcoinClient,
-        TempDir,
-        Child,
-        KontorClient,
-        Identity,
-    )> {
-        let bitcoin_data_dir = TempDir::new()?;
-        let kontor_data_dir = TempDir::new()?;
-        let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
-        let (address, keypair) = generate_taproot_address();
-        let block_hashes = bitcoin_client
-            .generate_to_address(101, &address.to_string())
-            .await?;
-        let block_hash = BlockHash::from_str(
-            block_hashes
-                .first()
-                .ok_or(anyhow!("One block not created"))?,
-        )?;
-        let block = bitcoin_client.get_block(&block_hash).await?;
-        let out_point = OutPoint {
-            txid: block.txdata[0].compute_txid(),
-            vout: 0,
-        };
-        let tx_out = block.txdata[0].output[0].clone();
-        let identity = Identity {
-            address,
-            keypair,
-            next_funding_utxo: (out_point, tx_out),
-        };
-        let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path()).await?;
-        Ok((
-            bitcoin_data_dir,
-            bitcoin_child,
-            bitcoin_client,
-            kontor_data_dir,
-            kontor_child,
-            kontor_client,
-            identity,
-        ))
-    }
-
-    pub async fn teardown(
-        bitcoin_client: BitcoinClient,
-        mut bitcoin_child: Child,
-        kontor_client: KontorClient,
-        mut kontor_child: Child,
-    ) -> Result<()> {
-        kontor_client.stop().await?;
-        kontor_child.wait().await?;
-        bitcoin_client.stop().await?;
-        bitcoin_child.wait().await?;
-        Ok(())
-    }
-
+impl RegTesterInner {
     pub async fn new(
         identity: Identity,
         bitcoin_client: BitcoinClient,
@@ -214,7 +160,10 @@ impl RegTester {
         Ok(())
     }
 
-    pub async fn mempool_accept_result(&self, raw_txs: &[String]) -> Result<Vec<TestMempoolAcceptResult>> {
+    pub async fn mempool_accept_result(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<Vec<TestMempoolAcceptResult>> {
         let result = self.bitcoin_client.test_mempool_accept(raw_txs).await?;
         Ok(result)
     }
@@ -375,5 +324,104 @@ impl RegTester {
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         let response = self.kontor_client.wit(contract_address).await?;
         Ok(response.wit)
+    }
+}
+
+#[derive(Clone)]
+pub struct RegTester {
+    inner: Arc<Mutex<RegTesterInner>>,
+}
+
+impl RegTester {
+    pub async fn setup() -> Result<(
+        TempDir,
+        Child,
+        BitcoinClient,
+        TempDir,
+        Child,
+        KontorClient,
+        Identity,
+    )> {
+        let bitcoin_data_dir = TempDir::new()?;
+        let kontor_data_dir = TempDir::new()?;
+        let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
+        let (address, keypair) = generate_taproot_address();
+        let block_hashes = bitcoin_client
+            .generate_to_address(101, &address.to_string())
+            .await?;
+        let block_hash = BlockHash::from_str(
+            block_hashes
+                .first()
+                .ok_or(anyhow!("One block not created"))?,
+        )?;
+        let block = bitcoin_client.get_block(&block_hash).await?;
+        let out_point = OutPoint {
+            txid: block.txdata[0].compute_txid(),
+            vout: 0,
+        };
+        let tx_out = block.txdata[0].output[0].clone();
+        let identity = Identity {
+            address,
+            keypair,
+            next_funding_utxo: (out_point, tx_out),
+        };
+        let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path()).await?;
+        Ok((
+            bitcoin_data_dir,
+            bitcoin_child,
+            bitcoin_client,
+            kontor_data_dir,
+            kontor_child,
+            kontor_client,
+            identity,
+        ))
+    }
+
+    pub async fn teardown(
+        bitcoin_client: BitcoinClient,
+        mut bitcoin_child: Child,
+        kontor_client: KontorClient,
+        mut kontor_child: Child,
+    ) -> Result<()> {
+        kontor_client.stop().await?;
+        kontor_child.wait().await?;
+        bitcoin_client.stop().await?;
+        bitcoin_child.wait().await?;
+        Ok(())
+    }
+
+    pub async fn new(
+        identity: Identity,
+        bitcoin_client: BitcoinClient,
+        kontor_client: KontorClient,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(
+                RegTesterInner::new(identity, bitcoin_client, kontor_client).await?,
+            )),
+        })
+    }
+
+    pub async fn mempool_accept_result(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<Vec<TestMempoolAcceptResult>> {
+        self.inner.lock().await.mempool_accept_result(raw_txs).await
+    }
+
+    pub async fn instruction(&mut self, ident: &mut Identity, inst: Inst) -> Result<String> {
+        self.inner.lock().await.instruction(ident, inst).await
+    }
+
+    pub async fn identity(&mut self) -> Result<Identity> {
+        self.inner.lock().await.identity().await
+    }
+
+    pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
+        self.inner.lock().await.view(contract_address, expr).await
+    }
+
+    pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
+        self.inner.lock().await.wit(contract_address).await
     }
 }

@@ -289,8 +289,8 @@ pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let bitcoin_client = bitcoin_client.clone();
                 let kontor_client = kontor_client.clone();
                 async move {
-                    let reg_tester = RegTester::new(identity, bitcoin_client, kontor_client).await?;
-                    let mut runtime = &mut Runtime::new_regtest(RuntimeConfig::builder().contracts_dir(#contracts_dir).build(), reg_tester).await?;
+                    let mut reg_tester = RegTester::new(identity, bitcoin_client, kontor_client).await?;
+                    let mut runtime = &mut Runtime::new_regtest(RuntimeConfig::builder().contracts_dir(#contracts_dir).build(), reg_tester.clone()).await?;
                     #fn_block
                 }
             })
