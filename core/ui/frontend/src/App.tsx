@@ -186,18 +186,53 @@ async function composeCommitReveal(
   utxos: Utxo[],
   inputData: string
 ): Promise<ComposeResult> {
-  const base64EncodedData = btoa(inputData || "");
   const fundingUtxoIds = utxos
     .map((utxo) => `${utxo.txid}:${utxo.vout}`)
     .join(",");
-  const url = `${kontorUrl}/compose?address=${address.address}&x_only_public_key=${address.xOnlyPublicKey}&funding_utxo_ids=${fundingUtxoIds}&sat_per_vbyte=2&script_data=${base64EncodedData}`;
 
-  const response = await fetch(url);
+  // Serialize script data as bytes (Vec<u8> in backend JSON)
+  const scriptBytes = Array.from(new TextEncoder().encode(inputData || ""));
+
+  const body = {
+    instructions: [
+      {
+        address: address.address,
+        x_only_public_key: address.xOnlyPublicKey,
+        funding_utxo_ids: fundingUtxoIds,
+        script_data: scriptBytes,
+      },
+    ],
+    sat_per_vbyte: 2,
+  };
+
+  const response = await fetch(`${kontorUrl}/api/compose`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
   const data = await response.json();
-  if (data.error) {
-    throw new Error(data.error);
+  if (!response.ok) {
+    throw new Error(data?.error || "Failed to compose transactions");
   }
-  return data.result;
+
+  const r = data.result;
+  const first = r?.per_participant?.[0];
+  if (!first || !first.commit) {
+    throw new Error("Compose response missing participant tap script data");
+  }
+
+  return {
+    commit_transaction: r.commit_transaction,
+    commit_transaction_hex: r.commit_transaction_hex,
+    reveal_transaction: r.reveal_transaction,
+    reveal_transaction_hex: r.reveal_transaction_hex,
+    commit_psbt_hex: r.commit_psbt_hex,
+    reveal_psbt_hex: r.reveal_psbt_hex,
+    tap_script: first.commit.tap_script,
+    tap_leaf_script: first.commit.tap_leaf_script,
+    chained_tap_script: first.chained ? first.chained.tap_script : null,
+  } as ComposeResult;
 }
 
 async function broadcastTestMempoolAccept(
@@ -253,10 +288,85 @@ async function signPsbtWithXverse(
   }
 
   const signedPsbt = bitcoin.Psbt.fromBase64(res.result.psbt);
-  signedPsbt.finalizeAllInputs();
+
+  console.log("Input 0 data:", signedPsbt.data.inputs[0]);
+  console.log("tapScriptSig:", signedPsbt.data.inputs[0].tapScriptSig);
+  console.log("tapKeySig:", signedPsbt.data.inputs[0].tapKeySig);
+  console.log(
+    "Pre-existing finalScriptWitness length:",
+    signedPsbt.data.inputs[0].finalScriptWitness?.length
+  );
+
+  // FORCE script-path spend by overriding the pre-finalized witness
+  if (scriptLeafData) {
+    const input = signedPsbt.data.inputs[0];
+
+    if (!input.tapScriptSig || input.tapScriptSig.length === 0) {
+      throw new Error("No taproot script signature found");
+    }
+
+    // Build witness stack for script-path: [signature, script, control_block]
+    const witness: Buffer[] = [
+      input.tapScriptSig[0].signature,
+      Buffer.from(scriptLeafData.script, "hex"),
+      Buffer.from(scriptLeafData.controlBlock, "hex"),
+    ];
+
+    console.log("Overriding with script-path witness:");
+    console.log("  Signature:", witness[0].toString("hex"));
+    console.log("  Script:", witness[1].toString("hex"));
+    console.log("  Control Block:", witness[2].toString("hex"));
+
+    // OVERRIDE the finalScriptWitness
+    signedPsbt.data.inputs[0].finalScriptWitness = encodeWitness(witness);
+
+    // Clear the partial signatures to prevent conflicts
+    delete signedPsbt.data.inputs[0].tapScriptSig;
+    delete signedPsbt.data.inputs[0].tapKeySig;
+    delete signedPsbt.data.inputs[0].tapLeafScript;
+
+    console.log(
+      "New finalScriptWitness length:",
+      signedPsbt.data.inputs[0].finalScriptWitness.length
+    );
+  } else {
+    signedPsbt.finalizeAllInputs();
+  }
+
   const tx = signedPsbt.extractTransaction();
 
+  console.log("Final TX witness length:", tx.ins[0].witness.length);
+  console.log(
+    "Final TX witness items:",
+    tx.ins[0].witness.map((w) => w.toString("hex"))
+  );
+
   return tx.toHex();
+}
+
+// Helper to encode witness stack
+function encodeWitness(witness: Buffer[]): Buffer {
+  const buffers: Buffer[] = [];
+
+  // Encode witness item count
+  buffers.push(Buffer.from([witness.length]));
+
+  // Encode each witness item with its length prefix
+  witness.forEach((item) => {
+    if (item.length < 253) {
+      buffers.push(Buffer.from([item.length]));
+    } else if (item.length <= 0xffff) {
+      const buf = Buffer.allocUnsafe(3);
+      buf.writeUInt8(253, 0);
+      buf.writeUInt16LE(item.length, 1);
+      buffers.push(buf);
+    } else {
+      throw new Error("Witness item too large");
+    }
+    buffers.push(item);
+  });
+
+  return Buffer.concat(buffers);
 }
 
 async function signPsbtWithLeather(
@@ -521,6 +631,7 @@ const AddressInfo: React.FC<{
   </div>
 );
 
+
 const TransactionDetails: React.FC<{ tx: Transaction; title: string }> = ({
   tx,
   title,
@@ -608,24 +719,45 @@ const Composer: React.FC<{
 );
 
 const Signer: React.FC<{
-  signedTx: string;
+  signedCommitTx: string;
+  signedRevealTx: string;
   onSign: () => void;
   onBroadcast: () => void;
-}> = ({ signedTx, onSign, onBroadcast }) => (
-  <div className="sign-transaction">
-    <button onClick={onSign}>Sign Transactions</button>
-    {signedTx && (
-      <>
-        <div className="signed-transaction">
-          <h3>Signed Transactions (Commit, Reveal):</h3>
-          <p className="tx-hex">{signedTx}</p>
-        </div>
-        <button onClick={onBroadcast}>Test Broadcast Transactions</button>
-        <p>Note: Transaction will not be broadcasted to the network.</p>
-      </>
-    )}
-  </div>
-);
+}> = ({ signedCommitTx, signedRevealTx, onSign, onBroadcast }) => {
+  let revealWitnessHex: string[] = [];
+  let decodedRevealScriptLines: string[] = [];
+
+  try {
+    let revealTx = signedRevealTx;
+    let tx = bitcoin.Transaction.fromHex(revealTx);
+
+    console.log("REVEAL TX!!!!:", tx);
+
+  } catch (e) {
+    console.log("ERROR:", e);
+    // ignore decoding errors in UI
+  }
+
+  return (
+    <div className="sign-transaction">
+      <button onClick={onSign}>Sign Transactions</button>
+      {signedCommitTx && signedRevealTx && (
+        <>
+          <div className="signed-transaction">
+            <h3>Signed Commit Transaction:</h3>
+            <p className="tx-hex">{signedCommitTx}</p>
+          </div>
+          <div className="signed-transaction">
+            <h3>Signed Reveal Transaction:</h3>
+            <p className="tx-hex">{signedRevealTx}</p>
+          </div>
+          <button onClick={onBroadcast}>Test Broadcast Transactions</button>
+          <p>Note: Transaction will not be broadcasted to the network.</p>
+        </>
+      )}
+    </div>
+  );
+};
 
 const BroadcastResultDisplay: React.FC<{
   broadcastedTx: TestMempoolAcceptResult[];
@@ -657,7 +789,8 @@ function WalletComponent() {
     ComposeResult | undefined
   >();
   const [error, setError] = useState<string>("");
-  const [signedTx, setSignedTx] = useState<string>("");
+  const [signedCommitTx, setSignedCommitTx] = useState<string>("");
+  const [signedRevealTx, setSignedRevealTx] = useState<string>("");
   const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>(
     []
   );
@@ -670,7 +803,8 @@ function WalletComponent() {
     setAddress(undefined);
     setUtxos([]);
     setInputData("");
-    setSignedTx("");
+    setSignedCommitTx("");
+    setSignedRevealTx("");
     setBroadcastedTx([]);
     setComposeResult(undefined);
     setError("");
@@ -895,18 +1029,21 @@ function WalletComponent() {
         provider,
         composeResult.tap_leaf_script
       );
-
-      setSignedTx([commitSignResult, revealSignResult].join(","));
+      setSignedCommitTx(commitSignResult);
+      setSignedRevealTx(revealSignResult);
     } catch (err) {
+      console.log("ERROR:", err);
       setError(`An error occurred while signing: ${err}`);
     }
   };
 
   const handleBroadcastTransaction = async () => {
-    if (!signedTx) return;
+    if (!signedCommitTx || !signedRevealTx) return;
     setError("");
     try {
-      const result = await broadcastTestMempoolAccept(signedTx);
+      const result = await broadcastTestMempoolAccept(
+        [signedCommitTx, signedRevealTx].join(",")
+      );
       setBroadcastedTx(result);
     } catch (err) {
       setError(`An error occurred while broadcasting: ${err}`);
@@ -950,7 +1087,8 @@ function WalletComponent() {
 
       {composeResult && (
         <Signer
-          signedTx={signedTx}
+          signedCommitTx={signedCommitTx}
+          signedRevealTx={signedRevealTx}
           onSign={handleSignTransaction}
           onBroadcast={handleBroadcastTransaction}
         />

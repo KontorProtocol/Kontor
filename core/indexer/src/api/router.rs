@@ -132,7 +132,12 @@ pub fn new(context: Env) -> Router {
                         .on_failure(NoOpOnFailure),
                 )
                 .layer(PropagateRequestIdLayer::new(x_request_id))
-                .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any))
+                .layer(
+                    CorsLayer::new()
+                        .allow_origin(Any)
+                        .allow_methods(Any)
+                        .allow_headers(Any),
+                )
                 .layer(CatchPanicLayer::custom(handle_panic))
                 .layer(TimeoutLayer::new(Duration::from_secs(30))),
         )
