@@ -631,6 +631,36 @@ const AddressInfo: React.FC<{
   </div>
 );
 
+// --- Script decoding helpers ---
+const getOpcodeName = (op: number): string => {
+  const entry = Object.entries(bitcoin.opcodes).find(
+    ([, value]) => value === op
+  );
+  return entry ? entry[0] : `OP_${op}`;
+};
+
+const isPrintableAscii = (buf: Uint8Array): boolean =>
+  Array.from(buf).every((b) => b >= 32 && b <= 126);
+
+const toAsciiOrHex = (buf: Uint8Array): string =>
+  isPrintableAscii(buf)
+    ? `"${Buffer.from(buf).toString("utf8")}` + `"`
+    : Buffer.from(buf).toString("hex");
+
+const decompileTapScriptToLines = (scriptBuffer: Buffer): string[] => {
+  try {
+    const chunks = bitcoin.script.decompile(scriptBuffer);
+    if (!chunks) return ["<unable to decompile script>"];
+    return chunks.map((chunk) => {
+      if (Buffer.isBuffer(chunk)) {
+        return `PUSH(${chunk.length}): ${toAsciiOrHex(chunk)}`;
+      }
+      return getOpcodeName(chunk as number);
+    });
+  } catch (_) {
+    return ["<error decoding script>"];
+  }
+};
 
 const TransactionDetails: React.FC<{ tx: Transaction; title: string }> = ({
   tx,
@@ -724,18 +754,20 @@ const Signer: React.FC<{
   onSign: () => void;
   onBroadcast: () => void;
 }> = ({ signedCommitTx, signedRevealTx, onSign, onBroadcast }) => {
-  let revealWitnessHex: string[] = [];
-  let decodedRevealScriptLines: string[] = [];
-
+  // Only attempt to decode after both transactions are signed
+  let decodedLines: string[] = [];
   try {
-    let revealTx = signedRevealTx;
-    let tx = bitcoin.Transaction.fromHex(revealTx);
-
-    console.log("REVEAL TX!!!!:", tx);
-
+    if (signedCommitTx && signedRevealTx) {
+      const revealTx = bitcoin.Transaction.fromHex(signedRevealTx);
+      const witness = revealTx.ins?.[0]?.witness ?? [];
+      console.log("Witness length:", witness.length);
+      if (witness.length >= 2) {
+        const scriptBuffer = witness[1];
+        decodedLines = decompileTapScriptToLines(scriptBuffer as Buffer);
+      }
+    }
   } catch (e) {
-    console.log("ERROR:", e);
-    // ignore decoding errors in UI
+    console.error("Signer decode error:", e);
   }
 
   return (
@@ -751,6 +783,16 @@ const Signer: React.FC<{
             <h3>Signed Reveal Transaction:</h3>
             <p className="tx-hex">{signedRevealTx}</p>
           </div>
+          {decodedLines.length > 0 && (
+            <div className="transaction-details">
+              <h4>Decoded Tap Script (from witness[len-2]):</h4>
+              <ul>
+                {decodedLines.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <button onClick={onBroadcast}>Test Broadcast Transactions</button>
           <p>Note: Transaction will not be broadcasted to the network.</p>
         </>
