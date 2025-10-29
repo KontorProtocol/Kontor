@@ -60,7 +60,7 @@ pub struct Config {
         long,
         env = "STARTING_BLOCK_HEIGHT",
         help = "Block height to begin parsing at (e.g. 850000)",
-        default_value = "894000"
+        default_value = "921300"
     )]
     pub starting_block_height: u64,
 

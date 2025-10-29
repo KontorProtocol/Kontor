@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
+use std::io::Read;
+use wit_component::{ComponentEncoder, WitPrinter};
 
 use crate::{
     database::{
@@ -87,6 +89,35 @@ impl Storage {
 
     pub async fn contract_bytes(&self, contract_id: i64) -> Result<Option<Vec<u8>>> {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
+    }
+
+    pub async fn component_bytes(&self, contract_id: i64) -> Result<Vec<u8>> {
+        let compressed_bytes = self
+            .contract_bytes(contract_id)
+            .await?
+            .ok_or(anyhow!("Contract not found when trying to load component"))?;
+        let module_bytes = tokio::task::spawn_blocking(move || {
+            let mut decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
+            let mut module_bytes = Vec::new();
+            decompressor.read_to_end(&mut module_bytes)?;
+            Ok::<_, std::io::Error>(module_bytes)
+        })
+        .await??;
+
+        ComponentEncoder::default()
+            .module(&module_bytes)?
+            .validate(true)
+            .encode()
+    }
+
+    pub async fn component_wit(&self, contract_id: i64) -> Result<String> {
+        let bs = self.component_bytes(contract_id).await?;
+        let decoded = wit_component::decode(&bs).context("Failed to decode component")?;
+        let mut printer = WitPrinter::default();
+        printer
+            .print(decoded.resolve(), decoded.package(), &[])
+            .context("Failed to print component")?;
+        Ok(format!("{}", printer.output))
     }
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<i64> {

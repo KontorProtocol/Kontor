@@ -1,6 +1,6 @@
 use bitcoin::{
     BlockHash, Txid, XOnlyPublicKey,
-    opcodes::all::{OP_CHECKSIG, OP_IF},
+    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
     script::Instruction,
 };
 
@@ -48,11 +48,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                     && let Ok(signer) = XOnlyPublicKey::from_slice(key.as_bytes())
                 {
                     let mut data = Vec::new();
-                    while let Some(Ok(Instruction::PushBytes(bs))) = insts.next() {
+                    let mut inst = insts.next();
+                    while let Some(Ok(Instruction::PushBytes(bs))) = inst {
                         data.extend_from_slice(bs.as_bytes());
+                        inst = insts.next();
                     }
 
-                    if let Ok(inst) = deserialize_cbor::<Inst>(&data) {
+                    if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
+                        && insts.next().is_none()
+                        && let Ok(inst) = deserialize_cbor::<Inst>(&data)
+                    {
                         let metadata = OpMetadata {
                             input_index: input_index as i64,
                             signer: Signer::XOnlyPubKey(signer.to_string()),

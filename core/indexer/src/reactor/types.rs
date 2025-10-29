@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::{ContractAddress, wit::Signer};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpMetadata {
     pub input_index: i64,
     pub signer: Signer,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Publish {
         metadata: OpMetadata,

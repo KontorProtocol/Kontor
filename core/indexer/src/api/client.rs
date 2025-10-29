@@ -6,7 +6,7 @@ use crate::{
     api::{
         compose::{ComposeOutputs, ComposeQuery, InstructionQuery},
         error::ErrorResponse,
-        handlers::{Info, ViewExpr, WitResponse},
+        handlers::{Info, OpWithResult, TransactionHex, ViewExpr, WitResponse},
         result::ResultResponse,
     },
     config::Config,
@@ -70,6 +70,17 @@ impl Client {
             self.client
                 .post(format!("{}/compose", &self.url))
                 .json(&query)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn transaction_ops(&self, tx_hex: TransactionHex) -> Result<Vec<OpWithResult>> {
+        Self::handle_response(
+            self.client
+                .post(format!("{}/transactions/ops", &self.url))
+                .json(&tx_hex)
                 .send()
                 .await?,
         )

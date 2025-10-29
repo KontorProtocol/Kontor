@@ -2,7 +2,10 @@ use std::{path::Path, str::FromStr, sync::Arc};
 
 use crate::{
     api::{
-        client::Client as KontorClient, compose::InstructionQuery, ws::Response,
+        client::Client as KontorClient,
+        compose::InstructionQuery,
+        handlers::{OpWithResult, TransactionHex},
+        ws::Response,
         ws_client::WebSocketClient,
     },
     bitcoin_client::{
@@ -134,6 +137,12 @@ pub struct RegTesterInner {
     pub height: i64,
 }
 
+pub struct InstructionResult {
+    pub value: String,
+    pub commit_tx_hex: String,
+    pub reveal_tx_hex: String,
+}
+
 impl RegTesterInner {
     pub async fn new(
         identity: Identity,
@@ -168,7 +177,11 @@ impl RegTesterInner {
         Ok(result)
     }
 
-    pub async fn instruction(&mut self, ident: &mut Identity, inst: Inst) -> Result<String> {
+    pub async fn instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<InstructionResult> {
         let script_data = serialize_cbor(&inst)?;
         let mut compose_res = self
             .kontor_client
@@ -247,7 +260,11 @@ impl RegTesterInner {
             .context("Failed to receive response from websocket")?
         {
             match result {
-                ResultEvent::Ok { value } => Ok(value),
+                ResultEvent::Ok { value } => Ok(InstructionResult {
+                    value,
+                    commit_tx_hex,
+                    reveal_tx_hex,
+                }),
                 ResultEvent::Err { message } => Err(anyhow!("{}", message)),
             }
         } else {
@@ -409,7 +426,22 @@ impl RegTester {
         self.inner.lock().await.mempool_accept_result(raw_txs).await
     }
 
-    pub async fn instruction(&mut self, ident: &mut Identity, inst: Inst) -> Result<String> {
+    pub async fn transaction_ops(&self, tx_hex: &str) -> Result<Vec<OpWithResult>> {
+        self.inner
+            .lock()
+            .await
+            .kontor_client
+            .transaction_ops(TransactionHex {
+                hex: tx_hex.to_string(),
+            })
+            .await
+    }
+
+    pub async fn instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<InstructionResult> {
         self.inner.lock().await.instruction(ident, inst).await
     }
 

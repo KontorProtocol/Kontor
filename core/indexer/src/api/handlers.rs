@@ -1,20 +1,20 @@
-use anyhow::Context;
 use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use wit_component::WitPrinter;
+use bitcoin::consensus::encode;
 
 use crate::{
     bitcoin_client::types::TestMempoolAcceptResult,
+    block::filter_map,
     database::{
         queries::{
-            get_contract_id_from_address, get_transaction_by_txid, get_transactions_paginated,
+            get_op_result, get_transaction_by_txid, get_transactions_paginated,
             select_block_by_height_or_hash, select_block_latest,
         },
-        types::{BlockRow, TransactionListResponse, TransactionQuery, TransactionRow},
+        types::{BlockRow, OpResultId, TransactionListResponse, TransactionQuery, TransactionRow},
     },
-    reactor::results::ResultEvent,
+    reactor::{results::ResultEvent, types::Op},
     runtime::ContractAddress,
 };
 
@@ -183,6 +183,43 @@ pub async fn get_transaction(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionHex {
+    pub hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpWithResult {
+    pub op: Op,
+    pub result: Option<ResultEvent>,
+}
+
+pub async fn post_transaction_ops(
+    State(env): State<Env>,
+    Json(TransactionHex { hex }): Json<TransactionHex>,
+) -> Result<Vec<OpWithResult>> {
+    let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let conn = env.reader.connection().await?;
+    let mut ops = Vec::new();
+    if let Some(tx) = filter_map((0, btx)) {
+        for op in tx.ops {
+            let result = get_op_result(
+                &conn,
+                &OpResultId::builder()
+                    .txid(tx.txid.to_string())
+                    .input_index(op.metadata().input_index)
+                    .op_index(0)
+                    .build(),
+            )
+            .await?
+            .map(Into::<ResultEvent>::into);
+            ops.push(OpWithResult { op, result });
+        }
+    }
+    Ok(ops.into())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewExpr {
     pub expr: String,
 }
@@ -229,16 +266,13 @@ pub struct WitResponse {
 
 pub async fn get_wit(Path(address): Path<String>, State(env): State<Env>) -> Result<WitResponse> {
     let contract_address = extract_contract_address(&address)?;
-    let contract_id =
-        get_contract_id_from_address(&*env.reader.connection().await?, &contract_address)
-            .await?
-            .ok_or(HttpError::NotFound("Contract not found".to_string()))?;
-    let bs = env.runtime.get_component_bytes(contract_id).await?;
-    let decoded = wit_component::decode(&bs).context("Failed to decode component")?;
-    let mut printer = WitPrinter::default();
-    printer
-        .print(decoded.resolve(), decoded.package(), &[])
-        .context("Failed to print component")?;
-    let wit = format!("{}", printer.output);
+    let contract_id = env
+        .runtime
+        .storage
+        .contract_id(&contract_address)
+        .await?
+        .ok_or(HttpError::NotFound("Contract not found".to_string()))?;
+
+    let wit = env.runtime.storage.component_wit(contract_id).await?;
     Ok(WitResponse { wit }.into())
 }

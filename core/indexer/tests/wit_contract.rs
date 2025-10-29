@@ -19,12 +19,20 @@ world root {
 }
 "#;
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
-async fn test_get_wit_from_api() -> Result<()> {
-    logging::setup();
+async fn run_test(runtime: &mut Runtime) -> Result<()> {
     let alice = runtime.identity().await?;
     let token = runtime.publish(&alice, "token").await?;
     let wit = runtime.wit(&token).await?;
     assert_eq!(WIT, wit);
     Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts")]
+async fn test_get_wit_from_api() -> Result<()> {
+    run_test(runtime).await
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_get_wit_from_api_regtest() -> Result<()> {
+    run_test(runtime).await
 }

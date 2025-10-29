@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     database::{
         queries::{get_contract_id_from_address, get_op_result},
-        types::OpResultId,
+        types::{ContractResultRow, OpResultId},
     },
     runtime::ContractAddress,
 };
@@ -23,6 +23,18 @@ use crate::{
 pub enum ResultEvent {
     Ok { value: String },
     Err { message: String },
+}
+
+impl From<ContractResultRow> for ResultEvent {
+    fn from(row: ContractResultRow) -> Self {
+        if let Some(value) = row.value {
+            ResultEvent::Ok { value }
+        } else {
+            ResultEvent::Err {
+                message: "Procedure failed. Error messages are ephemeral.".to_string(),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Builder)]
@@ -111,16 +123,7 @@ impl ResultSubscriptions {
             .or_default()
             .subscribe();
         if let Some(row) = get_op_result(conn, id).await? {
-            self.dispatch_one_shot(
-                id,
-                if let Some(value) = row.value {
-                    ResultEvent::Ok { value }
-                } else {
-                    ResultEvent::Err {
-                        message: "Procedure failed. Error messages are ephemeral.".to_string(),
-                    }
-                },
-            );
+            self.dispatch_one_shot(id, row.into());
         }
         Ok(receiver)
     }
