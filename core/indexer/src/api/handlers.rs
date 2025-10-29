@@ -94,8 +94,8 @@ pub async fn post_compose(
     State(env): State<Env>,
     Json(query): Json<ComposeQuery>,
 ) -> Result<ComposeOutputs> {
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    if query.instructions.len() > 400 * 1024 {
+        return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
     let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
@@ -107,30 +107,12 @@ pub async fn post_compose(
     Ok(outputs.into())
 }
 
-pub async fn get_compose(
-    Query(query): Query<ComposeQuery>,
+pub async fn post_compose_commit(
     State(env): State<Env>,
-) -> Result<ComposeOutputs> {
-    // Hard cap addresses payload
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
-    }
-
-    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
-        .await
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-
-    let outputs = compose(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
-
-    Ok(outputs.into())
-}
-
-pub async fn get_compose_commit(
-    Query(query): Query<ComposeQuery>,
-    State(env): State<Env>, // TODO
+    Json(query): Json<ComposeQuery>,
 ) -> Result<CommitOutputs> {
-    if query.addresses.len() > 64 * 1024 {
-        return Err(HttpError::BadRequest("addresses too large".to_string()).into());
+    if query.instructions.len() > 400 * 1024 {
+        return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
     let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
@@ -144,9 +126,9 @@ pub async fn get_compose_commit(
     Ok(outputs.into())
 }
 
-pub async fn get_compose_reveal(
-    Query(query): Query<RevealQuery>,
+pub async fn post_compose_reveal(
     State(env): State<Env>,
+    Json(query): Json<RevealQuery>,
 ) -> Result<RevealOutputs> {
     let inputs = RevealInputs::from_query(query, env.config.network, &env.bitcoin)
         .await

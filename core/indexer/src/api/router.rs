@@ -25,8 +25,7 @@ use super::{
     Env,
     error::ErrorResponse,
     handlers::{
-        get_block, get_block_latest, get_compose, get_compose_commit, get_compose_reveal,
-        test_mempool_accept,
+        get_block, get_block_latest, post_compose_commit, post_compose_reveal, test_mempool_accept,
     },
     ws,
 };
@@ -112,10 +111,9 @@ pub fn new(context: Env) -> Router {
                 .nest(
                     "/compose",
                     Router::new()
-                        .route("/", get(get_compose))
                         .route("/", post(post_compose))
-                        .route("/commit", get(get_compose_commit))
-                        .route("/reveal", get(get_compose_reveal)),
+                        .route("/commit", post(post_compose_commit))
+                        .route("/reveal", post(post_compose_reveal)),
                 )
                 .route("/view/{address}", post(post_view))
                 .route("/wit/{address}", get(get_wit)),

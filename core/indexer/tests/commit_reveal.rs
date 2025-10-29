@@ -11,7 +11,7 @@ use bitcoin::{
 };
 use clap::Parser;
 use indexer::api::compose::compose;
-use indexer::api::compose::{ComposeAddressInputs, ComposeInputs};
+use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::config::TestConfig;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
@@ -57,7 +57,7 @@ async fn test_taproot_transaction() -> Result<()> {
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
     let compose_params = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
-        compose::{ComposeAddressQuery, ComposeOutputs, ComposeQuery},
+        compose::{ComposeOutputs, ComposeQuery, InstructionQuery},
         error::ErrorResponse,
         handlers::{Info, ViewExpr, WitResponse},
         result::ResultResponse,
@@ -59,9 +59,9 @@ impl Client {
         .await
     }
 
-    pub async fn compose(&self, query: ComposeAddressQuery) -> Result<ComposeOutputs> {
+    pub async fn compose(&self, query: InstructionQuery) -> Result<ComposeOutputs> {
         let query = ComposeQuery {
-            addresses: vec![query],
+            instructions: vec![query],
             sat_per_vbyte: 2,
             envelope: None,
             chained_script_data: None,

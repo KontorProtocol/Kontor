@@ -1,7 +1,7 @@
 use bitcoin::FeeRate;
 use bitcoin::{Amount, OutPoint, TxOut, Txid};
 use indexer::api::compose::{
-    CommitInputs, ComposeAddressInputs, ComposeInputs, build_tap_script_and_script_address,
+    CommitInputs, ComposeInputs, InstructionInputs, build_tap_script_and_script_address,
     compose_commit, compose_reveal,
 };
 use std::str::FromStr;
@@ -25,7 +25,7 @@ fn test_compose_reveal_psbt_inputs_have_tap_fields() {
         },
     );
     let inputs = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],
@@ -65,7 +65,7 @@ fn test_compose_reveal_chained_output_and_change_thresholds() {
         },
     );
     let inputs = ComposeInputs::builder()
-        .addresses(vec![ComposeAddressInputs {
+        .instructions(vec![InstructionInputs {
             address: addr.clone(),
             x_only_public_key: xonly,
             funding_utxos: vec![utxo],

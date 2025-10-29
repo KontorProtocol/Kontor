@@ -19,7 +19,7 @@ use bon::Builder;
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use serde::{Deserialize, Serialize};
-use serde_with::{base64::Base64, serde_as};
+use serde_with::serde_as;
 use std::{collections::HashSet, str::FromStr};
 
 use crate::bitcoin_client::Client;
@@ -33,55 +33,25 @@ const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
-pub struct ComposeAddressQuery {
+
+pub struct InstructionQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
-    #[serde_as(as = "Base64")]
     pub script_data: Vec<u8>,
 }
 
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct ComposeQuery {
-    // base64-encoded JSON Vec<ComposeAddressQuery>
-    #[serde(with = "addresses_b64_json")]
-    pub addresses: Vec<ComposeAddressQuery>,
+    pub instructions: Vec<InstructionQuery>,
     pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
-    // optional base64 string → Option<Vec<u8>>
-    #[serde_as(as = "Option<Base64>")]
     pub chained_script_data: Option<Vec<u8>>,
 }
 
-mod addresses_b64_json {
-    use super::*;
-    use base64::prelude::*;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn deserialize<'de, D>(de: D) -> Result<Vec<ComposeAddressQuery>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(de)?;
-        let bytes = BASE64_STANDARD
-            .decode(s)
-            .map_err(serde::de::Error::custom)?;
-        serde_json::from_slice(&bytes).map_err(serde::de::Error::custom)
-    }
-
-    pub fn serialize<S>(value: &Vec<ComposeAddressQuery>, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = serde_json::to_vec(value).map_err(serde::ser::Error::custom)?;
-        let s = BASE64_STANDARD.encode(bytes);
-        ser.serialize_str(&s)
-    }
-}
-
 #[derive(Serialize, Builder, Clone)]
-pub struct ComposeAddressInputs {
+pub struct InstructionInputs {
     pub address: Address,
     pub x_only_public_key: XOnlyPublicKey,
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
@@ -90,7 +60,7 @@ pub struct ComposeAddressInputs {
 
 #[derive(Serialize, Builder)]
 pub struct ComposeInputs {
-    pub addresses: Vec<ComposeAddressInputs>,
+    pub instructions: Vec<InstructionInputs>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
     pub chained_script_data: Option<Vec<u8>>,
@@ -102,29 +72,20 @@ impl ComposeInputs {
         network: bitcoin::Network,
         bitcoin_client: &Client,
     ) -> Result<Self> {
-        if query.addresses.is_empty() {
-            return Err(anyhow!("No addresses provided"));
+        if query.instructions.is_empty() {
+            return Err(anyhow!("No instructions provided"));
         }
-        if query.addresses.len() > MAX_PARTICIPANTS {
+        if query.instructions.len() > MAX_PARTICIPANTS {
             return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
         }
 
         if query.sat_per_vbyte == 0 {
             return Err(anyhow!("Invalid fee rate"));
         }
-
-        // Validate unique addresses early (before fetching UTXOs)
-        let mut addr_str_set: HashSet<String> = HashSet::with_capacity(query.addresses.len());
-        for addr_query in query.addresses.iter() {
-            if !addr_str_set.insert(addr_query.address.clone()) {
-                return Err(anyhow!("duplicate address provided"));
-            }
-        }
-
         // Validate unique UTXOs within and across participants early
         let mut global_utxo_set: HashSet<String> = HashSet::new();
-        for addr_query in query.addresses.iter() {
-            let utxo_ids: Vec<&str> = addr_query.funding_utxo_ids.split(',').collect();
+        for instruction_query in query.instructions.iter() {
+            let utxo_ids: Vec<&str> = instruction_query.funding_utxo_ids.split(',').collect();
             let mut local_utxo_set: HashSet<&str> = HashSet::new();
             for utxo_id in utxo_ids.iter() {
                 if !local_utxo_set.insert(utxo_id) {
@@ -140,28 +101,29 @@ impl ComposeInputs {
             }
         }
 
-        let addresses: Vec<ComposeAddressInputs> =
-            try_join_all(query.addresses.iter().map(|address_query| async {
+        let instructions: Vec<InstructionInputs> =
+            try_join_all(query.instructions.iter().map(|instruction_query| async {
                 let address: Address =
-                    Address::from_str(&address_query.address)?.require_network(network)?;
+                    Address::from_str(&instruction_query.address)?.require_network(network)?;
                 match address.address_type() {
                     Some(AddressType::P2tr) => {}
                     _ => return Err(anyhow!("Invalid address type")),
                 }
-                let x_only_public_key = XOnlyPublicKey::from_str(&address_query.x_only_public_key)?;
+                let x_only_public_key =
+                    XOnlyPublicKey::from_str(&instruction_query.x_only_public_key)?;
                 let funding_utxos =
-                    get_utxos(bitcoin_client, address_query.funding_utxo_ids.clone()).await?;
+                    get_utxos(bitcoin_client, instruction_query.funding_utxo_ids.clone()).await?;
                 if funding_utxos.len() > MAX_UTXOS_PER_PARTICIPANT {
                     return Err(anyhow!(
                         "too many utxos for participant (max {})",
                         MAX_UTXOS_PER_PARTICIPANT
                     ));
                 }
-                let script_data = address_query.script_data.clone();
+                let script_data = instruction_query.script_data.clone();
                 if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
                     return Err(anyhow!("script data size invalid"));
                 }
-                Ok(ComposeAddressInputs {
+                Ok(InstructionInputs {
                     address,
                     x_only_public_key,
                     funding_utxos,
@@ -186,7 +148,7 @@ impl ComposeInputs {
             .max(MIN_ENVELOPE_SATS);
 
         Ok(Self {
-            addresses,
+            instructions,
             fee_rate,
             envelope,
             chained_script_data: chained_script_data_bytes,
@@ -232,7 +194,7 @@ pub struct ComposeOutputs {
 
 #[derive(Builder)]
 pub struct CommitInputs {
-    pub addresses: Vec<ComposeAddressInputs>,
+    pub instructions: Vec<InstructionInputs>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
 }
@@ -240,7 +202,7 @@ pub struct CommitInputs {
 impl From<ComposeInputs> for CommitInputs {
     fn from(value: ComposeInputs) -> Self {
         Self {
-            addresses: value.addresses,
+            instructions: value.instructions,
             fee_rate: value.fee_rate,
             envelope: value.envelope,
         }
@@ -262,7 +224,6 @@ pub struct RevealParticipantQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub commit_vout: u32,
-    #[serde_as(as = "Base64")]
     pub commit_script_data: Vec<u8>,
     pub envelope: Option<u64>,
 }
@@ -273,10 +234,8 @@ pub struct RevealQuery {
     pub commit_txid: String,
     pub sat_per_vbyte: u64,
     pub participants: Vec<RevealParticipantQuery>,
-    #[serde_as(as = "Option<Base64>")]
     pub op_return_data: Option<Vec<u8>>,
     pub envelope: Option<u64>,
-    #[serde_as(as = "Option<Base64>")]
     pub chained_script_data: Option<Vec<u8>>,
 }
 
@@ -379,10 +338,10 @@ pub struct RevealOutputs {
 
 pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
     // Clone addresses for response mapping prior to move
-    let addresses_clone = params.addresses.clone();
+    let instructions_clone = params.instructions.clone();
     // Build the commit tx
     let commit_outputs = compose_commit(CommitInputs {
-        addresses: params.addresses,
+        instructions: params.instructions,
         fee_rate: params.fee_rate,
         envelope: params.envelope,
     })?;
@@ -407,8 +366,8 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
                 .enumerate()
                 .map(|(idx, commit_pair)| ParticipantScripts {
                     index: idx as u32,
-                    address: addresses_clone[idx].address.to_string(),
-                    x_only_public_key: addresses_clone[idx].x_only_public_key.to_string(),
+                    address: instructions_clone[idx].address.to_string(),
+                    x_only_public_key: instructions_clone[idx].x_only_public_key.to_string(),
                     commit: commit_pair,
                     chained: reveal_outputs.per_participant_chained_tap.get(idx).cloned(),
                 })
@@ -429,26 +388,27 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     })?;
 
     // Validate per-participant datas alignment
-    let num_addrs = params.addresses.len();
-    if num_addrs == 0 {
-        return Err(anyhow!("No addresses provided"));
+    let num_instructions = params.instructions.len();
+    if num_instructions == 0 {
+        return Err(anyhow!("No instructions provided"));
     }
 
-    let mut per_participant_tap: Vec<TapScriptPair> = Vec::with_capacity(num_addrs);
-    let mut per_participant_selected_tx_outs: Vec<Vec<TxOut>> = Vec::with_capacity(num_addrs);
+    let mut per_participant_tap: Vec<TapScriptPair> = Vec::with_capacity(num_instructions);
+    let mut per_participant_selected_tx_outs: Vec<Vec<TxOut>> =
+        Vec::with_capacity(num_instructions);
 
-    for addr in params.addresses.iter() {
-        let chunk = addr.script_data.clone();
+    for instruction in params.instructions.iter() {
+        let chunk = instruction.script_data.clone();
 
         // Build tapscript for this address
         let (tap_script, tap_info, script_spendable_address) =
-            build_tap_script_and_script_address(addr.x_only_public_key, chunk.clone())?;
+            build_tap_script_and_script_address(instruction.x_only_public_key, chunk.clone())?;
 
         // Estimate reveal fee using helper
         let reveal_fee = estimate_reveal_fee_for_address(
             &tap_script,
             &tap_info,
-            addr.address.script_pubkey().len(),
+            instruction.address.script_pubkey().len(),
             params.fee_rate,
         )?;
 
@@ -456,7 +416,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         let script_value = params.envelope.saturating_add(reveal_fee);
 
         // Select only necessary UTXOs for this address to cover script_value + commit delta fee
-        let mut utxos = addr.funding_utxos.clone();
+        let mut utxos = instruction.funding_utxos.clone();
         // Sort ascending, then pop() to take largest-first deterministically
         utxos.sort_by_key(|(_, txout)| txout.value.to_sat());
 
@@ -490,7 +450,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             });
             base.output.push(TxOut {
                 value: Amount::from_sat(0),
-                script_pubkey: addr.address.script_pubkey(),
+                script_pubkey: instruction.address.script_pubkey(),
             });
             let total_fee_target = estimate_fee_with_dummy_key_witness(&base, params.fee_rate)
                 .ok_or(anyhow!("fee calculation overflow"))?;
@@ -507,7 +467,10 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                     selected.push((op, txo));
                 }
                 None => {
-                    return Err(anyhow!("Insufficient inputs for address {}", addr.address));
+                    return Err(anyhow!(
+                        "Insufficient inputs for address {}",
+                        instruction.address
+                    ));
                 }
             }
         }
@@ -523,7 +486,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             });
             let inp: bitcoin::psbt::Input = bitcoin::psbt::Input {
                 witness_utxo: Some(prevout.clone()),
-                tap_internal_key: Some(addr.x_only_public_key),
+                tap_internal_key: Some(instruction.x_only_public_key),
                 ..Default::default()
             };
             commit_psbt.inputs.push(inp);
@@ -543,7 +506,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         let mut with_change = commit_psbt.unsigned_tx.clone();
         with_change.output.push(TxOut {
             value: Amount::from_sat(0),
-            script_pubkey: addr.address.script_pubkey(),
+            script_pubkey: instruction.address.script_pubkey(),
         });
         let with_change_fee = estimate_fee_with_dummy_key_witness(&with_change, params.fee_rate)
             .ok_or(anyhow!("fee calculation overflow"))?;
@@ -555,7 +518,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         if change_candidate >= params.envelope {
             commit_psbt.unsigned_tx.output.push(TxOut {
                 value: Amount::from_sat(change_candidate),
-                script_pubkey: addr.address.script_pubkey(),
+                script_pubkey: instruction.address.script_pubkey(),
             });
             commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         }
@@ -587,13 +550,14 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     // Build reveal inputs here for convenience
     use std::collections::HashMap;
     let commit_txid = commit_transaction.compute_txid();
-    let mut participants: Vec<RevealParticipantInputs> = Vec::with_capacity(params.addresses.len());
+    let mut participants: Vec<RevealParticipantInputs> =
+        Vec::with_capacity(params.instructions.len());
     // Track how many times we've assigned a given script_pubkey to ensure unique vout selection
     let mut spk_usage_counts: HashMap<ScriptBuf, u32> = HashMap::new();
-    for (idx, a) in params.addresses.iter().enumerate() {
+    for (idx, instruction) in params.instructions.iter().enumerate() {
         let pair = &per_participant_tap[idx];
         let (_tap, _info, script_addr) = build_tap_script_and_script_address(
-            a.x_only_public_key,
+            instruction.x_only_public_key,
             pair.script_data_chunk.clone(),
         )?;
         let spk = script_addr.script_pubkey();
@@ -615,7 +579,12 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("failed to locate unique commit vout for {}", a.address))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to locate unique commit vout for {}",
+                    instruction.address
+                )
+            })?;
         *spk_usage_counts.entry(spk.clone()).or_insert(0) += 1;
         let commit_outpoint = OutPoint {
             txid: commit_txid,
@@ -623,8 +592,8 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         };
         let commit_prevout = commit_transaction.output[vout as usize].clone();
         participants.push(RevealParticipantInputs {
-            address: a.address.clone(),
-            x_only_public_key: a.x_only_public_key,
+            address: instruction.address.clone(),
+            x_only_public_key: instruction.x_only_public_key,
             commit_outpoint,
             commit_prevout,
             commit_script_data: pair.script_data_chunk.clone(),
