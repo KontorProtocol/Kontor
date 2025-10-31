@@ -264,12 +264,12 @@ impl RegTesterInner {
             .context("Failed to receive response from websocket")?
         {
             match result {
-                ResultEvent::Ok { value } => Ok(InstructionResult {
+                ResultEvent::Ok { value, .. } => Ok(InstructionResult {
                     value,
                     commit_tx_hex,
                     reveal_tx_hex,
                 }),
-                ResultEvent::Err { message } => Err(anyhow!("{}", message)),
+                ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
             }
         } else {
             Err(anyhow!("Unexpected response from websocket"))
@@ -337,8 +337,8 @@ impl RegTesterInner {
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
         let result = self.kontor_client.view(contract_address, expr).await?;
         match result {
-            ResultEvent::Ok { value } => Ok(value),
-            ResultEvent::Err { message } => Err(anyhow!("{}", message)),
+            ResultEvent::Ok { value, .. } => Ok(value),
+            ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
         }
     }
 

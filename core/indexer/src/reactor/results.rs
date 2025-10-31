@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use bon::Builder;
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
@@ -13,38 +13,64 @@ use uuid::Uuid;
 
 use crate::{
     database::{
-        queries::{get_contract_id_from_address, get_op_result},
-        types::{ContractResultRow, OpResultId},
+        queries::{get_contract_address_from_id, get_op_result},
+        types::OpResultId,
     },
     runtime::ContractAddress,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ResultEvent {
-    Ok { value: String },
-    Err { message: String },
-}
-
-impl From<ContractResultRow> for ResultEvent {
-    fn from(row: ContractResultRow) -> Self {
-        if let Some(value) = row.value {
-            ResultEvent::Ok { value }
-        } else {
-            ResultEvent::Err {
-                message: "Procedure failed. Error messages are ephemeral.".to_string(),
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Builder)]
-pub struct ResultEventWrapper {
-    #[builder(default = 1)]
-    pub contract_id: i64,
-    #[builder(default = "".to_string())]
+pub struct ResultEventMetadata {
+    #[builder(default = ContractAddress { name: String::new(), height: 0, tx_index: 0 })]
+    pub contract_address: ContractAddress,
+    #[builder(default = String::new())]
     pub func_name: String,
     pub op_result_id: Option<OpResultId>,
-    pub event: ResultEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ResultEvent {
+    Ok {
+        metadata: ResultEventMetadata,
+        value: String,
+    },
+    Err {
+        metadata: ResultEventMetadata,
+        message: String,
+    },
+}
+
+impl ResultEvent {
+    pub fn metadata(&self) -> &ResultEventMetadata {
+        match self {
+            ResultEvent::Ok { metadata, .. } => metadata,
+            ResultEvent::Err { metadata, .. } => metadata,
+        }
+    }
+
+    pub async fn get_by_op_result_id(conn: &Connection, id: &OpResultId) -> Result<Option<Self>> {
+        Ok(if let Some(row) = get_op_result(conn, id).await? {
+            let metadata = ResultEventMetadata::builder()
+                .contract_address(
+                    get_contract_address_from_id(conn, row.contract_id)
+                        .await?
+                        .expect("Contract address must exist"),
+                )
+                .func_name(row.func_name)
+                .op_result_id(id.clone())
+                .build();
+            Some(if let Some(value) = row.value {
+                ResultEvent::Ok { metadata, value }
+            } else {
+                ResultEvent::Err {
+                    metadata,
+                    message: "Procedure failed. Error messages are ephemeral.".to_string(),
+                }
+            })
+        } else {
+            None
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,7 +127,8 @@ impl ResultSubscription {
 
 type SubscriptionsTree = (
     ResultSubscription,
-    HashMap<i64, (ResultSubscription, HashMap<String, ResultSubscription>)>,
+    // ContractAddress keys
+    HashMap<String, (ResultSubscription, HashMap<String, ResultSubscription>)>,
 );
 
 #[derive(Debug, Clone, Default)]
@@ -122,8 +149,8 @@ impl ResultSubscriptions {
             .entry(id.clone())
             .or_default()
             .subscribe();
-        if let Some(row) = get_op_result(conn, id).await? {
-            self.dispatch_one_shot(id, row.into());
+        if let Some(event) = ResultEvent::get_by_op_result_id(conn, id).await? {
+            self.dispatch_one_shot(id, event);
         }
         Ok(receiver)
     }
@@ -158,13 +185,10 @@ impl ResultSubscriptions {
                 contract_address,
                 func_name,
             } => {
-                let contract_id = get_contract_id_from_address(conn, contract_address)
-                    .await?
-                    .ok_or(anyhow!("Contract not found: {}", contract_address))?;
                 let entry = self
                     .recurring_subscriptions
                     .1
-                    .entry(contract_id)
+                    .entry(contract_address.to_string())
                     .or_default();
                 Ok(match func_name {
                     None => entry.0.subscribe(),
@@ -183,7 +207,7 @@ impl ResultSubscriptions {
         Ok((subscription_id, subscription))
     }
 
-    pub async fn unsubscribe(&mut self, conn: &Connection, id: Uuid) -> Result<bool> {
+    pub async fn unsubscribe(&mut self, id: Uuid) -> Result<bool> {
         if let Some(filter) = self.subscription_ids.remove(&id) {
             return Ok(match filter {
                 ResultEventFilter::All => {
@@ -194,10 +218,11 @@ impl ResultSubscriptions {
                     contract_address,
                     func_name,
                 } => {
-                    let contract_id = get_contract_id_from_address(conn, &contract_address)
-                        .await?
-                        .ok_or(anyhow!("Contract not found: {}", contract_address))?;
-                    match self.recurring_subscriptions.1.get_mut(&contract_id) {
+                    match self
+                        .recurring_subscriptions
+                        .1
+                        .get_mut(&contract_address.to_string())
+                    {
                         Some(entry) => {
                             let unsubscribed = match &func_name {
                                 None => {
@@ -216,7 +241,9 @@ impl ResultSubscriptions {
                                 },
                             };
                             if entry.0.is_empty() && entry.1.is_empty() {
-                                self.recurring_subscriptions.1.remove(&contract_id);
+                                self.recurring_subscriptions
+                                    .1
+                                    .remove(&contract_address.to_string());
                             }
                             unsubscribed
                         }
@@ -231,20 +258,20 @@ impl ResultSubscriptions {
         Ok(false)
     }
 
-    pub async fn dispatch(&mut self, wrapper: ResultEventWrapper) -> Result<()> {
-        if let Some(op_result_id) = wrapper.op_result_id {
-            self.dispatch_one_shot(&op_result_id, wrapper.event.clone());
+    pub async fn dispatch(&mut self, event: ResultEvent) -> Result<()> {
+        if let Some(op_result_id) = event.metadata().op_result_id.as_ref() {
+            self.dispatch_one_shot(op_result_id, event.clone());
         }
 
-        let _ = self
+        let _ = self.recurring_subscriptions.0.sender.send(event.clone());
+        if let Some(entry) = self
             .recurring_subscriptions
-            .0
-            .sender
-            .send(wrapper.event.clone());
-        if let Some(entry) = self.recurring_subscriptions.1.get(&wrapper.contract_id) {
-            let _ = entry.0.sender.send(wrapper.event.clone());
-            if let Some(entry) = entry.1.get(&wrapper.func_name) {
-                let _ = entry.sender.send(wrapper.event.clone());
+            .1
+            .get(&event.metadata().contract_address.to_string())
+        {
+            let _ = entry.0.sender.send(event.clone());
+            if let Some(entry) = entry.1.get(&event.metadata().func_name) {
+                let _ = entry.sender.send(event.clone());
             }
         }
 
@@ -267,15 +294,15 @@ impl ResultSubscriber {
         subs.subscribe(conn, filter).await
     }
 
-    pub async fn unsubscribe(&mut self, conn: &Connection, id: Uuid) -> Result<bool> {
+    pub async fn unsubscribe(&mut self, id: Uuid) -> Result<bool> {
         let mut subs = self.subscriptions.lock().await;
-        subs.unsubscribe(conn, id).await
+        subs.unsubscribe(id).await
     }
 
     pub fn run(
         &self,
         cancel_token: CancellationToken,
-        mut rx: mpsc::Receiver<ResultEventWrapper>,
+        mut rx: mpsc::Receiver<ResultEvent>,
     ) -> JoinHandle<()> {
         let self_ = self.clone();
         tokio::spawn(async move {

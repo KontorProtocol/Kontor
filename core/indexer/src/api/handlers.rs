@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -9,12 +10,15 @@ use crate::{
     block::filter_map,
     database::{
         queries::{
-            get_op_result, get_transaction_by_txid, get_transactions_paginated,
-            select_block_by_height_or_hash, select_block_latest,
+            get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
+            select_block_latest,
         },
         types::{BlockRow, OpResultId, TransactionListResponse, TransactionQuery, TransactionRow},
     },
-    reactor::{results::ResultEvent, types::Op},
+    reactor::{
+        results::{ResultEvent, ResultEventMetadata},
+        types::Op,
+    },
     runtime::ContractAddress,
 };
 
@@ -203,16 +207,12 @@ pub async fn post_transaction_ops(
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
         for op in tx.ops {
-            let result = get_op_result(
-                &conn,
-                &OpResultId::builder()
-                    .txid(tx.txid.to_string())
-                    .input_index(op.metadata().input_index)
-                    .op_index(0)
-                    .build(),
-            )
-            .await?
-            .map(Into::<ResultEvent>::into);
+            let id = OpResultId::builder()
+                .txid(tx.txid.to_string())
+                .input_index(op.metadata().input_index)
+                .op_index(0)
+                .build();
+            let result = ResultEvent::get_by_op_result_id(&conn, &id).await?;
             ops.push(OpWithResult { op, result });
         }
     }
@@ -249,10 +249,22 @@ pub async fn post_view(
     Json(ViewExpr { expr }): Json<ViewExpr>,
 ) -> Result<ResultEvent> {
     let contract_address = extract_contract_address(&address)?;
+    let func_name = expr
+        .split("(")
+        .next()
+        .ok_or(anyhow!("Invalid wave expression"))?;
     let result = env.runtime.execute(None, &contract_address, &expr).await;
+    let metadata = ResultEventMetadata::builder()
+        .contract_address(contract_address)
+        .func_name(func_name.to_string())
+        .build();
     Ok(match result {
-        Ok(value) => ResultEvent::Ok { value },
+        Ok(value) => ResultEvent::Ok {
+            metadata,
+            value: value.clone(),
+        },
         Err(e) => ResultEvent::Err {
+            metadata,
             message: format!("{:?}", e),
         },
     }

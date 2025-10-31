@@ -44,9 +44,10 @@ use wasmtime::{
     },
 };
 
+use crate::reactor::results::ResultEventMetadata;
 use crate::{
     database::{Reader, types::OpResultId},
-    reactor::results::{ResultEvent, ResultEventWrapper},
+    reactor::results::ResultEvent,
     runtime::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
@@ -91,7 +92,7 @@ pub struct Runtime {
     pub gauge: Option<FuelGauge>,
     pub starting_fuel: u64,
     pub txid: Txid,
-    pub events: Queue<ResultEventWrapper>,
+    pub events: Queue<ResultEvent>,
 }
 
 impl Runtime {
@@ -185,10 +186,15 @@ impl Runtime {
             .await
             .expect("Failed to insert contract result");
 
+        let contract_address = self
+            .storage
+            .contract_address(id)
+            .await?
+            .expect("Contract doesn't exist");
         self.events
-            .replace_last(
-                ResultEventWrapper::builder()
-                    .contract_id(id)
+            .replace_last(ResultEvent::Ok {
+                metadata: ResultEventMetadata::builder()
+                    .contract_address(contract_address)
                     .func_name("init".to_string())
                     .op_result_id(
                         OpResultId::builder()
@@ -197,11 +203,9 @@ impl Runtime {
                             .op_index(self.storage.op_index)
                             .build(),
                     )
-                    .event(ResultEvent::Ok {
-                        value: value.clone(),
-                    })
                     .build(),
-            )
+                value: value.clone(),
+            })
             .await;
         Ok(value)
     }
@@ -254,28 +258,28 @@ impl Runtime {
             )
             .await;
         if is_proc {
-            self.events
-                .push(
-                    ResultEventWrapper::builder()
-                        .contract_id(contract_id)
-                        .func_name(func_name)
-                        .op_result_id(
-                            OpResultId::builder()
-                                .txid(self.txid.to_string())
-                                .input_index(self.storage.input_index)
-                                .op_index(self.storage.op_index)
-                                .build(),
-                        )
-                        .event(match &result {
-                            Ok(value) => ResultEvent::Ok {
-                                value: value.clone(),
-                            },
-                            Err(e) => ResultEvent::Err {
-                                message: format!("{:?}", e),
-                            },
-                        })
+            let metadata = ResultEventMetadata::builder()
+                .contract_address(contract_address.clone())
+                .func_name(func_name)
+                .op_result_id(
+                    OpResultId::builder()
+                        .txid(self.txid.to_string())
+                        .input_index(self.storage.input_index)
+                        .op_index(self.storage.op_index)
                         .build(),
                 )
+                .build();
+            self.events
+                .push(match &result {
+                    Ok(value) => ResultEvent::Ok {
+                        metadata,
+                        value: value.clone(),
+                    },
+                    Err(e) => ResultEvent::Err {
+                        metadata,
+                        message: format!("{:?}", e),
+                    },
+                })
                 .await;
         }
         result
@@ -581,21 +585,21 @@ impl Runtime {
             )
             .await;
         if is_proc {
+            let metadata = ResultEventMetadata::builder()
+                .contract_address(contract_address.clone())
+                .func_name(func_name)
+                .build();
             self.events
-                .push(
-                    ResultEventWrapper::builder()
-                        .contract_id(contract_id)
-                        .func_name(func_name)
-                        .event(match &result {
-                            Ok(value) => ResultEvent::Ok {
-                                value: value.clone(),
-                            },
-                            Err(e) => ResultEvent::Err {
-                                message: format!("{:?}", e),
-                            },
-                        })
-                        .build(),
-                )
+                .push(match &result {
+                    Ok(value) => ResultEvent::Ok {
+                        metadata,
+                        value: value.clone(),
+                    },
+                    Err(e) => ResultEvent::Err {
+                        metadata,
+                        message: format!("{:?}", e),
+                    },
+                })
                 .await;
         }
         result

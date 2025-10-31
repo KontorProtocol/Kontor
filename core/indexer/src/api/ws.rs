@@ -124,7 +124,7 @@ pub async fn handle_message(
             info!("Received unsubscribe request for ID: {}", id);
             match state.subscriptions.remove(&id) {
                 Some(_) => {
-                    let _ = env.result_subscriber.unsubscribe(&conn, id).await;
+                    let _ = env.result_subscriber.unsubscribe(id).await;
                     info!("Unsubscribed ID: {}", id);
                     Some(Response::UnsubscribeResponse { id })
                 }
@@ -297,10 +297,8 @@ pub async fn handle_socket(
             }
         }
 
-        if let Ok(conn) = env.reader.connection().await {
-            for (id, ..) in state.subscriptions.drain() {
-                let _ = env.result_subscriber.unsubscribe(&conn, id).await;
-            }
+        for (id, ..) in state.subscriptions.drain() {
+            let _ = env.result_subscriber.unsubscribe( id).await;
         }
         let _ = socket.close().await;
         info!("WebSocket connection closed");

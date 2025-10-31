@@ -5,11 +5,11 @@ use indexer::{
     bitcoin_client::Client,
     config::Config,
     database::{
-        queries::{insert_block, insert_contract_result, insert_transaction},
-        types::{BlockRow, ContractResultRow, OpResultId, TransactionRow},
+        queries::{insert_block, insert_contract, insert_contract_result, insert_transaction},
+        types::{BlockRow, ContractResultRow, ContractRow, OpResultId, TransactionRow},
     },
     logging,
-    reactor::results::{ResultEvent, ResultEventWrapper, ResultSubscriber},
+    reactor::results::{ResultEvent, ResultEventMetadata, ResultSubscriber},
     runtime::Runtime,
     test_utils::{new_mock_block_hash, new_test_db},
 };
@@ -52,28 +52,20 @@ async fn test_websocket_server() -> Result<()> {
     let bar_subscription_id = ws_client.subscribe(&bar_id).await?;
 
     let event1 = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .op_result_id(foo_id.clone())
+            .build(),
         value: "1".to_string(),
     };
     let event2 = ResultEvent::Err {
+        metadata: ResultEventMetadata::builder()
+            .op_result_id(bar_id.clone())
+            .build(),
         message: "failure".to_string(),
     };
 
-    event_tx
-        .send(
-            ResultEventWrapper::builder()
-                .op_result_id(foo_id.clone())
-                .event(event1.clone())
-                .build(),
-        )
-        .await?;
-    event_tx
-        .send(
-            ResultEventWrapper::builder()
-                .op_result_id(bar_id.clone())
-                .event(event2.clone())
-                .build(),
-        )
-        .await?;
+    event_tx.send(event1.clone()).await?;
+    event_tx.send(event2.clone()).await?;
 
     assert_eq!(
         ws_client.next().await?,
@@ -92,14 +84,16 @@ async fn test_websocket_server() -> Result<()> {
     );
 
     let conn = reader.connection().await?;
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(1)
-            .hash(new_mock_block_hash(1))
-            .build(),
-    )
-    .await?;
+    for i in [0, 1] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(i)
+                .hash(new_mock_block_hash(i as u32))
+                .build(),
+        )
+        .await?;
+    }
     insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -109,9 +103,23 @@ async fn test_websocket_server() -> Result<()> {
             .build(),
     )
     .await?;
+    let contract_id = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .bytes(vec![])
+            .height(0)
+            .tx_index(0)
+            .name("".to_string())
+            .build(),
+    )
+    .await?;
     insert_contract_result(
         &conn,
-        ContractResultRow::builder().height(1).tx_index(1).build(),
+        ContractResultRow::builder()
+            .contract_id(contract_id)
+            .height(1)
+            .tx_index(1)
+            .build(),
     )
     .await?;
 
@@ -123,6 +131,7 @@ async fn test_websocket_server() -> Result<()> {
         Response::Result {
             id: test_subscription_id,
             result: ResultEvent::Err {
+                metadata: ResultEventMetadata::builder().op_result_id(test_id).build(),
                 message: "Procedure failed. Error messages are ephemeral.".to_string()
             }
         }
