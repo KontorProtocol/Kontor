@@ -20,6 +20,7 @@ pub struct Config {
     tx_index: i64,
     path: String,
     world: Option<String>,
+    public: Option<bool>,
 }
 
 pub fn generate(config: Config, test: bool) -> TokenStream {
@@ -30,6 +31,7 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
     let tx_index = config.tx_index;
     let path = config.path;
     let world_name = config.world.unwrap_or("contract".to_string());
+    let public = config.public.unwrap_or_default();
 
     import(
         path,
@@ -37,6 +39,7 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
         world_name,
         Some((&name, height, tx_index)),
         test,
+        public,
     )
 }
 
@@ -46,6 +49,7 @@ pub fn import(
     world_name: String,
     contract_id: Option<(&str, i64, i64)>,
     test: bool,
+    public: bool,
 ) -> TokenStream {
     assert!(fs::metadata(&path).is_ok());
     let mut resolve = Resolve::new();
@@ -116,6 +120,7 @@ pub fn import(
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
+            use super::Signer;
             use super::{ Decimal, Integer };
         }
     } else {
@@ -128,8 +133,14 @@ pub fn import(
         }
     };
 
+    let mod_keyword = if public {
+        quote! { pub mod }
+    } else {
+        quote! { mod }
+    };
+
     quote! {
-        mod #module_name {
+        #mod_keyword #module_name {
             #supers
 
             #(#type_streams)*
@@ -165,7 +176,7 @@ pub fn generate_functions(
         params[0] = quote! { #runtime_name: #runtime_ty};
         if is_proc_context {
             let signer_name = Ident::new("signer", Span::call_site());
-            let signer_ty = quote! { &testlib::Signer };
+            let signer_ty = quote! { &Signer };
             params.insert(1, quote! { #signer_name: #signer_ty });
         }
     } else if is_proc_context {

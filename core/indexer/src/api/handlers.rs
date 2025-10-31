@@ -245,7 +245,7 @@ fn extract_contract_address(s: &str) -> anyhow::Result<ContractAddress> {
 
 pub async fn post_view(
     Path(address): Path<String>,
-    State(env): State<Env>,
+    State(mut env): State<Env>,
     Json(ViewExpr { expr }): Json<ViewExpr>,
 ) -> Result<ResultEvent> {
     let contract_address = extract_contract_address(&address)?;

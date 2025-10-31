@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 stdlib = { path = "../stdlib" }
+macros = { path = "../macros" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }

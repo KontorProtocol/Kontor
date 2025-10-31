@@ -5,6 +5,7 @@ pub mod numerics;
 pub mod queue;
 mod stack;
 mod storage;
+mod token;
 mod types;
 pub mod wit;
 
@@ -159,7 +160,7 @@ impl Runtime {
         self.starting_fuel = starting_fuel
     }
 
-    pub async fn publish(&self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
+    pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
         let id = self
             .storage
             .insert_contract(name, bytes)
@@ -206,7 +207,7 @@ impl Runtime {
     }
 
     pub async fn execute(
-        &self,
+        &mut self,
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
@@ -221,6 +222,12 @@ impl Runtime {
         let (mut store, contract_id, func_name, is_fallback, params, mut results, func, is_proc) =
             self.prepare_call(contract_address, signer, expr, self.starting_fuel)
                 .await?;
+        // How we will escrow and consume gas
+        // let x = Box::pin({
+        //     let mut runtime = self.clone();
+        //     async move { token::api::balance(&mut runtime, "").await }
+        // })
+        // .await;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store)
@@ -234,14 +241,15 @@ impl Runtime {
                 contract_id,
                 &func_name,
                 result,
-                |remaining_fuel| async move {
-                    OptionFuture::from(
-                        self.gauge
-                            .as_ref()
-                            .map(|g| g.set_ending_fuel(remaining_fuel)),
-                    )
-                    .await;
-                    Ok(())
+                |remaining_fuel| {
+                    let gauge = self.gauge.clone();
+                    async move {
+                        OptionFuture::from(
+                            gauge.as_ref().map(|g| g.set_ending_fuel(remaining_fuel)),
+                        )
+                        .await;
+                        Ok(())
+                    }
                 },
             )
             .await;

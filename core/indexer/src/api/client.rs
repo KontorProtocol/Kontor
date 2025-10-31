@@ -52,7 +52,7 @@ impl Client {
     pub async fn stop(&self) -> Result<Info> {
         Self::handle_response(
             self.client
-                .get(format!("{}{}", &self.url, "/stop"))
+                .get(format!("{}/stop", &self.url))
                 .send()
                 .await?,
         )

@@ -84,11 +84,9 @@ impl Reactor {
             }
         };
 
-        let runtime = Runtime::new(
-            Storage::builder().conn(writer.connection()).build(),
-            ComponentCache::new(),
-        )
-        .await?;
+        let storage = Storage::builder().conn(writer.connection()).build();
+        storage.store_native_contracts().await?;
+        let runtime = Runtime::new(storage, ComponentCache::new()).await?;
         Ok(Self {
             reader,
             writer,

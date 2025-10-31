@@ -18,5 +18,5 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
     let path = config.path;
     let world_name = config.world.unwrap_or("contract".to_string());
 
-    import::import(path, module_name, world_name, None, test)
+    import::import(path, module_name, world_name, None, test, false)
 }
