@@ -45,7 +45,7 @@ pub struct Config {
         long,
         env = "API_PORT",
         help = "Port number for the API server (e.g., 8080)",
-        default_value = "8443"
+        default_value = "9333"
     )]
     pub api_port: u16,
 
@@ -95,6 +95,12 @@ impl Config {
             starting_block_height: 1,
             use_local_regtest: false,
         }
+    }
+
+    pub fn should_use_tls(&self) -> bool {
+        let cert_path = self.data_dir.join("cert.pem");
+        let key_path = self.data_dir.join("key.pem");
+        cert_path.exists() && key_path.exists()
     }
 }
 

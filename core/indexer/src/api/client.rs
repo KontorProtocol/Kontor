@@ -32,7 +32,12 @@ impl Client {
     }
 
     pub fn new_from_config(config: &Config) -> Result<Self> {
-        Self::new(format!("https://localhost:{}/api", config.api_port))
+        let proto = if config.should_use_tls() {
+            "https"
+        } else {
+            "http"
+        };
+        Self::new(format!("{}://localhost:{}/api", proto, config.api_port))
     }
 
     async fn handle_response<T: Serialize + for<'a> Deserialize<'a>>(res: Response) -> Result<T> {

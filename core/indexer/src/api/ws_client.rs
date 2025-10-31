@@ -7,7 +7,8 @@ use rustls::{ClientConfig, RootCertStore};
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config, tungstenite::Message,
+    Connector, MaybeTlsStream, WebSocketStream, connect_async, connect_async_tls_with_config,
+    tungstenite::Message,
 };
 use tracing::info;
 use uuid::Uuid;
@@ -40,36 +41,44 @@ pub fn from_message(m: Message) -> Result<Response> {
 impl WebSocketClient {
     pub async fn new() -> Result<Self> {
         let config = Config::try_parse()?;
-        let url = format!("wss://localhost:{}/ws", config.api_port);
-
-        let mut root_store = RootCertStore::empty();
-        #[cfg(not(windows))]
-        {
-            let certs = rustls_native_certs::load_native_certs().unwrap();
-            for cert in certs {
-                root_store.add(cert)?;
+        let url = format!("localhost:{}/ws", config.api_port);
+        let stream = if config.should_use_tls() {
+            let url = format!("wss://{}", url);
+            let mut root_store = RootCertStore::empty();
+            #[cfg(not(windows))]
+            {
+                let certs = rustls_native_certs::load_native_certs().unwrap();
+                for cert in certs {
+                    root_store.add(cert)?;
+                }
             }
-        }
-        #[cfg(windows)]
-        {
-            use std::env;
-            use std::fs;
-            use std::io::BufReader;
+            #[cfg(windows)]
+            {
+                use std::env;
+                use std::fs;
+                use std::io::BufReader;
 
-            let cert_file_path =
-                env::var("ROOT_CA_FILE").expect("ROOT_CA_FILE env var not set on Windows");
-            let cert_file = fs::File::open(cert_file_path)?;
-            let mut reader = BufReader::new(cert_file);
-            let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
-            root_store.add_parsable_certificates(certs);
-        }
+                let cert_file_path =
+                    env::var("ROOT_CA_FILE").expect("ROOT_CA_FILE env var not set on Windows");
+                let cert_file = fs::File::open(cert_file_path)?;
+                let mut reader = BufReader::new(cert_file);
+                let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+                root_store.add_parsable_certificates(certs);
+            }
 
-        let connector = Connector::Rustls(Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth(),
-        ));
-        let (stream, _) = connect_async_tls_with_config(url, None, false, Some(connector)).await?;
+            let connector = Connector::Rustls(Arc::new(
+                ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth(),
+            ));
+            let (stream, _) =
+                connect_async_tls_with_config(url, None, false, Some(connector)).await?;
+            stream
+        } else {
+            let url = format!("ws://{}", url);
+            let (stream, _) = connect_async(url).await?;
+            stream
+        };
 
         Ok(WebSocketClient { stream })
     }

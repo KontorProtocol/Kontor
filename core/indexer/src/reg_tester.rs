@@ -75,8 +75,12 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let config = Config::try_parse()?;
-    tokio::fs::copy(config.data_dir.join("cert.pem"), data_dir.join("cert.pem")).await?;
-    tokio::fs::copy(config.data_dir.join("key.pem"), data_dir.join("key.pem")).await?;
+    let cert_path = config.data_dir.join("cert.pem");
+    let key_path = config.data_dir.join("key.pem");
+    if cert_path.exists() && key_path.exists() {
+        tokio::fs::copy(cert_path, data_dir.join("cert.pem")).await?;
+        tokio::fs::copy(key_path, data_dir.join("key.pem")).await?;
+    }
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
