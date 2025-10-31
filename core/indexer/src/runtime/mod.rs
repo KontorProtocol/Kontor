@@ -5,6 +5,7 @@ pub mod numerics;
 pub mod queue;
 mod stack;
 mod storage;
+mod token;
 mod types;
 pub mod wit;
 
@@ -43,9 +44,10 @@ use wasmtime::{
     },
 };
 
+use crate::reactor::results::ResultEventMetadata;
 use crate::{
     database::{Reader, types::OpResultId},
-    reactor::results::{ResultEvent, ResultEventWrapper},
+    reactor::results::ResultEvent,
     runtime::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
@@ -90,7 +92,7 @@ pub struct Runtime {
     pub gauge: Option<FuelGauge>,
     pub starting_fuel: u64,
     pub txid: Txid,
-    pub events: Queue<ResultEventWrapper>,
+    pub events: Queue<ResultEvent>,
 }
 
 impl Runtime {
@@ -159,7 +161,7 @@ impl Runtime {
         self.starting_fuel = starting_fuel
     }
 
-    pub async fn publish(&self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
+    pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
         let id = self
             .storage
             .insert_contract(name, bytes)
@@ -184,10 +186,15 @@ impl Runtime {
             .await
             .expect("Failed to insert contract result");
 
+        let contract_address = self
+            .storage
+            .contract_address(id)
+            .await?
+            .expect("Contract doesn't exist");
         self.events
-            .replace_last(
-                ResultEventWrapper::builder()
-                    .contract_id(id)
+            .replace_last(ResultEvent::Ok {
+                metadata: ResultEventMetadata::builder()
+                    .contract_address(contract_address)
                     .func_name("init".to_string())
                     .op_result_id(
                         OpResultId::builder()
@@ -196,17 +203,15 @@ impl Runtime {
                             .op_index(self.storage.op_index)
                             .build(),
                     )
-                    .event(ResultEvent::Ok {
-                        value: value.clone(),
-                    })
                     .build(),
-            )
+                value: value.clone(),
+            })
             .await;
         Ok(value)
     }
 
     pub async fn execute(
-        &self,
+        &mut self,
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
@@ -221,6 +226,12 @@ impl Runtime {
         let (mut store, contract_id, func_name, is_fallback, params, mut results, func, is_proc) =
             self.prepare_call(contract_address, signer, expr, self.starting_fuel)
                 .await?;
+        // How we will escrow and consume gas
+        // let x = Box::pin({
+        //     let mut runtime = self.clone();
+        //     async move { token::api::balance(&mut runtime, "").await }
+        // })
+        // .await;
         let result = tokio::spawn(async move {
             let call_result = func.call_async(&mut store, &params, &mut results).await;
             (call_result, results, store)
@@ -234,40 +245,41 @@ impl Runtime {
                 contract_id,
                 &func_name,
                 result,
-                |remaining_fuel| async move {
-                    OptionFuture::from(
-                        self.gauge
-                            .as_ref()
-                            .map(|g| g.set_ending_fuel(remaining_fuel)),
-                    )
-                    .await;
-                    Ok(())
+                |remaining_fuel| {
+                    let gauge = self.gauge.clone();
+                    async move {
+                        OptionFuture::from(
+                            gauge.as_ref().map(|g| g.set_ending_fuel(remaining_fuel)),
+                        )
+                        .await;
+                        Ok(())
+                    }
                 },
             )
             .await;
         if is_proc {
-            self.events
-                .push(
-                    ResultEventWrapper::builder()
-                        .contract_id(contract_id)
-                        .func_name(func_name)
-                        .op_result_id(
-                            OpResultId::builder()
-                                .txid(self.txid.to_string())
-                                .input_index(self.storage.input_index)
-                                .op_index(self.storage.op_index)
-                                .build(),
-                        )
-                        .event(match &result {
-                            Ok(value) => ResultEvent::Ok {
-                                value: value.clone(),
-                            },
-                            Err(e) => ResultEvent::Err {
-                                message: format!("{:?}", e),
-                            },
-                        })
+            let metadata = ResultEventMetadata::builder()
+                .contract_address(contract_address.clone())
+                .func_name(func_name)
+                .op_result_id(
+                    OpResultId::builder()
+                        .txid(self.txid.to_string())
+                        .input_index(self.storage.input_index)
+                        .op_index(self.storage.op_index)
                         .build(),
                 )
+                .build();
+            self.events
+                .push(match &result {
+                    Ok(value) => ResultEvent::Ok {
+                        metadata,
+                        value: value.clone(),
+                    },
+                    Err(e) => ResultEvent::Err {
+                        metadata,
+                        message: format!("{:?}", e),
+                    },
+                })
                 .await;
         }
         result
@@ -573,21 +585,21 @@ impl Runtime {
             )
             .await;
         if is_proc {
+            let metadata = ResultEventMetadata::builder()
+                .contract_address(contract_address.clone())
+                .func_name(func_name)
+                .build();
             self.events
-                .push(
-                    ResultEventWrapper::builder()
-                        .contract_id(contract_id)
-                        .func_name(func_name)
-                        .event(match &result {
-                            Ok(value) => ResultEvent::Ok {
-                                value: value.clone(),
-                            },
-                            Err(e) => ResultEvent::Err {
-                                message: format!("{:?}", e),
-                            },
-                        })
-                        .build(),
-                )
+                .push(match &result {
+                    Ok(value) => ResultEvent::Ok {
+                        metadata,
+                        value: value.clone(),
+                    },
+                    Err(e) => ResultEvent::Err {
+                        metadata,
+                        message: format!("{:?}", e),
+                    },
+                })
                 .await;
         }
         result

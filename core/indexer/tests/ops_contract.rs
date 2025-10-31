@@ -1,6 +1,8 @@
+use bitcoin::consensus::encode::deserialize_hex;
 use indexer::{
+    database::types::OpResultId,
     reactor::{
-        results::ResultEvent,
+        results::{ResultEvent, ResultEventMetadata},
         types::{Inst, Op, OpMetadata},
     },
     reg_tester::InstructionResult,
@@ -22,6 +24,8 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
         )
         .await?;
 
+    let tx = deserialize_hex::<bitcoin::Transaction>(&reveal_tx_hex)?;
+
     let ops = reg_tester.transaction_ops(&reveal_tx_hex).await?;
     assert_eq!(ops.len(), 1);
     assert_eq!(
@@ -38,6 +42,19 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
     assert_eq!(
         ops[0].result,
         Some(ResultEvent::Ok {
+            metadata: ResultEventMetadata::builder()
+                .contract_address(ContractAddress {
+                    name: "token".to_string(),
+                    height: 103,
+                    tx_index: 2
+                })
+                .func_name("init".to_string())
+                .op_result_id(
+                    OpResultId::builder()
+                        .txid(tx.compute_txid().to_string())
+                        .build()
+                )
+                .build(),
             value: "{name: \"token\", height: 103, tx-index: 2}".to_string()
         })
     );

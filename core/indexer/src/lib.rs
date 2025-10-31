@@ -15,4 +15,5 @@ pub mod retry;
 pub mod runtime;
 pub mod stopper;
 pub mod test_utils;
+pub mod testlib_exports;
 pub mod witness_data;

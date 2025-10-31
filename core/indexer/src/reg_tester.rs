@@ -75,8 +75,12 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let config = Config::try_parse()?;
-    tokio::fs::copy(config.data_dir.join("cert.pem"), data_dir.join("cert.pem")).await?;
-    tokio::fs::copy(config.data_dir.join("key.pem"), data_dir.join("key.pem")).await?;
+    let cert_path = config.data_dir.join("cert.pem");
+    let key_path = config.data_dir.join("key.pem");
+    if cert_path.exists() && key_path.exists() {
+        tokio::fs::copy(cert_path, data_dir.join("cert.pem")).await?;
+        tokio::fs::copy(key_path, data_dir.join("key.pem")).await?;
+    }
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
@@ -260,12 +264,12 @@ impl RegTesterInner {
             .context("Failed to receive response from websocket")?
         {
             match result {
-                ResultEvent::Ok { value } => Ok(InstructionResult {
+                ResultEvent::Ok { value, .. } => Ok(InstructionResult {
                     value,
                     commit_tx_hex,
                     reveal_tx_hex,
                 }),
-                ResultEvent::Err { message } => Err(anyhow!("{}", message)),
+                ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
             }
         } else {
             Err(anyhow!("Unexpected response from websocket"))
@@ -333,8 +337,8 @@ impl RegTesterInner {
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
         let result = self.kontor_client.view(contract_address, expr).await?;
         match result {
-            ResultEvent::Ok { value } => Ok(value),
-            ResultEvent::Err { message } => Err(anyhow!("{}", message)),
+            ResultEvent::Ok { value, .. } => Ok(value),
+            ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
         }
     }
 

@@ -15,7 +15,7 @@ UI runs at localhost:3000
 Add environment variables to `.envrc`:
 ```bash
 export VITE_ELECTRS_URL="https://api.unspendablelabs.com:3000"
-export VITE_KONTOR_URL="https://localhost:8443"
+export VITE_KONTOR_URL="https://localhost:9333"
 ```
 
 ```bash

@@ -2146,6 +2146,7 @@ dependencies = [
  "indexmap 2.12.0",
  "libsql",
  "lru",
+ "macros",
  "num",
  "once_cell",
  "proptest",

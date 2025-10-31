@@ -29,7 +29,7 @@ use crate::{
         },
         types::{BlockRow, TransactionRow},
     },
-    reactor::{results::ResultEventWrapper, types::Op},
+    reactor::{results::ResultEvent, types::Op},
     runtime::{ComponentCache, Runtime, Storage},
 };
 
@@ -40,7 +40,7 @@ struct Reactor {
     ctrl: CtrlChannel,
     bitcoin_event_rx: Option<Receiver<Event>>,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
+    event_tx: Option<mpsc::Sender<ResultEvent>>,
     runtime: Runtime,
 
     last_height: u64,
@@ -55,7 +55,7 @@ impl Reactor {
         ctrl: CtrlChannel,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
-        event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
+        event_tx: Option<mpsc::Sender<ResultEvent>>,
     ) -> Result<Self> {
         let conn = &*reader.connection().await?;
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
@@ -84,11 +84,9 @@ impl Reactor {
             }
         };
 
-        let runtime = Runtime::new(
-            Storage::builder().conn(writer.connection()).build(),
-            ComponentCache::new(),
-        )
-        .await?;
+        let storage = Storage::builder().conn(writer.connection()).build();
+        storage.store_native_contracts().await?;
+        let runtime = Runtime::new(storage, ComponentCache::new()).await?;
         Ok(Self {
             reader,
             writer,
@@ -341,7 +339,7 @@ pub fn run(
     writer: database::Writer,
     ctrl: CtrlChannel,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<ResultEventWrapper>>,
+    event_tx: Option<mpsc::Sender<ResultEvent>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {

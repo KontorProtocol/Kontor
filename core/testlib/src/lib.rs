@@ -1,20 +1,14 @@
-use std::{collections::HashMap, path::PathBuf};
-
 use anyhow::Context;
 use async_trait::async_trait;
 use bon::Builder;
 use glob::Paths;
-pub use indexer::runtime::wit::kontor::built_in::{
-    error::Error,
-    foreign::ContractAddress,
-    numbers::{Decimal, Integer},
-};
+pub use indexer::testlib_exports::*;
 use indexer::{
     config::Config,
     database::{
         queries::{
-            contract_has_state, get_transaction_by_txid, insert_block, insert_contract,
-            insert_processed_block, insert_transaction, select_block_at_height,
+            contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
+            insert_transaction,
         },
         types::{BlockRow, ContractRow, TransactionRow},
     },
@@ -23,15 +17,8 @@ use indexer::{
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
-pub use indexer::{
-    logging,
-    reg_tester::RegTester,
-    runtime::{CheckedArithmetics, numerics as numbers, wit::Signer},
-};
 use libsql::Connection;
-pub use macros::{import_test as import, interface_test as interface, runtime};
-
-pub use anyhow::{Error as AnyhowError, Result, anyhow};
+use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
 use tokio::{fs::File, io::AsyncReadExt, task};
 
@@ -115,21 +102,14 @@ pub struct RuntimeLocal {
 }
 
 impl RuntimeLocal {
-    pub async fn load_contracts(&self, signer: &Signer, contracts: &[(&str, &[u8])]) -> Result<()> {
-        let height = 0;
+    pub async fn load_contracts(
+        &mut self,
+        signer: &Signer,
+        contracts: &[(&str, &[u8])],
+    ) -> Result<()> {
+        let height = 1;
         let tx_index = 0;
         let conn = self.runtime.get_storage_conn();
-        if select_block_at_height(&conn, 0).await?.is_none() {
-            insert_block(
-                &conn,
-                BlockRow {
-                    height,
-                    hash: new_mock_block_hash(0),
-                },
-            )
-            .await?;
-        }
-
         let tx = new_mock_transaction(1);
         if get_transaction_by_txid(&conn, &tx.txid.to_string())
             .await?
@@ -190,6 +170,7 @@ impl RuntimeLocal {
         let (_, writer, _db_dir) = new_test_db(&Config::new_na()).await?;
         let conn = writer.connection();
         let storage = Self::make_storage(conn).await?;
+        storage.store_native_contracts().await?;
         let component_cache = ComponentCache::new();
         let runtime = IndexerRuntime::new(storage, component_cache).await?;
         Ok(Self { runtime, _db_dir })
@@ -212,7 +193,7 @@ impl RuntimeImpl for RuntimeLocal {
         self.load_contracts(signer, &[(name, contract)]).await?;
         Ok(ContractAddress {
             name: name.to_string(),
-            height: 0,
+            height: 1,
             tx_index: 0,
         })
     }

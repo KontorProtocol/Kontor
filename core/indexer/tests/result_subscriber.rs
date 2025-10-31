@@ -3,7 +3,7 @@ use clap::Parser;
 use indexer::{
     config::Config,
     database::types::OpResultId,
-    reactor::results::{ResultEvent, ResultEventWrapper, ResultSubscriber},
+    reactor::results::{ResultEvent, ResultEventMetadata, ResultSubscriber},
     test_utils::new_test_db,
 };
 use std::time::Duration;
@@ -32,15 +32,10 @@ async fn test_subscriber_subscribe_and_receive_event() -> Result<()> {
 
     // Send an event through the mpsc channel
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder().op_result_id(id).build(),
         value: "success".to_string(),
     };
-    tx.send(
-        ResultEventWrapper::builder()
-            .op_result_id(id)
-            .event(event.clone())
-            .build(),
-    )
-    .await?;
+    tx.send(event.clone()).await?;
 
     // Receive the event
     let received = tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await??;
@@ -71,15 +66,10 @@ async fn test_subscriber_multiple_subscribers() -> Result<()> {
 
     // Send an event
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder().op_result_id(id).build(),
         value: "success".to_string(),
     };
-    tx.send(
-        ResultEventWrapper::builder()
-            .op_result_id(id)
-            .event(event.clone())
-            .build(),
-    )
-    .await?;
+    tx.send(event.clone()).await?;
 
     // Both receivers should get the event
     let received1 = tokio::time::timeout(Duration::from_secs(1), receiver1.recv()).await??;
@@ -105,10 +95,10 @@ async fn test_subscriber_unsubscribe() -> Result<()> {
     let (subscription_id, ..) = subscriber.subscribe(&conn, id.into()).await?;
 
     // Unsubscribe
-    assert!(subscriber.unsubscribe(&conn, subscription_id).await?);
+    assert!(subscriber.unsubscribe(subscription_id).await?);
 
     // Unsubscribe non-existent ID
-    assert!(!subscriber.unsubscribe(&conn, subscription_id).await?);
+    assert!(!subscriber.unsubscribe(subscription_id).await?);
 
     Ok(())
 }
@@ -125,15 +115,10 @@ async fn test_subscriber_dispatch_nonexistent_id() -> Result<()> {
 
     // Send an event for a non-existent subscription
     let event = ResultEvent::Err {
+        metadata: ResultEventMetadata::builder().op_result_id(id).build(),
         message: "error".to_string(),
     };
-    tx.send(
-        ResultEventWrapper::builder()
-            .op_result_id(id.clone())
-            .event(event.clone())
-            .build(),
-    )
-    .await?;
+    tx.send(event.clone()).await?;
 
     // Give the run task time to process
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -168,16 +153,10 @@ async fn test_subscriber_cancellation() -> Result<()> {
 
     // Send an event after cancellation (should not be processed)
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder().op_result_id(id).build(),
         value: "success".to_string(),
     };
-    let send_result = tx
-        .send(
-            ResultEventWrapper::builder()
-                .op_result_id(id.clone())
-                .event(event.clone())
-                .build(),
-        )
-        .await;
+    let send_result = tx.send(event.clone()).await;
     assert!(send_result.is_err()); // Send succeeds, but no processing
 
     // Try to receive (should fail due to no active sender)

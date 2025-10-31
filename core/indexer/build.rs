@@ -1,34 +1,7 @@
-// use glob::glob;
-// use std::process::Command;
-
-// fn main() {
-//     let mut cd = std::env::current_dir().unwrap();
-//     cd.pop();
-//     cd.pop();
-//     let contract_dir = cd.join("contracts");
-
-//     println!("cargo:rerun-if-changed={}", contract_dir.display());
-
-//     println!("Debug: Starting build script");
-//     let status = Command::new("./build.sh")
-//         .current_dir(contract_dir)
-//         .status()
-//         .expect("Failed to execute build script");
-
-//     if !status.success() {
-//         panic!("Failed to build contract to WASM");
-//     }
-// }
-
 use glob::glob;
 use std::process::Command;
 
-fn main() {
-    // Get the path to the contracts directory
-    let mut cd = std::env::current_dir().unwrap();
-    cd.pop();
-    cd.pop();
-    let contract_dir = cd.join("contracts");
+fn build(contract_dir: &std::path::Path) {
     let target_dir = contract_dir.join("target");
 
     // Define patterns to monitor (all files in contracts, recursively)
@@ -57,11 +30,19 @@ fn main() {
 
     // Execute the build script
     let status = Command::new(&build_script)
-        .current_dir(&contract_dir)
+        .current_dir(contract_dir)
         .status()
         .expect("Failed to execute build script");
 
     if !status.success() {
         panic!("Failed to build contract to WASM");
     }
+}
+
+fn main() {
+    // Get the path to the contracts directory
+    let mut cd = std::env::current_dir().unwrap();
+    cd.pop();
+    cd.pop();
+    build(&cd.join("contracts"));
 }

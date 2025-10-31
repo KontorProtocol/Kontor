@@ -8,7 +8,7 @@ use indexer::{
         queries::{insert_block, insert_contract},
         types::{BlockRow, ContractRow, OpResultId},
     },
-    reactor::results::{ResultEvent, ResultEventFilter, ResultEventWrapper, ResultSubscriptions},
+    reactor::results::{ResultEvent, ResultEventFilter, ResultEventMetadata, ResultSubscriptions},
     test_utils::{new_mock_block_hash, new_test_db},
 };
 use testlib::ContractAddress;
@@ -32,16 +32,12 @@ async fn test_subscribe_and_receive_event() -> Result<()> {
 
     // Dispatch an event
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .op_result_id(op_result_id.clone())
+            .build(),
         value: "success".to_string(),
     };
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .op_result_id(op_result_id.clone())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    subscriptions.dispatch(event.clone()).await?;
 
     // Receive the event
     let received = receiver.recv().await?;
@@ -81,16 +77,12 @@ async fn test_multiple_subscribers() -> Result<()> {
 
     // Dispatch an event
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .op_result_id(id.clone())
+            .build(),
         value: "success".to_string(),
     };
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .op_result_id(id.clone())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    subscriptions.dispatch(event.clone()).await?;
 
     // Both receivers should get the event
     let received1 = receiver1.recv().await?;
@@ -113,11 +105,11 @@ async fn test_unsubscribe() -> Result<()> {
     let (id, ..) = subscriptions.subscribe(&conn, id.clone().into()).await?;
 
     // Unsubscribe
-    assert!(subscriptions.unsubscribe(&conn, id).await?);
+    assert!(subscriptions.unsubscribe(id).await?);
     assert!(subscriptions.one_shot_subscriptions.is_empty());
 
     // Unsubscribe non-existent ID
-    assert!(!subscriptions.unsubscribe(&conn, id).await?);
+    assert!(!subscriptions.unsubscribe(id).await?);
 
     Ok(())
 }
@@ -129,16 +121,12 @@ async fn test_dispatch_to_nonexistent_id() -> Result<()> {
 
     // Dispatch to non-existent ID
     let event = ResultEvent::Err {
+        metadata: ResultEventMetadata::builder()
+            .op_result_id(id.clone())
+            .build(),
         message: "error".to_string(),
     };
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .op_result_id(id.clone())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    subscriptions.dispatch(event.clone()).await?;
     assert!(subscriptions.one_shot_subscriptions.is_empty());
 
     Ok(())
@@ -159,18 +147,34 @@ async fn test_subscriber_recurring() -> Result<()> {
             .build(),
     )
     .await?;
+    let func_name = "foo";
     let contract_address = ContractAddress {
         name: "test".to_string(),
         height: 1,
         tx_index: 1,
     };
-    let func_name = "foo";
-    let contract_id = insert_contract(
+    insert_contract(
         &conn,
         ContractRow::builder()
             .name(contract_address.name.clone())
             .height(contract_address.height)
             .tx_index(contract_address.tx_index)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+
+    let contract_address_1 = ContractAddress {
+        name: "test1".to_string(),
+        height: 1,
+        tx_index: 1,
+    };
+    insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name(contract_address_1.name.clone())
+            .height(contract_address_1.height)
+            .tx_index(contract_address_1.tx_index)
             .bytes(vec![])
             .build(),
     )
@@ -200,17 +204,13 @@ async fn test_subscriber_recurring() -> Result<()> {
         .await?;
 
     let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .contract_address(contract_address.clone())
+            .func_name(func_name.to_string())
+            .build(),
         value: "".to_string(),
     };
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .contract_id(contract_id)
-                .func_name(func_name.to_string())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    subscriptions.dispatch(event.clone()).await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), receiver1.recv()).await??,
         event
@@ -224,15 +224,15 @@ async fn test_subscriber_recurring() -> Result<()> {
         event
     );
 
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .contract_id(contract_id)
-                .func_name("bar".to_string())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .contract_address(contract_address.clone())
+            .func_name("bar".to_string())
+            .build(),
+        value: "".to_string(),
+    };
+
+    subscriptions.dispatch(event.clone()).await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), receiver1.recv()).await??,
         event
@@ -247,15 +247,15 @@ async fn test_subscriber_recurring() -> Result<()> {
             .is_err()
     );
 
-    subscriptions
-        .dispatch(
-            ResultEventWrapper::builder()
-                .contract_id(0)
-                .func_name("bar".to_string())
-                .event(event.clone())
-                .build(),
-        )
-        .await?;
+    let event = ResultEvent::Ok {
+        metadata: ResultEventMetadata::builder()
+            .contract_address(contract_address_1.clone())
+            .func_name(func_name.to_string())
+            .build(),
+        value: "".to_string(),
+    };
+
+    subscriptions.dispatch(event.clone()).await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), receiver1.recv()).await??,
         event
@@ -271,23 +271,23 @@ async fn test_subscriber_recurring() -> Result<()> {
             .is_err()
     );
 
-    assert!(subscriptions.unsubscribe(&conn, sub_id_2).await?);
+    assert!(subscriptions.unsubscribe(sub_id_2).await?);
     assert!(
         subscriptions
             .recurring_subscriptions
             .1
-            .contains_key(&contract_id)
+            .contains_key(&contract_address.to_string())
     );
 
-    assert!(subscriptions.unsubscribe(&conn, sub_id_3).await?);
+    assert!(subscriptions.unsubscribe(sub_id_3).await?);
     assert!(
         !subscriptions
             .recurring_subscriptions
             .1
-            .contains_key(&contract_id)
+            .contains_key(&contract_address.to_string())
     );
 
-    assert!(subscriptions.unsubscribe(&conn, sub_id_1).await?);
+    assert!(subscriptions.unsubscribe(sub_id_1).await?);
     assert!(subscriptions.subscription_ids.is_empty());
     assert!(subscriptions.recurring_subscriptions.0.is_empty());
 
