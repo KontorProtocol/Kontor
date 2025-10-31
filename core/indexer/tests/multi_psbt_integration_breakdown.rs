@@ -1,7 +1,7 @@
 use anyhow::Result;
+use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
-use bitcoin::{TxOut};
 use indexer::logging;
 use rand::Rng;
 use tracing::info;
@@ -32,7 +32,7 @@ Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
 use testlib::*;
 
 #[runtime(contracts_dir = "../../contracts", mode = "regtest")]
-async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) -> Result<()> {
+async fn test_portal_coordinated_compose_flow() -> Result<()> {
     // Setup
     logging::setup();
     let secp = Secp256k1::new();

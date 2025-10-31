@@ -1,50 +1,24 @@
 use anyhow::Result;
-use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{
-    Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
-    transaction::TxOut,
-};
-use bitcoin::{FeeRate, Network, TapSighashType};
-use clap::Parser;
+use bitcoin::{FeeRate, TapSighashType};
+use bitcoin::{OutPoint, consensus::encode::serialize as serialize_tx, key::Secp256k1};
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
 
 use bitcoin::Psbt;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::config::TestConfig;
-use indexer::multi_psbt_test_utils::{get_node_addresses, mock_fetch_utxos_for_addresses};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer::{bitcoin_client::Client, config::Config};
-use std::str::FromStr;
 
-#[tokio::test]
-async fn test_taproot_transaction() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+use testlib::*;
 
+async fn test_taproot_transaction(reg_tester: &mut RegTester) -> Result<()> {
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-
-    // UTXO loaded with 9000 sats
-    let out_point = OutPoint {
-        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
-        vout: 0,
-    };
-
-    let utxo_for_output = TxOut {
-        value: Amount::from_sat(9000),
-        script_pubkey: seller_address.script_pubkey(),
-    };
+    let (out_point, utxo_for_output) = identity.next_funding_utxo;
 
     // Create token balance data
     let token_value = 1000;
@@ -151,8 +125,8 @@ async fn test_taproot_transaction() -> Result<()> {
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx));
     let chained_reveal_tx_hex = hex::encode(serialize_tx(&chained_reveal_tx));
 
-    let result = client
-        .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex, chained_reveal_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[commit_tx_hex, reveal_tx_hex, chained_reveal_tx_hex])
         .await?;
 
     assert_eq!(
@@ -167,19 +141,18 @@ async fn test_taproot_transaction() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
-    let config = TestConfig::try_parse()?;
-    let secp = bitcoin::key::Secp256k1::new();
-    let (nodes, _secrets) = get_node_addresses(&secp, Network::Bitcoin, &config.taproot_key_path)?;
-    let utxos = mock_fetch_utxos_for_addresses(&nodes);
+async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    let (nodes, _secrets) =
+        indexer::multi_psbt_test_utils::get_node_addresses(&mut reg_tester.clone()).await?;
 
     let mut instructions = Vec::new();
-    for (i, n) in nodes.iter().enumerate() {
+    for n in nodes.iter() {
         instructions.push(indexer::api::compose::InstructionInputs {
             address: n.address.clone(),
             x_only_public_key: n.internal_key,
-            funding_utxos: vec![utxos[i].clone()],
+            funding_utxos: vec![n.next_funding_utxo.clone()],
             script_data: b"hello-world".to_vec(),
         });
     }
@@ -256,5 +229,12 @@ fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes() -> Result<()> {
             .all(|i| i.tap_merkle_root.is_some())
     );
 
+    Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes_regtest() -> Result<()> {
+    test_taproot_transaction(&mut reg_tester.clone()).await?;
+    test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(&mut reg_tester.clone()).await?;
     Ok(())
 }
