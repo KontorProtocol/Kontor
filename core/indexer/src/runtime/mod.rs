@@ -45,6 +45,7 @@ use wasmtime::{
 };
 
 use crate::reactor::results::ResultEventMetadata;
+use crate::runtime::wit::CoreContext;
 use crate::{
     database::{Reader, types::OpResultId},
     reactor::results::ResultEvent,
@@ -902,6 +903,24 @@ impl Runtime {
         Ok(table.push(ViewContext { contract_id })?)
     }
 
+    async fn _core_proc_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        Fuel::CoreProcContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        let signer = res.signer.clone();
+        Ok(table.push(ProcContext {
+            contract_id,
+            signer,
+        })?)
+    }
+
     async fn _get_contract_address<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -1401,6 +1420,27 @@ impl built_in::context::HostFallContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._fall_view_context(accessor, self_)
+            .await
+    }
+}
+
+impl built_in::context::HostCoreContext for Runtime {}
+
+impl built_in::context::HostCoreContextWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<CoreContext>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn proc_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._core_proc_context(accessor, self_)
             .await
     }
 }

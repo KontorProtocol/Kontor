@@ -54,6 +54,10 @@ interface context {
         proc-context: func() -> option<proc-context>;
         view-context: func() -> view-context;
     }
+
+    resource core-context {
+        proc-context: func() -> proc-context;
+    }
 }
 
 interface foreign {

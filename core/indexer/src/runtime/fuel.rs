@@ -34,6 +34,7 @@ pub enum Fuel {
     FallSigner,
     FallProcContext,
     FallViewContext,
+    CoreProcContext,
     CryptoHash(u64),
     CryptoGenerateId,
     NumbersU64ToInteger,
@@ -81,7 +82,10 @@ impl Fuel {
             Self::ProcViewContext => 200,
             Self::ProcStorage => 200,
             Self::ViewStorage => 200,
-            Self::FallSigner | Self::FallProcContext | Self::FallViewContext => 100,
+            Self::FallSigner
+            | Self::FallProcContext
+            | Self::FallViewContext
+            | Self::CoreProcContext => 100,
             Self::CryptoHash(input_len) => 500 + 10 * input_len,
             Self::CryptoGenerateId => 500,
             Self::NumbersU64ToInteger

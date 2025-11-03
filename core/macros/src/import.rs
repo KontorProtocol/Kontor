@@ -84,6 +84,7 @@ pub fn import(
                 "fall-context",
                 "proc-context",
                 "proc-storage",
+                "core-context",
                 "signer",
                 "error",
                 "keys",
