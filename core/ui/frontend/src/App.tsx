@@ -338,6 +338,141 @@ const formatError = (err: unknown): string => {
   }
 };
 
+type WalletRequestErrorObject = {
+  code?: number;
+  message?: string;
+  data?: unknown;
+  [key: string]: unknown;
+};
+
+type WalletRequestError = string | WalletRequestErrorObject;
+
+type WalletRequestResult<T = unknown> =
+  | { status: "success"; result: T }
+  | { status: "error"; error: WalletRequestError };
+
+const extractWalletErrorMessage = (error: WalletRequestError): string => {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (!error) {
+    return "Unknown error";
+  }
+  if (typeof error.message === "string" && error.message.trim()) {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+async function walletRequest<T = unknown>(
+  method: string,
+  params?: unknown,
+  providerId?: string
+): Promise<WalletRequestResult<T>> {
+  if (providerId === PROVIDER_ID_LEATHER) {
+    const provider = window.LeatherProvider;
+
+    if (!provider) {
+      return {
+        status: "error",
+        error: {
+          message: "Leather wallet provider is not available",
+        },
+      };
+    }
+
+    try {
+      const response = await provider.request(method, params);
+
+      if (response && typeof response === "object") {
+        if ("error" in response && (response as { error?: WalletRequestError }).error !== undefined) {
+          return {
+            status: "error",
+            error: (response as { error: WalletRequestError }).error,
+          };
+        }
+
+        if ("result" in response) {
+          return {
+            status: "success",
+            result: (response as { result: T }).result,
+          };
+        }
+      }
+
+      return {
+        status: "error",
+        error: {
+          message: "Unexpected response from Leather wallet",
+          data: response,
+        },
+      };
+    } catch (err) {
+      if (typeof err === "string") {
+        return {
+          status: "error",
+          error: err,
+        };
+      }
+
+      if (err && typeof err === "object") {
+        return {
+          status: "error",
+          error: err as WalletRequestErrorObject,
+        };
+      }
+
+      return {
+        status: "error",
+        error: {
+          message: String(err),
+        },
+      };
+    }
+  }
+
+  const response = await satsConnectRequest(
+    method as Parameters<typeof satsConnectRequest>[0],
+    params as Parameters<typeof satsConnectRequest>[1],
+    providerId
+  );
+
+  if (response.status === "error") {
+    if (typeof response.error === "string") {
+      return {
+        status: "error",
+        error: response.error,
+      } satisfies WalletRequestResult<T>;
+    }
+
+    const rpcError = response.error as {
+      code?: number;
+      message?: string;
+      data?: unknown;
+      [key: string]: unknown;
+    };
+
+    return {
+      status: "error",
+      error: {
+        code: rpcError?.code,
+        message: rpcError?.message,
+        data: rpcError?.data,
+        ...rpcError,
+      },
+    } satisfies WalletRequestResult<T>;
+  }
+
+  return {
+    status: "success",
+    result: response.result as T,
+  } satisfies WalletRequestResult<T>;
+}
+
 const normalizeLeatherAddresses = (
   data: unknown
 ): LeatherAddressEntry[] => {
@@ -600,7 +735,7 @@ async function signPsbtWithXverse(
     });
   }
 
-  const res = await satsConnectRequest(
+  const res = await walletRequest<{ psbt: string }>(
     "signPsbt",
     {
       psbt: psbt.toBase64(),
@@ -616,7 +751,9 @@ async function signPsbtWithXverse(
   );
 
   if (res.status === "error") {
-    throw new Error(`Signing failed: ${res.error || "Unknown error"}`);
+    throw new Error(
+      `Signing failed: ${extractWalletErrorMessage(res.error)}`
+    );
   }
 
   const signedPsbt = bitcoin.Psbt.fromBase64(res.result.psbt);
@@ -667,15 +804,12 @@ async function signPsbtWithLeather(
     },
   } as const;
 
-  const res = await satsConnectRequest("signPsbt", params as any, provider);
+  const res = await walletRequest<{ hex?: string }>("signPsbt", params, provider);
 
   if (res.status === "error") {
-    const message =
-      (res.error as { message?: string })?.message ||
-      (typeof res.error === "string" ? res.error : undefined) ||
-      "Unknown error";
-
-    throw new Error(`Signing failed: ${message}`);
+    throw new Error(
+      `Signing failed: ${extractWalletErrorMessage(res.error)}`
+    );
   }
 
   const signedPsbtHex = (res.result as { hex?: string })?.hex;
@@ -1522,19 +1656,42 @@ function WalletComponent() {
             ],
           };
 
-          const response = await satsConnectRequest(
-            "getAddresses",
-            params,
-            provider
-          );
+          const getAddresses = () =>
+            walletRequest("getAddresses", params, provider);
+
+          let response = await getAddresses();
 
           if (response.status === "error") {
-            const message =
-              typeof response.error === "string"
-                ? response.error
-                : (response.error as { message?: string })?.message;
+            const code =
+              typeof response.error === "object"
+                ? (response.error as WalletRequestErrorObject)?.code
+                : undefined;
 
-            throw new Error(message || "Failed to get addresses.");
+            if (code === RpcErrorCode.ACCESS_DENIED) {
+              const permissionResponse = await walletRequest(
+                "wallet_requestPermissions",
+                undefined,
+                provider
+              );
+
+              if (permissionResponse.status === "error") {
+                throw new Error(
+                  extractWalletErrorMessage(permissionResponse.error) ||
+                    "Failed to get addresses."
+                );
+              }
+
+              response = await getAddresses();
+            } else {
+              throw new Error(
+                extractWalletErrorMessage(response.error) ||
+                  "Failed to get addresses."
+              );
+            }
+          }
+
+          if (response.status !== "success") {
+            throw new Error("Failed to get addresses.");
           }
 
           const leatherAddresses = normalizeLeatherAddresses(response.result);
