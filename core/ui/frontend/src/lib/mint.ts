@@ -43,8 +43,29 @@ const normalizeAmount = (amount: bigint | number | string): bigint => {
   return ensureNonNegativeInteger(BigInt(trimmed));
 };
 
+const INTEGER_LIMB_BITS = 64n;
+const INTEGER_LIMB_MASK = (1n << INTEGER_LIMB_BITS) - 1n;
+
+const toIntegerWaveLiteral = (value: bigint): string => {
+  const sign = value < 0n ? "minus" : "plus";
+  const abs = value < 0n ? -value : value;
+
+  const limbs = [
+    abs & INTEGER_LIMB_MASK,
+    (abs >> INTEGER_LIMB_BITS) & INTEGER_LIMB_MASK,
+    (abs >> (INTEGER_LIMB_BITS * 2n)) & INTEGER_LIMB_MASK,
+    (abs >> (INTEGER_LIMB_BITS * 3n)) & INTEGER_LIMB_MASK,
+  ];
+
+  const [r0, r1, r2, r3] = limbs.map((limb) => limb.toString());
+
+  const fields = [`r0: ${r0}`, `r1: ${r1}`, `r2: ${r2}`, `r3: ${r3}`, `sign: ${sign}`];
+
+  return `{${fields.join(", ")}}`;
+};
+
 const buildCallExpression = (amount: bigint): string => {
-  return `mint(${amount.toString()})`;
+  return `mint(${toIntegerWaveLiteral(amount)})`;
 };
 
 export function buildMintCallBytes(

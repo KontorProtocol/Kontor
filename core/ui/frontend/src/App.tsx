@@ -30,6 +30,64 @@ const mempoolBaseUrl = (electrsUrl || "")
 const kontorUrl = import.meta.env.VITE_KONTOR_URL;
 const tokenContractAddress = `${DEFAULT_TOKEN_CONTRACT.name}_${DEFAULT_TOKEN_CONTRACT.height}_${DEFAULT_TOKEN_CONTRACT.tx_index}`;
 const tokenSymbol = DEFAULT_TOKEN_CONTRACT.name.toUpperCase();
+const WAVE_INTEGER_LIMB_BITS = 64n;
+
+const parseWaveIntegerLiteral = (literal: string): bigint | null => {
+  const trimmed = literal.trim();
+
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  const matches = Array.from(
+    trimmed.matchAll(/(r[0-3]|sign)\s*:\s*([^,{}\s]+)/g)
+  );
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const fields = matches.reduce<Record<string, string>>((acc, [, key, value]) => {
+    acc[key] = value;
+    return acc;
+  }, {});
+
+  const sign = fields["sign"];
+  if (!sign || (sign !== "plus" && sign !== "minus")) {
+    return null;
+  }
+
+  const limbs: bigint[] = [];
+
+  for (let index = 0; index < 4; index++) {
+    const limbValue = fields[`r${index}`];
+    if (limbValue === undefined) {
+      return null;
+    }
+
+    const digits = limbValue.replace(/_/g, "");
+    if (!/^\d+$/.test(digits)) {
+      return null;
+    }
+
+    try {
+      limbs.push(BigInt(digits));
+    } catch {
+      return null;
+    }
+  }
+
+  let magnitude = 0n;
+  for (let index = limbs.length - 1; index >= 0; index--) {
+    magnitude = (magnitude << WAVE_INTEGER_LIMB_BITS) + limbs[index];
+  }
+
+  if (sign === "minus" && magnitude !== 0n) {
+    magnitude = -magnitude;
+  }
+
+  return magnitude;
+};
 
 const parseWaveOptionInteger = (waveValue: string): string | null => {
   if (!waveValue) {
@@ -54,14 +112,26 @@ const parseWaveOptionInteger = (waveValue: string): string | null => {
     }
   }
 
+  const waveInteger = parseWaveIntegerLiteral(inner);
+  if (waveInteger !== null) {
+    return waveInteger.toString();
+  }
+
   return inner;
 };
 
 const formatTokenBalance = (balance: string): string => {
-  const normalized = balance || "0";
+  const normalized = balance?.trim() || "0";
+
   try {
-    return new Intl.NumberFormat("en-US").format(BigInt(normalized));
+    return BigInt(normalized).toString();
   } catch {
+    const parsed = parseWaveOptionInteger(normalized);
+
+    if (parsed !== null) {
+      return parsed;
+    }
+
     return normalized;
   }
 };
