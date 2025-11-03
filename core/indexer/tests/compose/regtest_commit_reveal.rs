@@ -10,11 +10,9 @@ use indexer::{
     test_utils,
     witness_data::TokenBalance,
 };
+use testlib::RegTester;
 
-use testlib::*;
-
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
-async fn test_taproot_transaction_regtest() -> Result<()> {
+pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Result<()> {
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;

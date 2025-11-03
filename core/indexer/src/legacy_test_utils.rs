@@ -94,6 +94,8 @@ pub fn build_signed_taproot_attach_tx(
     keypair: &Keypair,
     seller_address: &Address,
     script_spendable_address: &Address,
+    seller_out_point: OutPoint,
+    seller_utxo_for_output: TxOut,
 ) -> Result<Transaction> {
     let mut op_return_script = ScriptBuf::new();
     op_return_script.push_opcode(OP_RETURN);
@@ -109,13 +111,8 @@ pub fn build_signed_taproot_attach_tx(
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_str(
-                    "dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8",
-                )?,
-                vout: 0,
-            }, // The output we are spending
-            script_sig: ScriptBuf::default(), // For a p2tr script_sig is empty
+            previous_output: seller_out_point, // The output we are spending
+            script_sig: ScriptBuf::default(),  // For a p2tr script_sig is empty
             sequence: Sequence::MAX,
             witness: Witness::default(), // Filled in after signing
         }],
@@ -129,7 +126,9 @@ pub fn build_signed_taproot_attach_tx(
                 script_pubkey: op_return_script,
             },
             TxOut {
-                value: Amount::from_sat(7700), // 9000 - 1000 - 300 fee
+                value: seller_utxo_for_output.value
+                    - Amount::from_sat(1000)
+                    - Amount::from_sat(300), // seller utxo amount - 1000 - 300 fee
                 script_pubkey: seller_address.script_pubkey(),
             },
         ],
@@ -139,7 +138,7 @@ pub fn build_signed_taproot_attach_tx(
     // Sign the transaction
     let sighash_type = TapSighashType::Default;
     let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000), // existing utxo with 9000 sats
+        value: seller_utxo_for_output.value, // existing seller utxo
         script_pubkey: seller_address.script_pubkey(),
     }];
     let prevouts = Prevouts::All(&prevouts);
@@ -267,19 +266,19 @@ pub fn build_seller_psbt_and_sig_taproot(
     Ok((seller_psbt, signature, control_block))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_signed_buyer_psbt_taproot(
     secp: &Secp256k1<secp256k1::All>,
-    buyer_child_key: &Xpriv,
+    buyer_keypair: &Keypair,
+    buyer_internal_key: XOnlyPublicKey,
     buyer_address: &Address,
+    buyer_out_point: OutPoint,
+    buyer_utxo_for_output: TxOut,
     seller_address: &Address,
     attach_tx: &Transaction,
     script_spendable_address: &Address,
     seller_psbt: &Psbt,
 ) -> Result<Psbt> {
-    // Create buyer's keypair
-    let buyer_keypair = Keypair::from_secret_key(secp, &buyer_child_key.private_key);
-    let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
-
     // Create buyer's PSBT that combines with seller's PSBT
     let mut buyer_psbt = Psbt {
         unsigned_tx: Transaction {
@@ -298,12 +297,7 @@ pub fn build_signed_buyer_psbt_taproot(
                 },
                 // Buyer's UTXO input
                 TxIn {
-                    previous_output: OutPoint {
-                        txid: Txid::from_str(
-                            "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
-                        )?,
-                        vout: 0,
-                    },
+                    previous_output: buyer_out_point,
                     script_sig: ScriptBuf::default(),
                     sequence: Sequence::MAX,
                     witness: Witness::default(),
@@ -341,7 +335,9 @@ pub fn build_signed_buyer_psbt_taproot(
                 },
                 // Buyer's change
                 TxOut {
-                    value: Amount::from_sat(8854), // 10000 - 600 - 546
+                    value: buyer_utxo_for_output.value
+                        - Amount::from_sat(600)
+                        - Amount::from_sat(546), // buyer utxo amount - 600 - 546
                     script_pubkey: buyer_address.script_pubkey(),
                 },
             ],
@@ -353,7 +349,7 @@ pub fn build_signed_buyer_psbt_taproot(
             Input {
                 witness_utxo: Some(TxOut {
                     script_pubkey: buyer_address.script_pubkey(),
-                    value: Amount::from_sat(10000),
+                    value: buyer_utxo_for_output.value,
                 }),
                 tap_internal_key: Some(buyer_internal_key),
                 ..Default::default()
@@ -383,7 +379,7 @@ pub fn build_signed_buyer_psbt_taproot(
                 script_pubkey: script_spendable_address.script_pubkey(),
             },
             TxOut {
-                value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
+                value: buyer_utxo_for_output.value, // The value of the second input (buyer's UTXO)
                 script_pubkey: buyer_address.script_pubkey(),
             },
         ];

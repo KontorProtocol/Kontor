@@ -18,11 +18,77 @@ use crate::compose_commit_unit::{
     test_compose_commit_psbt_inputs_have_metadata,
     test_compose_commit_unique_vout_mapping_even_with_identical_chunks,
 };
+use crate::compose_helpers::{
+    test_build_tap_script_address_type_is_p2tr,
+    test_build_tap_script_and_script_address_empty_data_errs,
+    test_build_tap_script_and_script_address_multi_push_and_structure,
+    test_build_tap_script_chunk_boundaries_push_count,
+    test_calculate_change_single_insufficient_returns_none,
+    test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect,
+    test_compose_reveal_op_return_size_validation,
+    test_estimate_commit_delta_fee_increases_with_each_spk_len_independently,
+    test_estimate_commit_delta_fee_monotonic,
+    test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance,
+    test_split_even_chunks_diff_at_most_one_and_order_preserved,
+    test_split_even_chunks_more_parts_than_bytes, test_split_even_chunks_roundtrip_and_balance,
+    test_split_even_chunks_zero_parts_errs,
+    test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness,
+};
+use crate::legacy_taproot_envelope::{
+    test_legacy_taproot_envelope_psbt_inscription,
+    test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig,
+    test_legacy_taproot_inscription_without_checksig,
+    test_legacy_taproot_inscription_wrong_internal_key,
+    test_legacy_tapscript_inscription_invalid_token_data,
+};
+use crate::legacy_taproot_swap::{
+    test_legacy_taproot_swap, test_taproot_swap_psbt_with_incorrect_prefix,
+    test_taproot_swap_with_long_witness_stack, test_taproot_swap_with_wrong_token,
+    test_taproot_swap_with_wrong_token_amount, test_taproot_swap_without_control_block,
+    test_taproot_swap_without_tapscript, test_taproot_swap_without_token_balance,
+};
+use crate::multi_psbt_integration::test_portal_coordinated_commit_reveal_flow_integration;
+use crate::multi_psbt_integration_breakdown::test_portal_coordinated_compose_flow;
+use crate::multi_psbt_security::{
+    test_async_node_sign_and_merge_flows, test_commit_outputs_whitelist_including_portal,
+    test_commit_psbt_security_invariants,
+    test_commit_shortfall_is_offset_by_reveal_surplus_after_signing, test_inputs_sequences_are_rbf,
+    test_portal_reveal_fairness_base_plus_witness, test_pre_sign_estimated_commit_fee_is_covered,
+    test_psbt_hygiene_and_witness_utxo_presence, test_reveal_outputs_whitelist_and_counts,
+    test_reveal_psbt_security_invariants, test_script_address_hrp_across_networks,
+    test_script_address_hrp_matches_network,
+    test_script_output_funds_dust_plus_reveal_fee_estimate,
+    test_sighash_default_encoding_for_signatures,
+    test_tap_internal_key_set_on_commit_and_reveal_inputs,
+    test_tapscript_builder_rejects_empty_data,
+    test_tapscript_prefix_structure_pubkey_then_op_checksig,
+    test_witness_stack_shapes_commit_and_reveal,
+};
+use crate::multi_psbt_tx_validation::{
+    test_node_cannot_steal_in_reveal_rejected, test_portal_cannot_steal_change_rejected,
+    test_portal_reorders_commit_inputs_before_sign_rejected,
+    test_pre_sign_node_refuses_on_reveal_output_remap,
+    test_pre_sign_node_refuses_on_underfunded_script_output,
+    test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
+};
+use crate::regtest_commit_reveal::test_taproot_transaction_regtest;
+use crate::size_limit::test_compose_progressive_size_limit_testnet;
+use crate::swap::test_swap_psbt;
 
 mod commit_reveal;
 mod commit_reveal_random_keypair;
 mod compose_api;
 mod compose_commit_unit;
+mod compose_helpers;
+mod legacy_taproot_envelope;
+mod legacy_taproot_swap;
+mod multi_psbt_integration;
+mod multi_psbt_integration_breakdown;
+mod multi_psbt_security;
+mod multi_psbt_tx_validation;
+mod regtest_commit_reveal;
+mod size_limit;
+mod swap;
 
 async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result<()> {
     info!("test_commit_reveal_chained_reveal");
@@ -249,19 +315,108 @@ async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
 
 #[runtime(contracts_dir = "../../contracts", mode = "regtest")]
 async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes_regtest() -> Result<()> {
-    println!("test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes_regtest");
-    println!("test_commit_reveal_chained_reveal");
     test_commit_reveal_chained_reveal(&mut reg_tester.clone()).await?;
-    println!("test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes");
     test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(&mut reg_tester.clone()).await?;
-    println!("test_commit_reveal_ordinals");
+
+    info!("commit_reveal_random_keypair");
     test_commit_reveal_ordinals(&mut reg_tester.clone()).await?;
-    println!("test_commit_reveal");
+
+    info!("commit_reveal");
     test_commit_reveal(&mut reg_tester.clone()).await?;
-    println!("test_compose_commit_unique_vout_mapping_even_with_identical_chunks");
+
+    info!("compose_commit_unit");
     test_compose_commit_unique_vout_mapping_even_with_identical_chunks(&mut reg_tester.clone())
         .await?;
-    println!("test_compose_commit_psbt_inputs_have_metadata");
     test_compose_commit_psbt_inputs_have_metadata(&mut reg_tester.clone()).await?;
+
+    info!("compose_helpers");
+    test_split_even_chunks_roundtrip_and_balance();
+    test_split_even_chunks_more_parts_than_bytes();
+    test_split_even_chunks_zero_parts_errs();
+    test_estimate_commit_delta_fee_increases_with_each_spk_len_independently();
+    test_estimate_commit_delta_fee_monotonic();
+    test_split_even_chunks_diff_at_most_one_and_order_preserved();
+    test_build_tap_script_and_script_address_empty_data_errs(&mut reg_tester.clone()).await?;
+    test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
+        .await?;
+    test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
+    test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect(
+        &mut reg_tester.clone(),
+    )
+    .await?;
+    test_calculate_change_single_insufficient_returns_none(&mut reg_tester.clone()).await?;
+    test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance(&mut reg_tester.clone())
+        .await?;
+    test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
+    test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness(&mut reg_tester.clone())
+        .await?;
+    test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
+
+    info!("legacy_taproot_envelope");
+    test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;
+    test_legacy_taproot_inscription_without_checksig(&mut reg_tester.clone()).await?;
+    test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig(
+        &mut reg_tester.clone(),
+    )
+    .await?;
+    test_legacy_taproot_inscription_wrong_internal_key(&mut reg_tester.clone()).await?;
+    test_legacy_tapscript_inscription_invalid_token_data(&mut reg_tester.clone()).await?;
+
+    info!("legacy_taproot_swap");
+    test_legacy_taproot_swap(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_tapscript(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_control_block(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_long_witness_stack(&mut reg_tester.clone()).await?;
+    test_taproot_swap_psbt_with_incorrect_prefix(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_wrong_token_amount(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_token_balance(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_wrong_token(&mut reg_tester.clone()).await?;
+
+    info!("multi_psbt_integration_breakdown");
+    test_portal_coordinated_compose_flow(&mut reg_tester.clone()).await?;
+    test_portal_coordinated_commit_reveal_flow_integration(&mut reg_tester.clone()).await?;
+
+    info!("multi_psbt_security");
+    test_commit_psbt_security_invariants(&mut reg_tester.clone()).await?;
+    test_reveal_psbt_security_invariants(&mut reg_tester.clone()).await?;
+    test_inputs_sequences_are_rbf(&mut reg_tester.clone()).await?;
+    test_commit_outputs_whitelist_including_portal(&mut reg_tester.clone()).await?;
+    test_script_address_hrp_matches_network(&mut reg_tester.clone()).await?;
+    test_portal_reveal_fairness_base_plus_witness(&mut reg_tester.clone()).await?;
+    test_psbt_hygiene_and_witness_utxo_presence(&mut reg_tester.clone()).await?;
+    test_tapscript_prefix_structure_pubkey_then_op_checksig(&mut reg_tester.clone()).await?;
+    test_tapscript_builder_rejects_empty_data(&mut reg_tester.clone()).await?;
+    test_async_node_sign_and_merge_flows(&mut reg_tester.clone()).await?;
+    test_sighash_default_encoding_for_signatures(&mut reg_tester.clone()).await?;
+    test_reveal_outputs_whitelist_and_counts(&mut reg_tester.clone()).await?;
+    test_script_output_funds_dust_plus_reveal_fee_estimate(&mut reg_tester.clone()).await?;
+    test_pre_sign_estimated_commit_fee_is_covered(&mut reg_tester.clone()).await?;
+    test_commit_shortfall_is_offset_by_reveal_surplus_after_signing(&mut reg_tester.clone())
+        .await?;
+    test_tap_internal_key_set_on_commit_and_reveal_inputs(&mut reg_tester.clone()).await?;
+    test_witness_stack_shapes_commit_and_reveal(&mut reg_tester.clone()).await?;
+    test_script_address_hrp_across_networks(&mut reg_tester.clone()).await?;
+    Ok(())
+}
+
+#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+async fn test_multi_psbt_tx_validation(reg_tester: &mut RegTester) -> Result<()> {
+    info!("multi_psbt_tx_validation");
+    test_pre_sign_node_refuses_on_underfunded_script_output(&mut reg_tester.clone()).await?;
+    test_pre_sign_node_refuses_on_reveal_output_remap(&mut reg_tester.clone()).await?;
+    test_reordering_commit_inputs_rejected(&mut reg_tester.clone()).await?;
+    test_reordering_commit_outputs_rejected(&mut reg_tester.clone()).await?;
+    test_portal_cannot_steal_change_rejected(&mut reg_tester.clone()).await?;
+    test_node_cannot_steal_in_reveal_rejected(&mut reg_tester.clone()).await?;
+    test_portal_reorders_commit_inputs_before_sign_rejected(&mut reg_tester.clone()).await?;
+
+    info!("regtest_commit_reveal");
+    test_taproot_transaction_regtest(&mut reg_tester.clone()).await?;
+
+    info!("size_limit");
+    test_compose_progressive_size_limit_testnet(&mut reg_tester.clone()).await?;
+
+    info!("swap");
+    test_swap_psbt(&mut reg_tester.clone()).await?;
     Ok(())
 }

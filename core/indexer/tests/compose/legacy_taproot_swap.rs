@@ -1,44 +1,37 @@
 use anyhow::Result;
+use bitcoin::Witness;
 use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::script::Instruction;
-use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Network, Witness};
 use bitcoin::{
     address::{Address, KnownHrp},
     consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
 };
-use clap::Parser;
-use indexer::config::TestConfig;
-use indexer::witness_data::TokenBalance;
-use indexer::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
-use indexer::{legacy_test_utils, test_utils};
-use std::collections::HashMap;
 
-#[tokio::test]
-async fn test_taproot_transaction() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+use indexer::legacy_test_utils;
+use indexer::op_return::OpReturnData;
+use indexer::witness_data::TokenBalance;
+use std::collections::HashMap;
+use testlib::RegTester;
+use tracing::info;
+
+pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_legacy_taproot_swap");
+
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -52,7 +45,7 @@ async fn test_taproot_transaction() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -60,7 +53,7 @@ async fn test_taproot_transaction() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -70,18 +63,20 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -97,8 +92,11 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -111,8 +109,8 @@ async fn test_taproot_transaction() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -200,29 +198,23 @@ async fn test_taproot_transaction() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_incorrect_prefix() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_psbt_with_incorrect_prefix(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_taproot_swap_psbt_with_incorrect_prefix");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -236,7 +228,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -244,7 +236,7 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key) // does this need to be the whole keypair then?
+        .finalize(&secp, seller_internal_key) // does this need to be the whole keypair then?
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -254,18 +246,20 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -281,8 +275,11 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -295,8 +292,8 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -315,29 +312,21 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_without_tapscript() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_without_tapscript(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_without_tapscript");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -351,7 +340,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -359,7 +348,7 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -369,18 +358,20 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -395,8 +386,11 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -409,8 +403,8 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -429,29 +423,22 @@ async fn test_taproot_transaction_without_tapscript() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_with_wrong_token(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_with_wrong_token");
+
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -465,7 +452,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -473,7 +460,7 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -483,18 +470,20 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -518,8 +507,11 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -532,8 +524,8 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -551,29 +543,21 @@ async fn test_taproot_transaction_with_wrong_token() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_with_wrong_token_amount(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_with_wrong_token_amount");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -587,14 +571,14 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
     // Build the Taproot tree with the script
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -604,18 +588,20 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -639,8 +625,11 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -653,8 +642,8 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -672,30 +661,21 @@ async fn test_taproot_transaction_with_wrong_token_amount() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_without_token_balance() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_without_token_balance(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_without_token_balance");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
-
     // Create token balance data
     let token_value = 1000;
     let token_balance = TokenBalance {
@@ -708,7 +688,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -716,7 +696,7 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -726,18 +706,20 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -752,8 +734,11 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -766,8 +751,8 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -785,29 +770,21 @@ async fn test_taproot_transaction_without_token_balance() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_without_control_block() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_without_control_block(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_without_control_block");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     // Create token balance data
     let token_value = 1000;
@@ -821,7 +798,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -829,7 +806,7 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -839,18 +816,20 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, _control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -865,8 +844,11 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -879,8 +861,8 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -899,29 +881,21 @@ async fn test_taproot_transaction_without_control_block() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_taproot_swap_with_long_witness_stack(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_taproot_swap_with_long_witness_stack");
 
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_balances = legacy_test_utils::build_long_token_balance();
 
@@ -930,7 +904,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Taproot(&internal_key),
+        legacy_test_utils::PublicKey::Taproot(&seller_internal_key),
         &serialized_token_balance,
     );
 
@@ -938,7 +912,7 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone()) // Add script at depth 0
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
     // Get the output key which commits to both the internal key and the script tree
     let output_key = taproot_spend_info.output_key();
@@ -948,18 +922,20 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
 
     let attach_tx = legacy_test_utils::build_signed_taproot_attach_tx(
         &secp,
-        &keypair,
+        &seller_keypair,
         &seller_address,
         &script_spendable_address,
+        seller_out_point,
+        seller_utxo_for_output.clone(),
     )?;
 
     let (mut seller_psbt, signature, control_block) =
         legacy_test_utils::build_seller_psbt_and_sig_taproot(
             &secp,
-            &keypair,
+            &seller_keypair,
             &seller_address,
             &attach_tx,
-            &internal_key,
+            &seller_internal_key,
             &taproot_spend_info,
             &tap_script,
         )?;
@@ -975,8 +951,11 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
 
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_taproot(
         &secp,
-        &buyer_child_key,
+        &buyer_keypair,
+        buyer_internal_key,
         &buyer_address,
+        buyer_out_point,
+        buyer_utxo_for_output,
         &seller_address,
         &attach_tx,
         &script_spendable_address,
@@ -989,8 +968,8 @@ async fn test_taproot_transaction_with_long_witness_stack() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed

@@ -9,7 +9,9 @@ use crate::{
         ws_client::WebSocketClient,
     },
     bitcoin_client::{
-        self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
+        self, Client as BitcoinClient,
+        client::RegtestRpc,
+        types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
     config::{Config, RegtestConfig},
     database::types::OpResultId,
@@ -177,7 +179,13 @@ impl RegTesterInner {
         &self,
         raw_txs: &[String],
     ) -> Result<Vec<TestMempoolAcceptResult>> {
-        let result = self.bitcoin_client.test_mempool_accept(raw_txs).await?;
+        self.bitcoin_client
+            .test_mempool_accept(raw_txs)
+            .await
+            .map_err(|e| anyhow!("Failed to accept transactions: {}", e))
+    }
+    pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
+        let result = self.bitcoin_client.get_mempool_info().await?;
         Ok(result)
     }
 
@@ -523,7 +531,9 @@ impl RegTester {
             })
             .await
     }
-
+    pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
+        self.inner.lock().await.mempool_info().await
+    }
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,

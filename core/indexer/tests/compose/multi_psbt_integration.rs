@@ -1,25 +1,19 @@
 use anyhow::Result;
-use bitcoin::address::Address;
+use bitcoin::Witness;
 use bitcoin::amount::Amount;
-use bitcoin::key::{Keypair, Secp256k1};
+use bitcoin::key::Secp256k1;
 use bitcoin::script::Instruction;
-use bitcoin::secp256k1::All;
 use bitcoin::transaction::Version;
-use bitcoin::{
-    Network, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, XOnlyPublicKey, absolute::LockTime,
-};
+use bitcoin::{Network, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, absolute::LockTime};
 use bitcoin::{TapSighashType, consensus::encode::serialize as serialize_tx};
-use bitcoin::{Txid, Witness};
-use clap::Parser;
 use futures_util::future::join_all;
-use indexer::config::TestConfig;
 use indexer::multi_psbt_test_utils::{
-    build_tap_script_and_script_address_helper, log_node_sign_size_and_fee_breakdown,
-    log_total_size_and_fee_breakdown,
+    build_tap_script_and_script_address_helper, estimate_single_input_single_output_reveal_vbytes,
+    get_node_addresses, get_portal_info, log_node_sign_size_and_fee_breakdown,
+    log_total_size_and_fee_breakdown, tx_vbytes,
 };
-use indexer::{bitcoin_client::Client, logging, test_utils};
-use std::path::Path;
-use std::str::FromStr;
+use indexer::{logging, test_utils};
+use testlib::RegTester;
 use tracing::info;
 
 #[macro_export]
@@ -40,173 +34,6 @@ macro_rules! log_node {
     ($fmt:expr) => {
         tracing::info!(target: "node", "\x1b[38;5;208m{}\x1b[0m", format!($fmt));
     };
-}
-
-#[derive(Clone, Debug)]
-struct NodeInfo {
-    address: Address,
-    internal_key: XOnlyPublicKey,
-}
-
-#[derive(Clone, Debug)]
-struct NodeSecrets {
-    keypair: Keypair,
-}
-
-#[derive(Clone, Debug)]
-struct PortalInfo {
-    address: Address,
-    internal_key: XOnlyPublicKey,
-    keypair: Keypair,
-}
-
-// NODE AND PORTAL SETUP HELPERS
-fn get_node_addresses(
-    secp: &Secp256k1<All>,
-    network: Network,
-    taproot_key_path: &Path,
-) -> Result<(Vec<NodeInfo>, Vec<NodeSecrets>)> {
-    let mut infos = Vec::new();
-    let mut secrets = Vec::new();
-    for i in 0..3 {
-        let (address, child_key, _compressed) = test_utils::generate_taproot_address_from_mnemonic(
-            secp,
-            network,
-            taproot_key_path,
-            i as u32,
-        )?;
-        let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
-        let (internal_key, _parity) = keypair.x_only_public_key();
-        infos.push(NodeInfo {
-            address,
-            internal_key,
-        });
-        secrets.push(NodeSecrets { keypair });
-    }
-    Ok((infos, secrets))
-}
-
-fn get_portal_info(
-    secp: &Secp256k1<All>,
-    network: Network,
-    taproot_key_path: &Path,
-) -> Result<PortalInfo> {
-    let (address, child_key, _compressed) =
-        test_utils::generate_taproot_address_from_mnemonic(secp, network, taproot_key_path, 4)?;
-    let keypair = Keypair::from_secret_key(secp, &child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
-    Ok(PortalInfo {
-        address,
-        internal_key,
-        keypair,
-    })
-}
-
-fn mock_fetch_utxos_for_addresses(signups: &[NodeInfo]) -> Vec<(OutPoint, TxOut)> {
-    signups
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let (txid_str, vout_u32, value_sat): (&str, u32, u64) = match i {
-                0 => (
-                    "dac8f123136bb59926e559e9da97eccc9f46726c3e7daaf2ab3502ef3a47fa46",
-                    0,
-                    500_000,
-                ),
-                1 => (
-                    "465de2192b246635df14ff81c3b6f37fb864f308ad271d4f91a29dcf476640ba",
-                    0,
-                    500_000,
-                ),
-                2 => (
-                    "49e327c2945f88908f67586de66af3bfc2567fe35ec7c5f1769f973f9fe8e47e",
-                    0,
-                    500_000,
-                ),
-                _ => unreachable!(),
-            };
-            (
-                OutPoint {
-                    txid: Txid::from_str(txid_str).unwrap(),
-                    vout: vout_u32,
-                },
-                TxOut {
-                    value: Amount::from_sat(value_sat),
-                    script_pubkey: s.address.script_pubkey(),
-                },
-            )
-        })
-        .collect()
-}
-
-fn mock_fetch_portal_utxo(portal: &PortalInfo) -> (OutPoint, TxOut) {
-    let (txid_str, vout_u32, value_sat): (&str, u32, u64) = (
-        "09c741dd08af774cb5d1c26bfdc28eaa4ae42306a6a07d7be01de194979ff8df",
-        0,
-        500_000,
-    );
-    (
-        OutPoint {
-            txid: Txid::from_str(txid_str).unwrap(),
-            vout: vout_u32,
-        },
-        TxOut {
-            value: Amount::from_sat(value_sat),
-            script_pubkey: portal.address.script_pubkey(),
-        },
-    )
-}
-
-// SIZE ESTIMATION HELPERS
-fn tx_vbytes(tx: &Transaction) -> u64 {
-    let mut no_wit = tx.clone();
-    for inp in &mut no_wit.input {
-        inp.witness = Witness::new();
-    }
-    let base_size = serialize_tx(&no_wit).len() as u64;
-    let total_size = serialize_tx(tx).len() as u64;
-    let witness_size = total_size.saturating_sub(base_size);
-    let weight = base_size * 4 + witness_size;
-    weight.div_ceil(4)
-}
-
-fn estimate_single_input_single_output_reveal_vbytes(
-    tap_script: &bitcoin::script::ScriptBuf,
-    tap_info: &bitcoin::taproot::TaprootSpendInfo,
-    recipient_spk_len: usize,
-    envelope_sat: u64,
-) -> u64 {
-    let mut dummy_reveal = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_str(
-                    "0000000000000000000000000000000000000000000000000000000000000000",
-                )
-                .unwrap(),
-                vout: 0,
-            },
-            script_sig: bitcoin::script::ScriptBuf::new(),
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(envelope_sat),
-            script_pubkey: bitcoin::script::ScriptBuf::from_bytes(vec![0u8; recipient_spk_len]),
-        }],
-    };
-    let mut w = Witness::new();
-    w.push(vec![0u8; 65]);
-    w.push(tap_script.clone());
-    w.push(
-        tap_info
-            .control_block(&(tap_script.clone(), bitcoin::taproot::LeafVersion::TapScript))
-            .expect("cb")
-            .serialize(),
-    );
-    dummy_reveal.input[0].witness = w;
-    tx_vbytes(&dummy_reveal)
 }
 
 /*
@@ -230,20 +57,16 @@ The nodes send the copy of the commit and reveal with their individual sigs back
 Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
 */
 
-#[tokio::test]
-async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
+pub async fn test_portal_coordinated_commit_reveal_flow_integration(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
     // Setup
     logging::setup();
-    let network = Network::Testnet4;
-    let config = TestConfig::try_parse()?;
-
-    // Ensure we are talking to the Testnet4 node (default port 48332)
-    let client = Client::new_from_config(&config)?;
 
     let secp = Secp256k1::new();
 
     // Fee environment
-    let mp = client.get_mempool_info().await?;
+    let mp = reg_tester.mempool_info().await?;
     let min_btc_per_kvb = mp
         .mempool_min_fee_btc_per_kvb
         .max(mp.min_relay_tx_fee_btc_per_kvb);
@@ -252,10 +75,9 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     info!("min_sat_per_vb={}", min_sat_per_vb);
 
     // Phase 1: Nodes sign up for agreement with address + x-only pubkey
-    let (signups, _) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
+    let (signups, node_secrets) = get_node_addresses(&mut reg_tester.clone()).await?;
 
     // Phase 2: Portal fetches node utxos and constructs COMMIT PSBT using nodes' outpoints/prevouts
-    let node_utxos: Vec<(OutPoint, TxOut)> = mock_fetch_utxos_for_addresses(&signups);
     info!("portal fetching node utxos and constructing commit/reveal psbts");
 
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
@@ -272,7 +94,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     for (idx, s) in signups.iter().enumerate() {
         log_node!("node idx={} appending to COMMIT", idx);
-        let (node_outpoint, node_prevout) = node_utxos[idx].clone();
+        let (node_outpoint, node_prevout) = s.next_funding_utxo.clone();
         // Snapshot size before adding this node to charge full delta (non-witness + witness + optional change)
         let base_before_vb = tx_vbytes(&commit_psbt.unsigned_tx);
         let node_input_index = commit_psbt.unsigned_tx.input.len();
@@ -290,7 +112,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let (tap_script, tap_info, script_addr) = build_tap_script_and_script_address_helper(
             s.internal_key,
             b"node-data".to_vec(),
-            Network::Testnet4,
+            Network::Regtest,
         )?;
 
         // Estimate reveal fee the node will need to pay later (1-in script + 1-out to self)
@@ -369,8 +191,8 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
 
     // Portal participation: append portal input/output (script reveal) and charge full-delta fee like nodes
     info!("portal appending to COMMIT");
-    let portal_info = get_portal_info(&secp, network, &config.taproot_key_path)?;
-    let (portal_outpoint, portal_prevout) = mock_fetch_portal_utxo(&portal_info);
+    let portal_info = get_portal_info(&mut reg_tester.clone()).await?;
+    let (portal_outpoint, portal_prevout) = portal_info.next_funding_utxo.clone();
     let base_before_portal_vb = tx_vbytes(&commit_psbt.unsigned_tx);
     let portal_input_index = commit_psbt.unsigned_tx.input.len();
     commit_psbt.unsigned_tx.input.push(TxIn {
@@ -388,7 +210,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         build_tap_script_and_script_address_helper(
             portal_info.internal_key,
             b"portal-data".to_vec(),
-            Network::Testnet4,
+            Network::Regtest,
         )?;
     let portal_reveal_vb = estimate_single_input_single_output_reveal_vbytes(
         &portal_tap_script,
@@ -504,8 +326,6 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         Some(commit_psbt.unsigned_tx.output[portal_script_vout as usize].clone());
     reveal_psbt.inputs[nodes_n].tap_internal_key = Some(portal_info.internal_key);
 
-    let (_, node_secrets) = get_node_addresses(&secp, network, &config.taproot_key_path)?;
-
     // Phase 4: Portal sends both PSBTs to nodes; nodes sign commit input (key-spend, SIGHASH_ALL) and reveal input (script-spend, SIGHASH_ALL)
     // Each node signs asynchronously and returns only its own witnesses; portal merges them
     let commit_base_tx = commit_psbt.unsigned_tx.clone();
@@ -520,6 +340,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let mut commit_psbt_local = commit_base_psbt.clone();
         let mut reveal_psbt_local = reveal_base_psbt.clone();
         let prevouts_commit = all_prevouts_clone.clone();
+        info!("portal finalizing commit psbt");
         let node_input_indices_async = node_input_indices.clone();
         let input_index = node_input_indices_async[i];
         async move {
@@ -545,7 +366,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
             let (tap_script, tap_info, _addr) = build_tap_script_and_script_address_helper(
                 s.internal_key,
                 b"node-data".to_vec(),
-                Network::Testnet4,
+                Network::Regtest,
             )?;
             let prevouts_reveal: Vec<TxOut> = reveal_psbt_local
                 .inputs
@@ -630,7 +451,7 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
         let (tap_script, tap_info, _addr) = build_tap_script_and_script_address_helper(
             portal_info.internal_key,
             b"portal-data".to_vec(),
-            Network::Testnet4,
+            Network::Regtest,
         )?;
         let prevouts: Vec<TxOut> = reveal_psbt
             .inputs
@@ -718,8 +539,8 @@ async fn test_portal_coordinated_commit_reveal_flow() -> Result<()> {
     // Phase 6: Broadcast commit then reveal together
     let commit_hex = hex::encode(serialize_tx(&commit_tx));
     let reveal_hex = hex::encode(serialize_tx(&reveal_tx));
-    let res = client
-        .test_mempool_accept(&[commit_hex, reveal_hex])
+    let res = reg_tester
+        .mempool_accept_result(&[commit_hex, reveal_hex])
         .await?;
     assert_eq!(res.len(), 2, "Expected results for both transactions");
     assert!(

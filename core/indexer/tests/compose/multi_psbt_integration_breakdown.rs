@@ -2,8 +2,9 @@ use anyhow::Result;
 use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
-use indexer::logging;
+use indexer::{logging, multi_psbt_test_utils::{NodeInfo, get_node_addresses, get_portal_info, tx_vbytes}};
 use rand::Rng;
+use testlib::RegTester;
 use tracing::info;
 
 use bitcoin::{FeeRate, TapSighashType};
@@ -29,10 +30,8 @@ The nodes send the copy of the commit and reveal with their individual sigs back
 
 Then the portal broadcasts the chained commit/reveal (test_mempool_accept).
 */
-use testlib::*;
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
-async fn test_portal_coordinated_compose_flow() -> Result<()> {
+pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) -> Result<()> {
     // Setup
     logging::setup();
     let secp = Secp256k1::new();
@@ -42,13 +41,11 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
     let envelope_sat: u64 = 330;
 
     // Participants: 3 nodes + portal
-    let (signups, node_secrets) =
-        indexer::multi_psbt_test_utils::get_node_addresses(&mut reg_tester.clone()).await?;
-    let portal_info =
-        indexer::multi_psbt_test_utils::get_portal_info(&mut reg_tester.clone()).await?;
+    let (signups, node_secrets) = get_node_addresses(&mut reg_tester.clone()).await?;
+    let portal_info = get_portal_info(&mut reg_tester.clone()).await?;
     let mut all_participants = signups.clone();
     // Append portal as the last participant
-    let portal_as_node = indexer::multi_psbt_test_utils::NodeInfo {
+    let portal_as_node = NodeInfo {
         address: portal_info.address.clone(),
         internal_key: portal_info.internal_key,
         next_funding_utxo: portal_info.next_funding_utxo,
@@ -127,7 +124,7 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
             )?;
         }
     }
-    let commit_vb = indexer::multi_psbt_test_utils::tx_vbytes(&commit_tx);
+    let commit_vb = tx_vbytes(&commit_tx);
     let commit_in_total: u64 = commit_prevouts.iter().map(|o| o.value.to_sat()).sum();
     let commit_out_total: u64 = commit_tx.output.iter().map(|o| o.value.to_sat()).sum();
     let commit_paid_total = commit_in_total.saturating_sub(commit_out_total);
@@ -180,7 +177,7 @@ async fn test_portal_coordinated_compose_flow() -> Result<()> {
         )?;
         info!(idx = i, "sign reveal: participant signed");
     }
-    let reveal_vb = indexer::multi_psbt_test_utils::tx_vbytes(&reveal_tx);
+    let reveal_vb = tx_vbytes(&reveal_tx);
     let reveal_in_total: u64 = reveal_prevouts.iter().map(|o| o.value.to_sat()).sum();
     let reveal_out_total: u64 = reveal_tx.output.iter().map(|o| o.value.to_sat()).sum();
     let reveal_paid_total = reveal_in_total.saturating_sub(reveal_out_total);

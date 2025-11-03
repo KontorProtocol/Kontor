@@ -1,22 +1,18 @@
+use anyhow::Result;
 use bitcoin::script::Instruction;
-use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
+use bitcoin::taproot::LeafVersion::TapScript;
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
     RevealInputs, RevealParticipantInputs, build_dummy_tx, build_tap_script_and_script_address,
-    calculate_change_single, estimate_fee_with_dummy_key_witness, estimate_reveal_fee_for_address,
-    split_even_chunks,
+    calculate_change_single, compose_reveal, estimate_fee_with_dummy_key_witness,
+    estimate_reveal_fee_for_address, split_even_chunks, tx_vbytes_est,
 };
 use std::str::FromStr;
+use testlib::RegTester;
+use tracing::info;
 
-fn fixed_keypair() -> (Secp256k1<bitcoin::secp256k1::All>, Keypair) {
-    let secp = Secp256k1::new();
-    let sk = SecretKey::from_slice(&[1u8; 32]).expect("secret key");
-    let kp = Keypair::from_secret_key(&secp, &sk);
-    (secp, kp)
-}
-
-#[test]
-fn test_split_even_chunks_roundtrip_and_balance() {
+pub fn test_split_even_chunks_roundtrip_and_balance() {
+    info!("test_split_even_chunks_roundtrip_and_balance");
     let data: Vec<u8> = (0u8..100u8).collect();
     let chunks = split_even_chunks(&data, 3).unwrap();
     assert_eq!(chunks.len(), 3);
@@ -31,8 +27,8 @@ fn test_split_even_chunks_roundtrip_and_balance() {
     assert_eq!(single[0], data);
 }
 
-#[test]
-fn test_split_even_chunks_more_parts_than_bytes() {
+pub fn test_split_even_chunks_more_parts_than_bytes() {
+    info!("test_split_even_chunks_more_parts_than_bytes");
     let data: Vec<u8> = (0u8..5u8).collect();
     let parts = 10;
     let chunks = split_even_chunks(&data, parts).unwrap();
@@ -48,31 +44,38 @@ fn test_split_even_chunks_more_parts_than_bytes() {
     }
 }
 
-#[test]
-fn test_split_even_chunks_zero_parts_errs() {
+pub fn test_split_even_chunks_zero_parts_errs() {
+    info!("test_split_even_chunks_zero_parts_errs");
     let res = split_even_chunks(&[1, 2, 3], 0);
     assert!(res.is_err());
 }
 
-#[test]
-fn test_build_tap_script_and_script_address_empty_data_errs() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_build_tap_script_and_script_address_empty_data_errs(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_build_tap_script_and_script_address_empty_data_errs");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let res = build_tap_script_and_script_address(xonly, vec![]);
     assert!(res.is_err());
+    Ok(())
 }
 
-#[test]
-fn test_build_tap_script_and_script_address_multi_push_and_structure() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_build_tap_script_and_script_address_multi_push_and_structure");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     // 600 bytes ensures > 520, triggering multiple pushes
     let data = vec![7u8; 600];
     let (tap_script, tap_info, script_addr) =
         build_tap_script_and_script_address(xonly, data.clone()).expect("build tapscript");
     // Control block should be derivable
     let _cb = tap_info
-        .control_block(&(tap_script.clone(), bitcoin::taproot::LeafVersion::TapScript))
+        .control_block(&(tap_script.clone(), TapScript))
         .expect("control block");
     // Script address should be P2TR-like spk length 34
     assert_eq!(script_addr.script_pubkey().len(), 34);
@@ -110,63 +113,64 @@ fn test_build_tap_script_and_script_address_multi_push_and_structure() {
     assert_eq!(instructions.last(), Some(&Instruction::Op(OP_ENDIF)));
     assert_eq!(pushed.len(), data.len());
     assert_eq!(pushed, data);
+    Ok(())
 }
 
-fn build_commit_components(
+async fn build_commit_components(
     value_sat: u64,
-) -> (bitcoin::TxIn, bitcoin::TxOut, ScriptBuf, ScriptBuf) {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+    reg_tester: &mut RegTester,
+) -> Result<(bitcoin::TxIn, bitcoin::TxOut, ScriptBuf, ScriptBuf)> {
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let data = b"hello world".to_vec();
     let (tap_script, tap_info, script_addr) =
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
     let control_block = ScriptBuf::from_bytes(
         tap_info
-            .control_block(&(tap_script.clone(), bitcoin::taproot::LeafVersion::TapScript))
+            .control_block(&(tap_script.clone(), TapScript))
             .expect("cb")
             .serialize(),
     );
+    let (out_point, _utxo_for_output) = identity.next_funding_utxo;
     let txin = bitcoin::TxIn {
-        previous_output: OutPoint {
-            txid: Txid::from_str(
-                "0000000000000000000000000000000000000000000000000000000000000001",
-            )
-            .unwrap(),
-            vout: 0,
-        },
+        previous_output: out_point,
         ..Default::default()
     };
     let txout = bitcoin::TxOut {
         value: Amount::from_sat(value_sat),
         script_pubkey: script_addr.script_pubkey(),
     };
-    (txin, txout, tap_script, control_block)
+    Ok((txin, txout, tap_script, control_block))
 }
 
-#[test]
-fn test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness() {
+pub async fn test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness");
     // No-witness transaction
-    let tx_nowit = indexer::api::compose::build_dummy_tx(
+    let tx_nowit = build_dummy_tx(
         vec![],
         vec![bitcoin::TxOut {
             value: Amount::from_sat(0),
             script_pubkey: ScriptBuf::from_bytes(vec![0; 34]),
         }],
     );
-    let est = indexer::api::compose::tx_vbytes_est(&tx_nowit);
+    let est = tx_vbytes_est(&tx_nowit);
     let actual = tx_nowit.vsize() as u64;
     assert!((est as i64 - actual as i64).abs() <= 1);
 
     // With a script-spend-like witness
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let data = b"w".repeat(200);
     let (tap_script, tap_info, _addr) =
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
     let cb = tap_info
-        .control_block(&(tap_script.clone(), bitcoin::taproot::LeafVersion::TapScript))
+        .control_block(&(tap_script.clone(), TapScript))
         .expect("cb");
-    let mut tx = indexer::api::compose::build_dummy_tx(
+    let mut tx = build_dummy_tx(
         vec![bitcoin::TxIn {
             ..Default::default()
         }],
@@ -177,13 +181,13 @@ fn test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness() {
     wit.push(tap_script);
     wit.push(cb.serialize());
     tx.input[0].witness = wit;
-    let est2 = indexer::api::compose::tx_vbytes_est(&tx);
+    let est2 = tx_vbytes_est(&tx);
     let actual2 = tx.vsize() as u64;
     assert!((est2 as i64 - actual2 as i64).abs() <= 1);
+    Ok(())
 }
 
-#[test]
-fn test_split_even_chunks_diff_at_most_one_and_order_preserved() {
+pub fn test_split_even_chunks_diff_at_most_one_and_order_preserved() {
     let data: Vec<u8> = (0..1234u16).map(|i| (i % 251) as u8).collect();
     let parts = 7;
     let chunks = split_even_chunks(&data, parts).unwrap();
@@ -196,10 +200,13 @@ fn test_split_even_chunks_diff_at_most_one_and_order_preserved() {
     assert_eq!(reconcat, data);
 }
 
-#[test]
-fn test_build_tap_script_chunk_boundaries_push_count() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_build_tap_script_chunk_boundaries_push_count(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_build_tap_script_chunk_boundaries_push_count");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     for &len in &[520usize, 521usize, 1040usize, 1041usize] {
         let data = vec![0xABu8; len];
         let (tap_script, _info, _addr) =
@@ -220,10 +227,10 @@ fn test_build_tap_script_chunk_boundaries_push_count() {
         let expected = len.div_ceil(520);
         assert_eq!(push_count, expected);
     }
+    Ok(())
 }
 
-#[test]
-fn test_estimate_commit_delta_fee_increases_with_each_spk_len_independently() {
+pub fn test_estimate_commit_delta_fee_increases_with_each_spk_len_independently() {
     let base = build_dummy_tx(vec![], vec![]);
     let fr = FeeRate::from_sat_per_vb(3).unwrap();
     // Vary script_spk_len
@@ -296,19 +303,24 @@ fn test_estimate_commit_delta_fee_increases_with_each_spk_len_independently() {
     assert!(d >= c);
 }
 
-#[test]
-fn test_build_tap_script_address_type_is_p2tr() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_build_tap_script_address_type_is_p2tr(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_build_tap_script_address_type_is_p2tr");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let data = b"abc".to_vec();
     let (_tap, _info, addr) =
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
     assert_eq!(addr.address_type(), Some(bitcoin::AddressType::P2tr));
+    Ok(())
 }
 
-#[test]
-fn test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect() {
-    let (txin, txout, tap_script, control_block) = build_commit_components(20_000);
+pub async fn test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect");
+    let (txin, txout, tap_script, control_block) =
+        build_commit_components(20_000, reg_tester).await?;
 
     let low_fee = FeeRate::from_sat_per_vb(1).unwrap();
     let high_fee = FeeRate::from_sat_per_vb(10).unwrap();
@@ -345,11 +357,15 @@ fn test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect() {
     )
     .expect("some change");
     assert!(ch_with_owner < ch_low);
+    Ok(())
 }
 
-#[test]
-fn test_calculate_change_single_insufficient_returns_none() {
-    let (txin, mut txout, tap_script, control_block) = build_commit_components(0);
+pub async fn test_calculate_change_single_insufficient_returns_none(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_calculate_change_single_insufficient_returns_none");
+    let (txin, mut txout, tap_script, control_block) =
+        build_commit_components(0, reg_tester).await?;
     // With zero input value and any fee rate, change cannot cover fee+outputs
     let fee = FeeRate::from_sat_per_vb(5).unwrap();
     let res = calculate_change_single(
@@ -383,12 +399,16 @@ fn test_calculate_change_single_insufficient_returns_none() {
         FeeRate::from_sat_per_vb(100).unwrap(),
     );
     assert!(res2.is_none());
+    Ok(())
 }
 
-#[test]
-fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let data = vec![9u8; 100];
     let (tap_script, tap_info, _addr) =
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
@@ -404,10 +424,11 @@ fn test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance() {
     let fee_env_large =
         estimate_reveal_fee_for_address(&tap_script, &tap_info, 34, fee_rate).unwrap();
     assert_eq!(fee_env_small, fee_env_large);
+    Ok(())
 }
 
-#[test]
-fn test_estimate_commit_delta_fee_monotonic() {
+pub fn test_estimate_commit_delta_fee_monotonic() {
+    info!("test_estimate_commit_delta_fee_monotonic");
     let base = build_dummy_tx(vec![], vec![]);
     let fr = FeeRate::from_sat_per_vb(5).unwrap();
     let d1 = {
@@ -497,10 +518,13 @@ fn test_estimate_commit_delta_fee_monotonic() {
     assert!(d0 > 0);
 }
 
-#[test]
-fn test_compose_reveal_op_return_size_validation() {
-    let (_secp, kp) = fixed_keypair();
-    let (xonly, _parity) = kp.x_only_public_key();
+pub async fn test_compose_reveal_op_return_size_validation(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_compose_reveal_op_return_size_validation");
+    let identity = reg_tester.identity().await?;
+    let keypair = identity.keypair;
+    let (xonly, _parity) = keypair.x_only_public_key();
     let commit_data = b"data".to_vec();
     let (_tap_script, _tap_info, script_addr) =
         build_tap_script_and_script_address(xonly, commit_data.clone()).expect("build");
@@ -534,7 +558,7 @@ fn test_compose_reveal_op_return_size_validation() {
         .op_return_data(vec![1u8; 77])
         .envelope(546)
         .build();
-    let ok = indexer::api::compose::compose_reveal(ok_inputs);
+    let ok = compose_reveal(ok_inputs);
     assert!(ok.is_ok(), "77-byte OP_RETURN payload should be accepted");
 
     let err_inputs = RevealInputs::builder()
@@ -547,7 +571,7 @@ fn test_compose_reveal_op_return_size_validation() {
         .op_return_data(vec![2u8; 78])
         .envelope(546)
         .build();
-    let err = indexer::api::compose::compose_reveal(err_inputs);
+    let err = compose_reveal(err_inputs);
     assert!(err.is_err(), "78-byte OP_RETURN payload should be rejected");
     let msg = err.err().unwrap().to_string();
     assert!(
@@ -555,4 +579,5 @@ fn test_compose_reveal_op_return_size_validation() {
         "unexpected error: {}",
         msg
     );
+    Ok(())
 }

@@ -1,22 +1,17 @@
-use std::str::FromStr;
-
 use anyhow::Result;
 use bitcoin::Amount;
 use bitcoin::FeeRate;
-use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
-use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use bitcoin::absolute::LockTime;
 use bitcoin::psbt::Input;
 use bitcoin::psbt::Output;
 use bitcoin::script::Instruction;
-use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
@@ -26,41 +21,32 @@ use bitcoin::{
     consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
 };
-use clap::Parser;
 use indexer::api::compose::compose;
 use indexer::api::compose::compose_reveal;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs};
-use indexer::config::TestConfig;
 use indexer::op_return::OpReturnData;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
 use indexer::witness_data::WitnessData;
-use indexer::{bitcoin_client::Client, config::Config};
+use testlib::RegTester;
+use tracing::info;
 
-#[tokio::test]
-async fn test_psbt_inscription() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
-
+pub async fn test_swap_psbt(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_swap_psbt");
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
+    let seller_identity = reg_tester.identity().await?;
+    let seller_address = seller_identity.address;
+    let seller_keypair = seller_identity.keypair;
+    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = seller_identity.next_funding_utxo;
 
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _parity) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let token_value = 1000;
     let attach_witness_data = WitnessData::Attach {
@@ -84,21 +70,11 @@ async fn test_psbt_inscription() -> Result<()> {
     let mut serialized_detach_data = Vec::new();
     ciborium::into_writer(&detach_data, &mut serialized_detach_data).unwrap();
 
-    let outpoint = OutPoint {
-        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
-        vout: 0,
-    };
-
-    let txout = TxOut {
-        value: Amount::from_sat(9000),
-        script_pubkey: seller_address.script_pubkey(),
-    };
-
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
-            x_only_public_key: internal_key,
-            funding_utxos: vec![(outpoint, txout)],
+            x_only_public_key: seller_internal_key,
+            funding_utxos: vec![(seller_out_point, seller_utxo_for_output.clone())],
             script_data: serialized_token_balance,
         }])
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
@@ -118,7 +94,7 @@ async fn test_psbt_inscription() -> Result<()> {
         .clone();
 
     let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000), // existing utxo with 9000 sats
+        value: seller_utxo_for_output.clone().value,
         script_pubkey: seller_address.script_pubkey(),
     }];
 
@@ -126,7 +102,7 @@ async fn test_psbt_inscription() -> Result<()> {
         &secp,
         &mut attach_commit_tx,
         &prevouts,
-        &keypair,
+        &seller_keypair,
         0,
         Some(TapSighashType::All),
     )?;
@@ -134,7 +110,7 @@ async fn test_psbt_inscription() -> Result<()> {
     let attach_taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, attach_tap_script.clone())
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
 
     let prevouts = vec![attach_commit_tx.output[0].clone()];
@@ -145,7 +121,7 @@ async fn test_psbt_inscription() -> Result<()> {
         &attach_tap_script,
         &mut attach_reveal_tx,
         &prevouts,
-        &keypair,
+        &seller_keypair,
         0,
     )?;
 
@@ -212,7 +188,7 @@ async fn test_psbt_inscription() -> Result<()> {
     let detach_tapscript_spend_info = TaprootBuilder::new()
         .add_leaf(0, detach_tap_script.clone())
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
 
     let detach_control_block = detach_tapscript_spend_info
@@ -237,7 +213,7 @@ async fn test_psbt_inscription() -> Result<()> {
         },
         inputs: vec![Input {
             witness_utxo: Some(attach_reveal_tx.output[0].clone()),
-            tap_internal_key: Some(internal_key),
+            tap_internal_key: Some(seller_internal_key),
             tap_merkle_root: Some(detach_tapscript_spend_info.merkle_root().unwrap()),
             tap_scripts: {
                 let mut scripts = std::collections::BTreeMap::new();
@@ -260,14 +236,11 @@ async fn test_psbt_inscription() -> Result<()> {
         &secp,
         &mut seller_detach_psbt,
         &detach_tap_script,
-        internal_key,
+        seller_internal_key,
         detach_control_block,
-        &keypair,
+        &seller_keypair,
         &prevouts,
     );
-
-    let buyer_keypair = Keypair::from_secret_key(&secp, &buyer_child_key.private_key);
-    let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
 
     // Create transfer data pointing to output 2 (buyer's address)
     let transfer_data = OpReturnData::D {
@@ -281,7 +254,7 @@ async fn test_psbt_inscription() -> Result<()> {
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .participants(vec![RevealParticipantInputs {
             address: seller_address.clone(),
-            x_only_public_key: internal_key,
+            x_only_public_key: seller_internal_key,
             commit_outpoint: OutPoint {
                 txid: attach_reveal_tx.compute_txid(),
                 vout: 0,
@@ -299,18 +272,13 @@ async fn test_psbt_inscription() -> Result<()> {
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
     buyer_psbt.unsigned_tx.input.push(TxIn {
-        previous_output: OutPoint {
-            txid: Txid::from_str(
-                "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
-            )?,
-            vout: 0,
-        },
+        previous_output: buyer_out_point,
         ..Default::default()
     });
     buyer_psbt.inputs.push(Input {
         witness_utxo: Some(TxOut {
             script_pubkey: buyer_address.script_pubkey(),
-            value: Amount::from_sat(10000),
+            value: buyer_utxo_for_output.value,
         }),
         tap_internal_key: Some(buyer_internal_key),
         ..Default::default()
@@ -329,7 +297,7 @@ async fn test_psbt_inscription() -> Result<()> {
     let prevouts = [
         attach_reveal_tx.output[0].clone(),
         TxOut {
-            value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
+            value: buyer_utxo_for_output.value,
             script_pubkey: buyer_address.script_pubkey(),
         },
     ];
@@ -341,8 +309,8 @@ async fn test_psbt_inscription() -> Result<()> {
     let raw_attach_reveal_tx_hex = hex::encode(serialize_tx(&attach_reveal_tx));
     let raw_psbt_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
         .await?;
 
     assert_eq!(

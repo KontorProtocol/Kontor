@@ -309,14 +309,14 @@ pub fn log_total_size_and_fee_breakdown(
 
 pub fn add_single_node_input_and_output_to_commit_psbt(
     commit_psbt: &mut Psbt,
-    node_utxos: &[(OutPoint, TxOut)],
+    node_utxo: &(OutPoint, TxOut),
     idx: usize,
     min_sat_per_vb: u64,
     node_info: &NodeInfo,
     dust_limit_sat: u64,
 ) -> Result<(u64, usize, usize)> {
     info!("node idx={} appending to COMMIT", idx);
-    let (node_outpoint, node_prevout) = node_utxos[idx].clone();
+    let (node_outpoint, node_prevout) = node_utxo.clone();
     // Snapshot size before adding this node to charge full delta (non-witness + witness + optional change)
     let base_before_vb = tx_vbytes(&commit_psbt.unsigned_tx);
     let node_input_index = commit_psbt.unsigned_tx.input.len();
