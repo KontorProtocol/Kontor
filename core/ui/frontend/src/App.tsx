@@ -9,10 +9,9 @@ import {
 
 import * as bitcoin from "bitcoinjs-lib";
 
-import "./App.css";
-
 import * as ecc from "tiny-secp256k1";
 import { ECPairFactory } from "ecpair";
+import { buildMintCallBytes } from "./lib/mint";
 
 // --- Constants ---
 const SATS_PER_BTC = 100_000_000;
@@ -74,6 +73,9 @@ declare global {
     unisat?: UnisatProvider;
     okxwallet?: OkxWallet;
     phantom?: PhantomWallet;
+    LeatherProvider?: {
+      request(method: string, params?: unknown): Promise<unknown>;
+    };
   }
 }
 
@@ -151,6 +153,8 @@ interface ComposeResult {
   chained_tap_script: string | null;
 }
 
+type ComposeMode = "raw" | "mint";
+
 interface TestMempoolAcceptResult {
   txid: string;
   wtxid: string;
@@ -210,6 +214,44 @@ const convertKebabToSnake = (obj: Record<string, any>): Record<string, any> => {
   }, {} as Record<string, any>);
 };
 
+const formatError = (err: unknown): string => {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+};
+
+const normalizeLeatherAddresses = (
+  data: unknown
+): LeatherAddressEntry[] => {
+  if (!data) {
+    return [];
+  }
+
+  if (Array.isArray(data)) {
+    return data as LeatherAddressEntry[];
+  }
+
+  if (typeof data === "object") {
+    const maybe = data as { addresses?: unknown; result?: unknown };
+    if (Array.isArray(maybe.addresses)) {
+      return maybe.addresses as LeatherAddressEntry[];
+    }
+    if (maybe.result) {
+      return normalizeLeatherAddresses(maybe.result);
+    }
+  }
+
+  return [];
+};
+
 async function fetchUtxos(address: string): Promise<Utxo[]> {
   const response = await fetch(`${electrsUrl}/address/${address}/utxo`);
   if (!response.ok) {
@@ -221,14 +263,14 @@ async function fetchUtxos(address: string): Promise<Utxo[]> {
 async function composeCommitReveal(
   address: ComposeAddressEntry,
   utxos: Utxo[],
-  inputData: string
+  scriptData: Uint8Array
 ): Promise<ComposeResult> {
   const fundingUtxoIds = utxos
     .map((utxo) => `${utxo.txid}:${utxo.vout}`)
     .join(",");
 
   // Serialize script data as bytes (Vec<u8> in backend JSON)
-  const scriptBytes = Array.from(new TextEncoder().encode(inputData || ""));
+  const scriptBytes = Array.from(scriptData ?? new Uint8Array());
 
   const body = {
     instructions: [
@@ -431,26 +473,41 @@ async function signPsbtWithLeather(
     });
   }
 
-  const res = await satsConnectRequest(
-    "signPsbt",
-    {
-      hex: psbt.toHex(),
-      broadcast: false,
-      signInputs: {
-        [sourceAddress]: Array.from(
-          { length: psbt.txInputs.length },
-          (_, i) => i
-        ),
-      },
-    } as any,
-    provider
-  );
+  const params = {
+    hex: psbt.toHex(),
+    broadcast: false,
+    signInputs: {
+      [sourceAddress]: Array.from({ length: psbt.txInputs.length }, (_, i) => i),
+    },
+  } as const;
+
+  const res = await satsConnectRequest("signPsbt", params as any, provider);
 
   if (res.status === "error") {
-    throw new Error(`Signing failed: ${res.error?.message || "Unknown error"}`);
+    const message =
+      (res.error as { message?: string })?.message ||
+      (typeof res.error === "string" ? res.error : undefined) ||
+      "Unknown error";
+
+    throw new Error(`Signing failed: ${message}`);
   }
 
-  const signedPsbt = bitcoin.Psbt.fromHex((res.result as any).hex);
+  const signedPsbtHex = (res.result as { hex?: string })?.hex;
+
+  if (!signedPsbtHex) {
+    throw new Error(
+      "Leather signing did not return a PSBT. Please ensure the wallet is up to date."
+    );
+  }
+
+  let signedPsbt: bitcoin.Psbt;
+  try {
+    signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
+  } catch (err) {
+    throw new Error(
+      `Unable to parse signed PSBT from Leather: ${formatError(err)}`
+    );
+  }
 
   // FORCE script-path spend by overriding the pre-finalized witness
   if (scriptLeafData) {
@@ -783,30 +840,111 @@ const ComposeResultDisplay: React.FC<{ composeResult: ComposeResult }> = ({
 );
 
 const Composer: React.FC<{
-  inputData: string;
-  setInputData: (d: string) => void;
+  mode: ComposeMode;
+  onModeChange: (mode: ComposeMode) => void;
+  rawInputData: string;
+  setRawInputData: (d: string) => void;
+  mintAmount: string;
+  onMintAmountChange: (value: string) => void;
+  mintError?: string;
   onCompose: () => void;
   disabled?: boolean;
   disabledMessage?: string;
-}> = ({ inputData, setInputData, onCompose, disabled, disabledMessage }) => (
+}> = ({
+  mode,
+  onModeChange,
+  rawInputData,
+  setRawInputData,
+  mintAmount,
+  onMintAmountChange,
+  mintError,
+  onCompose,
+  disabled,
+  disabledMessage,
+}) => (
   <div className="compose-section">
-    <div className="input-container">
-      <input
-        type="text"
-        value={inputData}
-        onChange={(e) => setInputData(e.target.value)}
-        placeholder="Enter data to encode"
-        className="data-input"
-        style={{
-          width: "100%",
-          padding: "12px",
-          marginBottom: "16px",
-          fontSize: "16px",
-          borderRadius: "4px",
-          border: "1px solid #ccc",
-        }}
-      />
+    <div
+      className="compose-mode-toggle"
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        gap: "16px",
+        marginBottom: "16px",
+        alignItems: "center",
+      }}
+    >
+      <label>
+        <input
+          type="radio"
+          name="compose-mode"
+          value="raw"
+          checked={mode === "raw"}
+          onChange={() => onModeChange("raw")}
+        />
+        <span style={{ marginLeft: "8px" }}>Raw payload</span>
+      </label>
+      <label>
+        <input
+          type="radio"
+          name="compose-mode"
+          value="mint"
+          checked={mode === "mint"}
+          onChange={() => onModeChange("mint")}
+        />
+        <span style={{ marginLeft: "8px" }}>Mint tokens</span>
+      </label>
     </div>
+
+    {mode === "raw" ? (
+      <div className="input-container">
+        <input
+          type="text"
+          value={rawInputData}
+          onChange={(e) => setRawInputData(e.target.value)}
+          placeholder="Enter data to encode"
+          className="data-input"
+          style={{
+            width: "100%",
+            padding: "12px",
+            marginBottom: "16px",
+            fontSize: "16px",
+            borderRadius: "4px",
+            border: "1px solid #ccc",
+          }}
+        />
+      </div>
+    ) : (
+      <div className="input-container">
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={mintAmount}
+          onChange={(e) => onMintAmountChange(e.target.value)}
+          placeholder="Enter amount to mint"
+          className="data-input"
+          style={{
+            width: "100%",
+            padding: "12px",
+            marginBottom: "8px",
+            fontSize: "16px",
+            borderRadius: "4px",
+            border: "1px solid #ccc",
+          }}
+        />
+        <p
+          style={{
+            fontSize: "14px",
+            color: "#555",
+            marginTop: 0,
+            marginBottom: "8px",
+          }}
+        >
+          Minted tokens credit the connected signer.
+        </p>
+        {mintError && <p className="error">{mintError}</p>}
+      </div>
+    )}
     {disabled && disabledMessage && <p className="error">{disabledMessage}</p>}
     <button onClick={onCompose} disabled={disabled}>
       Compose Commit/Reveal Transactions
@@ -820,7 +958,15 @@ const Signer: React.FC<{
   onSign: () => void;
   onBroadcast: () => void;
   provider: string;
-}> = ({ signedCommitTx, signedRevealTx, onSign, onBroadcast, provider }) => {
+  onReset: () => void;
+}> = ({
+  signedCommitTx,
+  signedRevealTx,
+  onSign,
+  onBroadcast,
+  provider,
+  onReset,
+}) => {
   const [opsResult, setOpsResult] = useState<OpWithResult[] | null>(null);
 
   useEffect(() => {
@@ -842,7 +988,18 @@ const Signer: React.FC<{
 
   return (
     <div className="sign-transaction">
-      <button onClick={onSign}>Sign Transactions</button>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          gap: "12px",
+          marginBottom: "16px",
+        }}
+      >
+        <button onClick={onSign}>Sign Transactions</button>
+        <button onClick={onReset}>Start over</button>
+      </div>
       {signedCommitTx && signedRevealTx && (
         <>
           <div className="signed-transaction">
@@ -905,6 +1062,9 @@ function WalletComponent() {
     []
   );
   const [inputData, setInputData] = useState<string>("");
+  const [composeMode, setComposeMode] = useState<ComposeMode>("raw");
+  const [mintAmount, setMintAmount] = useState<string>("");
+  const [mintError, setMintError] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
   const [availableProviders, setAvailableProviders] = useState<Provider[]>([]);
 
@@ -913,11 +1073,28 @@ function WalletComponent() {
     setAddress(undefined);
     setUtxos([]);
     setInputData("");
+    setComposeMode("raw");
+    setMintAmount("");
+    setMintError("");
     setSignedCommitTx("");
     setSignedRevealTx("");
     setBroadcastedTx([]);
     setComposeResult(undefined);
     setError("");
+  };
+
+  const handleMintAmountChange = (value: string) => {
+    setMintAmount(value);
+    if (mintError) {
+      setMintError("");
+    }
+  };
+
+  const handleComposeModeChange = (mode: ComposeMode) => {
+    setComposeMode(mode);
+    if (mode === "raw") {
+      setMintError("");
+    }
   };
 
   useEffect(() => {
@@ -1063,44 +1240,48 @@ function WalletComponent() {
           break;
         }
         case PROVIDER_ID_LEATHER: {
-          const getAddresses = () =>
-            satsConnectRequest(
-              "getAddresses",
-              {
-                purposes: [
-                  AddressPurpose.Payment,
-                  AddressPurpose.Ordinals,
-                  AddressPurpose.Stacks,
-                ],
-              },
-              provider
-            );
-          let response = await getAddresses();
+          const params = {
+            purposes: [
+              AddressPurpose.Payment,
+              AddressPurpose.Ordinals,
+              AddressPurpose.Stacks,
+            ],
+          };
+
+          const response = await satsConnectRequest(
+            "getAddresses",
+            params,
+            provider
+          );
 
           if (response.status === "error") {
-            throw new Error(
-              response.error.message || "Failed to get addresses."
-            );
+            const message =
+              typeof response.error === "string"
+                ? response.error
+                : (response.error as { message?: string })?.message;
+
+            throw new Error(message || "Failed to get addresses.");
           }
 
-          if (response.status === "success") {
-            const paymentAddress = (
-              response.result.addresses as unknown as LeatherAddressEntry[]
-            ).find(
-              (addr) => (addr as LeatherAddressEntry).type === ADDRESS_TYPE_P2TR
-            );
+          const leatherAddresses = normalizeLeatherAddresses(response.result);
 
-            if (paymentAddress) {
-              const composeAddress: ComposeAddressEntry = {
-                address: paymentAddress.address,
-                xOnlyPublicKey: (paymentAddress as LeatherAddressEntry)
-                  .tweakedPublicKey,
-              };
-              setAddress(composeAddress);
-              handleFetchUtxos(composeAddress.address);
-            } else {
-              setError("Could not find a P2TR (Taproot) payment address.");
-            }
+          if (leatherAddresses.length === 0) {
+            throw new Error("Failed to get addresses.");
+          }
+
+          const paymentAddress = leatherAddresses.find(
+            (addr) => addr.type === ADDRESS_TYPE_P2TR
+          );
+
+          if (paymentAddress) {
+            const composeAddress: ComposeAddressEntry = {
+              address: paymentAddress.address,
+              xOnlyPublicKey: paymentAddress.tweakedPublicKey,
+            };
+            setAddress(composeAddress);
+            handleFetchUtxos(composeAddress.address);
+          } else {
+            setError("Could not find a P2TR (Taproot) payment address.");
           }
           break;
         }
@@ -1108,7 +1289,7 @@ function WalletComponent() {
     } catch (err) {
       const providerName =
         availableProviders.find((p) => p.id === provider)?.name || provider;
-      setError(`Error with ${providerName}: ${err}`);
+      setError(`Error with ${providerName}: ${formatError(err)}`);
     }
   };
 
@@ -1117,18 +1298,47 @@ function WalletComponent() {
       const utxoData = await fetchUtxos(addr);
       setUtxos(utxoData);
     } catch (err) {
-      setError(`An error occurred while fetching UTXOs: ${err}`);
+      setError(`An error occurred while fetching UTXOs: ${formatError(err)}`);
     }
   };
 
   const handleCompose = async () => {
     if (!address || utxos.length === 0) return;
     setError("");
+
+    let scriptData: Uint8Array;
+
+    if (composeMode === "mint") {
+      const trimmed = mintAmount.trim();
+      if (trimmed === "") {
+        setMintError("Enter a whole number");
+        return;
+      }
+      if (!/^[0-9]+$/.test(trimmed)) {
+        setMintError("Enter a whole number");
+        return;
+      }
+
+      try {
+        scriptData = buildMintCallBytes(BigInt(trimmed));
+      } catch (err) {
+        setMintError(err instanceof Error ? err.message : "Invalid amount");
+        return;
+      }
+      setMintError("");
+    } else {
+      scriptData = new TextEncoder().encode(inputData || "");
+    }
+
+    setSignedCommitTx("");
+    setSignedRevealTx("");
+    setBroadcastedTx([]);
+
     try {
-      const kontorData = await composeCommitReveal(address, utxos, inputData);
+      const kontorData = await composeCommitReveal(address, utxos, scriptData);
       setComposeResult(kontorData);
     } catch (err) {
-      setError(`An error occurred while composing: ${err}`);
+      setError(`An error occurred while composing: ${formatError(err)}`);
     }
   };
 
@@ -1155,7 +1365,7 @@ function WalletComponent() {
       setSignedRevealTx(revealSignResult);
     } catch (err) {
       console.log("ERROR:", err);
-      setError(`An error occurred while signing: ${err}`);
+      setError(`An error occurred while signing: ${formatError(err)}`);
     }
   };
 
@@ -1168,8 +1378,20 @@ function WalletComponent() {
       );
       setBroadcastedTx(result);
     } catch (err) {
-      setError(`An error occurred while broadcasting: ${err}`);
+      setError(`An error occurred while broadcasting: ${formatError(err)}`);
     }
+  };
+
+  const handleResetComposer = () => {
+    setComposeResult(undefined);
+    setSignedCommitTx("");
+    setSignedRevealTx("");
+    setBroadcastedTx([]);
+    setInputData("");
+    setMintAmount("");
+    setMintError("");
+    setComposeMode("raw");
+    setError("");
   };
 
   const isUnisat = provider === PROVIDER_ID_UNISAT;
@@ -1199,8 +1421,13 @@ function WalletComponent() {
 
       {!composeResult && address && utxos.length > 0 && (
         <Composer
-          inputData={inputData}
-          setInputData={setInputData}
+          mode={composeMode}
+          onModeChange={handleComposeModeChange}
+          rawInputData={inputData}
+          setRawInputData={setInputData}
+          mintAmount={mintAmount}
+          onMintAmountChange={handleMintAmountChange}
+          mintError={mintError}
           onCompose={handleCompose}
           disabled={isUnisat}
           disabledMessage={isUnisat ? unisatMessage : undefined}
@@ -1214,6 +1441,7 @@ function WalletComponent() {
           onSign={handleSignTransaction}
           onBroadcast={handleBroadcastTransaction}
           provider={provider}
+          onReset={handleResetComposer}
         />
       )}
 

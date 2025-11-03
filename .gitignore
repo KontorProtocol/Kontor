@@ -1,4 +1,5 @@
 .envrc
+.env
 **/target
 **/.DS_Store
 **/cert.pem
@@ -12,3 +13,4 @@
 **/*.so
 !/core/indexer/sqlean*/**/*.so
 !/core/indexer/sqlean*/**/*.dylib
+core/ui/dist/
