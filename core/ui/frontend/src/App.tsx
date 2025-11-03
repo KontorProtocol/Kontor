@@ -24,6 +24,9 @@ const PROVIDER_ID_HORIZON = "HorizonWalletProvider";
 const ADDRESS_TYPE_P2TR = "p2tr";
 
 const electrsUrl = import.meta.env.VITE_ELECTRS_URL;
+const mempoolBaseUrl = (electrsUrl || "")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/+$/, "");
 const kontorUrl = import.meta.env.VITE_KONTOR_URL;
 
 // --- Types ---
@@ -325,6 +328,31 @@ async function broadcastTestMempoolAccept(
     result: rawData.result.map((item: any) => convertKebabToSnake(item)),
   };
   return convertedData.result;
+}
+
+async function broadcastTransactionsElectrs(
+  signedTxs: string[]
+): Promise<string[]> {
+  const txids: string[] = [];
+
+  for (const tx of signedTxs) {
+    const response = await fetch(`${electrsUrl}/tx`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain",
+      },
+      body: tx,
+    });
+    const responseText = (await response.text()).trim();
+
+    if (!response.ok) {
+      throw new Error(responseText || "Failed to broadcast transaction");
+    }
+
+    txids.push(responseText.replace(/"/g, ""));
+  }
+
+  return txids;
 }
 
 async function fetchOps(txHex: string): Promise<OpWithResult[]> {
@@ -956,6 +984,7 @@ const Signer: React.FC<{
   signedCommitTx: string;
   signedRevealTx: string;
   onSign: () => void;
+  onTestMempoolAccept: () => void;
   onBroadcast: () => void;
   provider: string;
   onReset: () => void;
@@ -963,6 +992,7 @@ const Signer: React.FC<{
   signedCommitTx,
   signedRevealTx,
   onSign,
+  onTestMempoolAccept,
   onBroadcast,
   provider,
   onReset,
@@ -1011,8 +1041,22 @@ const Signer: React.FC<{
             <p className="tx-hex">{signedRevealTx}</p>
           </div>
           <OpsResultDisplay ops={opsResult} />
-          <button onClick={onBroadcast}>Test Broadcast Transactions</button>
-          <p>Note: Transaction will not be broadcasted to the network.</p>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "12px",
+              justifyContent: "center",
+              marginTop: "12px",
+            }}
+          >
+            <button onClick={onTestMempoolAccept}>Test Mempool Acceptance</button>
+            <button onClick={onBroadcast}>Broadcast Transactions</button>
+          </div>
+          <p>
+            Note: Test Mempool Acceptance does not broadcast transactions to the
+            network.
+          </p>
           {provider === PROVIDER_ID_OKX && (
             <p className="error">
               Heads up: OKX currently signs only key-path for this flow; the
@@ -1032,7 +1076,7 @@ const BroadcastResultDisplay: React.FC<{
   if (broadcastedTx.length === 0) return null;
   return (
     <div className="broadcasted-transaction">
-      <h3>Broadcasted Transaction Result:</h3>
+      <h3>Test Mempool Acceptance Result:</h3>
       <ul>
         {broadcastedTx.map((tx, index) => (
           <li key={index}>
@@ -1041,6 +1085,43 @@ const BroadcastResultDisplay: React.FC<{
             {tx.reject_reason && <p>Reject Reason: {tx.reject_reason}</p>}
             {tx.vsize && <p>Vsize: {tx.vsize}</p>}
             {tx.fee && <p>Fee: {tx.fee}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+const ElectrsBroadcastDisplay: React.FC<{
+  txids: { commit: string; reveal: string } | null;
+}> = ({ txids }) => {
+  if (!txids) return null;
+
+  const entries = [
+    { label: "Commit Transaction", txid: txids.commit },
+    { label: "Reveal Transaction", txid: txids.reveal },
+  ].filter((entry) => entry.txid);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="broadcasted-transaction">
+      <h3>Broadcasted Transactions:</h3>
+      <ul>
+        {entries.map(({ label, txid }) => (
+          <li key={label}>
+            <strong>{label}:</strong>{" "}
+            {mempoolBaseUrl ? (
+              <a
+                href={`${mempoolBaseUrl}/tx/${txid}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {txid}
+              </a>
+            ) : (
+              txid
+            )}
           </li>
         ))}
       </ul>
@@ -1061,6 +1142,9 @@ function WalletComponent() {
   const [broadcastedTx, setBroadcastedTx] = useState<TestMempoolAcceptResult[]>(
     []
   );
+  const [broadcastedElectrsTxids, setBroadcastedElectrsTxids] = useState<
+    { commit: string; reveal: string } | null
+  >(null);
   const [inputData, setInputData] = useState<string>("");
   const [composeMode, setComposeMode] = useState<ComposeMode>("raw");
   const [mintAmount, setMintAmount] = useState<string>("");
@@ -1079,6 +1163,7 @@ function WalletComponent() {
     setSignedCommitTx("");
     setSignedRevealTx("");
     setBroadcastedTx([]);
+    setBroadcastedElectrsTxids(null);
     setComposeResult(undefined);
     setError("");
   };
@@ -1333,6 +1418,7 @@ function WalletComponent() {
     setSignedCommitTx("");
     setSignedRevealTx("");
     setBroadcastedTx([]);
+    setBroadcastedElectrsTxids(null);
 
     try {
       const kontorData = await composeCommitReveal(address, utxos, scriptData);
@@ -1363,22 +1449,42 @@ function WalletComponent() {
       );
       setSignedCommitTx(commitSignResult);
       setSignedRevealTx(revealSignResult);
+      setBroadcastedElectrsTxids(null);
     } catch (err) {
       console.log("ERROR:", err);
       setError(`An error occurred while signing: ${formatError(err)}`);
     }
   };
 
-  const handleBroadcastTransaction = async () => {
+  const handleTestMempoolAccept = async () => {
     if (!signedCommitTx || !signedRevealTx) return;
     setError("");
+    setBroadcastedElectrsTxids(null);
     try {
       const result = await broadcastTestMempoolAccept(
         [signedCommitTx, signedRevealTx].join(",")
       );
       setBroadcastedTx(result);
     } catch (err) {
-      setError(`An error occurred while broadcasting: ${formatError(err)}`);
+      setError(
+        `An error occurred while testing mempool acceptance: ${formatError(err)}`
+      );
+    }
+  };
+
+  const handleBroadcastTransactions = async () => {
+    if (!signedCommitTx || !signedRevealTx) return;
+    setError("");
+    try {
+      const [commitTxid, revealTxid] = await broadcastTransactionsElectrs([
+        signedCommitTx,
+        signedRevealTx,
+      ]);
+      setBroadcastedElectrsTxids({ commit: commitTxid, reveal: revealTxid });
+    } catch (err) {
+      setError(
+        `An error occurred while broadcasting via electrs: ${formatError(err)}`
+      );
     }
   };
 
@@ -1387,6 +1493,7 @@ function WalletComponent() {
     setSignedCommitTx("");
     setSignedRevealTx("");
     setBroadcastedTx([]);
+    setBroadcastedElectrsTxids(null);
     setInputData("");
     setMintAmount("");
     setMintError("");
@@ -1439,13 +1546,15 @@ function WalletComponent() {
           signedCommitTx={signedCommitTx}
           signedRevealTx={signedRevealTx}
           onSign={handleSignTransaction}
-          onBroadcast={handleBroadcastTransaction}
+          onTestMempoolAccept={handleTestMempoolAccept}
+          onBroadcast={handleBroadcastTransactions}
           provider={provider}
           onReset={handleResetComposer}
         />
       )}
 
       <BroadcastResultDisplay broadcastedTx={broadcastedTx} />
+      <ElectrsBroadcastDisplay txids={broadcastedElectrsTxids} />
     </div>
   );
 }
