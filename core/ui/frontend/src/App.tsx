@@ -11,7 +11,7 @@ import * as bitcoin from "bitcoinjs-lib";
 
 import * as ecc from "tiny-secp256k1";
 import { ECPairFactory } from "ecpair";
-import { buildMintCallBytes } from "./lib/mint";
+import { buildMintCallBytes, DEFAULT_TOKEN_CONTRACT } from "./lib/mint";
 
 // --- Constants ---
 const SATS_PER_BTC = 100_000_000;
@@ -28,6 +28,43 @@ const mempoolBaseUrl = (electrsUrl || "")
   .replace(/\/api\/?$/, "")
   .replace(/\/+$/, "");
 const kontorUrl = import.meta.env.VITE_KONTOR_URL;
+const tokenContractAddress = `${DEFAULT_TOKEN_CONTRACT.name}_${DEFAULT_TOKEN_CONTRACT.height}_${DEFAULT_TOKEN_CONTRACT.tx_index}`;
+const tokenSymbol = DEFAULT_TOKEN_CONTRACT.name.toUpperCase();
+
+const parseWaveOptionInteger = (waveValue: string): string | null => {
+  if (!waveValue) {
+    return null;
+  }
+
+  const trimmed = waveValue.trim();
+
+  if (/^none$/i.test(trimmed)) {
+    return "0";
+  }
+
+  const someMatch = trimmed.match(/^some\((.*)\)$/i);
+  const inner = someMatch ? someMatch[1].trim() : trimmed;
+  const sanitized = inner.replace(/_/g, "").replace(/n$/i, "");
+
+  if (/^-?\d+$/.test(sanitized)) {
+    try {
+      return BigInt(sanitized).toString();
+    } catch {
+      return sanitized;
+    }
+  }
+
+  return inner;
+};
+
+const formatTokenBalance = (balance: string): string => {
+  const normalized = balance || "0";
+  try {
+    return new Intl.NumberFormat("en-US").format(BigInt(normalized));
+  } catch {
+    return normalized;
+  }
+};
 
 // --- Types ---
 interface UnisatProvider {
@@ -261,6 +298,57 @@ async function fetchUtxos(address: string): Promise<Utxo[]> {
     throw new Error("Failed to fetch UTXOs");
   }
   return response.json();
+}
+
+interface ViewResultOk {
+  metadata: unknown;
+  value: string;
+}
+
+interface ViewResultErr {
+  metadata: unknown;
+  message?: string;
+}
+
+type ViewResult = {
+  Ok?: ViewResultOk;
+  Err?: ViewResultErr;
+};
+
+async function fetchTokenBalance(
+  account: ComposeAddressEntry
+): Promise<string | null> {
+  if (!kontorUrl) {
+    throw new Error("Kontor API URL is not configured");
+  }
+
+  const response = await fetch(`${kontorUrl}/api/view/${tokenContractAddress}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expr: `balance("${account.xOnlyPublicKey}")` }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error || "Failed to fetch token balance");
+  }
+
+  const resultEvent = data?.result as ViewResult | undefined;
+
+  if (!resultEvent) {
+    throw new Error("Invalid token balance response");
+  }
+
+  if (resultEvent.Err) {
+    throw new Error(resultEvent.Err.message || "Token balance call failed");
+  }
+
+  if (!resultEvent.Ok) {
+    throw new Error("Unexpected token balance response");
+  }
+
+  return parseWaveOptionInteger(resultEvent.Ok.value);
 }
 
 async function composeCommitReveal(
@@ -757,33 +845,58 @@ const ProviderSelector: React.FC<{
 const AddressInfo: React.FC<{
   address: ComposeAddressEntry;
   utxos: Utxo[];
-}> = ({ address, utxos }) => (
-  <div className="addresses">
-    <h2>Your Taproot Address:</h2>
-    <ul>
-      <li>{address.address}</li>
-    </ul>
-    {utxos.length > 0 && (
-      <div className="utxos">
-        <h3>UTXOs:</h3>
-        <ul>
-          {utxos.map((utxo, index) => (
-            <li key={index}>
-              <strong>TXID:</strong> {utxo.txid}
-              <br />
-              <strong>Vout:</strong> {utxo.vout}
-              <br />
-              <strong>Value:</strong> {utxo.value / SATS_PER_BTC} BTC
-              <br />
-              <strong>Status:</strong>{" "}
-              {utxo.status.confirmed ? "Confirmed" : "Unconfirmed"}
-            </li>
-          ))}
-        </ul>
+  tokenBalance: string | null;
+  tokenBalanceLoading: boolean;
+  tokenBalanceError: string | null;
+}> = ({
+  address,
+  utxos,
+  tokenBalance,
+  tokenBalanceLoading,
+  tokenBalanceError,
+}) => {
+  const balanceDisplay = tokenBalance ? formatTokenBalance(tokenBalance) : "0";
+
+  return (
+    <div className="addresses">
+      <h2>Your Taproot Address:</h2>
+      <ul>
+        <li>{address.address}</li>
+      </ul>
+
+      <div className="token-balance">
+        <h3>{tokenSymbol} Balance:</h3>
+        {tokenBalanceLoading ? (
+          <p>Loading...</p>
+        ) : tokenBalanceError ? (
+          <p className="error">{tokenBalanceError}</p>
+        ) : (
+          <p>{balanceDisplay}</p>
+        )}
       </div>
-    )}
-  </div>
-);
+
+      {utxos.length > 0 && (
+        <div className="utxos">
+          <h3>UTXOs:</h3>
+          <ul>
+            {utxos.map((utxo, index) => (
+              <li key={index}>
+                <strong>TXID:</strong> {utxo.txid}
+                <br />
+                <strong>Vout:</strong> {utxo.vout}
+                <br />
+                <strong>Value:</strong> {utxo.value / SATS_PER_BTC} BTC
+                <br />
+                <strong>Status:</strong>{" "}
+                {utxo.status.confirmed ? "Confirmed" : "Unconfirmed"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const OpsResultDisplay: React.FC<{ ops: OpWithResult[] | null }> = ({
   ops,
@@ -1133,6 +1246,9 @@ const ElectrsBroadcastDisplay: React.FC<{
 function WalletComponent() {
   const [address, setAddress] = useState<ComposeAddressEntry | undefined>();
   const [utxos, setUtxos] = useState<Utxo[]>([]);
+  const [tokenBalance, setTokenBalance] = useState<string | null>(null);
+  const [tokenBalanceLoading, setTokenBalanceLoading] = useState<boolean>(false);
+  const [tokenBalanceError, setTokenBalanceError] = useState<string | null>(null);
   const [composeResult, setComposeResult] = useState<
     ComposeResult | undefined
   >();
@@ -1156,6 +1272,9 @@ function WalletComponent() {
     setProvider(newProvider);
     setAddress(undefined);
     setUtxos([]);
+    setTokenBalance(null);
+    setTokenBalanceError(null);
+    setTokenBalanceLoading(false);
     setInputData("");
     setComposeMode("raw");
     setMintAmount("");
@@ -1229,7 +1348,7 @@ function WalletComponent() {
                 return;
               }
               setAddress(paymentAddress);
-              handleFetchUtxos(paymentAddress.address);
+              handleFetchAccountData(paymentAddress);
             }
           }
           break;
@@ -1249,7 +1368,7 @@ function WalletComponent() {
               return;
             }
             setAddress(paymentAddress);
-            handleFetchUtxos(paymentAddress.address);
+            handleFetchAccountData(paymentAddress);
           }
           break;
         case PROVIDER_ID_PHANTOM:
@@ -1265,7 +1384,7 @@ function WalletComponent() {
                 xOnlyPublicKey: paymentAccount.publicKey.slice(-64),
               };
               setAddress(paymentAddress);
-              handleFetchUtxos(paymentAddress.address);
+              handleFetchAccountData(paymentAddress);
             } else {
               setError(
                 "Could not find a P2TR payment address in Phantom wallet."
@@ -1317,7 +1436,7 @@ function WalletComponent() {
                 xOnlyPublicKey: paymentAddress.publicKey,
               };
               setAddress(composeAddress);
-              handleFetchUtxos(composeAddress.address);
+              handleFetchAccountData(composeAddress);
             } else {
               setError("Could not find a P2TR (Taproot) payment address.");
             }
@@ -1364,7 +1483,7 @@ function WalletComponent() {
               xOnlyPublicKey: paymentAddress.tweakedPublicKey,
             };
             setAddress(composeAddress);
-            handleFetchUtxos(composeAddress.address);
+            handleFetchAccountData(composeAddress);
           } else {
             setError("Could not find a P2TR (Taproot) payment address.");
           }
@@ -1378,12 +1497,25 @@ function WalletComponent() {
     }
   };
 
-  const handleFetchUtxos = async (addr: string) => {
+  const handleFetchAccountData = async (account: ComposeAddressEntry) => {
     try {
-      const utxoData = await fetchUtxos(addr);
+      const utxoData = await fetchUtxos(account.address);
       setUtxos(utxoData);
     } catch (err) {
       setError(`An error occurred while fetching UTXOs: ${formatError(err)}`);
+    }
+
+    setTokenBalance(null);
+    setTokenBalanceError(null);
+    setTokenBalanceLoading(true);
+
+    try {
+      const balanceValue = await fetchTokenBalance(account);
+      setTokenBalance(balanceValue ?? "0");
+    } catch (err) {
+      setTokenBalanceError(formatError(err));
+    } finally {
+      setTokenBalanceLoading(false);
     }
   };
 
@@ -1522,7 +1654,15 @@ function WalletComponent() {
       {isHorizon && <p className="error">{horizonMessage}</p>}
       <ErrorMessage error={error} />
 
-      {address && <AddressInfo address={address} utxos={utxos} />}
+      {address && (
+        <AddressInfo
+          address={address}
+          utxos={utxos}
+          tokenBalance={tokenBalance}
+          tokenBalanceLoading={tokenBalanceLoading}
+          tokenBalanceError={tokenBalanceError}
+        />
+      )}
 
       {composeResult && <ComposeResultDisplay composeResult={composeResult} />}
 
