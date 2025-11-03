@@ -160,7 +160,6 @@ pub async fn test_commit_reveal_ordinals(reg_tester: &mut RegTester) -> Result<(
     let result = reg_tester
         .mempool_accept_result(&[raw_commit_tx_hex, raw_reveal_tx_hex])
         .await?;
-    println!("result: {:#?}", result);
     // Assert both transactions are allowed
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Commit transaction was rejected");

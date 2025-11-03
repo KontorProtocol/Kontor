@@ -293,6 +293,12 @@ pub async fn test_swap_psbt(reg_tester: &mut RegTester) -> Result<()> {
         },
     );
 
+    // Add buyer change so the remainder of the buyer input is not treated as fee
+    buyer_psbt.unsigned_tx.output.push(TxOut {
+        value: buyer_utxo_for_output.value - Amount::from_sat(600) - Amount::from_sat(546),
+        script_pubkey: buyer_address.script_pubkey(),
+    });
+
     // Define the prevouts explicitly in the same order as inputs
     let prevouts = [
         attach_reveal_tx.output[0].clone(),

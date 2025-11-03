@@ -1,8 +1,8 @@
 use anyhow::{Error, Result};
-use bip39::Mnemonic;
-use bitcoin::address::Address;
+
 use bitcoin::hashes::Hash;
-use bitcoin::key::{PublicKey as BitcoinPublicKey, TapTweak};
+use bitcoin::key::TapTweak;
+use bitcoin::key::{CompressedPublicKey, Secp256k1};
 use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
@@ -11,19 +11,10 @@ use bitcoin::secp256k1::{All, Keypair};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
-    BlockHash, KnownHrp, Network, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid,
-    Witness, XOnlyPublicKey, secp256k1,
-};
-use bitcoin::{
-    PrivateKey,
-    bip32::{DerivationPath, Xpriv},
-    key::{CompressedPublicKey, Secp256k1},
+    BlockHash, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid, Witness, XOnlyPublicKey,
 };
 use libsql::Connection;
 use rand::prelude::*;
-use std::fs;
-use std::path::Path;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -80,52 +71,6 @@ pub fn build_inscription(serialized_token_balance: Vec<u8>, key: PublicKey) -> R
 
     let tap_script = build_script_after_pubkey(base_witness_script, serialized_token_balance)?;
     Ok(tap_script.into_script())
-}
-
-pub fn generate_taproot_address_from_mnemonic(
-    secp: &Secp256k1<secp256k1::All>,
-    network: Network,
-    taproot_key_path: &Path,
-    index: u32,
-) -> Result<(Address, Xpriv, CompressedPublicKey), anyhow::Error> {
-    let mnemonic = fs::read_to_string(taproot_key_path)
-        .expect("Failed to read mnemonic file")
-        .trim()
-        .to_string();
-
-    // Parse the mnemonic
-    let mnemonic = Mnemonic::from_str(&mnemonic).expect("Invalid mnemonic phrase");
-
-    // Generate seed from mnemonic
-    let seed = mnemonic.to_seed("");
-
-    // Create master key
-    let master_key = Xpriv::new_master(network, &seed).expect("Failed to create master key");
-
-    let network_path: String = if network == Network::Testnet4 {
-        format!("m/86'/1'/0'/0/{}", index)
-    } else {
-        format!("m/86'/0'/0'/0/{}", index)
-    };
-
-    // Derive first child key using a proper derivation path
-    let path = DerivationPath::from_str(&network_path).expect("Invalid derivation path");
-    let child_key = master_key
-        .derive_priv(secp, &path)
-        .expect("Failed to derive child key");
-
-    // Get the private key
-    let private_key = PrivateKey::new(child_key.private_key, network);
-
-    // Get the public key
-    let public_key = BitcoinPublicKey::from_private_key(secp, &private_key);
-    let compressed_pubkey = bitcoin::CompressedPublicKey(public_key.inner);
-
-    // Create a Taproot address
-    let x_only_pubkey = public_key.inner.x_only_public_key().0;
-    let address = Address::p2tr(secp, x_only_pubkey, None, KnownHrp::from(network));
-
-    Ok((address, child_key, compressed_pubkey))
 }
 
 pub fn sign_key_spend(

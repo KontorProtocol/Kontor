@@ -990,8 +990,6 @@ pub async fn test_portal_reorders_commit_inputs_before_sign_rejected(
     let commit_hex = hex::encode(serialize_tx(&commit_psbt.extract_tx()?));
     let reveal_hex = hex::encode(serialize_tx(&reveal_psbt.extract_tx()?));
 
-    println!("commit_hex@@@@@@@@@@@@@@!!!!!!!!!!!!!!: {}", commit_hex);
-
     let res = reg_tester
         .mempool_accept_result(&[commit_hex, reveal_hex])
         .await;

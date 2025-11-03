@@ -34,6 +34,23 @@ use crate::compose_helpers::{
     test_split_even_chunks_zero_parts_errs,
     test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness,
 };
+use crate::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
+use crate::legacy_segwit_envelope::{
+    test_legacy_segwit_envelope_psbt_inscription,
+    test_legacy_segwit_psbt_inscription_invalid_token_data,
+    test_legacy_segwit_psbt_inscription_with_wrong_internal_key_without_checksig,
+    test_legacy_segwit_psbt_inscription_without_checksig,
+    test_legacy_segwit_psbt_inscription_wrong_internal_key,
+};
+use crate::legacy_segwit_swap::{
+    test_legacy_segwit_swap_psbt_with_incorrect_prefix,
+    test_legacy_segwit_swap_psbt_with_insufficient_funds,
+    test_legacy_segwit_swap_psbt_with_long_witness_stack,
+    test_legacy_segwit_swap_psbt_with_malformed_witness_script,
+    test_legacy_segwit_swap_psbt_with_secret, test_legacy_segwit_swap_psbt_with_wrong_token_name,
+    test_legacy_segwit_swap_psbt_without_prefix, test_legacy_segwit_swap_psbt_without_secret,
+    test_legacy_segwit_swap_psbt_without_token_balance,
+};
 use crate::legacy_taproot_envelope::{
     test_legacy_taproot_envelope_psbt_inscription,
     test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig,
@@ -72,6 +89,9 @@ use crate::multi_psbt_tx_validation::{
     test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
 };
 use crate::regtest_commit_reveal::test_taproot_transaction_regtest;
+use crate::signature_replay_fails::{
+    test_psbt_signature_replay_fails, test_signature_replay_fails,
+};
 use crate::size_limit::test_compose_progressive_size_limit_testnet;
 use crate::swap::test_swap_psbt;
 
@@ -80,6 +100,9 @@ mod commit_reveal_random_keypair;
 mod compose_api;
 mod compose_commit_unit;
 mod compose_helpers;
+mod legacy_commit_reveal_p2wsh;
+mod legacy_segwit_envelope;
+mod legacy_segwit_swap;
 mod legacy_taproot_envelope;
 mod legacy_taproot_swap;
 mod multi_psbt_integration;
@@ -87,6 +110,7 @@ mod multi_psbt_integration_breakdown;
 mod multi_psbt_security;
 mod multi_psbt_tx_validation;
 mod regtest_commit_reveal;
+mod signature_replay_fails;
 mod size_limit;
 mod swap;
 
@@ -418,5 +442,35 @@ async fn test_multi_psbt_tx_validation(reg_tester: &mut RegTester) -> Result<()>
 
     info!("swap");
     test_swap_psbt(&mut reg_tester.clone()).await?;
+
+    info!("legacy_commit_reveal_p2wsh");
+    test_legacy_commit_reveal_p2wsh(&mut reg_tester.clone()).await?;
+
+    info!("legacy_segwit_envelope");
+    test_legacy_segwit_envelope_psbt_inscription(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_psbt_inscription_invalid_token_data(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_psbt_inscription_wrong_internal_key(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_psbt_inscription_without_checksig(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_psbt_inscription_with_wrong_internal_key_without_checksig(
+        &mut reg_tester.clone(),
+    )
+    .await?;
+
+    info!("legacy_segwit_swap");
+    test_legacy_segwit_swap_psbt_with_secret(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_without_secret(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_secret(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_long_witness_stack(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_wrong_token_name(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_malformed_witness_script(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_without_token_balance(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_without_prefix(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_incorrect_prefix(&mut reg_tester.clone()).await?;
+    test_legacy_segwit_swap_psbt_with_insufficient_funds(&mut reg_tester.clone()).await?;
+
+    info!("signature_replay_fails");
+    test_signature_replay_fails(&mut reg_tester.clone()).await?;
+    test_psbt_signature_replay_fails(&mut reg_tester.clone()).await?;
+
     Ok(())
 }

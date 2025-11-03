@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bitcoin::CompressedPublicKey;
 use bitcoin::EcdsaSighashType;
 use bitcoin::Network;
 use bitcoin::hashes::Hash;
@@ -13,37 +14,22 @@ use bitcoin::{
     key::Secp256k1,
     transaction::{Transaction, TxIn, TxOut, Version},
 };
-use clap::Parser;
-use indexer::config::TestConfig;
 use indexer::legacy_test_utils;
-use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer::{bitcoin_client::Client, config::Config};
+use testlib::RegTester;
 
-#[tokio::test]
-async fn test_taproot_transaction() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_commit_reveal_p2wsh(reg_tester: &mut RegTester) -> Result<()> {
+    let seller_identity = reg_tester.identity().await?;
+    let seller_address = seller_identity.address;
+    let seller_keypair = seller_identity.keypair;
+    let (seller_out_point, seller_utxo_for_output) = seller_identity.next_funding_utxo;
 
     let secp = Secp256k1::new();
 
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        test_utils::generate_taproot_address_from_mnemonic(
-            &secp,
-            Network::Bitcoin,
-            &config.taproot_key_path,
-            0,
-        )?;
+    let recipient_identity = reg_tester.identity().await?;
+    let recipient_address = recipient_identity.address;
 
-    let (recipient_address, _recipient_child_key, _recipient_compressed_pubkey) =
-        test_utils::generate_taproot_address_from_mnemonic(
-            &secp,
-            Network::Bitcoin,
-            &config.taproot_key_path,
-            1,
-        )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
+    let keypair = Keypair::from_secret_key(&secp, &seller_keypair.secret_key());
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -53,8 +39,13 @@ async fn test_taproot_transaction() -> Result<()> {
     let mut serialized_token_balance = Vec::new();
     ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
 
+    let seller_compressed = CompressedPublicKey::from_private_key(
+        &secp,
+        &bitcoin::PrivateKey::new(seller_keypair.secret_key(), Network::Regtest),
+    )
+    .expect("compressed pubkey");
     let witness_script = legacy_test_utils::build_witness_script(
-        legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
+        legacy_test_utils::PublicKey::Segwit(&seller_compressed),
         &serialized_token_balance,
     );
 
@@ -65,6 +56,8 @@ async fn test_taproot_transaction() -> Result<()> {
         &keypair,
         &seller_address,
         &script_address,
+        seller_out_point,
+        seller_utxo_for_output,
     )?;
 
     // Spend the p2sh output
@@ -92,7 +85,7 @@ async fn test_taproot_transaction() -> Result<()> {
         .p2wsh_signature_hash(0, &witness_script, Amount::from_sat(1000), sighash_type)
         .expect("failed to construct sighash");
     let msg = Message::from_digest(sighash.to_byte_array());
-    let sig = secp.sign_ecdsa(&msg, &seller_child_key.private_key);
+    let sig = secp.sign_ecdsa(&msg, &seller_keypair.secret_key());
     let sig = bitcoin::ecdsa::Signature {
         signature: sig,
         sighash_type,
@@ -106,8 +99,8 @@ async fn test_taproot_transaction() -> Result<()> {
 
     let spend_tx_hex = hex::encode(serialize_tx(&spend_tx));
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
-    let result = client
-        .test_mempool_accept(&[attach_tx_hex, spend_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[attach_tx_hex, spend_tx_hex])
         .await?;
 
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");

@@ -22,10 +22,11 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use bitcoin::{
-    Address, Amount, BlockHash, Network, OutPoint, Transaction, TxIn, TxOut, Txid, XOnlyPublicKey,
+    Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
+    Txid, XOnlyPublicKey,
     absolute::LockTime,
     consensus::serialize as serialize_tx,
-    key::{Keypair, Secp256k1, rand},
+    key::{Keypair, PrivateKey, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
 };
@@ -133,6 +134,24 @@ impl Identity {
     pub fn signer(&self) -> Signer {
         Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct P2wpkhIdentity {
+    pub address: Address,
+    pub compressed_public_key: CompressedPublicKey,
+    pub private_key: PrivateKey,
+    pub keypair: Keypair,
+    pub next_funding_utxo: (OutPoint, TxOut),
+}
+
+fn generate_random_ecdsa_key(network: Network) -> (PrivateKey, CompressedPublicKey) {
+    let secp = Secp256k1::new();
+    let secret_key = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
+    let private_key = PrivateKey::new(secret_key, network);
+    let public_key = bitcoin::key::PublicKey::from_private_key(&secp, &private_key);
+    let compressed_pubkey = CompressedPublicKey(public_key.inner);
+    (private_key, compressed_pubkey)
 }
 
 pub struct RegTesterInner {
@@ -342,6 +361,25 @@ impl RegTesterInner {
         })
     }
 
+    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
+        let network = Network::Regtest;
+        let secp = Secp256k1::new();
+        let (private_key, compressed_public_key) = generate_random_ecdsa_key(network);
+        let address = Address::p2wpkh(&compressed_public_key, network);
+        let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        let mut funded = self.fund_address(&address, 1).await?;
+        let next_funding_utxo = funded
+            .pop()
+            .ok_or_else(|| anyhow!("failed to fund p2wpkh identity"))?;
+        Ok(P2wpkhIdentity {
+            address,
+            compressed_public_key,
+            private_key,
+            keypair,
+            next_funding_utxo,
+        })
+    }
+
     pub async fn fund_address(
         &mut self,
         address: &Address,
@@ -544,6 +582,10 @@ impl RegTester {
 
     pub async fn identity(&mut self) -> Result<Identity> {
         self.inner.lock().await.identity().await
+    }
+
+    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
+        self.inner.lock().await.identity_p2wpkh().await
     }
 
     pub async fn fund_address(

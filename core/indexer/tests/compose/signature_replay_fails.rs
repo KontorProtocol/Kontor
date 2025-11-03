@@ -2,56 +2,37 @@ use anyhow::Result;
 use bitcoin::absolute::LockTime;
 use bitcoin::psbt::{Input, Output};
 use bitcoin::script::Instruction;
-use bitcoin::secp256k1::Keypair;
 use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Address, FeeRate, KnownHrp, Network, Psbt, ScriptBuf, TapSighashType, Transaction, TxIn,
-    Witness, XOnlyPublicKey,
+    Address, FeeRate, KnownHrp, Psbt, ScriptBuf, TapSighashType, Transaction, TxIn, Witness,
+    XOnlyPublicKey,
 };
 use bitcoin::{
-    Amount, OutPoint, Txid, consensus::encode::serialize as serialize_tx, key::Secp256k1,
+    Amount, OutPoint, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
-use clap::Parser;
 use indexer::api::compose::{
     ComposeInputs, InstructionInputs, RevealInputs, RevealParticipantInputs, compose,
     compose_reveal,
 };
-use indexer::config::TestConfig;
 use indexer::op_return::OpReturnData;
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer::{bitcoin_client::Client, config::Config};
-use std::str::FromStr;
 
-#[tokio::test]
-async fn test_signature_replay_failse() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+use testlib::RegTester;
+use tracing::info;
+
+pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_signature_replay_fails");
+
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _) = seller_keypair.x_only_public_key();
+    let (out_point, utxo_for_output) = identity.next_funding_utxo;
 
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let seller_keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (seller_internal_key, _parity) = seller_keypair.x_only_public_key();
-
-    // UTXO loaded with 9000 sats
-    let out_point = OutPoint {
-        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
-        vout: 0,
-    };
-
-    let utxo_for_output = TxOut {
-        value: Amount::from_sat(9000),
-        script_pubkey: seller_address.script_pubkey(),
-    };
 
     // Create token balance data
     let token_value = 1000;
@@ -114,30 +95,16 @@ async fn test_signature_replay_failse() -> Result<()> {
     let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx));
 
-    let result = client
-        .test_mempool_accept(&[commit_tx_hex, reveal_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[commit_tx_hex, reveal_tx_hex])
         .await?;
 
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
     assert!(result[0].allowed, "Commit transaction was rejected");
     assert!(result[1].allowed, "Reveal transaction was rejected");
 
-    let (buyer_address, _, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let buyer_out_point = OutPoint {
-        txid: Txid::from_str("ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3")?,
-        vout: 0,
-    };
-
-    let buyer_utxo_for_output = TxOut {
-        value: Amount::from_sat(10000),
-        script_pubkey: buyer_address.script_pubkey(),
-    };
+    let buyer_identity = reg_tester.identity().await?;
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {
@@ -162,8 +129,8 @@ async fn test_signature_replay_failse() -> Result<()> {
     let buyer_commit_tx_hex = hex::encode(serialize_tx(&buyer_commit_tx));
     let buyer_reveal_tx_hex = hex::encode(serialize_tx(&buyer_reveal_tx));
 
-    let result = client
-        .test_mempool_accept(&[buyer_commit_tx_hex, buyer_reveal_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[buyer_commit_tx_hex, buyer_reveal_tx_hex])
         .await?;
 
     assert_eq!(result.len(), 2, "Expected exactly two transaction results");
@@ -187,29 +154,22 @@ async fn test_signature_replay_failse() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_signature_replay_fails() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_psbt_signature_replay_fails");
+
+    let identity = reg_tester.identity().await?;
+    let seller_address = identity.address;
+    let seller_keypair = identity.keypair;
+    let (seller_internal_key, _) = seller_keypair.x_only_public_key();
+    let (seller_out_point, seller_utxo_for_output) = identity.next_funding_utxo;
+
+    let buyer_identity = reg_tester.identity().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_keypair = buyer_identity.keypair;
+    let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
+    let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        0,
-    )?;
-
-    let (buyer_address, buyer_child_key, _) = test_utils::generate_taproot_address_from_mnemonic(
-        &secp,
-        Network::Bitcoin,
-        &config.taproot_key_path,
-        1,
-    )?;
-
-    let keypair = Keypair::from_secret_key(&secp, &seller_child_key.private_key);
-    let (internal_key, _parity) = keypair.x_only_public_key();
 
     let token_value = 1000;
     let attach_witness_data = WitnessData::Attach {
@@ -233,21 +193,11 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let mut serialized_detach_data = Vec::new();
     ciborium::into_writer(&detach_data, &mut serialized_detach_data).unwrap();
 
-    let outpoint = OutPoint {
-        txid: Txid::from_str("dd3d962f95741f2f5c3b87d6395c325baa75c4f3f04c7652e258f6005d70f3e8")?,
-        vout: 0,
-    };
-
-    let txout = TxOut {
-        value: Amount::from_sat(9000),
-        script_pubkey: seller_address.script_pubkey(),
-    };
-
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {
             address: seller_address.clone(),
-            x_only_public_key: internal_key,
-            funding_utxos: vec![(outpoint, txout)],
+            x_only_public_key: seller_internal_key,
+            funding_utxos: vec![(seller_out_point, seller_utxo_for_output.clone())],
             script_data: serialized_token_balance,
         }])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
@@ -266,16 +216,13 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         .tap_script
         .clone();
 
-    let prevouts = vec![TxOut {
-        value: Amount::from_sat(9000),
-        script_pubkey: seller_address.script_pubkey(),
-    }];
+    let prevouts = vec![seller_utxo_for_output.clone()];
 
     test_utils::sign_key_spend(
         &secp,
         &mut attach_commit_tx,
         &prevouts,
-        &keypair,
+        &seller_keypair,
         0,
         Some(TapSighashType::All),
     )?;
@@ -283,7 +230,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let attach_taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, attach_tap_script.clone())
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
 
     let prevouts = vec![attach_commit_tx.output[0].clone()];
@@ -294,7 +241,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         &attach_tap_script,
         &mut attach_reveal_tx,
         &prevouts,
-        &keypair,
+        &seller_keypair,
         0,
     )?;
 
@@ -361,7 +308,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let detach_tapscript_spend_info = TaprootBuilder::new()
         .add_leaf(0, detach_tap_script.clone())
         .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
+        .finalize(&secp, seller_internal_key)
         .expect("Failed to finalize Taproot tree");
 
     let detach_control_block = detach_tapscript_spend_info
@@ -386,7 +333,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         },
         inputs: vec![Input {
             witness_utxo: Some(attach_reveal_tx.output[0].clone()),
-            tap_internal_key: Some(internal_key),
+            tap_internal_key: Some(seller_internal_key),
             tap_merkle_root: Some(detach_tapscript_spend_info.merkle_root().unwrap()),
             tap_scripts: {
                 let mut scripts = std::collections::BTreeMap::new();
@@ -414,9 +361,6 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     witness.push(detach_control_block.serialize());
     seller_detach_psbt.inputs[0].final_script_witness = Some(witness);
 
-    let buyer_keypair = Keypair::from_secret_key(&secp, &buyer_child_key.private_key);
-    let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
-
     // Create transfer data pointing to output 2 (buyer's address)
     let transfer_data = OpReturnData::D {
         destination: buyer_internal_key,
@@ -429,7 +373,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .participants(vec![RevealParticipantInputs {
             address: seller_address.clone(),
-            x_only_public_key: internal_key,
+            x_only_public_key: seller_internal_key,
             commit_outpoint: OutPoint {
                 txid: attach_reveal_tx.compute_txid(),
                 vout: 0,
@@ -448,12 +392,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
     // Add buyer funding input as a second input
     buyer_psbt.unsigned_tx.input.push(TxIn {
-        previous_output: OutPoint {
-            txid: Txid::from_str(
-                "ffb32fce7a4ce109ed2b4b02de910ea1a08b9017d88f1da7f49b3d2f79638cc3",
-            )?,
-            vout: 0,
-        },
+        previous_output: buyer_out_point,
         ..Default::default()
     });
     buyer_psbt.inputs.push(Input {
@@ -474,7 +413,7 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let prevouts = [
         attach_reveal_tx.output[0].clone(),
         TxOut {
-            value: Amount::from_sat(10000), // The value of the second input (buyer's UTXO)
+            value: buyer_utxo_for_output.value, // The value of the second input (buyer's UTXO)
             script_pubkey: buyer_address.script_pubkey(),
         },
     ];
@@ -486,8 +425,8 @@ async fn test_psbt_signature_replay_fails() -> Result<()> {
     let raw_attach_reveal_tx_hex = hex::encode(serialize_tx(&attach_reveal_tx));
     let raw_psbt_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[attach_commit_tx_hex, raw_attach_reveal_tx_hex, raw_psbt_hex])
         .await?;
 
     assert_eq!(

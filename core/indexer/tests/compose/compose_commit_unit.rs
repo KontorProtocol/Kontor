@@ -76,10 +76,6 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
         .build();
     let commit = compose_commit(CommitInputs::from(inputs)).expect("commit");
     let psbt_hex = commit.commit_psbt_hex;
-    eprintln!(
-        "commit_psbt_hex_prefix={}...",
-        &psbt_hex.get(0..16).unwrap_or("")
-    );
     let psbt_bytes = hex::decode(&psbt_hex).expect("hex decode");
     let psbt: bitcoin::psbt::Psbt =
         bitcoin::psbt::Psbt::deserialize(&psbt_bytes).expect("psbt decode");

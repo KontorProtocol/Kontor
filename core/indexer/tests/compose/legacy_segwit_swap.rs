@@ -10,24 +10,31 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_EQUALVERIFY, OP_SHA256},
     script::Builder,
 };
-use clap::Parser;
-use indexer::config::TestConfig;
+
 use indexer::legacy_test_utils;
+use indexer::op_return::OpReturnData;
 use indexer::witness_data::TokenBalance;
-use indexer::{bitcoin_client::Client, config::Config, op_return::OpReturnData};
 use std::collections::HashMap;
+use testlib::RegTester;
+use tracing::info;
 
-#[tokio::test]
-async fn test_psbt_with_secret() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_secret(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_secret");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -46,14 +53,16 @@ async fn test_psbt_with_secret() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -67,11 +76,13 @@ async fn test_psbt_with_secret() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -79,8 +90,8 @@ async fn test_psbt_with_secret() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -156,17 +167,25 @@ async fn test_psbt_with_secret() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_incorrect_prefix() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_incorrect_prefix(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_incorrect_prefix");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -185,14 +204,16 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -207,11 +228,13 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -219,8 +242,8 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert attach transaction is allowed but swap is rejected
@@ -238,17 +261,23 @@ async fn test_psbt_with_incorrect_prefix() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_without_secret() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_without_secret(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_without_secret");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -267,14 +296,16 @@ async fn test_psbt_without_secret() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -288,11 +319,13 @@ async fn test_psbt_without_secret() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -300,8 +333,8 @@ async fn test_psbt_without_secret() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -319,17 +352,25 @@ async fn test_psbt_without_secret() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_without_token_balance() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_without_token_balance(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_without_token_balance");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -347,14 +388,16 @@ async fn test_psbt_without_token_balance() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -367,11 +410,13 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -379,8 +424,8 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -398,17 +443,23 @@ async fn test_psbt_without_token_balance() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_without_prefix() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_without_prefix(reg_tester: &mut RegTester) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_without_prefix");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -427,14 +478,16 @@ async fn test_psbt_without_prefix() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -447,11 +500,13 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -459,8 +514,8 @@ async fn test_psbt_without_prefix() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -478,17 +533,25 @@ async fn test_psbt_without_prefix() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_malformed_witness_script() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_malformed_witness_script(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_malformed_witness_script");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -507,14 +570,16 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -538,11 +603,13 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -550,8 +617,8 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -569,17 +636,25 @@ async fn test_psbt_with_malformed_witness_script() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_wrong_token_name() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_wrong_token_name(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_wrong_token_name");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -598,14 +673,16 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -628,11 +705,13 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -640,8 +719,8 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -659,17 +738,25 @@ async fn test_psbt_with_wrong_token_name() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_insufficient_funds() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_insufficient_funds(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_insufficient_funds");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balance = TokenBalance {
         value: 1000,
@@ -688,14 +775,16 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -718,11 +807,13 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -730,8 +821,8 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
@@ -749,17 +840,25 @@ async fn test_psbt_with_insufficient_funds() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_psbt_with_long_witness_stack() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-    let config = TestConfig::try_parse()?;
+pub async fn test_legacy_segwit_swap_psbt_with_long_witness_stack(
+    reg_tester: &mut RegTester,
+) -> Result<()> {
+    info!("test_legacy_segwit_swap_psbt_with_long_witness_stack");
+    let seller_identity = reg_tester.identity_p2wpkh().await?;
+    let seller_address = seller_identity.address;
+    let seller_private_key = seller_identity.private_key;
+    let seller_compressed_pubkey = seller_identity.compressed_public_key;
+    let seller_out_point = seller_identity.next_funding_utxo.0;
+    let seller_utxo_for_output = seller_identity.next_funding_utxo.1;
+
+    let buyer_identity = reg_tester.identity_p2wpkh().await?;
+    let buyer_address = buyer_identity.address;
+    let buyer_private_key = buyer_identity.private_key;
+    let buyer_compressed_pubkey = buyer_identity.compressed_public_key;
+    let buyer_out_point = buyer_identity.next_funding_utxo.0;
+    let buyer_utxo_for_output = buyer_identity.next_funding_utxo.1;
+
     let secp = Secp256k1::new();
-
-    let (seller_address, seller_child_key, seller_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.seller_key_path)?;
-
-    let (buyer_address, buyer_child_key, buyer_compressed_pubkey) =
-        legacy_test_utils::generate_address_from_mnemonic_p2wpkh(&secp, &config.buyer_key_path)?;
 
     let token_balances = legacy_test_utils::build_long_token_balance();
 
@@ -775,14 +874,16 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
         &secp,
         &seller_address,
         &seller_compressed_pubkey,
-        &seller_child_key,
+        &seller_private_key.inner,
         &witness_script,
+        seller_out_point,
+        &seller_utxo_for_output,
     )?;
 
     let (mut seller_psbt, sig) = legacy_test_utils::build_seller_psbt_and_sig_segwit(
         &secp,
         &seller_address,
-        &seller_child_key,
+        &seller_private_key.inner,
         &attach_tx,
         &witness_script,
     )?;
@@ -796,11 +897,13 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     let buyer_psbt = legacy_test_utils::build_signed_buyer_psbt_segwit(
         &secp,
         &buyer_address,
-        &buyer_child_key,
+        &buyer_private_key.inner,
         &attach_tx,
         &buyer_compressed_pubkey,
         &seller_address,
         &seller_psbt,
+        buyer_out_point,
+        buyer_utxo_for_output,
     )?;
 
     let final_tx = buyer_psbt.extract_tx()?;
@@ -808,8 +911,8 @@ async fn test_psbt_with_long_witness_stack() -> Result<()> {
     let raw_attach_tx_hex = hex::encode(serialize_tx(&attach_tx));
     let raw_swap_tx_hex = hex::encode(serialize_tx(&final_tx));
 
-    let result = client
-        .test_mempool_accept(&[raw_attach_tx_hex, raw_swap_tx_hex])
+    let result = reg_tester
+        .mempool_accept_result(&[raw_attach_tx_hex, raw_swap_tx_hex])
         .await?;
 
     // Assert both transactions are allowed
