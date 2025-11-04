@@ -59,3 +59,4 @@ docker run -d -p 9333:9333 -v kontor-data:/data kontor-indexer \
 ```
 
 Available networks: `bitcoin`, `testnet`, `signet`, `regtest`
+
