@@ -42,7 +42,7 @@ pub struct InstructionQuery {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Builder)]
 pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
     pub sat_per_vbyte: u64,

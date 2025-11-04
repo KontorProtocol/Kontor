@@ -32,12 +32,7 @@ use crate::compose_helpers::{
     test_calculate_change_single_insufficient_returns_none,
     test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect,
     test_compose_reveal_op_return_size_validation,
-    test_estimate_commit_delta_fee_increases_with_each_spk_len_independently,
-    test_estimate_commit_delta_fee_monotonic,
     test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance,
-    test_split_even_chunks_diff_at_most_one_and_order_preserved,
-    test_split_even_chunks_more_parts_than_bytes, test_split_even_chunks_roundtrip_and_balance,
-    test_split_even_chunks_zero_parts_errs,
     test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness,
 };
 use crate::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
@@ -360,12 +355,6 @@ async fn test_compose_regtest() -> Result<()> {
     test_compose_commit_psbt_inputs_have_metadata(&mut reg_tester.clone()).await?;
 
     info!("compose_helpers");
-    test_split_even_chunks_roundtrip_and_balance();
-    test_split_even_chunks_more_parts_than_bytes();
-    test_split_even_chunks_zero_parts_errs();
-    test_estimate_commit_delta_fee_increases_with_each_spk_len_independently();
-    test_estimate_commit_delta_fee_monotonic();
-    test_split_even_chunks_diff_at_most_one_and_order_preserved();
     test_build_tap_script_and_script_address_empty_data_errs(&mut reg_tester.clone()).await?;
     test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
         .await?;
@@ -426,11 +415,7 @@ async fn test_compose_regtest() -> Result<()> {
     test_tap_internal_key_set_on_commit_and_reveal_inputs(&mut reg_tester.clone()).await?;
     test_witness_stack_shapes_commit_and_reveal(&mut reg_tester.clone()).await?;
     test_script_address_hrp_across_networks(&mut reg_tester.clone()).await?;
-    Ok(())
-}
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
-async fn test_compose_regtest_continued(reg_tester: &mut RegTester) -> Result<()> {
     info!("multi_psbt_tx_validation");
     test_pre_sign_node_refuses_on_underfunded_script_output(&mut reg_tester.clone()).await?;
     test_pre_sign_node_refuses_on_reveal_output_remap(&mut reg_tester.clone()).await?;

@@ -1,7 +1,4 @@
 use anyhow::{Result, anyhow};
-use axum::http::StatusCode;
-use axum_test::{TestResponse, TestServer};
-
 use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
@@ -24,9 +21,6 @@ struct ComposeResponse {
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     let secp = Secp256k1::new();
-
-    // Arrange
-    let app = reg_tester.compose_router().await?;
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
@@ -44,28 +38,17 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     let mut token_data_bytes = Vec::new();
     ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: token_data_bytes.clone(),
+        }])
+        .sat_per_vbyte(2)
+        .build();
 
-    let instructions_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: token_data_bytes.clone(),
-    }];
-
-    let query = ComposeQuery {
-        instructions: instructions_vec,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
-
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::OK);
-    let result: ComposeResponse = serde_json::from_slice(response.as_bytes()).unwrap();
-
-    let compose_outputs = result.result;
+    let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
 
@@ -157,7 +140,6 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     let secp = Secp256k1::new();
 
     let identity = reg_tester.identity().await?;
@@ -180,28 +162,19 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let mut chained_token_data_bytes = Vec::new();
     ciborium::into_writer(&b"Hello, World!", &mut chained_token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: token_data_bytes.clone(),
+        }])
+        .sat_per_vbyte(2)
+        .envelope(600)
+        .chained_script_data(chained_token_data_bytes)
+        .build();
 
-    let instructions_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: token_data_bytes.clone(),
-    }];
-
-    let query = ComposeQuery {
-        instructions: instructions_vec,
-        sat_per_vbyte: 2,
-        envelope: Some(600),
-        chained_script_data: Some(chained_token_data_bytes),
-    };
-
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::OK);
-    let result: ComposeResponse = serde_json::from_slice(response.as_bytes()).unwrap();
-
-    let compose_outputs = result.result;
+    let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
 
@@ -339,46 +312,39 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 pub async fn test_compose_missing_params(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, _utxo_for_output) = identity.next_funding_utxo;
-    let server = TestServer::new(app)?;
 
-    let response: TestResponse = server
-        .post("/compose")
-        .json(&serde_json::json!({
-            "instructions": [{
-                "address": seller_address.to_string(),
-                "x_only_public_key": internal_key.to_string(),
-                "funding_utxo_ids": format!("{}:{}", out_point.txid, out_point.vout),
-                // no script_data on purpose
-            }],
-            "sat_per_vbyte": 2,
-            "envelope": 600
-        }))
-        .await;
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: vec![],
+        }])
+        .sat_per_vbyte(2)
+        .envelope(600)
+        .build();
 
-    assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY); // axum defaults to this status code for deserialization failures; missing a param will result in 422
-    let error_body = response.text();
-    assert!(error_body.contains("missing field `script_data`"));
-
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(e.to_string().contains("script data size invalid")),
+    }
     Ok(())
 }
 
 pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     reg_tester: &mut RegTester,
 ) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
     let utxos = reg_tester.fund_address(&seller_address, 2).await?;
     let (out_point1, _utxo_for_output1) = utxos[0].clone();
-    let (out_point2, _utxo_for_output2) = utxos[1].clone();
 
     let token_data = WitnessData::Attach {
         output_index: 0,
@@ -390,126 +356,113 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     let mut token_data_bytes = Vec::new();
     ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
-
     // duplicate address provided twice
-    let addresses_vec = vec![
-        InstructionQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-            script_data: token_data_bytes.clone(),
-        },
-        InstructionQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-            script_data: token_data_bytes.clone(),
-        },
-    ];
-    let query = ComposeQuery {
-        instructions: addresses_vec,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
+    let query = ComposeQuery::builder()
+        .instructions(vec![
+            InstructionQuery {
+                address: seller_address.to_string(),
+                x_only_public_key: internal_key.to_string(),
+                funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
+                script_data: token_data_bytes.clone(),
+            },
+            InstructionQuery {
+                address: seller_address.to_string(),
+                x_only_public_key: internal_key.to_string(),
+                funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
+                script_data: token_data_bytes.clone(),
+            },
+        ])
+        .sat_per_vbyte(2)
+        .build();
 
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-    let error_body = response.text();
-    assert!(error_body.contains("duplicate funding outpoint provided across participants"));
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(
+            e.to_string()
+                .contains("duplicate funding outpoint provided across participants")
+        ),
+    }
 
     // duplicate utxo within a participant
-    let addresses_vec2 = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!(
-            "{}:{},{}:{}",
-            out_point1.txid, out_point1.vout, out_point1.txid, out_point1.vout
+    let query2 = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!(
+                "{}:{},{}:{}",
+                out_point1.txid, out_point1.vout, out_point1.txid, out_point1.vout
+            ),
+            script_data: token_data_bytes.clone(),
+        }])
+        .sat_per_vbyte(2)
+        .build();
+
+    match reg_tester.compose(query2).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(
+            e.to_string()
+                .contains("duplicate funding outpoint provided for participant")
         ),
-        script_data: token_data_bytes.clone(),
-    }];
-
-    let query2 = ComposeQuery {
-        instructions: addresses_vec2,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
-
-    let response2: TestResponse = server.post("/compose").json(&query2).await;
-
-    assert_eq!(response2.status_code(), StatusCode::BAD_REQUEST);
-    let error_body2 = response2.text();
-    assert!(error_body2.contains("duplicate funding outpoint provided for participant"));
-
+    }
     Ok(())
 }
 
 pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, _utxo_for_output) = identity.next_funding_utxo;
-    let server = TestServer::new(app)?;
 
     // Oversized script_data
     let oversized = vec![0u8; 387 * 1024 + 1];
-    let addresses_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout).to_string(),
-        script_data: oversized,
-    }];
-    let query = ComposeQuery {
-        instructions: addresses_vec,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout).to_string(),
+            script_data: oversized,
+        }])
+        .sat_per_vbyte(2)
+        .build();
 
-    let resp: TestResponse = server.post("/compose").json(&query).await;
-    assert_eq!(resp.status_code(), StatusCode::BAD_REQUEST);
-    assert!(resp.text().contains("script data size invalid"));
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(e.to_string().contains("script data size invalid")),
+    }
 
     // Oversized chained_script_data
     let chained_oversized_b64 = vec![0u8; 387 * 1024 + 1];
-    let addresses_vec2 = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: b"x".to_vec(),
-    }];
-    let query = ComposeQuery {
-        instructions: addresses_vec2.clone(),
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: Some(chained_oversized_b64),
-    };
+    let query2 = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: b"x".to_vec(),
+        }])
+        .sat_per_vbyte(2)
+        .chained_script_data(chained_oversized_b64)
+        .build();
 
-    let resp2: TestResponse = server.post("/compose").json(&query).await;
-    assert_eq!(resp2.status_code(), StatusCode::BAD_REQUEST);
-    assert!(resp2.text().contains("chained script data size invalid"));
+    match reg_tester.compose(query2).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(e.to_string().contains("chained script data size invalid")),
+    }
 
     // Invalid fee rate (0)
-    let addresses_vec3 = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: b"x".to_vec(),
-    }];
-    let query = ComposeQuery {
-        instructions: addresses_vec3,
-        sat_per_vbyte: 0,
-        envelope: None,
-        chained_script_data: None,
-    };
-    let resp3: TestResponse = server.post("/compose").json(&query).await;
-    assert_eq!(resp3.status_code(), StatusCode::BAD_REQUEST);
-    assert!(resp3.text().contains("Invalid fee rate"));
+    let query3 = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: b"x".to_vec(),
+        }])
+        .sat_per_vbyte(0)
+        .build();
+    match reg_tester.compose(query3).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(e.to_string().contains("Invalid fee rate")),
+    }
 
     Ok(())
 }
@@ -607,8 +560,6 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
 }
 
 pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
-
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
@@ -624,35 +575,29 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
     let mut token_data_bytes = Vec::new();
     ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            // Ensure a guaranteed-nonexistent txid in regtest
+            funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
+                .to_string(),
+            script_data: token_data_bytes,
+        }])
+        .sat_per_vbyte(2)
+        .build();
 
-    let addresses_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        // Ensure a guaranteed-nonexistent txid in regtest
-        funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
-            .to_string(),
-        script_data: token_data_bytes,
-    }];
-    let query = ComposeQuery {
-        instructions: addresses_vec,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
-
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-
-    let error_body = response.text();
-    assert!(error_body.contains("No such mempool or blockchain transaction"));
-
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(
+            e.to_string()
+                .contains("No such mempool or blockchain transaction")
+        ),
+    }
     Ok(())
 }
 
 pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     // Use a non-taproot address (p2wpkh) to trigger Invalid address type
     let seller_identity = reg_tester.identity_p2wpkh().await?;
     let seller_address = seller_identity.address;
@@ -669,32 +614,23 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
     let mut token_data_bytes = Vec::new();
     ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
-
-    let addresses_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: token_data_bytes,
-    }];
-    let query = ComposeQuery {
-        instructions: addresses_vec,
-        sat_per_vbyte: 2,
-        envelope: None,
-        chained_script_data: None,
-    };
-
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-    let error_body = response.text();
-
-    assert!(error_body.contains("Invalid address type"));
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: token_data_bytes,
+        }])
+        .sat_per_vbyte(2)
+        .build();
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(e.to_string().contains("Invalid address type")),
+    }
     Ok(())
 }
 
 pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Result<()> {
-    let app = reg_tester.compose_router().await?;
     let identity = reg_tester.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
@@ -711,31 +647,25 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
     let mut token_data_bytes = Vec::new();
     ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
 
-    let server = TestServer::new(app)?;
+    let query = ComposeQuery::builder()
+        .instructions(vec![InstructionQuery {
+            address: seller_address.to_string(),
+            x_only_public_key: internal_key.to_string(),
+            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
+            script_data: token_data_bytes,
+        }])
+        .sat_per_vbyte(4)
+        .envelope(5_000_000_001)
+        .build();
 
-    let instructions_vec = vec![InstructionQuery {
-        address: seller_address.to_string(),
-        x_only_public_key: internal_key.to_string(),
-        funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-        script_data: token_data_bytes,
-    }];
-    let query = ComposeQuery {
-        instructions: instructions_vec,
-        sat_per_vbyte: 4,
-        envelope: Some(5_000_000_001),
-        chained_script_data: None,
-    };
-
-    let response: TestResponse = server.post("/compose").json(&query).await;
-
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-    let error_body = response.text();
-
-    assert!(
-        error_body.contains("Insufficient inputs")
-            || error_body.contains("Insufficient")
-            || error_body.contains("Change amount is negative")
-    );
+    match reg_tester.compose(query).await {
+        Ok(_) => panic!("Expected error, got success"),
+        Err(e) => assert!(
+            e.to_string().contains("Insufficient inputs")
+                || e.to_string().contains("Insufficient")
+                || e.to_string().contains("Change amount is negative")
+        ),
+    }
 
     Ok(())
 }

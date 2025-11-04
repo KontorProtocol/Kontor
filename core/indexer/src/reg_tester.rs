@@ -3,7 +3,7 @@ use std::{path::Path, str::FromStr, sync::Arc};
 use crate::{
     api::{
         client::Client as KontorClient,
-        compose::InstructionQuery,
+        compose::{ComposeOutputs, ComposeQuery, InstructionQuery},
         handlers::{OpWithResult, TransactionHex},
         ws::Response,
         ws_client::WebSocketClient,
@@ -21,7 +21,6 @@ use crate::{
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use axum::{Router, routing::post};
 use bitcoin::{
     Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
     Txid, XOnlyPublicKey,
@@ -39,7 +38,6 @@ use tokio::{
     process::{Child, Command},
     sync::Mutex,
 };
-use tokio_util::sync::CancellationToken;
 
 const REGTEST_CONF: &str = r#"
 regtest=1
@@ -216,15 +214,17 @@ impl RegTesterInner {
         inst: Inst,
     ) -> Result<InstructionResult> {
         let script_data = serialize_cbor(&inst)?;
-        let mut compose_res = self
-            .kontor_client
-            .compose(InstructionQuery {
+
+        let query = ComposeQuery::builder()
+            .instructions(vec![InstructionQuery {
                 address: ident.address.to_string(),
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 funding_utxo_ids: outpoint_to_utxo_id(&ident.next_funding_utxo.0),
                 script_data,
-            })
-            .await?;
+            }])
+            .sat_per_vbyte(2)
+            .build();
+        let mut compose_res = self.kontor_client.compose(query).await?;
         let secp = Secp256k1::new();
         test_utils::sign_key_spend(
             &secp,
@@ -315,7 +315,7 @@ impl RegTesterInner {
                 ..Default::default()
             }],
             output: vec![TxOut {
-                value: Amount::from_sat(4_999_999_000),
+                value: self.identity.next_funding_utxo.1.value - Amount::from_sat(1000),
                 script_pubkey: address.script_pubkey(),
             }],
         };
@@ -391,7 +391,7 @@ impl RegTesterInner {
             return Ok(vec![]);
         }
 
-        let total_output_value = Amount::from_sat(4_999_999_000);
+        let total_output_value = self.identity.next_funding_utxo.1.value - Amount::from_sat(1000);
         let value_per_output = total_output_value.to_sat() / count as u64;
         let remainder = total_output_value.to_sat() % count as u64;
 
@@ -571,6 +571,11 @@ impl RegTester {
             })
             .await
     }
+
+    pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {
+        self.inner.lock().await.kontor_client.compose(query).await
+    }
+
     pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
         self.inner.lock().await.mempool_info().await
     }
@@ -604,37 +609,5 @@ impl RegTester {
 
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
-    }
-
-    // Build an in-process Router exposing only the compose endpoints, using the
-    // same bitcoin client as this RegTester and a fresh ephemeral test DB.
-    pub async fn compose_router(&self) -> Result<Router> {
-        let bitcoin_client = { self.inner.lock().await.bitcoin_client.clone() };
-        let mut config = Config::try_parse()?;
-        // Ensure regtest network for address/hrp consistency in compose tests
-        config.network = Network::Regtest;
-
-        let (reader, _, _temp_dir) = crate::test_utils::new_test_db(&config).await?;
-        let env = crate::api::Env {
-            bitcoin: bitcoin_client,
-            config,
-            cancel_token: CancellationToken::new(),
-            result_subscriber: crate::reactor::results::ResultSubscriber::default(),
-            runtime: crate::runtime::Runtime::new_read_only(&reader).await?,
-            reader,
-        };
-
-        // Only mount compose endpoints at the root for axum_test usage
-        Ok(Router::new()
-            .route("/compose", post(crate::api::handlers::post_compose))
-            .route(
-                "/compose/commit",
-                post(crate::api::handlers::post_compose_commit),
-            )
-            .route(
-                "/compose/reveal",
-                post(crate::api::handlers::post_compose_reveal),
-            )
-            .with_state(env))
     }
 }
