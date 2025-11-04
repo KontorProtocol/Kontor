@@ -20,6 +20,9 @@ pub enum Op {
         contract: ContractAddress,
         expr: String,
     },
+    Issuance {
+        metadata: OpMetadata,
+    },
 }
 
 impl Op {
@@ -27,6 +30,7 @@ impl Op {
         match self {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
+            Op::Issuance { metadata, .. } => metadata,
         }
     }
 }
@@ -47,4 +51,6 @@ pub enum Inst {
         #[serde(rename = "e")]
         expr: String,
     },
+    #[serde(rename = "i")]
+    Issuance,
 }

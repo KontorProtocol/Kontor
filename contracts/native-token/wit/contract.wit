@@ -2,11 +2,13 @@ package kontor:contract;
 
 world contract {
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{view-context, proc-context, signer};
+    use kontor:built-in/context.{core-context, view-context, proc-context, signer};
     use kontor:built-in/error.{error};
     use kontor:built-in/numbers.{integer, decimal};
 
     export init: func(ctx: borrow<proc-context>);
+
+    export issuance: func(ctx: borrow<core-context>, to: string);
 
     export mint: func(ctx: borrow<proc-context>, n: integer);
     export mint-checked: func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;

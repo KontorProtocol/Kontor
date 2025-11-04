@@ -221,20 +221,26 @@ impl Reactor {
                     .set_context(height as i64, t.index, input_index, 0, t.txid)
                     .await;
 
-                let _ = match op {
+                match op {
                     Op::Publish {
                         metadata,
                         name,
                         bytes,
-                    } => self.runtime.publish(&metadata.signer, &name, &bytes).await,
+                    } => {
+                        let _ = self.runtime.publish(&metadata.signer, &name, &bytes).await;
+                    }
                     Op::Call {
                         metadata,
                         contract,
                         expr,
                     } => {
-                        self.runtime
+                        let _ = self
+                            .runtime
                             .execute(Some(&metadata.signer), &contract, &expr)
-                            .await
+                            .await;
+                    }
+                    Op::Issuance { metadata, .. } => {
+                        let _ = self.runtime.issuance(&metadata.signer).await;
                     }
                 };
 

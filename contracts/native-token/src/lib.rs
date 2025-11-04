@@ -13,6 +13,11 @@ impl Guest for Token {
         TokenStorage::default().init(ctx);
     }
 
+    fn issuance(ctx: &CoreContext, to: String) {
+        let ledger = ctx.proc_context().model().ledger();
+        ledger.set(to, 10.into());
+    }
+
     fn mint(ctx: &ProcContext, n: Integer) {
         let to = ctx.signer().to_string();
         let ledger = ctx.model().ledger();
