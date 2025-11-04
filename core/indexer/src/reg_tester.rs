@@ -21,6 +21,7 @@ use crate::{
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use axum::{Router, routing::post};
 use bitcoin::{
     Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
     Txid, XOnlyPublicKey,
@@ -38,6 +39,7 @@ use tokio::{
     process::{Child, Command},
     sync::Mutex,
 };
+use tokio_util::sync::CancellationToken;
 
 const REGTEST_CONF: &str = r#"
 regtest=1
@@ -602,5 +604,37 @@ impl RegTester {
 
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
+    }
+
+    // Build an in-process Router exposing only the compose endpoints, using the
+    // same bitcoin client as this RegTester and a fresh ephemeral test DB.
+    pub async fn compose_router(&self) -> Result<Router> {
+        let bitcoin_client = { self.inner.lock().await.bitcoin_client.clone() };
+        let mut config = Config::try_parse()?;
+        // Ensure regtest network for address/hrp consistency in compose tests
+        config.network = Network::Regtest;
+
+        let (reader, _, _temp_dir) = crate::test_utils::new_test_db(&config).await?;
+        let env = crate::api::Env {
+            bitcoin: bitcoin_client,
+            config,
+            cancel_token: CancellationToken::new(),
+            result_subscriber: crate::reactor::results::ResultSubscriber::default(),
+            runtime: crate::runtime::Runtime::new_read_only(&reader).await?,
+            reader,
+        };
+
+        // Only mount compose endpoints at the root for axum_test usage
+        Ok(Router::new()
+            .route("/compose", post(crate::api::handlers::post_compose))
+            .route(
+                "/compose/commit",
+                post(crate::api::handlers::post_compose_commit),
+            )
+            .route(
+                "/compose/reveal",
+                post(crate::api::handlers::post_compose_reveal),
+            )
+            .with_state(env))
     }
 }

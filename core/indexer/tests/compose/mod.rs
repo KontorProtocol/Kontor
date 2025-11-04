@@ -14,6 +14,12 @@ use tracing::info;
 
 use crate::commit_reveal::test_commit_reveal;
 use crate::commit_reveal_random_keypair::test_commit_reveal_ordinals;
+use crate::compose_api::{
+    test_compose, test_compose_all_fields, test_compose_duplicate_address_and_duplicate_utxo,
+    test_compose_insufficient_funds, test_compose_invalid_address, test_compose_missing_params,
+    test_compose_nonexistent_utxo, test_compose_param_bounds_and_fee_rate,
+    test_reveal_with_op_return_mempool_accept,
+};
 use crate::compose_commit_unit::{
     test_compose_commit_psbt_inputs_have_metadata,
     test_compose_commit_unique_vout_mapping_even_with_identical_chunks,
@@ -472,5 +478,15 @@ async fn test_compose_regtest_continued(reg_tester: &mut RegTester) -> Result<()
     test_signature_replay_fails(&mut reg_tester.clone()).await?;
     test_psbt_signature_replay_fails(&mut reg_tester.clone()).await?;
 
+    info!("compose_api");
+    test_compose(&mut reg_tester.clone()).await?;
+    test_compose_all_fields(&mut reg_tester.clone()).await?;
+    test_compose_nonexistent_utxo(&mut reg_tester.clone()).await?;
+    test_compose_invalid_address(&mut reg_tester.clone()).await?;
+    test_compose_insufficient_funds(&mut reg_tester.clone()).await?;
+    test_compose_missing_params(&mut reg_tester.clone()).await?;
+    test_compose_duplicate_address_and_duplicate_utxo(&mut reg_tester.clone()).await?;
+    test_compose_param_bounds_and_fee_rate(&mut reg_tester.clone()).await?;
+    test_reveal_with_op_return_mempool_accept(&mut reg_tester.clone()).await?;
     Ok(())
 }
