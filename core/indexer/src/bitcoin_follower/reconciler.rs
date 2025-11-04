@@ -104,7 +104,10 @@ impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> 
                 if self.state.zmq_connected {
                     error!("ZMQ disconnected: {}", e);
                 } else {
-                    error!("ZMQ connection failed: {} (check bitcoind is running with ZMQ enabled)", e);
+                    error!(
+                        "ZMQ connection failed: {} (check bitcoind is running with ZMQ enabled)",
+                        e
+                    );
                 }
                 self.state.zmq_connected = false;
                 if self.state.mode == Mode::Zmq {

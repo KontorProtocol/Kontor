@@ -63,7 +63,10 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    info!("Waiting for Bitcoin follower to initialize (ZMQ connection at {})...", config.zmq_address);
+    info!(
+        "Waiting for Bitcoin follower to initialize (ZMQ connection at {})...",
+        config.zmq_address
+    );
     match timeout(Duration::from_secs(30), init_rx).await {
         Ok(Ok(_)) => {
             info!("Bitcoin follower initialized successfully");
@@ -73,7 +76,10 @@ async fn main() -> Result<()> {
             bail!("Bitcoin follower initialization failed");
         }
         Err(_) => {
-            error!("Timed out waiting for ZMQ connection to {} (check bitcoind is reachable with ZMQ enabled)", config.zmq_address);
+            error!(
+                "Timed out waiting for ZMQ connection to {} (check bitcoind is reachable with ZMQ enabled)",
+                config.zmq_address
+            );
             bail!("Bitcoin follower failed to connect to ZMQ within 30 seconds");
         }
     }
