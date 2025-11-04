@@ -265,7 +265,7 @@ pub fn generate_functions(
         ret_expr = quote! { Ok(#ret_expr) };
     }
 
-    let ctx_signer = if is_proc_context {
+    let ctx_signer = if is_proc_context || is_core_context {
         quote! { Some(signer) }
     } else {
         quote! { None }

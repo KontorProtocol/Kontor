@@ -456,7 +456,13 @@ impl Runtime {
                         ),
                     )
                 }
-                _ => return Err(anyhow!("Unsupported context/signer type")),
+                (t, signer) => {
+                    return Err(anyhow!(
+                        "Unsupported context/signer type: {:?} {:?}",
+                        t,
+                        signer
+                    ));
+                }
             }
         }
 

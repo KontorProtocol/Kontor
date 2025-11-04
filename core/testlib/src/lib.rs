@@ -94,6 +94,7 @@ pub trait RuntimeImpl: Send {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String>;
+    async fn issuance(&mut self, signer: &Signer) -> Result<()>;
 }
 
 pub struct RuntimeLocal {
@@ -181,7 +182,9 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let (address, ..) = generate_taproot_address();
-        Ok(Signer::XOnlyPubKey(address.to_string()))
+        let signer = Signer::XOnlyPubKey(address.to_string());
+        self.issuance(&signer).await?;
+        Ok(signer)
     }
 
     async fn publish(
@@ -218,6 +221,10 @@ impl RuntimeImpl for RuntimeLocal {
         self.runtime.storage.op_index += 1;
         result
     }
+
+    async fn issuance(&mut self, signer: &Signer) -> Result<()> {
+        self.runtime.issuance(signer).await
+    }
 }
 
 pub struct RuntimeRegtest {
@@ -241,6 +248,7 @@ impl RuntimeImpl for RuntimeRegtest {
         let identity = self.reg_tester.identity().await?;
         let signer = identity.signer();
         self.identities.insert(signer.clone(), identity);
+        self.issuance(&signer).await?;
         Ok(signer)
     }
 
@@ -300,6 +308,17 @@ impl RuntimeImpl for RuntimeRegtest {
         } else {
             self.reg_tester.view(contract_address, expr).await
         }
+    }
+
+    async fn issuance(&mut self, signer: &Signer) -> Result<()> {
+        let identity = self
+            .identities
+            .get_mut(signer)
+            .ok_or_else(|| anyhow!("Identity not found"))?;
+        self.reg_tester
+            .instruction(identity, Inst::Issuance)
+            .await?;
+        Ok(())
     }
 }
 
