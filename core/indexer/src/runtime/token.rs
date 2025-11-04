@@ -6,6 +6,14 @@ import!(
     mod_name = "api",
     height = 0,
     tx_index = 0,
-    path = "../contracts/token/wit",
+    path = "../contracts/native-token/wit",
     public = true,
 );
+
+pub fn address() -> ContractAddress {
+    ContractAddress {
+        name: "token".to_string(),
+        height: 0,
+        tx_index: 0,
+    }
+}

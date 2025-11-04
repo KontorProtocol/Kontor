@@ -5,7 +5,7 @@ pub mod numerics;
 pub mod queue;
 mod stack;
 mod storage;
-mod token;
+pub mod token;
 mod types;
 pub mod wit;
 
@@ -45,6 +45,7 @@ use wasmtime::{
 };
 
 use crate::reactor::results::ResultEventMetadata;
+use crate::runtime::wit::CoreContext;
 use crate::{
     database::{Reader, types::OpResultId},
     reactor::results::ResultEvent,
@@ -210,6 +211,34 @@ impl Runtime {
         Ok(value)
     }
 
+    pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
+        let result = token::api::issuance(self, &Signer::Core, signer).await;
+        let metadata = ResultEventMetadata::builder()
+            .contract_address(token::address())
+            .func_name("issuance".to_string())
+            .op_result_id(
+                OpResultId::builder()
+                    .txid(self.txid.to_string())
+                    .input_index(self.storage.input_index)
+                    .op_index(self.storage.op_index)
+                    .build(),
+            )
+            .build();
+        self.events
+            .push(match &result {
+                Ok(_) => ResultEvent::Ok {
+                    metadata,
+                    value: "".to_string(),
+                },
+                Err(e) => ResultEvent::Err {
+                    metadata,
+                    message: format!("{:?}", e),
+                },
+            })
+            .await;
+        result
+    }
+
     pub async fn execute(
         &mut self,
         signer: Option<&Signer>,
@@ -373,6 +402,21 @@ impl Runtime {
         {
             let mut table = self.table.lock().await;
             match (resource_type, signer) {
+                (t, Some(Signer::Core))
+                    if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
+                {
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(CoreContext {
+                                    signer: Signer::Core,
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
                 (t, Some(signer))
                     if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
                 {
@@ -412,7 +456,13 @@ impl Runtime {
                         ),
                     )
                 }
-                _ => return Err(anyhow!("Unsupported context/signer type")),
+                (t, signer) => {
+                    return Err(anyhow!(
+                        "Unsupported context/signer type: {:?} {:?}",
+                        t,
+                        signer
+                    ));
+                }
             }
         }
 
@@ -900,6 +950,24 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    async fn _core_proc_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        Fuel::CoreProcContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        let signer = res.signer.clone();
+        Ok(table.push(ProcContext {
+            contract_id,
+            signer,
+        })?)
     }
 
     async fn _get_contract_address<T>(
@@ -1401,6 +1469,27 @@ impl built_in::context::HostFallContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._fall_view_context(accessor, self_)
+            .await
+    }
+}
+
+impl built_in::context::HostCoreContext for Runtime {}
+
+impl built_in::context::HostCoreContextWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<CoreContext>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn proc_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._core_proc_context(accessor, self_)
             .await
     }
 }

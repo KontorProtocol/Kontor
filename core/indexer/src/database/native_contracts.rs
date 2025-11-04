@@ -9,8 +9,9 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-pub const TOKEN: &[u8] =
-    include_bytes!("../../../../contracts/target/wasm32-unknown-unknown/release/token.wasm.br");
+pub const TOKEN: &[u8] = include_bytes!(
+    "../../../../contracts/target/wasm32-unknown-unknown/release/native_token.wasm.br"
+);
 
 pub async fn store_native_contracts(conn: &Connection) -> Result<()> {
     insert_block(

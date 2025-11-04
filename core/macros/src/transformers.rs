@@ -13,6 +13,7 @@ pub fn wit_type_to_unwrap_expr(
     match ty {
         WitType::U64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value) }),
         WitType::S64 => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value) }),
+        WitType::Bool => Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value) }),
         WitType::String => {
             Ok(quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value).into_owned() })
         }
@@ -83,6 +84,7 @@ pub fn wit_type_to_rust_type(
     match (ty, use_str) {
         (WitType::U64, _) => Ok(quote! { u64 }),
         (WitType::S64, _) => Ok(quote! { i64 }),
+        (WitType::Bool, _) => Ok(quote! { bool }),
         (WitType::String, false) => Ok(quote! { String }),
         (WitType::String, true) => Ok(quote! { &str }),
         (WitType::Id(id), _) => {
@@ -138,6 +140,7 @@ pub fn wit_type_to_wave_type(resolve: &Resolve, ty: &WitType) -> anyhow::Result<
     match ty {
         WitType::U64 => Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
         WitType::S64 => Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
+        WitType::Bool => Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
         WitType::String => Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
         WitType::Id(id) => {
             let ty_def = &resolve.types[*id];
@@ -199,8 +202,8 @@ pub fn syn_type_to_wave_type(ty: &SynType) -> syn::Result<TokenStream> {
         match segment.ident.to_string().as_str() {
             "u64" => return Ok(quote! { stdlib::wasm_wave::value::Type::U64 }),
             "i64" => return Ok(quote! { stdlib::wasm_wave::value::Type::S64 }),
-            "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
             "bool" => return Ok(quote! { stdlib::wasm_wave::value::Type::BOOL }),
+            "String" => return Ok(quote! { stdlib::wasm_wave::value::Type::STRING }),
             _ => (),
         }
     }
@@ -225,14 +228,14 @@ pub fn syn_type_to_unwrap_expr(ty: &SynType, value: TokenStream) -> syn::Result<
                     quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value.into_owned()) },
                 );
             }
-            "String" => {
-                return Ok(
-                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
-                );
-            }
             "bool" => {
                 return Ok(
                     quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value.into_owned()) },
+                );
+            }
+            "String" => {
+                return Ok(
+                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
                 );
             }
             _ => {}

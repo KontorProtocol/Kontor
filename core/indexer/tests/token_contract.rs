@@ -1,41 +1,37 @@
 use testlib::*;
 
-import!(
-    name = "token",
-    height = 0,
-    tx_index = 0,
-    path = "../contracts/token/wit",
-);
+interface!(name = "token", path = "../contracts/token/wit");
 
 async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
+    let token = runtime.publish(&minter, "token").await?;
 
-    token::mint(runtime, &minter, 900.into()).await?;
-    token::mint(runtime, &minter, 100.into()).await?;
+    token::mint(runtime, &token, &minter, 900.into()).await?;
+    token::mint(runtime, &token, &minter, 100.into()).await?;
 
-    let result = token::balance(runtime, &minter).await?;
+    let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(result, Some(1000.into()));
 
-    let result = token::transfer(runtime, &holder, &minter, 123.into()).await?;
+    let result = token::transfer(runtime, &token, &holder, &minter, 123.into()).await?;
     assert_eq!(
         result,
         Err(Error::Message("insufficient funds".to_string()))
     );
 
-    token::transfer(runtime, &minter, &holder, 40.into()).await??;
-    token::transfer(runtime, &minter, &holder, 2.into()).await??;
+    token::transfer(runtime, &token, &minter, &holder, 40.into()).await??;
+    token::transfer(runtime, &token, &minter, &holder, 2.into()).await??;
 
-    let result = token::balance(runtime, &holder).await?;
+    let result = token::balance(runtime, &token, &holder).await?;
     assert_eq!(result, Some(42.into()));
 
-    let result = token::balance(runtime, &minter).await?;
+    let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(result, Some(958.into()));
 
-    let result = token::balance(runtime, "foo").await?;
+    let result = token::balance(runtime, &token, "foo").await?;
     assert_eq!(result, None);
 
-    let result = token::balance_log10(runtime, &minter).await??;
+    let result = token::balance_log10(runtime, &token, &minter).await??;
     assert_eq!(result, Some("2.981_365_509_078_544_415".into()));
 
     Ok(())
@@ -54,17 +50,19 @@ async fn test_token_contract_regtest() -> Result<()> {
 async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
+    let token = runtime.publish(&minter, "token").await?;
 
     token::mint(
         runtime,
+        &token,
         &minter,
         "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000".into(),
     )
     .await?;
 
-    token::mint_checked(runtime, &minter, 100.into()).await??;
+    token::mint_checked(runtime, &token, &minter, 100.into()).await??;
 
-    let result = token::balance(runtime, &minter).await?;
+    let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(
         result,
         Some(
@@ -75,26 +73,27 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     assert!(
-        token::mint_checked(runtime, &minter, max_int.into())
+        token::mint_checked(runtime, &token, &minter, max_int.into())
             .await?
             .is_err()
     );
 
     token::transfer(
         runtime,
+        &token,
         &minter,
         &holder,
         "1_000_000_000_000_000_000_000_000_000_000".into(),
     )
     .await??;
 
-    let result = token::balance(runtime, &holder).await?;
+    let result = token::balance(runtime, &token, &holder).await?;
     assert_eq!(
         result,
         Some("1_000_000_000_000_000_000_000_000_000_000".into())
     );
 
-    let result = token::balance(runtime, &minter).await?;
+    let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(
         result,
         Some(
@@ -102,10 +101,10 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
         )
     );
 
-    let result = token::balance_log10(runtime, &minter).await??;
+    let result = token::balance_log10(runtime, &token, &minter).await??;
     assert_eq!(result, Some("59.000_000_000_000_000_000".into()));
 
-    let result = token::balance_log10(runtime, &holder).await??;
+    let result = token::balance_log10(runtime, &token, &holder).await??;
     assert_eq!(result, Some("30.000_000_000_000_000_000".into()));
 
     Ok(())

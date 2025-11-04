@@ -39,6 +39,7 @@ impl HasContractId for ProcStorage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Signer {
+    Core,
     XOnlyPubKey(String),
     ContractId { id: i64, id_str: String },
 }
@@ -56,6 +57,7 @@ impl Deref for Signer {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         match self {
+            Self::Core => "core",
             Self::XOnlyPubKey(s) => s,
             Self::ContractId { id_str, .. } => id_str,
         }
@@ -86,4 +88,15 @@ impl HasContractId for FallContext {
 
 pub struct Keys {
     pub stream: Pin<Box<dyn Stream<Item = Result<String, libsql::Error>> + Send>>,
+}
+
+pub struct CoreContext {
+    pub contract_id: i64,
+    pub signer: Signer,
+}
+
+impl HasContractId for CoreContext {
+    fn get_contract_id(&self) -> i64 {
+        self.contract_id
+    }
 }

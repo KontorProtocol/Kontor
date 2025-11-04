@@ -84,6 +84,7 @@ pub fn import(
                 "fall-context",
                 "proc-context",
                 "proc-storage",
+                "core-context",
                 "signer",
                 "error",
                 "keys",
@@ -169,17 +170,18 @@ pub fn generate_functions(
     let (_, ctx_type) = export.params.first().unwrap();
     let ctx_type_name = transformers::wit_type_to_rust_type(resolve, ctx_type, false)?;
     let is_proc_context = ctx_type_name.to_string() == quote! { &context::ProcContext }.to_string();
+    let is_core_context = ctx_type_name.to_string() == quote! { &context::CoreContext }.to_string();
 
     if test {
         let runtime_name = Ident::new("runtime", Span::call_site());
         let runtime_ty = quote! { &mut Runtime };
         params[0] = quote! { #runtime_name: #runtime_ty};
-        if is_proc_context {
+        if is_proc_context || is_core_context {
             let signer_name = Ident::new("signer", Span::call_site());
             let signer_ty = quote! { &Signer };
             params.insert(1, quote! { #signer_name: #signer_ty });
         }
-    } else if is_proc_context {
+    } else if is_proc_context || is_core_context {
         let signer_name = Ident::new("signer", Span::call_site());
         let signer_ty = quote! { foreign::Signer };
         params[0] = quote! { #signer_name: #signer_ty };
@@ -263,7 +265,7 @@ pub fn generate_functions(
         ret_expr = quote! { Ok(#ret_expr) };
     }
 
-    let ctx_signer = if is_proc_context {
+    let ctx_signer = if is_proc_context || is_core_context {
         quote! { Some(signer) }
     } else {
         quote! { None }

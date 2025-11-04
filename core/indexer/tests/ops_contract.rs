@@ -45,7 +45,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
             metadata: ResultEventMetadata::builder()
                 .contract_address(ContractAddress {
                     name: "token".to_string(),
-                    height: 103,
+                    height: reg_tester.height().await,
                     tx_index: 2
                 })
                 .func_name("init".to_string())

@@ -73,6 +73,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                 contract,
                                 expr,
                             },
+                            Inst::Issuance => Op::Issuance { metadata },
                         });
                     }
                 }

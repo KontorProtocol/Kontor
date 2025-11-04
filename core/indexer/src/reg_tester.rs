@@ -610,4 +610,8 @@ impl RegTester {
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
     }
+
+    pub async fn height(&self) -> i64 {
+        self.inner.lock().await.height
+    }
 }
