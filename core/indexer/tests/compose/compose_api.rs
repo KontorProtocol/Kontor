@@ -6,18 +6,12 @@ use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{Address, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut};
 use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
 use indexer::api::compose::{
-    ComposeInputs, ComposeOutputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
+    ComposeInputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
     RevealParticipantInputs, compose, compose_reveal,
 };
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use serde::{Deserialize, Serialize};
 use testlib::RegTester;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ComposeResponse {
-    result: ComposeOutputs,
-}
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     let secp = Secp256k1::new();
