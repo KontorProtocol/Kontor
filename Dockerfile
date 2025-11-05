@@ -44,7 +44,9 @@ RUN apk add --no-cache \
 # Copy pre-built cargo tools instead of building them
 COPY --from=tool-builder /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
 COPY --from=tool-builder /usr/local/cargo/bin/wasm-opt /usr/local/cargo/bin/
-COPY --from=tool-builder /usr/local/rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown /usr/local/rustup/toolchains/stable-x86_64-unknown-linux-musl/lib/rustlib/wasm32-unknown-unknown
+
+# Install wasm32 target directly instead of copying
+RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /build
 
@@ -58,39 +60,14 @@ RUN cargo chef cook --release --recipe-path recipe.json
 # Builder stage - builds actual code
 FROM builder-base AS builder
 
-# Copy vendored sqlean source to build extensions for musl/Alpine
-WORKDIR /tmp
-COPY core/indexer/sqlean-0.28.0 sqlean
-RUN cd sqlean && \
-    make download-sqlite && \
-    make download-external && \
-    make prepare-dist && \
-    mkdir -p /build/sqlean-musl && \
-    echo "Building crypto extension for musl..." && \
-    gcc -O3 -Isrc -DSQLEAN_VERSION='"0.28.0"' -z now -z relro -Wall -Wsign-compare -Wno-unknown-pragmas -fPIC -shared \
-       src/sqlite3-crypto.c src/crypto/*.c \
-       -o dist/crypto.so && \
-    echo "Building regexp extension for musl..." && \
-    gcc -O3 -Isrc -DSQLEAN_VERSION='"0.28.0"' -z now -z relro -Wall -Wsign-compare -Wno-unknown-pragmas -fPIC -shared \
-       -include src/regexp/constants.h src/sqlite3-regexp.c src/regexp/*.c src/regexp/pcre2/*.c \
-       -o dist/regexp.so && \
-    cp dist/crypto.so dist/regexp.so /build/sqlean-musl/
-
 WORKDIR /build
 
 # Copy cached dependencies from cacher stage
 COPY --from=cacher /build/core/target /build/core/target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 
-# Copy source code
+# Copy source code (including pre-built sqlean binaries)
 COPY . .
-
-# Replace the glibc sqlean extensions with musl versions
-RUN rm -rf core/indexer/sqlean-0.28.0/linux-* && \
-    mkdir -p core/indexer/sqlean-0.28.0/linux-x64 && \
-    mkdir -p core/indexer/sqlean-0.28.0/linux-arm64 && \
-    cp /build/sqlean-musl/*.so core/indexer/sqlean-0.28.0/linux-x64/ && \
-    cp /build/sqlean-musl/*.so core/indexer/sqlean-0.28.0/linux-arm64/
 
 # Build only the indexer (dependencies already built)
 WORKDIR /build/core
