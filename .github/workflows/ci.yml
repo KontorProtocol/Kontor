@@ -179,6 +179,13 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Sanitize branch name for cache tag
+        id: sanitize
+        run: |
+          BRANCH_NAME="${{ github.ref_name }}"
+          SANITIZED_NAME="${BRANCH_NAME//\//-}"
+          echo "branch_cache_tag=${SANITIZED_NAME}" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -189,9 +196,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |
             type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ replace(github.ref_name, '/', '-') }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}
             type=registry,ref=kontorprotocol/kontor:buildcache-main
             type=registry,ref=kontorprotocol/kontor:buildcache
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ replace(github.ref_name, '/', '-') }},mode=max
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }},mode=max
