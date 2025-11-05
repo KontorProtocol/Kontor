@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     init_rx.await?;
     info!("Reactor initialized successfully");
 
-    let (init_tx, init_rx) = oneshot::channel();
+    let (init_tx, mut init_rx) = oneshot::channel();
     handles.push(
         bitcoin_follower::run(
             config.zmq_address.clone(),
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 
     loop {
         tokio::select! {
-            result = init_rx => {
+            result = &mut init_rx => {
                 match result {
                     Ok(_) => {
                         info!("Bitcoin follower initialized successfully");
