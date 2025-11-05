@@ -55,7 +55,10 @@ pub async fn initialize_database(config: &Config, conn: &libsql::Connection) -> 
                 .await
                 .map_err(|e| Error::ConnectionFailed(e.to_string()))?;
         }
-        conn.load_extension(p, None)?;
+        // SQLite automatically adds platform-specific suffix (.so/.dylib/.dll)
+        // so pass path without extension to avoid double extension
+        let extension_path = config.data_dir.join(name);
+        conn.load_extension(extension_path, None)?;
     }
     Ok(())
 }
