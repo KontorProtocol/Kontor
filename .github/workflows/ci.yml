@@ -154,7 +154,7 @@ jobs:
     name: Cache Docker Dependencies
     runs-on: ubuntu-latest
     timeout-minutes: 600
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     permissions:
       contents: read
     steps:
@@ -190,7 +190,7 @@ jobs:
             type=registry,ref=kontorprotocol/kontor:buildcache
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }},mode=max
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }},mode=max
 
   docker-build:
     name: Build & Push Docker Image
