@@ -24,13 +24,15 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, insert_transaction, rollback_to_height, select_block_at_height,
-            select_block_latest, select_block_with_hash, set_block_processed,
+            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
+            select_block_at_height, select_block_latest, select_block_with_hash,
+            set_block_processed,
         },
         types::{BlockRow, TransactionRow},
     },
     reactor::{results::ResultEvent, types::Op},
     runtime::{ComponentCache, Runtime, Storage},
+    test_utils::new_mock_block_hash,
 };
 
 struct Reactor {
@@ -84,9 +86,22 @@ impl Reactor {
             }
         };
 
-        let storage = Storage::builder().conn(writer.connection()).build();
-        storage.store_native_contracts().await?;
-        let runtime = Runtime::new(storage, ComponentCache::new()).await?;
+        // ensure 0 (native) block exists
+        insert_processed_block(
+            conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .build(),
+        )
+        .await?;
+        let storage = Storage::builder()
+            .height(0)
+            .tx_index(0)
+            .conn(writer.connection())
+            .build();
+        let mut runtime = Runtime::new(storage, ComponentCache::new()).await?;
+        runtime.publish_native_contracts().await?;
         Ok(Self {
             reader,
             writer,

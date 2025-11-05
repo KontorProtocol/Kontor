@@ -5,7 +5,15 @@ contract!(name = "token");
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub admin: Option<String>,
-    pub ledger: Map<String, Integer>,
+    pub ledger: Map<String, Decimal>,
+    pub total_supply: Decimal,
+}
+
+fn mint(model: &TokenStorageWriteModel, to: String, n: Decimal) {
+    let ledger = model.ledger();
+    let balance = ledger.get(&to).unwrap_or_default();
+    ledger.set(to, balance + n);
+    model.set_total_supply(model.total_supply() + n);
 }
 
 impl Guest for Token {
@@ -14,28 +22,14 @@ impl Guest for Token {
     }
 
     fn issuance(ctx: &CoreContext, to: String) {
-        let ledger = ctx.proc_context().model().ledger();
-        ledger.set(to, 10.into());
+        mint(&ctx.proc_context().model(), to, 10.into());
     }
 
-    fn mint(ctx: &ProcContext, n: Integer) {
-        let to = ctx.signer().to_string();
-        let ledger = ctx.model().ledger();
-
-        let balance = ledger.get(&to).unwrap_or_default();
-        ledger.set(to, balance + n);
+    fn mint(ctx: &ProcContext, n: Decimal) {
+        mint(&ctx.model(), ctx.signer().to_string(), n);
     }
 
-    fn mint_checked(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
-        let to = ctx.signer().to_string();
-        let ledger = ctx.model().ledger();
-
-        let balance = ledger.get(&to).unwrap_or_default();
-        ledger.set(to, balance.add(n)?);
-        Ok(())
-    }
-
-    fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
+    fn transfer(ctx: &ProcContext, to: String, n: Decimal) -> Result<(), Error> {
         let from = ctx.signer().to_string();
         let ledger = ctx.model().ledger();
 
@@ -51,15 +45,22 @@ impl Guest for Token {
         Ok(())
     }
 
-    fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
+    fn balance(ctx: &ViewContext, acc: String) -> Option<Decimal> {
         ctx.model().ledger().get(acc)
     }
 
-    fn balance_log10(ctx: &ViewContext, acc: String) -> Result<Option<Decimal>, Error> {
+    fn balances(ctx: &ViewContext) -> Vec<Balance> {
         ctx.model()
             .ledger()
-            .get(acc)
-            .map(|i| Decimal::from(i).log10())
-            .transpose()
+            .keys()
+            .map(|k| Balance {
+                value: ctx.model().ledger().get(&k).unwrap_or_default(),
+                key: k,
+            })
+            .collect()
+    }
+
+    fn total_supply(ctx: &ViewContext) -> Decimal {
+        ctx.model().total_supply()
     }
 }

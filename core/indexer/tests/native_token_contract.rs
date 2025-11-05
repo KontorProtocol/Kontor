@@ -36,9 +36,6 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     let result = token::balance(runtime, "foo").await?;
     assert_eq!(result, None);
 
-    let result = token::balance_log10(runtime, &minter).await??;
-    assert_eq!(result, Some("2.981_365_509_078_544_415".into()));
-
     Ok(())
 }
 

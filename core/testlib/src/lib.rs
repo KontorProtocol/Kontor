@@ -17,7 +17,6 @@ use indexer::{
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
-use libsql::Connection;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
 use tokio::{fs::File, io::AsyncReadExt, task};
@@ -155,7 +154,17 @@ impl RuntimeLocal {
         Ok(())
     }
 
-    async fn make_storage(conn: Connection) -> Result<Storage> {
+    pub async fn new() -> Result<Self> {
+        let (_, writer, _db_dir) = new_test_db(&Config::new_na()).await?;
+        let conn = writer.connection();
+        insert_processed_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .build(),
+        )
+        .await?;
         insert_processed_block(
             &conn,
             BlockRow::builder()
@@ -164,16 +173,13 @@ impl RuntimeLocal {
                 .build(),
         )
         .await?;
-        Ok(Storage::builder().height(1).tx_index(1).conn(conn).build())
-    }
-
-    pub async fn new() -> Result<Self> {
-        let (_, writer, _db_dir) = new_test_db(&Config::new_na()).await?;
-        let conn = writer.connection();
-        let storage = Self::make_storage(conn).await?;
-        storage.store_native_contracts().await?;
+        let storage = Storage::builder().height(0).tx_index(0).conn(conn).build();
         let component_cache = ComponentCache::new();
-        let runtime = IndexerRuntime::new(storage, component_cache).await?;
+        let mut runtime = IndexerRuntime::new(storage, component_cache).await?;
+        runtime.publish_native_contracts().await?;
+        runtime
+            .set_context(1, 1, 0, 0, new_mock_transaction(0).txid)
+            .await;
         Ok(Self { runtime, _db_dir })
     }
 }

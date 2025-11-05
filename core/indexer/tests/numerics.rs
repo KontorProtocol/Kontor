@@ -140,3 +140,12 @@ async fn test_numerics_limits() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_numerics_defaults() -> Result<()> {
+    let x = Decimal::default();
+    assert_eq!(x, Decimal::from(0));
+    let x = Integer::default();
+    assert_eq!(x, Integer::from(0));
+    Ok(())
+}

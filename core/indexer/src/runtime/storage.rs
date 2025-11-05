@@ -7,7 +7,6 @@ use wit_component::{ComponentEncoder, WitPrinter};
 
 use crate::{
     database::{
-        native_contracts::store_native_contracts,
         queries::{
             delete_contract_state, delete_matching_paths, exists_contract_state,
             get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
@@ -132,10 +131,6 @@ impl Storage {
                 .build(),
         )
         .await?)
-    }
-
-    pub async fn store_native_contracts(&self) -> Result<()> {
-        store_native_contracts(&self.conn).await
     }
 
     pub async fn insert_contract_result(

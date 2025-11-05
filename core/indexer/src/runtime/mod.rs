@@ -44,6 +44,7 @@ use wasmtime::{
     },
 };
 
+use crate::database::native_contracts::TOKEN;
 use crate::reactor::results::ResultEventMetadata;
 use crate::runtime::wit::CoreContext;
 use crate::{
@@ -148,6 +149,9 @@ impl Runtime {
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
         self.txid = txid;
+        if let Some(gauge) = self.gauge.as_ref() {
+            gauge.reset().await;
+        }
     }
 
     pub fn get_storage_conn(&self) -> Connection {
@@ -162,20 +166,36 @@ impl Runtime {
         self.starting_fuel = starting_fuel
     }
 
+    pub async fn publish_native_contracts(&mut self) -> Result<()> {
+        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid)
+            .await;
+        self.publish(&Signer::Core, "token", TOKEN).await?;
+        Ok(())
+    }
+
     pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
+        let address = ContractAddress {
+            name: name.to_string(),
+            height: self.storage.height,
+            tx_index: self.storage.tx_index,
+        };
+        if self
+            .storage
+            .contract_id(&address)
+            .await
+            .expect("Failed to perform contract existence check")
+            .is_some()
+        {
+            return Ok("".to_string());
+        }
+
         let id = self
             .storage
             .insert_contract(name, bytes)
             .await
             .expect("Failed to insert contract");
-        let address = self
-            .storage
-            .contract_address(id)
-            .await
-            .expect("Failed to get contract address")
-            .expect("Contract doesn't exist");
         self.execute(Some(signer), &address, "init()").await?;
-        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address))
+        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
             .expect("Failed to convert address to string");
         self.storage
             .insert_contract_result(
@@ -186,16 +206,10 @@ impl Runtime {
             )
             .await
             .expect("Failed to insert contract result");
-
-        let contract_address = self
-            .storage
-            .contract_address(id)
-            .await?
-            .expect("Contract doesn't exist");
         self.events
             .replace_last(ResultEvent::Ok {
                 metadata: ResultEventMetadata::builder()
-                    .contract_address(contract_address)
+                    .contract_address(address)
                     .func_name("init".to_string())
                     .op_result_id(
                         OpResultId::builder()
@@ -286,6 +300,17 @@ impl Runtime {
                 },
             )
             .await;
+        if expr.starts_with("transfer(")
+            && let Some(gauge) = self.gauge.as_ref()
+        {
+            tracing::info!(
+                "Transfer: {}, {}, {}, {}",
+                gauge.starting_fuel().await,
+                gauge.ending_fuel().await,
+                gauge.starting_fuel().await - gauge.ending_fuel().await,
+                gauge.total_host_fuel().await
+            );
+        }
         if is_proc {
             let metadata = ResultEventMetadata::builder()
                 .contract_address(contract_address.clone())
