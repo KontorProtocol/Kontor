@@ -189,9 +189,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |
             type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref_name }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ replace(github.ref_name, '/', '-') }}
             type=registry,ref=kontorprotocol/kontor:buildcache-main
             type=registry,ref=kontorprotocol/kontor:buildcache
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref_name }},mode=max
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ replace(github.ref_name, '/', '-') }},mode=max

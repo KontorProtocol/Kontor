@@ -2,7 +2,7 @@
 
 # Tool builder stage - builds and caches cargo tools
 FROM rust:alpine AS tool-builder
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev g++ gcc make
 RUN cargo install cargo-chef --locked
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-opt --locked
