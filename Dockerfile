@@ -1,9 +1,16 @@
 # syntax=docker/dockerfile:1
 
+# Tool builder stage - builds and caches cargo tools
+FROM rust:alpine AS tool-builder
+RUN apk add --no-cache musl-dev
+RUN cargo install cargo-chef --locked
+RUN rustup target add wasm32-unknown-unknown
+RUN cargo install wasm-opt --locked
+
 # Planner stage - generates dependency recipe
 FROM rust:alpine AS planner
 RUN apk add --no-cache musl-dev
-RUN cargo install cargo-chef
+COPY --from=tool-builder /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
 WORKDIR /build
 COPY core core
 WORKDIR /build/core
@@ -34,9 +41,10 @@ RUN apk add --no-cache \
     unzip \
     pcre2-dev
 
-RUN cargo install cargo-chef
-RUN rustup target add wasm32-unknown-unknown
-RUN cargo install wasm-opt
+# Copy pre-built cargo tools instead of building them
+COPY --from=tool-builder /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
+COPY --from=tool-builder /usr/local/cargo/bin/wasm-opt /usr/local/cargo/bin/
+COPY --from=tool-builder /usr/local/rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown /usr/local/rustup/toolchains/stable-x86_64-unknown-linux-musl/lib/rustlib/wasm32-unknown-unknown
 
 WORKDIR /build
 
