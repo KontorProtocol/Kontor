@@ -1,9 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 use testlib::*;
 
-interface!(name = "token", path = "../contracts/token/wit",);
+interface!(name = "token", path = "../test-contracts/token/wit",);
 
-interface!(name = "pool", path = "../contracts/pool/wit",);
+interface!(name = "pool", path = "../test-contracts/pool/wit",);
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
@@ -533,62 +533,62 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_swaps_regtest() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_swap_fee_regtest() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_shares_token_interface() -> Result<()> {
     run_test_amm_shares_token_interface(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_shares_token_interface_regtest() -> Result<()> {
     run_test_amm_shares_token_interface(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_swap_low_slippage_regtest() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_deposit_withdraw_regtest() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_limits_regtest() -> Result<()> {
     run_test_amm_limits(runtime).await
 }

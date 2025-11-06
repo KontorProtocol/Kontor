@@ -1,0 +1,22 @@
+[workspace]
+members = ["amm", "arith", "crypto", "fib", "pool", "proxy", "shared-account", "token"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[workspace.lints.clippy]
+new_without_default = "allow"
+uninlined_format_args = "allow"
+too_many_arguments = "allow"
+unit_arg = "allow"
+
+[workspace.dependencies]
+# IMPORTANT
+wit-bindgen = "=0.47.0"
+
+stdlib = { path = "../core/stdlib" }

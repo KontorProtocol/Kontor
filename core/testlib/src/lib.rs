@@ -268,8 +268,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .identities
             .get_mut(signer)
             .ok_or_else(|| anyhow!("Identity not found"))?;
-        let expr = self
-            .reg_tester
+        self.reg_tester
             .instruction(
                 identity,
                 Inst::Publish {
@@ -279,12 +278,8 @@ impl RuntimeImpl for RuntimeRegtest {
                 },
             )
             .await
-            .map(|r| r.value)
-            .context("Failed to publish contract")?;
-        Ok(
-            wasm_wave::from_str::<wasm_wave::value::Value>(&ContractAddress::wave_type(), &expr)?
-                .into(),
-        )
+            .map(|r| r.contract_address)
+            .context("Failed to publish contract")
     }
 
     async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {

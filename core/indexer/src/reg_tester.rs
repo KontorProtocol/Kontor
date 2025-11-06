@@ -15,7 +15,10 @@ use crate::{
     },
     config::{Config, RegtestConfig},
     database::types::OpResultId,
-    reactor::{results::ResultEvent, types::Inst},
+    reactor::{
+        results::{ResultEvent, ResultEventMetadata},
+        types::Inst,
+    },
     retry::retry_simple,
     runtime::{ContractAddress, serialize_cbor, wit::Signer},
     test_utils,
@@ -163,6 +166,8 @@ pub struct RegTesterInner {
 }
 
 pub struct InstructionResult {
+    pub contract_address: ContractAddress,
+    pub func_name: String,
     pub value: String,
     pub commit_tx_hex: String,
     pub reveal_tx_hex: String,
@@ -293,7 +298,18 @@ impl RegTesterInner {
             .context("Failed to receive response from websocket")?
         {
             match result {
-                ResultEvent::Ok { value, .. } => Ok(InstructionResult {
+                ResultEvent::Ok {
+                    metadata:
+                        ResultEventMetadata {
+                            contract_address,
+                            func_name,
+                            ..
+                        },
+                    value,
+                    ..
+                } => Ok(InstructionResult {
+                    contract_address,
+                    func_name,
                     value,
                     commit_tx_hex,
                     reveal_tx_hex,

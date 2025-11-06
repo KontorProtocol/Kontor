@@ -1,8 +1,8 @@
 use testlib::*;
 
-interface!(name = "token", path = "../contracts/token/wit",);
+interface!(name = "token", path = "../test-contracts/token/wit",);
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_regtests() -> Result<()> {
     logging::setup();
 

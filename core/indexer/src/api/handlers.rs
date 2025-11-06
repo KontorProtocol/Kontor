@@ -6,7 +6,6 @@ use axum::{
 use bitcoin::consensus::encode;
 
 use crate::{
-    bitcoin_client::types::TestMempoolAcceptResult,
     block::filter_map,
     database::{
         queries::{
@@ -33,11 +32,6 @@ use super::{
 };
 
 use serde::{Deserialize, Serialize};
-
-#[derive(Deserialize)]
-pub struct TxsQuery {
-    txs: String,
-}
 
 #[derive(Deserialize, Serialize)]
 pub struct Info {
@@ -82,16 +76,6 @@ pub async fn get_block_latest(State(env): State<Env>) -> Result<BlockRow> {
         Some(block_row) => Ok(block_row.into()),
         None => Err(HttpError::NotFound("No blocks written".to_owned()).into()),
     }
-}
-
-pub async fn test_mempool_accept(
-    Query(query): Query<TxsQuery>,
-    State(env): State<Env>,
-) -> Result<Vec<TestMempoolAcceptResult>> {
-    let txs: Vec<String> = query.txs.split(',').map(|s| s.to_string()).collect();
-
-    let results = env.bitcoin.test_mempool_accept(&txs).await?;
-    Ok(results.into())
 }
 
 pub async fn post_compose(

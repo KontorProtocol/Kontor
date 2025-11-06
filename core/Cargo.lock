@@ -4729,16 +4729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ui"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.6",
- "tokio",
- "tower 0.5.2",
- "tower-http 0.6.6",
-]
-
-[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

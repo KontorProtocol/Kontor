@@ -1,6 +1,6 @@
 use testlib::*;
 
-interface!(name = "crypto", path = "../contracts/crypto/wit");
+interface!(name = "crypto", path = "../test-contracts/crypto/wit");
 
 async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<(Signer, ContractAddress)> {
     let alice = runtime.identity().await?;
@@ -21,7 +21,7 @@ async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<(Signer, Cont
     Ok((alice, crypto))
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_crypto_contract() -> Result<()> {
     let (alice, crypto) = run_test_crypto_contract(runtime).await?;
 
@@ -34,7 +34,7 @@ async fn test_crypto_contract() -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_crypto_contract_regtest() -> Result<()> {
     let (alice, crypto) = run_test_crypto_contract(runtime).await?;
 

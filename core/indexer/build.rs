@@ -44,5 +44,5 @@ fn main() {
     let mut cd = std::env::current_dir().unwrap();
     cd.pop();
     cd.pop();
-    build(&cd.join("contracts"));
+    build(&cd.join("test-contracts"));
 }

@@ -37,7 +37,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            contracts/target
+            test-contracts/target
+            native-contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - name: Run sccache-cache
@@ -89,7 +90,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            contracts/target
+            test-contracts/target
+            native-contracts/target
             core/target
           key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
       - uses: mozilla-actions/sccache-action@v0.0.9

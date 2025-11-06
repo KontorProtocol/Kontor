@@ -208,48 +208,15 @@ impl Runtime {
             return Ok("".to_string());
         }
 
-        let id = self
-            .storage
+        self.storage
             .insert_contract(name, bytes)
             .await
             .expect("Failed to insert contract");
         self.execute(Some(signer), &address, "init()").await?;
-        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
-            .expect("Failed to convert address to string");
-        let row = self
-            .storage
-            .get_contract_result(self.result_id_counter.get().await as i64 - 1)
-            .await
-            .expect("Failed to get publish init contract result")
-            .expect("Publish init contract result not in database");
-        self.storage
-            .insert_contract_result(
-                self.result_id_counter.get().await as i64 - 1,
-                id,
-                "init".to_string(),
-                row.gas,
-                Some(value.clone()),
-            )
-            .await
-            .expect("Failed to insert contract result");
-        self.events
-            .replace_last(ResultEvent::Ok {
-                metadata: ResultEventMetadata::builder()
-                    .contract_address(address)
-                    .func_name("init".to_string())
-                    .gas(row.gas as u64)
-                    .op_result_id(
-                        OpResultId::builder()
-                            .txid(self.txid.to_string())
-                            .input_index(self.storage.input_index)
-                            .op_index(self.storage.op_index)
-                            .build(),
-                    )
-                    .build(),
-                value: value.clone(),
-            })
-            .await;
-        Ok(value)
+        Ok(
+            wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
+                .expect("Failed to convert address to string"),
+        )
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {

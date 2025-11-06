@@ -1,6 +1,6 @@
 use testlib::*;
 
-interface!(name = "token", path = "../contracts/token/wit");
+interface!(name = "token", path = "../test-contracts/token/wit");
 
 async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
@@ -37,12 +37,12 @@ async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_token_contract() -> Result<()> {
     run_test_token_contract(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_token_contract_regtest() -> Result<()> {
     run_test_token_contract(runtime).await
 }
@@ -110,12 +110,12 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../contracts")]
+#[runtime(contracts_dir = "../../test-contracts")]
 async fn test_token_contract_large_numbers() -> Result<()> {
     run_test_token_contract_large_numbers(runtime).await
 }
 
-#[runtime(contracts_dir = "../../contracts", mode = "regtest")]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_token_contract_large_numbers_regtest() -> Result<()> {
     run_test_token_contract_large_numbers(runtime).await
 }
