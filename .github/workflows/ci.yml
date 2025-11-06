@@ -169,8 +169,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start Docker
-        run: sudo systemctl start docker
+      - name: Check and start Docker
+        run: |
+          # Check if Docker is already running
+          if docker info >/dev/null 2>&1; then
+            echo "Docker is already running"
+            exit 0
+          fi
+
+          # Try different ways to start Docker
+          if systemctl list-units --type=service --all | grep -q docker.service; then
+            echo "Starting Docker via systemctl..."
+            sudo systemctl start docker
+          elif systemctl list-units --type=service --all | grep -q snap.docker.dockerd.service; then
+            echo "Starting Docker via snap..."
+            sudo systemctl start snap.docker.dockerd
+          elif [ -f /etc/init.d/docker ]; then
+            echo "Starting Docker via init.d..."
+            sudo service docker start
+          else
+            echo "Docker service not found. Checking if Docker is installed..."
+            docker --version || (echo "ERROR: Docker is not installed on this runner" && exit 1)
+          fi
+
+          # Wait for Docker to be ready
+          for i in {1..30}; do
+            if docker info >/dev/null 2>&1; then
+              echo "Docker is ready"
+              exit 0
+            fi
+            echo "Waiting for Docker to start... ($i/30)"
+            sleep 1
+          done
+
+          echo "ERROR: Docker failed to start"
+          exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -226,8 +259,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start Docker
-        run: sudo systemctl start docker
+      - name: Check and start Docker
+        run: |
+          # Check if Docker is already running
+          if docker info >/dev/null 2>&1; then
+            echo "Docker is already running"
+            exit 0
+          fi
+
+          # Try different ways to start Docker
+          if systemctl list-units --type=service --all | grep -q docker.service; then
+            echo "Starting Docker via systemctl..."
+            sudo systemctl start docker
+          elif systemctl list-units --type=service --all | grep -q snap.docker.dockerd.service; then
+            echo "Starting Docker via snap..."
+            sudo systemctl start snap.docker.dockerd
+          elif [ -f /etc/init.d/docker ]; then
+            echo "Starting Docker via init.d..."
+            sudo service docker start
+          else
+            echo "Docker service not found. Checking if Docker is installed..."
+            docker --version || (echo "ERROR: Docker is not installed on this runner" && exit 1)
+          fi
+
+          # Wait for Docker to be ready
+          for i in {1..30}; do
+            if docker info >/dev/null 2>&1; then
+              echo "Docker is ready"
+              exit 0
+            fi
+            echo "Waiting for Docker to start... ($i/30)"
+            sleep 1
+          done
+
+          echo "ERROR: Docker failed to start"
+          exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
