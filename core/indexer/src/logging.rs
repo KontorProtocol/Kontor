@@ -1,28 +1,29 @@
-use std::panic;
 use std::sync::Once;
+
+use clap::{Parser, ValueEnum};
+use serde::{Deserialize, Serialize};
+
+use crate::config::Config;
 
 static INIT: Once = Once::new();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    JSON,
+    Plain,
+}
+
 pub fn setup() {
     INIT.call_once(|| {
-        let _ = tracing_subscriber::fmt::try_init();
-        panic::set_hook(Box::new(|panic_info| {
-            let message = panic_info
-                .payload()
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| {
-                    panic_info
-                        .payload()
-                        .downcast_ref::<String>()
-                        .map(|s| s.as_str())
-                })
-                .unwrap_or("Unknown panic");
-            let location = panic_info
-                .location()
-                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-                .unwrap_or_else(|| "unknown location".to_string());
-            tracing::error!(target: "panic", "Panic at {}: {}", location, message);
-        }));
+        let config = Config::try_parse().expect("Failed to parse config to setup logging");
+        match config.log_format {
+            Format::JSON => {
+                let _ = tracing_subscriber::fmt().json().try_init();
+            }
+            Format::Plain => {
+                let _ = tracing_subscriber::fmt::try_init();
+            }
+        }
     });
 }

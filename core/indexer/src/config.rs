@@ -4,6 +4,8 @@ use bitcoin::Network;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+use crate::logging;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[clap(
     author = "Unspendable Labs",
@@ -12,6 +14,14 @@ use serde::{Deserialize, Serialize};
     long_about = r#"Kontor is a Bitcoin Layer 2"#
 )]
 pub struct Config {
+    #[clap(
+        long,
+        env = "LOG_FORMAT",
+        help = "Log format (plain, json)",
+        default_value = "plain"
+    )]
+    pub log_format: logging::Format,
+
     #[clap(
         long,
         env = "BITCOIN_RPC_URL",
@@ -85,6 +95,7 @@ impl Config {
     pub fn new_na() -> Self {
         let na = "n/a".to_string();
         Self {
+            log_format: logging::Format::Plain,
             network: Network::Bitcoin,
             bitcoin_rpc_url: na.clone(),
             bitcoin_rpc_user: na.clone(),

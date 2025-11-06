@@ -30,7 +30,17 @@ async fn main() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let panic_token = cancel_token.clone();
     panic::set_hook(Box::new(move |info| {
-        error!("Panic occurred: {:?}", info);
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("Unknown panic");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        error!(target: "panic", "Panic at {}: {}", location, message);
         panic_token.cancel();
     }));
     let mut handles = vec![];
