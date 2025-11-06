@@ -12,4 +12,4 @@ wasm-wave = { workspace = true }
 
 [dev-dependencies]
 macrotest = "=1.2.0"
-trybuild = "=1.0.112"
+trybuild = "=1.0.113"

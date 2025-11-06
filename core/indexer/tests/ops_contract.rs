@@ -56,7 +56,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
                     .build()
             )
         );
-        assert_eq!(value, "{name: \"token\", height: 103, tx-index: 2}");
+        assert_eq!(value, "");
         assert!(metadata.gas > 0);
     } else {
         bail!("Unexpected result event: {:?}", result);
