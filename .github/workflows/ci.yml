@@ -1,8 +1,8 @@
-name: Rust CI
+name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
 
@@ -20,7 +20,7 @@ env:
 
 jobs:
   quality-checks:
-    name: Code Quality Checks
+    name: Lint & Security Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,7 @@ jobs:
         working-directory: ./core
 
   test:
-    name: Build & Test
+    name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     environment: mainnet
     strategy:
@@ -131,7 +131,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo expand
         run: cargo install cargo-expand
-      - name: Install wasm-opt via cargo
+      - name: Install wasm-opt
         run: cargo install wasm-opt
       - name: Install mkcert
         run: |
@@ -162,14 +162,24 @@ jobs:
         run: cargo test --workspace
 
   docker-cache-deps:
-    name: Cache Docker Dependencies
-    runs-on: ubuntu-latest
+    name: Docker - Cache Dependencies (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 600
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     permissions:
       contents: read
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-x86-4cpu
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-arm64-4cpu
+            platform: linux/arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-docker
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -191,28 +201,120 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: false
+          platforms: ${{ matrix.platform }}
+          push: true
           target: cacher
+          tags: kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}-cacher
           cache-from: |
             type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}
-            type=registry,ref=kontorprotocol/kontor:buildcache-main
-            type=registry,ref=kontorprotocol/kontor:buildcache
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ matrix.arch }}
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }},mode=max
+            type=inline
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }},mode=max
 
   docker-build:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    name: Docker - Build Image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 600
     needs: docker-cache-deps
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-x86-4cpu
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-arm64-4cpu
+            platform: linux/arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-docker
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: kontorprotocol/kontor
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+          flavor: |
+            suffix=-${{ matrix.arch }},onlatest=true
+
+      - name: Sanitize branch name for cache tag
+        id: sanitize
+        run: |
+          BRANCH_NAME="${{ github.ref_name }}"
+          SANITIZED_NAME="${BRANCH_NAME//\//-}"
+          echo "branch_cache_tag=${SANITIZED_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ matrix.arch }}
+          cache-to: |
+            type=gha,mode=max
+            type=inline
+            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }},mode=max
+          outputs: type=image,name=kontorprotocol/kontor,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: Docker - Publish Multi-Arch Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 600
+    needs: docker-build
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -234,26 +336,12 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Sanitize branch name for cache tag
-        id: sanitize
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
         run: |
-          BRANCH_NAME="${{ github.ref_name }}"
-          SANITIZED_NAME="${BRANCH_NAME//\//-}"
-          echo "branch_cache_tag=${SANITIZED_NAME}" >> $GITHUB_OUTPUT
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'kontorprotocol/kontor@sha256:%s ' *)
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}
-            type=registry,ref=kontorprotocol/kontor:buildcache-main
-            type=registry,ref=kontorprotocol/kontor:buildcache
-          cache-to: |
-            type=gha,mode=max
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }},mode=max
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect kontorprotocol/kontor:${{ steps.meta.outputs.version }}
