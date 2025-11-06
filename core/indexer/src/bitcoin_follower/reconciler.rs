@@ -147,6 +147,7 @@ impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> 
                             let Some(last_height) = self.state.latest_block_height else {
                                 bail!("must have start height before using ZMQ");
                             };
+                            warn!("Starting RPC fetcher at height {}", last_height + 1);
                             self.fetcher.start(last_height + 1);
                         }
                         vec![]
@@ -177,6 +178,11 @@ impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> 
         (target_height, block): (u64, Block),
     ) -> Result<Vec<Event>> {
         let height = block.height;
+        if let Some(latest_height) = self.state.latest_block_height
+            && height != latest_height + 1
+        {
+            return Ok(vec![]);
+        }
         self.state.latest_block_height = Some(height);
 
         match self.state.target_block_height {
@@ -204,7 +210,10 @@ impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> 
     }
 
     async fn switch_to_zmq(&mut self) -> Result<Event> {
-        let target_height = self.state.latest_block_height.unwrap();
+        let target_height = self
+            .state
+            .latest_block_height
+            .expect("Latest block height should be set");
         info!(
             "RPC Fetcher caught up to {}, switching to ZMQ",
             target_height
