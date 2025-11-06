@@ -2,6 +2,8 @@ use std::sync::Once;
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use tracing::{Level, level_filters::LevelFilter};
+use tracing_subscriber::{Registry, filter, layer::SubscriberExt};
 
 use crate::config::Config;
 
@@ -19,7 +21,13 @@ pub fn setup() {
         let config = Config::try_parse().expect("Failed to parse config to setup logging");
         match config.log_format {
             Format::JSON => {
-                let _ = tracing_subscriber::fmt().json().try_init();
+                let layer = tracing_stackdriver::layer();
+                let filter = filter::Targets::new()
+                    .with_default(LevelFilter::OFF)
+                    .with_target("kontor", Level::INFO)
+                    .with_target("indexer", Level::INFO);
+                let subscriber = Registry::default().with(layer).with(filter);
+                let _ = tracing::subscriber::set_global_default(subscriber);
             }
             Format::Plain => {
                 let _ = tracing_subscriber::fmt::try_init();
