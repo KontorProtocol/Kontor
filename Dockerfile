@@ -2,10 +2,25 @@
 
 # Tool builder stage - builds and caches cargo tools
 FROM rust:alpine AS tool-builder
-RUN apk add --no-cache musl-dev g++ gcc make openssl-dev pkgconfig
+RUN apk add --no-cache musl-dev g++ gcc make curl
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-opt --locked
-RUN cargo install sccache --locked
+
+# Download pre-built sccache binary instead of compiling (much faster and avoids static linking issues)
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        SCCACHE_ARCH="x86_64-unknown-linux-musl"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        SCCACHE_ARCH="aarch64-unknown-linux-musl"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    SCCACHE_VERSION="v0.8.2" && \
+    curl -L "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}.tar.gz" | \
+    tar xz && \
+    mv "sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}/sccache" /usr/local/cargo/bin/ && \
+    chmod +x /usr/local/cargo/bin/sccache && \
+    rm -rf "sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}"
 
 # Planner stage - generates dependency recipe using official cargo-chef image
 FROM lukemathwalker/cargo-chef:latest-rust-alpine AS planner
