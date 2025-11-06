@@ -170,10 +170,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-x86-4cpu
             platform: linux/amd64
             arch: amd64
-          - runner: ubuntu-24.04-arm64
+          - runner: ubuntu-arm64-4cpu
             platform: linux/arm64
             arch: arm64
     steps:
