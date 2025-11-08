@@ -20,7 +20,7 @@ use stdlib::impls;
 pub use storage::Storage;
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
-pub use wit::Contract;
+pub use wit::Root;
 
 use std::{io::Cursor, sync::Arc};
 
@@ -325,7 +325,7 @@ impl Runtime {
 
     pub fn make_linker(&self) -> Result<Linker<Runtime>> {
         let mut linker = Linker::new(&self.engine);
-        Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
+        Root::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
         Ok(linker)
     }
 

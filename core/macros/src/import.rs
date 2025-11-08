@@ -19,7 +19,6 @@ pub struct Config {
     height: i64,
     tx_index: i64,
     path: String,
-    world: Option<String>,
     public: Option<bool>,
 }
 
@@ -30,13 +29,12 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
     let height = config.height;
     let tx_index = config.tx_index;
     let path = config.path;
-    let world_name = config.world.unwrap_or("contract".to_string());
     let public = config.public.unwrap_or_default();
 
     import(
         path,
         module_name,
-        world_name,
+        "root".to_string(),
         Some((&name, height, tx_index)),
         test,
         public,

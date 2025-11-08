@@ -7,17 +7,15 @@ use syn::Ident;
 #[derive(FromMeta)]
 pub struct Config {
     name: String,
-    world: Option<String>,
     path: Option<String>,
 }
 
 pub fn generate(config: Config) -> TokenStream {
-    let world = config.world.unwrap_or("contract".to_string());
     let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&config.name.to_pascal_case()).unwrap();
     quote! {
         wit_bindgen::generate!({
-            world: #world,
+            world: "root",
             path: #path,
             generate_all,
             additional_derives: [stdlib::Storage, stdlib::Wavey],

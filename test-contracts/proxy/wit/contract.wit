@@ -1,6 +1,6 @@
-package kontor:contract;
+package root:component;
 
-world contract {
+world root {
   include kontor:built-in/built-in;
   use kontor:built-in/context.{fall-context, proc-context, view-context, signer};
   use kontor:built-in/foreign.{contract-address};
