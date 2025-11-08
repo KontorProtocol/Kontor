@@ -18,8 +18,10 @@ pub enum Format {
 
 pub fn setup() {
     INIT.call_once(|| {
-        let config = Config::try_parse().expect("Failed to parse config to setup logging");
-        match config.log_format {
+        let log_format = Config::try_parse()
+            .map(|c| c.log_format)
+            .unwrap_or(Format::Plain);
+        match log_format {
             Format::JSON => {
                 let layer = tracing_stackdriver::layer();
                 let filter = filter::Targets::new()

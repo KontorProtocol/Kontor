@@ -42,14 +42,7 @@ scopeguard = "=1.2.0"
 rayon = "=1.11.0"
 indexmap = "=2.12.0"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
-axum-server = { version = "=0.7.2", features = ["tls-rustls-no-provider"] }
-rustls = { version = "=0.23.35", features = [
-  "logging",
-  "std",
-  "ring",
-  "tls12",
-], default-features = false }
-rustls-native-certs = "=0.8.2"
+axum-server = "=0.7.2"
 futures-util = "=0.3.31"
 hex = "=0.4.3"
 bip39 = "=2.2.0"

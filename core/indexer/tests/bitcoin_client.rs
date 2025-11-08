@@ -1,11 +1,8 @@
-use anyhow::Result;
-use clap::Parser;
-use indexer::{bitcoin_client::Client, config::Config};
+use testlib::*;
 
-#[tokio::test]
+#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_bitcoin_client() -> Result<()> {
-    let client = Client::new_from_config(&Config::try_parse()?)?;
-
+    let client = reg_tester.bitcoin_client().await;
     let info = client.get_blockchain_info().await?;
     let hash = client.get_block_hash(info.blocks).await?;
     let block = client.get_block(&hash).await?;

@@ -2,15 +2,13 @@ use anyhow::Result;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::transaction::Version;
 use bitcoin::{Network, Psbt, Transaction, TxOut, absolute::LockTime};
-use clap::Parser;
-use indexer::config::TestConfig;
+use indexer::logging;
 use indexer::multi_psbt_test_utils::{
     add_node_input_and_output_to_reveal_psbt, add_portal_input_and_output_to_commit_psbt,
     add_portal_input_and_output_to_reveal_psbt, add_single_node_input_and_output_to_commit_psbt,
     build_tap_script_and_script_address_helper, get_node_addresses, merge_node_signatures,
     node_sign_commit_and_reveal, portal_signs_commit_and_reveal,
 };
-use indexer::{bitcoin_client::Client, logging};
 use testlib::RegTester;
 use tracing::info;
 
@@ -439,8 +437,6 @@ pub async fn test_reordering_commit_outputs_rejected(reg_tester: &mut RegTester)
     // Reordering invalidates signatures and also changes the commit txid, breaking reveal mapping.
     // We mutate the signed commit TX and assert mempool rejection.
     logging::setup();
-    let config = TestConfig::try_parse()?;
-    let client = Client::new_from_config(&config)?;
     let dust_limit_sat: u64 = 330;
     let min_sat_per_vb: u64 = 3;
 
@@ -550,7 +546,9 @@ pub async fn test_reordering_commit_outputs_rejected(reg_tester: &mut RegTester)
 
     let commit_hex = hex::encode(serialize_tx(&commit_tx));
     let reveal_hex = hex::encode(serialize_tx(&reveal_tx));
-    let res = client
+    let res = reg_tester
+        .bitcoin_client()
+        .await
         .test_mempool_accept(&[commit_hex, reveal_hex])
         .await?;
     assert!(

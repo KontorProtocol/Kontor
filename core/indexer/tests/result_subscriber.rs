@@ -1,7 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
 use indexer::{
-    config::Config,
     database::types::OpResultId,
     reactor::results::{ResultEvent, ResultEventMetadata, ResultSubscriber},
     test_utils::new_test_db,
@@ -21,7 +19,7 @@ async fn test_subscriber_subscribe_and_receive_event() -> Result<()> {
         .op_index(2)
         .build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Start the run task
@@ -54,7 +52,7 @@ async fn test_subscriber_multiple_subscribers() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let id = OpResultId::builder().txid("tx1".to_string()).build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Start the run task
@@ -88,7 +86,7 @@ async fn test_subscriber_unsubscribe() -> Result<()> {
     let mut subscriber = ResultSubscriber::default();
     let id = OpResultId::builder().txid("tx1".to_string()).build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Subscribe
@@ -136,7 +134,7 @@ async fn test_subscriber_cancellation() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let id = OpResultId::builder().txid("tx1".to_string()).build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Start the run task

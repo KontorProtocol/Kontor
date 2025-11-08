@@ -1,7 +1,7 @@
+use std::path::Path;
+
 use anyhow::Result;
 use libsql::Connection;
-
-use crate::config::Config;
 
 use super::connection::new_connection;
 
@@ -11,8 +11,8 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub async fn new(config: &Config, filename: &str) -> Result<Self> {
-        let conn = new_connection(config, filename).await?;
+    pub async fn new(data_dir: &Path, filename: &str) -> Result<Self> {
+        let conn = new_connection(data_dir, filename).await?;
         Ok(Self { conn })
     }
 

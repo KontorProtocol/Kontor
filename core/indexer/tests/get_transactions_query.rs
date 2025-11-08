@@ -1,8 +1,6 @@
 use anyhow::Result;
 use base64::Engine;
-use clap::Parser;
 use indexer::{
-    config::Config,
     database::{
         queries::{get_transactions_paginated, insert_block, insert_transaction},
         types::{BlockRow, TransactionCursor, TransactionRow},
@@ -67,8 +65,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
 
 #[tokio::test]
 async fn test_basic_pagination_no_filters() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -106,8 +103,7 @@ async fn test_basic_pagination_no_filters() -> Result<()> {
 
 #[tokio::test]
 async fn test_offset_pagination() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -151,8 +147,7 @@ async fn test_offset_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 
@@ -221,8 +216,7 @@ async fn test_cursor_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_height_filter() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -250,8 +244,7 @@ async fn test_height_filter() -> Result<()> {
 
 #[tokio::test]
 async fn test_height_filter_with_pagination() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -283,8 +276,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_and_offset_conflict() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -314,8 +306,7 @@ async fn test_cursor_and_offset_conflict() -> Result<()> {
 
 #[tokio::test]
 async fn test_empty_result_set() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -351,8 +342,7 @@ async fn test_cursor_encoding_decoding() -> Result<()> {
 
 #[tokio::test]
 async fn test_invalid_cursor() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 
@@ -376,8 +366,7 @@ async fn test_invalid_cursor() -> Result<()> {
 
 #[tokio::test]
 async fn test_large_limit() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -395,8 +384,7 @@ async fn test_large_limit() -> Result<()> {
 
 #[tokio::test]
 async fn test_zero_limit() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
@@ -413,8 +401,7 @@ async fn test_zero_limit() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_boundary_conditions() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 

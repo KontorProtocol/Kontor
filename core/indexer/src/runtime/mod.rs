@@ -20,7 +20,7 @@ use stdlib::impls;
 pub use storage::Storage;
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
-pub use wit::Contract;
+pub use wit::Root;
 
 use std::{io::Cursor, sync::Arc};
 
@@ -220,31 +220,10 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        let result = token::api::issuance(self, &Signer::Core, signer).await;
-        let metadata = ResultEventMetadata::builder()
-            .contract_address(token::address())
-            .func_name("issuance".to_string())
-            .op_result_id(
-                OpResultId::builder()
-                    .txid(self.txid.to_string())
-                    .input_index(self.storage.input_index)
-                    .op_index(self.storage.op_index)
-                    .build(),
-            )
-            .build();
-        self.events
-            .push(match &result {
-                Ok(_) => ResultEvent::Ok {
-                    metadata,
-                    value: "".to_string(),
-                },
-                Err(e) => ResultEvent::Err {
-                    metadata,
-                    message: format!("{:?}", e),
-                },
-            })
-            .await;
-        result
+        token::api::issuance(self, &Signer::Core, signer)
+            .await
+            .expect("Failed to issue tokens");
+        Ok(())
     }
 
     pub async fn execute(
@@ -325,7 +304,7 @@ impl Runtime {
 
     pub fn make_linker(&self) -> Result<Linker<Runtime>> {
         let mut linker = Linker::new(&self.engine);
-        Contract::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
+        Root::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
         Ok(linker)
     }
 
@@ -404,6 +383,7 @@ impl Runtime {
                 (t, Some(Signer::Core))
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
+                    is_proc = true;
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(

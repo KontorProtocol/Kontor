@@ -2,9 +2,7 @@ use std::panic;
 
 use crate::api::Env;
 use anyhow::Result;
-use bitcoin::Network;
 use clap::Parser;
-use indexer::config::RegtestConfig;
 use indexer::database::queries::delete_unprocessed_blocks;
 use indexer::reactor::results::ResultSubscriber;
 use indexer::runtime::Runtime;
@@ -18,13 +16,7 @@ use tracing::{error, info};
 async fn main() -> Result<()> {
     logging::setup();
     info!("Kontor");
-    let mut config = Config::try_parse()?;
-    if config.network == Network::Regtest && config.use_local_regtest {
-        let regtest_config = RegtestConfig::default();
-        config.bitcoin_rpc_url = regtest_config.bitcoin_rpc_url;
-        config.bitcoin_rpc_user = regtest_config.bitcoin_rpc_user;
-        config.bitcoin_rpc_password = regtest_config.bitcoin_rpc_password;
-    }
+    let config = Config::try_parse()?;
     info!("{:#?}", config);
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
@@ -46,8 +38,8 @@ async fn main() -> Result<()> {
     let mut handles = vec![];
     handles.push(stopper::run(cancel_token.clone())?);
     let filename = "state.db";
-    let reader = database::Reader::new(config.clone(), filename).await?;
-    let writer = database::Writer::new(&config, filename).await?;
+    let reader = database::Reader::new(&config.data_dir, filename).await?;
+    let writer = database::Writer::new(&config.data_dir, filename).await?;
     delete_unprocessed_blocks(&writer.connection()).await?;
 
     let (event_tx, event_rx) = mpsc::channel(10);

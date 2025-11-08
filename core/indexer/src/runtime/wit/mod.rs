@@ -14,7 +14,6 @@ pub use resources::{
 };
 
 wasmtime::component::bindgen!({
-    world: "contract",
     path: "src/runtime/wit",
     with: {
         "kontor:built-in/context/signer": Signer,

@@ -17,7 +17,6 @@ use indexer::{
         events::{BlockId, Event},
     },
     block::Block,
-    config::Config,
     database::{self, queries},
     reactor,
     test_utils::{await_block_at_height, gen_random_block, new_test_db},
@@ -86,7 +85,7 @@ async fn new_db_wrapper() -> Database {
 
 async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
     // unable to parse Config object with clap due to conflict with proptest flags.
-    let (reader, writer, _temp_dir) = new_test_db(&Config::new_na()).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
     Ok((reader, writer, _temp_dir))
 }
 

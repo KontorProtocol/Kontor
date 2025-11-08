@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use indexer::{
     api::{self, Env, ws::Response, ws_client::WebSocketClient},
     bitcoin_client::Client,
@@ -20,9 +19,8 @@ use tokio_util::sync::CancellationToken;
 async fn test_websocket_server() -> Result<()> {
     logging::setup();
     let cancel_token = CancellationToken::new();
-    let config = Config::try_parse()?;
-    let (reader, _writer, _temp_dir) = new_test_db(&config).await?;
-    let bitcoin = Client::new_from_config(&config)?;
+    let (reader, _writer, _temp_dir) = new_test_db().await?;
+    let bitcoin = Client::new("".to_string(), "".to_string(), "".to_string())?;
     let (event_tx, event_rx) = mpsc::channel(10); // Channel to send test events
     let result_subscriber = ResultSubscriber::default();
     let mut handles = vec![];
@@ -31,17 +29,17 @@ async fn test_websocket_server() -> Result<()> {
 
     handles.push(
         api::run(Env {
-            config: config.clone(),
+            config: Config::new_na(),
             cancel_token: cancel_token.clone(),
             reader: reader.clone(),
             result_subscriber: result_subscriber.clone(), // Clone for shared use
-            bitcoin: bitcoin.clone(),
+            bitcoin,
             runtime: Runtime::new_read_only(&reader).await?,
         })
         .await?,
     );
 
-    let mut ws_client = WebSocketClient::new().await?;
+    let mut ws_client = WebSocketClient::new(9333).await?;
 
     ws_client.ping().await?;
 

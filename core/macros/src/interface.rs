@@ -9,14 +9,12 @@ use crate::import;
 pub struct Config {
     name: String,
     path: String,
-    world: Option<String>,
 }
 
 pub fn generate(config: Config, test: bool) -> TokenStream {
     let name = config.name;
     let module_name = Ident::from_string(&name.clone().to_snake_case()).unwrap();
     let path = config.path;
-    let world_name = config.world.unwrap_or("contract".to_string());
 
-    import::import(path, module_name, world_name, None, test, false)
+    import::import(path, module_name, "root".to_string(), None, test, false)
 }

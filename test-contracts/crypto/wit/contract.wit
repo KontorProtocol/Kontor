@@ -1,6 +1,6 @@
-package kontor:contract;
+package root:component;
 
-world contract {
+world root {
   include kontor:built-in/built-in;
   use kontor:built-in/context.{view-context, proc-context};
 

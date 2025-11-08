@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -12,7 +11,6 @@ use indexer::{
         events::{BlockId, ZmqEvent},
         reconciler,
     },
-    config::Config,
     database::queries,
     reactor,
     test_utils::{
@@ -24,7 +22,7 @@ use indexer::{
 #[tokio::test]
 async fn test_follower_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let blocks = new_random_blockchain(5);
     let conn = &writer.connection();
@@ -120,7 +118,7 @@ async fn test_follower_reactor_fetching() -> Result<()> {
 #[tokio::test]
 async fn test_follower_reactor_rollback_during_start() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let mut blocks = new_random_blockchain(3);
     let conn = &writer.connection();
@@ -241,7 +239,7 @@ async fn test_follower_reactor_rollback_during_start() -> Result<()> {
 #[tokio::test]
 async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let mut blocks = new_random_blockchain(5);
 
@@ -475,7 +473,7 @@ async fn test_follower_handle_control_signal() -> Result<()> {
 // down to it and start fetching new blocks from that height.
 async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let mut blocks = new_random_blockchain(2);
 
@@ -600,7 +598,7 @@ async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<
 // removed.
 async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let mut blocks = new_random_blockchain(2);
 
