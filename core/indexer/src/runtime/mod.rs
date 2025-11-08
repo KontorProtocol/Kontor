@@ -220,31 +220,10 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        let result = token::api::issuance(self, &Signer::Core, signer).await;
-        let metadata = ResultEventMetadata::builder()
-            .contract_address(token::address())
-            .func_name("issuance".to_string())
-            .op_result_id(
-                OpResultId::builder()
-                    .txid(self.txid.to_string())
-                    .input_index(self.storage.input_index)
-                    .op_index(self.storage.op_index)
-                    .build(),
-            )
-            .build();
-        self.events
-            .push(match &result {
-                Ok(_) => ResultEvent::Ok {
-                    metadata,
-                    value: "".to_string(),
-                },
-                Err(e) => ResultEvent::Err {
-                    metadata,
-                    message: format!("{:?}", e),
-                },
-            })
-            .await;
-        result
+        token::api::issuance(self, &Signer::Core, signer)
+            .await
+            .expect("Failed to issue tokens");
+        Ok(())
     }
 
     pub async fn execute(
@@ -404,6 +383,7 @@ impl Runtime {
                 (t, Some(Signer::Core))
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
+                    is_proc = true;
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
