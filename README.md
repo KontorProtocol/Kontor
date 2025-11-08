@@ -1,32 +1,58 @@
 # Kontor
 
-The Kontor project is split into two workspaces: `core` and `contracts`.
+## Development
 
-The `core` workspace contains the application and its tests, while `contracts` contains the native contracts. This separation exists because contracts compile to `wasm32-unknown-unknown`. In `cargo`, compile targets can only be set at the workspace level, not at the crate level ([yet](https://github.com/rust-lang/cargo/issues/9406)).
+### Install build dependencies:
 
-## Getting Started
-
-Install build dependencies:
+MacOS:
 ```bash
-brew install binaryen
-brew install brotli
+brew install cmake pkgconf libevent boost zmq brotli
 ```
+
+Ubuntu:
+```bash
+sudo apt install cmake pkgconf libevent-dev libboost-all-dev libzmq3-dev brotli
+```
+
+If rust tooling is not installed follow steps from [rust-lang.org](https://rust-lang.org/tools/install/)
 
 Add wasm compile target:
 ```bash
 rustup target add wasm32-unknown-unknown
 ```
 
-Install cargo expand
-```
-cargo install cargo-expand
+Install cargo components
+```bash
+cargo install cargo-expand wasm-opt
 ```
 
-Set `core` as the working directory:
+### Compile Bitcoin
+
+A local copy of `bitcoind` is required to run all tests successfully.
+
+Install dependencies for compiling Bitcoin:
+
+Clone Bitcoin:
 ```bash
-cd core
+git clone https://github.com/bitcoin/bitcoin.git
+cd bitcoin
+git checkout v30.0
 ```
-Continue with `core` [README.md](core/README.md).
+
+Compile Bitcoin:
+```bash
+cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
+cmake --build build
+```
+Compiled binaries including `bitcoind` are located in `build/bin`. **This directory must be on your `$PATH` when running tests.**
+
+### Run Tests
+
+```bash
+git clone https://github.com/UnspendableLabs/Kontor.git
+cd Kontor/core
+cargo test
+```
 
 ## Docker
 
@@ -58,5 +84,4 @@ docker run -d -p 9333:9333 -v kontor-data:/data kontor-indexer \
   --api-port 9333
 ```
 
-Available networks: `bitcoin`, `testnet`, `signet`, `regtest`
-
+Available networks: `bitcoin`, `testnet`, `testnet4`, `signet`, `regtest`
