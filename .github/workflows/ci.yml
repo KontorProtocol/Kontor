@@ -10,13 +10,6 @@ env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: true
-  BITCOIN_RPC_URL: ${{ vars.BITCOIN_RPC_URL }}
-  BITCOIN_RPC_USER: ${{ vars.BITCOIN_RPC_USER }}
-  BITCOIN_RPC_PASSWORD: ${{ vars.BITCOIN_RPC_PASSWORD }}
-  TESTNET_BITCOIN_RPC_URL: ${{ vars.TESTNET_BITCOIN_RPC_URL }}
-  TESTNET_BITCOIN_RPC_USER: ${{ vars.TESTNET_BITCOIN_RPC_USER }}
-  TESTNET_BITCOIN_RPC_PASSWORD: ${{ vars.TESTNET_BITCOIN_RPC_PASSWORD }}
-  DATA_DIR: ${{ github.workspace }}/core/test-data
 
 jobs:
   quality-checks:
@@ -133,30 +126,6 @@ jobs:
         run: cargo install cargo-expand
       - name: Install wasm-opt
         run: cargo install wasm-opt
-      - name: Install mkcert
-        run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y libnss3-tools
-            curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
-            chmod +x mkcert-v*-linux-amd64
-            sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            choco install mkcert -y
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            brew install mkcert
-          fi
-        shell: bash
-      - name: Prepare test environment
-        run: |
-          mkdir -p "$DATA_DIR"
-          mkcert -key-file "$DATA_DIR/key.pem" -cert-file "$DATA_DIR/cert.pem" localhost 127.0.0.1 ::1
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            echo "ROOT_CA_FILE=$(mkcert -CAROOT)/rootCA.pem" >> $GITHUB_ENV
-          elif [ "$RUNNER_OS" != "Windows" ]; then
-            mkcert -install
-          fi
-        working-directory: ./core
-        shell: bash
       - name: Run core integration tests
         working-directory: ./core
         run: cargo test --workspace

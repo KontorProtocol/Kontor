@@ -1,11 +1,8 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use clap::Parser;
 use futures_util::TryStreamExt;
 use indexer::{
-    bitcoin_client::Client,
-    config::Config,
     database::{
         queries::{
             contract_has_state, delete_contract_state, delete_matching_paths,
@@ -22,7 +19,6 @@ use indexer::{
             OpResultId, TransactionRow,
         },
     },
-    logging,
     runtime::ContractAddress,
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
@@ -30,13 +26,11 @@ use libsql::params;
 
 #[tokio::test]
 async fn test_database() -> Result<()> {
-    let config = Config::try_parse()?;
-    let client = Client::new_from_config(&config)?;
-    let height = 800000;
-    let hash = client.get_block_hash(height as u64).await?;
+    let height: i64 = 800000;
+    let hash = new_mock_block_hash(height as u32);
     let block = BlockRow { height, hash };
 
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     insert_processed_block(&writer.connection(), block).await?;
     let block_at_height = select_block_at_height(&*reader.connection().await?, height)
@@ -55,12 +49,10 @@ async fn test_database() -> Result<()> {
 
 #[tokio::test]
 async fn test_transaction() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let tx = writer.connection().transaction().await?;
     let height = 800000;
-    let client = Client::new_from_config(&config)?;
-    let hash = client.get_block_hash(height as u64).await?;
+    let hash = new_mock_block_hash(height as u32);
     let block = BlockRow { height, hash };
     insert_processed_block(&tx, block).await?;
     assert!(select_block_latest(&tx).await?.is_some());
@@ -70,9 +62,7 @@ async fn test_transaction() -> Result<()> {
 
 #[tokio::test]
 async fn test_crypto_extension() -> Result<()> {
-    logging::setup();
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     let mut rows = conn
         .query("SELECT hex(crypto_sha256('abc'))", params![])
@@ -88,8 +78,7 @@ async fn test_crypto_extension() -> Result<()> {
 
 #[tokio::test]
 async fn test_contract_state_operations() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     // First insert a block to satisfy foreign key constraints
@@ -224,8 +213,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
 #[tokio::test]
 async fn test_transaction_operations() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     // Insert a block first
@@ -313,8 +301,7 @@ async fn test_transaction_operations() -> Result<()> {
 
 #[tokio::test]
 async fn test_select_block_by_height_or_hash() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     // Insert test blocks
@@ -414,8 +401,7 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
 
 #[tokio::test]
 async fn test_contracts() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     insert_block(
         &conn,
@@ -463,8 +449,7 @@ async fn test_contracts() -> Result<()> {
 
 #[tokio::test]
 async fn test_map_keys() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     let height = 800000;
@@ -540,8 +525,7 @@ async fn test_map_keys() -> Result<()> {
 
 #[tokio::test]
 async fn test_contract_result_operations() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     // Insert a block first

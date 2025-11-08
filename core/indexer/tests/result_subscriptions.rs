@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use clap::Parser;
 use indexer::{
-    config::Config,
     database::{
         queries::{insert_block, insert_contract},
         types::{BlockRow, ContractRow, OpResultId},
@@ -22,7 +20,7 @@ async fn test_subscribe_and_receive_event() -> Result<()> {
         .op_index(2)
         .build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Subscribe
@@ -58,7 +56,7 @@ async fn test_multiple_subscribers() -> Result<()> {
     let mut subscriptions = ResultSubscriptions::default();
     let id = OpResultId::builder().txid("tx1".to_string()).build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Subscribe multiple times
@@ -98,7 +96,7 @@ async fn test_unsubscribe() -> Result<()> {
     let mut subscriptions = ResultSubscriptions::default();
     let id = OpResultId::builder().txid("tx1".to_string()).build();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     // Subscribe
@@ -136,7 +134,7 @@ async fn test_dispatch_to_nonexistent_id() -> Result<()> {
 async fn test_subscriber_recurring() -> Result<()> {
     let mut subscriptions = ResultSubscriptions::default();
 
-    let (reader, _writer, _dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, _writer, _dir) = new_test_db().await?;
     let conn = reader.connection().await?;
 
     insert_block(

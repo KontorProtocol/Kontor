@@ -4,7 +4,6 @@ use bon::Builder;
 use glob::Paths;
 pub use indexer::testlib_exports::*;
 use indexer::{
-    config::Config,
     database::{
         queries::{
             contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
@@ -155,7 +154,7 @@ impl RuntimeLocal {
     }
 
     pub async fn new() -> Result<Self> {
-        let (_, writer, _db_dir) = new_test_db(&Config::new_na()).await?;
+        let (_, writer, _db_dir) = new_test_db().await?;
         let conn = writer.connection();
         insert_processed_block(
             &conn,

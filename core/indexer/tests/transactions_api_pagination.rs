@@ -1,7 +1,6 @@
 use anyhow::Result;
 use axum::{Router, routing::get};
 use axum_test::{TestResponse, TestServer};
-use clap::Parser;
 use indexer::{
     api::{
         Env,
@@ -28,9 +27,7 @@ struct TransactionListResponseWrapper {
 }
 
 async fn create_test_app() -> Result<Router> {
-    let config = Config::try_parse()?;
-    let (reader, writer, _temp_dir) = new_test_db(&config).await?;
-    let bitcoin_client = Client::new_from_config(&config)?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let conn = writer.connection();
 
@@ -111,8 +108,8 @@ async fn create_test_app() -> Result<Router> {
     }
 
     let env = Env {
-        bitcoin: bitcoin_client,
-        config,
+        bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
+        config: Config::new_na(),
         cancel_token: CancellationToken::new(),
         result_subscriber: ResultSubscriber::default(),
         runtime: Runtime::new_read_only(&reader).await?,

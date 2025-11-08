@@ -1,7 +1,7 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use deadpool::managed::{Object, Pool};
-
-use crate::config::Config;
 
 use super::pool::{Manager, new_pool};
 
@@ -11,8 +11,8 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub async fn new(config: Config, filename: &str) -> Result<Self> {
-        let pool = new_pool(config, filename).await?;
+    pub async fn new(data_dir: &Path, filename: &str) -> Result<Self> {
+        let pool = new_pool(data_dir, filename).await?;
         Ok(Self { pool })
     }
 

@@ -1,14 +1,12 @@
-use libsql::{Builder, Connection, Error};
+use std::path::Path;
 
-use crate::config::Config;
+use libsql::{Builder, Connection, Error};
 
 use super::init::initialize_database;
 
-pub async fn new_connection(config: &Config, filename: &str) -> Result<Connection, Error> {
-    let db = Builder::new_local(config.data_dir.join(filename))
-        .build()
-        .await?;
+pub async fn new_connection(data_dir: &Path, filename: &str) -> Result<Connection, Error> {
+    let db = Builder::new_local(data_dir.join(filename)).build().await?;
     let conn = db.connect()?;
-    initialize_database(config, &conn).await?;
+    initialize_database(data_dir, &conn).await?;
     Ok(conn)
 }

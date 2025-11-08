@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, hashes::Hash};
@@ -10,7 +9,6 @@ use indexer::{
         events::{BlockId, Event},
     },
     block::Block,
-    config::Config,
     database::queries,
     reactor,
     test_utils::{await_block_at_height, new_numbered_blockchain, new_test_db},
@@ -20,7 +18,7 @@ use indexer::{
 async fn test_reactor_rollback_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let handle = reactor::run(
         91,
@@ -145,7 +143,7 @@ async fn test_reactor_rollback_event() -> Result<()> {
 async fn test_reactor_unexpected_block() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let handle = reactor::run(
         81,
@@ -187,7 +185,7 @@ async fn test_reactor_unexpected_block() -> Result<()> {
 async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let handle = reactor::run(
         91,
@@ -289,7 +287,7 @@ async fn test_reactor_rollback_due_to_hash_mismatch() -> Result<()> {
 async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let handle = reactor::run(
         91,
@@ -404,7 +402,7 @@ async fn test_reactor_rollback_due_to_reverting_height() -> Result<()> {
 async fn test_reactor_rollback_hash_event() -> Result<()> {
     let cancel_token = CancellationToken::new();
     let (ctrl, mut ctrl_rx) = CtrlChannel::create();
-    let (reader, writer, _temp_dir) = new_test_db(&Config::try_parse()?).await?;
+    let (reader, writer, _temp_dir) = new_test_db().await?;
 
     let blocks = new_numbered_blockchain(5);
     let conn = &writer.connection();

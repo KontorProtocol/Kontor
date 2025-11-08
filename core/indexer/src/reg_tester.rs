@@ -13,7 +13,7 @@ use crate::{
         client::RegtestRpc,
         types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
-    config::{Config, RegtestConfig},
+    config::RegtestConfig,
     database::types::OpResultId,
     reactor::{
         results::{ResultEvent, ResultEventMetadata},
@@ -33,7 +33,6 @@ use bitcoin::{
     taproot::TaprootBuilder,
     transaction::Version,
 };
-use clap::Parser;
 use tempfile::TempDir;
 use tokio::{
     fs,
@@ -80,13 +79,7 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 }
 
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
-    let config = Config::try_parse()?;
-    let cert_path = config.data_dir.join("cert.pem");
-    let key_path = config.data_dir.join("key.pem");
-    if cert_path.exists() && key_path.exists() {
-        tokio::fs::copy(cert_path, data_dir.join("cert.pem")).await?;
-        tokio::fs::copy(key_path, data_dir.join("key.pem")).await?;
-    }
+    let config = RegtestConfig::default();
     let process = Command::new("../target/debug/kontor")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
@@ -94,9 +87,14 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
         .arg("regtest")
         .arg("--starting-block-height")
         .arg("102")
-        .arg("--use-local-regtest")
+        .arg("--bitcoin-rpc-url")
+        .arg(config.bitcoin_rpc_url)
+        .arg("--bitcoin-rpc-user")
+        .arg(config.bitcoin_rpc_user)
+        .arg("--bitcoin-rpc-password")
+        .arg(config.bitcoin_rpc_password)
         .spawn()?;
-    let client = KontorClient::new_from_config(&config)?;
+    let client = KontorClient::new("http://localhost:9333/api")?;
     retry_simple(async || {
         let i = client.index().await?;
         if !i.available {
@@ -179,7 +177,7 @@ impl RegTesterInner {
         bitcoin_client: BitcoinClient,
         kontor_client: KontorClient,
     ) -> Result<Self> {
-        let ws_client = WebSocketClient::new().await?;
+        let ws_client = WebSocketClient::new(9333).await?;
         Ok(Self {
             identity,
             ws_client,

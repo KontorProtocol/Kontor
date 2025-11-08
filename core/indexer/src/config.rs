@@ -59,11 +59,7 @@ pub struct Config {
     )]
     pub api_port: u16,
 
-    #[clap(
-        long,
-        env = "DATA_DIR",
-        help = "Directory path for Kontor data, certs, database, etc"
-    )]
+    #[clap(long, env = "DATA_DIR", help = "Directory path for Kontor data")]
     pub data_dir: PathBuf,
 
     #[clap(
@@ -101,42 +97,12 @@ impl Config {
             bitcoin_rpc_user: na.clone(),
             bitcoin_rpc_password: na.clone(),
             zmq_address: na,
-            api_port: 0,
+            api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
             use_local_regtest: false,
         }
     }
-
-    pub fn should_use_tls(&self) -> bool {
-        let cert_path = self.data_dir.join("cert.pem");
-        let key_path = self.data_dir.join("key.pem");
-        cert_path.exists() && key_path.exists()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
-pub struct TestConfig {
-    #[clap(
-        long,
-        env = "TESTNET_BITCOIN_RPC_URL",
-        help = "URL of the Bitcoin RPC server (e.g., http://localhost:8332)"
-    )]
-    pub bitcoin_rpc_url: String,
-
-    #[clap(
-        long,
-        env = "TESTNET_BITCOIN_RPC_USER",
-        help = "User for Bitcoin RPC authentication"
-    )]
-    pub bitcoin_rpc_user: String,
-
-    #[clap(
-        long,
-        env = "TESTNET_BITCOIN_RPC_PASSWORD",
-        help = "Password for Bitcoin RPC authentication"
-    )]
-    pub bitcoin_rpc_password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

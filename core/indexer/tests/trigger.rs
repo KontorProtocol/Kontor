@@ -1,8 +1,6 @@
 use anyhow::Result;
 use bitcoin::hashes::Hash;
-use clap::Parser;
 use indexer::{
-    config::Config,
     database::{
         queries::{get_checkpoint_by_id, insert_block, insert_contract_state},
         types::{BlockRow, ContractStateRow},
@@ -14,8 +12,7 @@ use sha2::{Digest, Sha256};
 
 #[tokio::test]
 async fn test_checkpoint_trigger() -> Result<()> {
-    let config = Config::try_parse()?;
-    let (_reader, writer, _temp_dir) = new_test_db(&config).await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     for height in 1..=200 {
