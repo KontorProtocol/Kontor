@@ -61,6 +61,13 @@ impl ProxyStorageWriteModel {
     pub fn set_contract_address(&self, value: ContractAddress) {
         self.ctx.__set(self.base_path.push("contract_address"), value);
     }
+    pub fn update_contract_address(
+        &self,
+        f: impl Fn(ContractAddress) -> ContractAddress,
+    ) {
+        let path = self.base_path.push("contract_address");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
     pub fn load(&self) -> ProxyStorage {
         ProxyStorage {
             contract_address: self.contract_address(),

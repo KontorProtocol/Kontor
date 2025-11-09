@@ -91,7 +91,7 @@ impl Guest for SharedAccount {
         if !authorized(&signer, &account) {
             return Err(unauthorized_error());
         }
-        account.set_balance(account.balance() + n);
+        account.update_balance(|b| b + n);
         token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)
     }
 

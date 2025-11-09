@@ -46,6 +46,10 @@ impl FibValueWriteModel {
     pub fn set_value(&self, value: u64) {
         self.ctx.__set(self.base_path.push("value"), value);
     }
+    pub fn update_value(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push("value");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
     pub fn load(&self) -> FibValue {
         FibValue { value: self.value() }
     }

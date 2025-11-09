@@ -14,7 +14,7 @@ fn mint(model: &TokenStorageWriteModel, to: String, n: Decimal) {
     let ledger = model.ledger();
     let balance = ledger.get(&to).unwrap_or_default();
     ledger.set(to, balance + n);
-    model.set_total_supply(model.total_supply() + n);
+    model.update_total_supply(|t| t + n);
 }
 
 impl Guest for Token {
@@ -32,8 +32,7 @@ impl Guest for Token {
 
     fn burn(ctx: &ProcContext, n: Decimal) -> Result<(), Error> {
         Self::transfer(ctx, BURNER.to_string(), n)?;
-        let model = ctx.model();
-        model.set_total_supply(model.total_supply() - n);
+        ctx.model().update_total_supply(|t| t - n);
         Ok(())
     }
 

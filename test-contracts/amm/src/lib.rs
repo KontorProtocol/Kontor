@@ -222,13 +222,13 @@ impl Guest for Amm {
         let pool = model.pools().get(pair_id(&pair)).ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
         let addr = model.custodian();
-        pool.set_balance_a(pool.balance_a() + res.deposit_a);
-        pool.set_balance_b(pool.balance_b() + res.deposit_b);
+        pool.update_balance_a(|b| b + res.deposit_a);
+        pool.update_balance_b(|b| b + res.deposit_b);
 
         let user = ctx.signer().to_string();
         let bal = ledger.get(&user).unwrap_or_default();
         ledger.set(user, bal + res.lp_shares);
-        pool.set_lp_total_supply(pool.lp_total_supply() + res.lp_shares);
+        pool.update_lp_total_supply(|t| t + res.lp_shares);
 
         token_dyn::transfer(&pair.a, ctx.signer(), &addr, res.deposit_a)?;
         token_dyn::transfer(&pair.b, ctx.signer(), &addr, res.deposit_b)?;
@@ -281,8 +281,8 @@ impl Guest for Amm {
 
         ledger.set(user.clone(), bal - shares);
         pool.set_lp_total_supply(total - shares);
-        pool.set_balance_a(pool.balance_a() - res.amount_a);
-        pool.set_balance_b(pool.balance_b() - res.amount_b);
+        pool.update_balance_a(|b| b - res.amount_a);
+        pool.update_balance_b(|b| b - res.amount_b);
 
         token_dyn::transfer(&pair.a, ctx.contract_signer(), &user, res.amount_a)?;
         token_dyn::transfer(&pair.b, ctx.contract_signer(), &user, res.amount_b)?;
@@ -334,11 +334,11 @@ impl Guest for Amm {
         let model = ctx.model();
         let pool = model.pools().get(pair_id(&pair)).ok_or(pool_not_found())?;
         if token_in == pair.a {
-            pool.set_balance_a(pool.balance_a() + amount_in);
-            pool.set_balance_b(pool.balance_b() - amount_out);
+            pool.update_balance_a(|b| b + amount_in);
+            pool.update_balance_b(|b| b - amount_out);
         } else {
-            pool.set_balance_a(pool.balance_a() - amount_out);
-            pool.set_balance_b(pool.balance_b() + amount_in);
+            pool.update_balance_a(|b| b - amount_out);
+            pool.update_balance_b(|b| b + amount_in);
         }
 
         token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;

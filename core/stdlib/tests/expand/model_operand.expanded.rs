@@ -46,6 +46,10 @@ impl OperandWriteModel {
     pub fn set_y(&self, value: u64) {
         self.ctx.__set(self.base_path.push("y"), value);
     }
+    pub fn update_y(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push("y");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
     pub fn load(&self) -> Operand {
         Operand { y: self.y() }
     }

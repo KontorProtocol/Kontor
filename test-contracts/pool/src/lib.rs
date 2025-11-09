@@ -199,7 +199,7 @@ impl Guest for Pool {
         let user = ctx.signer().to_string();
         let bal = ledger.get(&user).unwrap_or_default();
         ledger.set(user, bal + res.lp_shares);
-        model.set_lp_total_supply(model.lp_total_supply() + res.lp_shares);
+        model.update_lp_total_supply(|t| t + res.lp_shares);
 
         token_dyn::transfer(&model.token_a(), ctx.signer(), &custodian, res.deposit_a)?;
         token_dyn::transfer(&model.token_b(), ctx.signer(), &custodian, res.deposit_b)?;

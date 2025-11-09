@@ -67,11 +67,23 @@ impl ContractAddressWriteModel {
     pub fn set_name(&self, value: String) {
         self.ctx.__set(self.base_path.push("name"), value);
     }
+    pub fn update_name(&self, f: impl Fn(String) -> String) {
+        let path = self.base_path.push("name");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
     pub fn set_height(&self, value: i64) {
         self.ctx.__set(self.base_path.push("height"), value);
     }
+    pub fn update_height(&self, f: impl Fn(i64) -> i64) {
+        let path = self.base_path.push("height");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
     pub fn set_tx_index(&self, value: i64) {
         self.ctx.__set(self.base_path.push("tx_index"), value);
+    }
+    pub fn update_tx_index(&self, f: impl Fn(i64) -> i64) {
+        let path = self.base_path.push("tx_index");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
     }
     pub fn load(&self) -> ContractAddress {
         ContractAddress {

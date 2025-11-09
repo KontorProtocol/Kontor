@@ -141,15 +141,25 @@ pub fn generate_struct(
                         let field_ty = &field.ty;
                         let set_field_name =
                             Ident::new(&format!("set_{}", field_name), field_name.span());
-
+                        let setter = quote! {
+                            pub fn #set_field_name(&self, value: #field_ty) {
+                                self.ctx.__set(self.base_path.push(#field_name_str), value);
+                            }
+                        };
                         if utils::is_map_type(field_ty) {
                             Ok(quote! {})
-                        } else {
+                        } else if utils::is_primitive_type(field_ty) {
+                            let update_field_name = Ident::new(&format!("update_{}", field_name), field_name.span());
                             Ok(quote! {
-                                pub fn #set_field_name(&self, value: #field_ty) {
-                                    self.ctx.__set(self.base_path.push(#field_name_str), value);
+                                #setter
+
+                                pub fn #update_field_name(&self, f: impl Fn(#field_ty) -> #field_ty) {
+                                    let path = self.base_path.push(#field_name_str);
+                                    self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
                                 }
                             })
+                        } else {
+                            Ok(setter)
                         }
                     })
                     .collect::<Result<Vec<_>>>()?
