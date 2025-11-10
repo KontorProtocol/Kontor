@@ -188,7 +188,8 @@ impl Runtime {
         self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
-        self.publish(&Signer::Core, "token", TOKEN).await?;
+        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
+            .await?;
         Ok(())
     }
 
@@ -220,7 +221,7 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        token::api::issuance(self, &Signer::Core, signer)
+        token::api::issuance(self, &Signer::Core(Box::new(signer.clone())), 10.into())
             .await
             .expect("Failed to issue tokens");
         Ok(())
@@ -244,7 +245,7 @@ impl Runtime {
             is_proc,
             starting_fuel,
         ) = self
-            .prepare_call(contract_address, signer, expr, self.fuel_limit())
+            .prepare_call(contract_address, signer, expr, true, self.fuel_limit())
             .await?;
         OptionFuture::from(
             self.gauge
@@ -252,12 +253,6 @@ impl Runtime {
                 .map(|g| g.set_starting_fuel(starting_fuel)),
         )
         .await;
-        // How we will escrow and consume gas
-        // let x = Box::pin({
-        //     let mut runtime = self.clone();
-        //     async move { token::api::balance(&mut runtime, "").await }
-        // })
-        // .await;
         let (result, results, mut store) = tokio::spawn(async move {
             (
                 func.call_async(&mut store, &params, &mut results).await,
@@ -275,8 +270,10 @@ impl Runtime {
         )
         .await;
         if is_proc {
+            let signer = signer.expect("Signer should be available in proc");
             result = self
                 .handle_procedure(
+                    signer,
                     contract_id,
                     contract_address,
                     &func_name,
@@ -319,6 +316,7 @@ impl Runtime {
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
         expr: &str,
+        is_top_level: bool,
         fuel: Option<u64>,
     ) -> Result<(
         Store<Runtime>,
@@ -376,11 +374,10 @@ impl Runtime {
         }
 
         let mut is_proc = false;
-
         {
             let mut table = self.table.lock().await;
             match (resource_type, signer) {
-                (t, Some(Signer::Core))
+                (t, Some(Signer::Core(signer)))
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
                     is_proc = true;
@@ -389,7 +386,7 @@ impl Runtime {
                         wasmtime::component::Val::Resource(
                             table
                                 .push(CoreContext {
-                                    signer: Signer::Core,
+                                    signer: *signer.clone(),
                                     contract_id,
                                 })?
                                 .try_into_resource_any(&mut store)?,
@@ -455,6 +452,37 @@ impl Runtime {
             .iter()
             .map(default_val_for_type)
             .collect::<Vec<_>>();
+
+        if is_proc
+            && is_top_level
+            && let Some(signer) = signer
+            && !signer.is_core()
+        {
+            Box::pin({
+                let mut runtime = self.clone();
+                async move {
+                    token::api::hold(
+                        &mut runtime,
+                        &Signer::Core(Box::new(signer.clone())),
+                        Decimal::from(fuel_limit)
+                            .div(Decimal::from(self.gas_to_fuel_multiplier))
+                            .expect("Failed to convert fuel limit into gas limit")
+                            .mul(self.gas_to_token_multiplier)
+                            .expect("Failed to convert gas limit into token limit"),
+                    )
+                    .await
+                }
+            })
+            .await
+            .expect("Failed to escrow gas")
+            .map_err(|e| {
+                anyhow!(
+                    "Signer {:?} does not have enough token to cover gas limit: {}",
+                    signer,
+                    e
+                )
+            })?;
+        }
 
         self.stack.push(contract_id).await?;
         self.storage.savepoint().await?;
@@ -525,6 +553,7 @@ impl Runtime {
 
     pub async fn handle_procedure(
         &self,
+        signer: &Signer,
         contract_id: i64,
         contract_address: &ContractAddress,
         func_name: &str,
@@ -544,6 +573,25 @@ impl Runtime {
             starting_fuel,
             store.get_fuel().expect("Fuel should be available"),
         );
+        if is_op_result && !signer.is_core() {
+            Box::pin({
+                let mut runtime = self.clone();
+                runtime.stack = Stack::new();
+                async move {
+                    token::api::burn_and_release(
+                        &mut runtime,
+                        &Signer::Core(Box::new(signer.clone())),
+                        Decimal::from(gas)
+                            .mul(self.gas_to_token_multiplier)
+                            .expect("Failed to convert gas consumed to token amount"),
+                    )
+                    .await
+                }
+            })
+            .await
+            .expect("Failed to burn and release gas")
+            .map_err(|e| anyhow!("Problem burning and releasing gas: {}", e))?;
+        }
         self.storage
             .insert_contract_result(
                 self.result_id_counter.get().await as i64,
@@ -558,17 +606,22 @@ impl Runtime {
         let metadata = ResultEventMetadata::builder()
             .contract_address(contract_address.clone())
             .func_name(func_name.to_string())
-            .maybe_op_result_id(if is_op_result {
-                Some(
-                    OpResultId::builder()
-                        .txid(self.txid.to_string())
-                        .input_index(self.storage.input_index)
-                        .op_index(self.storage.op_index)
-                        .build(),
-                )
-            } else {
-                None
-            })
+            .maybe_op_result_id(
+                if is_op_result
+                    && (!signer.is_core()
+                        || func_name == "issuance" && contract_address == &token::address())
+                {
+                    Some(
+                        OpResultId::builder()
+                            .txid(self.txid.to_string())
+                            .input_index(self.storage.input_index)
+                            .op_index(self.storage.op_index)
+                            .build(),
+                    )
+                } else {
+                    None
+                },
+            )
             .gas(gas)
             .build();
         self.events
@@ -612,7 +665,13 @@ impl Runtime {
             is_proc,
             _fuel,
         ) = self
-            .prepare_call(contract_address, signer.as_ref(), expr, Some(starting_fuel))
+            .prepare_call(
+                contract_address,
+                signer.as_ref(),
+                expr,
+                false,
+                Some(starting_fuel),
+            )
             .await?;
         let (result, results, mut store) = tokio::spawn(async move {
             (
@@ -631,6 +690,7 @@ impl Runtime {
         if is_proc {
             result = self
                 .handle_procedure(
+                    signer.as_ref().expect("Signer should be available in proc"),
                     contract_id,
                     contract_address,
                     &func_name,
@@ -942,6 +1002,24 @@ impl Runtime {
     }
 
     async fn _core_proc_context<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        Fuel::CoreProcContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        let signer = res.signer.clone();
+        Ok(table.push(ProcContext {
+            contract_id,
+            signer: Signer::Core(Box::new(signer)),
+        })?)
+    }
+
+    async fn _core_signer_proc_context<T>(
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
@@ -1479,6 +1557,16 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._core_proc_context(accessor, self_)
+            .await
+    }
+
+    async fn signer_proc_context<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._core_signer_proc_context(accessor, self_)
             .await
     }
 }

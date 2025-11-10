@@ -15,6 +15,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
     let name = "token";
     let bytes = runtime.contract_reader.read(name).await?.unwrap();
     let mut ident = reg_tester.identity().await?;
+    reg_tester.instruction(&mut ident, Inst::Issuance).await?;
     let InstructionResult { reveal_tx_hex, .. } = reg_tester
         .instruction(
             &mut ident,

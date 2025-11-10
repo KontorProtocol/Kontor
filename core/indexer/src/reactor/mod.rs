@@ -244,7 +244,10 @@ impl Reactor {
                         bytes,
                     } => {
                         self.runtime.set_gas_limit(gas_limit);
-                        let _ = self.runtime.publish(&metadata.signer, &name, &bytes).await;
+                        let result = self.runtime.publish(&metadata.signer, &name, &bytes).await;
+                        if result.is_err() {
+                            warn!("Publish operation failed: {:?}", result);
+                        }
                     }
                     Op::Call {
                         metadata,
@@ -253,13 +256,19 @@ impl Reactor {
                         expr,
                     } => {
                         self.runtime.set_gas_limit(gas_limit);
-                        let _ = self
+                        let result = self
                             .runtime
                             .execute(Some(&metadata.signer), &contract, &expr)
                             .await;
+                        if result.is_err() {
+                            warn!("Call operation failed: {:?}", result);
+                        }
                     }
                     Op::Issuance { metadata, .. } => {
-                        let _ = self.runtime.issuance(&metadata.signer).await;
+                        let result = self.runtime.issuance(&metadata.signer).await;
+                        if result.is_err() {
+                            warn!("Issuance operation failed: {:?}", result);
+                        }
                     }
                 };
 

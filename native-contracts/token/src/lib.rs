@@ -22,8 +22,33 @@ impl Guest for Token {
         TokenStorage::default().init(ctx);
     }
 
-    fn issuance(ctx: &CoreContext, to: String) {
-        mint(&ctx.proc_context().model(), to, 10.into());
+    fn issuance(ctx: &CoreContext, n: Decimal) {
+        mint(
+            &ctx.proc_context().model(),
+            ctx.signer_proc_context().signer().to_string(),
+            n,
+        );
+    }
+
+    fn hold(ctx: &CoreContext, n: Decimal) -> Result<(), Error> {
+        Self::transfer(
+            &ctx.signer_proc_context(),
+            ctx.proc_context().signer().to_string(),
+            n,
+        )
+    }
+
+    fn burn_and_release(ctx: &CoreContext, n: Decimal) -> Result<(), Error> {
+        let core = ctx.proc_context();
+        Self::burn(&core, n)?;
+        Self::transfer(
+            &core,
+            ctx.signer_proc_context().signer().to_string(),
+            core.model()
+                .ledger()
+                .get(core.signer().to_string())
+                .unwrap_or_default(),
+        )
     }
 
     fn mint(ctx: &ProcContext, n: Decimal) {

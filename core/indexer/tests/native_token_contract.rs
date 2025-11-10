@@ -16,7 +16,11 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
 
     let result = token::balance(runtime, &minter).await?;
     // extra 10 comes from automatic issuance at identity creation
-    assert_eq!(result, Some(1010.into()));
+    let minter_tokens_spent_as_gas = Decimal::from("0.000000232");
+    assert_eq!(
+        result,
+        Some(Decimal::from(1010) - minter_tokens_spent_as_gas)
+    );
 
     let result = token::transfer(runtime, &holder, &minter, 123.into()).await?;
     assert_eq!(
@@ -28,10 +32,15 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     token::transfer(runtime, &minter, &holder, 2.into()).await??;
 
     let result = token::balance(runtime, &holder).await?;
-    assert_eq!(result, Some(62.into()));
+    let holder_tokens_spent_as_gas = Decimal::from("0.000000071");
+    assert_eq!(result, Some(Decimal::from(62) - holder_tokens_spent_as_gas));
 
     let result = token::balance(runtime, &minter).await?;
-    assert_eq!(result, Some(958.into()));
+    let minter_tokens_spent_as_gas = Decimal::from("0.000000486");
+    assert_eq!(
+        result,
+        Some(Decimal::from(958) - minter_tokens_spent_as_gas)
+    );
 
     let result = token::balance(runtime, "foo").await?;
     assert_eq!(result, None);

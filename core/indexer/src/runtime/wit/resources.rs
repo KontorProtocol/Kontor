@@ -39,9 +39,10 @@ impl HasContractId for ProcStorage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Signer {
-    Core,
+    Core(Box<Signer>),
     XOnlyPubKey(String),
     ContractId { id: i64, id_str: String },
+    Nobody,
 }
 
 impl Signer {
@@ -51,13 +52,18 @@ impl Signer {
             id_str: format!("__cid__{}", id),
         }
     }
+
+    pub fn is_core(&self) -> bool {
+        matches!(self, Signer::Core(_))
+    }
 }
 
 impl Deref for Signer {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Core => "core",
+            Self::Nobody => "nobody",
+            Self::Core(_) => "core",
             Self::XOnlyPubKey(s) => s,
             Self::ContractId { id_str, .. } => id_str,
         }

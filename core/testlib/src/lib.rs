@@ -234,7 +234,7 @@ impl RuntimeImpl for RuntimeLocal {
 
 pub struct RuntimeRegtest {
     reg_tester: RegTester,
-    identities: HashMap<Signer, reg_tester::Identity>,
+    pub identities: HashMap<Signer, reg_tester::Identity>,
 }
 
 impl RuntimeRegtest {
@@ -381,5 +381,9 @@ impl Runtime {
         expr: &str,
     ) -> Result<String> {
         self.runtime.execute(signer, contract_address, expr).await
+    }
+
+    pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
+        self.runtime.issuance(signer).await
     }
 }

@@ -77,14 +77,6 @@ pub struct Config {
         default_value = "bitcoin"
     )]
     pub network: bitcoin::Network,
-
-    #[clap(
-        long,
-        env = "USE_LOCAL_REGTEST",
-        help = "Whether or not to use a local regtest",
-        default_value = "false"
-    )]
-    pub use_local_regtest: bool,
 }
 
 impl Config {
@@ -100,7 +92,6 @@ impl Config {
             api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
-            use_local_regtest: false,
         }
     }
 }

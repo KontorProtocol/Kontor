@@ -57,6 +57,7 @@ interface context {
 
     resource core-context {
         proc-context: func() -> proc-context;
+        signer-proc-context: func() -> proc-context;
     }
 }
 

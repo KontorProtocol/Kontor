@@ -81,6 +81,8 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
     let process = Command::new("../target/debug/kontor")
+        .arg("--api-port")
+        .arg("9333")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
         .arg("--network")

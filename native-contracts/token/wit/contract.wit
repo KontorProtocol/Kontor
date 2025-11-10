@@ -11,7 +11,9 @@ world root {
 		value: decimal,
 	}
 
-	export issuance: func(ctx: borrow<core-context>, to: string);
+	export issuance: func(ctx: borrow<core-context>, n: decimal);
+	export hold: func(ctx: borrow<core-context>, n: decimal) -> result<_, error>;
+	export burn-and-release: func(ctx: borrow<core-context>, n: decimal) -> result<_, error>;
 
 	export init: func(ctx: borrow<proc-context>);
 
