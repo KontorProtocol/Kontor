@@ -120,7 +120,8 @@ impl Storage {
             .print(decoded.resolve(), decoded.package(), &[])
             .context("Failed to print component")?;
         let wit = format!("{}", printer.output);
-        let re = RegexBuilder::new(r"\n^.*borrow<core-context>.*$")
+        // regexr.com/8i6dk
+        let re = RegexBuilder::new(r"(\n^.*(borrow<core-context>|export init:|\{\s*core-context\s*\}).*$|[,]{0,1}\s*core-context[,]{0,1}\s*)")
             .multi_line(true)
             .build()?;
         let wit =
