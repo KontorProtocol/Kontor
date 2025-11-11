@@ -63,6 +63,20 @@ async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
 
 async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)> {
     create_bitcoin_conf(data_dir).await?;
+
+    // Check if bitcoind is in PATH
+    let bitcoind_check = Command::new("which")
+        .arg("bitcoind")
+        .output()
+        .await;
+
+    if bitcoind_check.is_err() || !bitcoind_check.unwrap().status.success() {
+        bail!(
+            "bitcoind not found in PATH. Regtest tests require Bitcoin Core.\n\
+             See TESTING.md for details."
+        );
+    }
+
     let process = Command::new("bitcoind")
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
         .spawn()?;

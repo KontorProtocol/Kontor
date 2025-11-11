@@ -131,16 +131,14 @@ jobs:
         run: cargo install cargo-expand
       - name: Install wasm-opt
         run: cargo install wasm-opt
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
       - name: Run tests (standard)
         if: matrix.test-type == 'standard'
         working-directory: ./core
-        run: cargo nextest run --workspace
+        run: cargo test --workspace
       - name: Run tests (optimized - prop & load tests only)
         if: matrix.test-type == 'optimized'
         working-directory: ./core
-        run: cargo nextest run --workspace --release -E 'binary(*_prop) + binary(load_tests)'
+        run: cargo test --release --workspace --test '*_prop' --test '*_load_tests'
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})

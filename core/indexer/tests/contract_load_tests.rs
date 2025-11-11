@@ -1,8 +1,7 @@
 //! Load tests for Kontor
 //!
-//! These tests are designed to stress-test the system and should always run with optimizations.
-//! They are automatically compiled with --release when run via:
-//!   cargo test --test load_tests
+//! These tests are designed to stress-test the system.
+//! Run with `--release` for meaningful performance data.
 //!
 //! The CI configuration ensures these always run optimized.
 
