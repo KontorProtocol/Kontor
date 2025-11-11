@@ -87,8 +87,6 @@ interface error {
         div-by-zero(string),
         syntax-error(string),
     }
-
-    meta-force-generate-error: func(e: error);
 }
 
 interface numbers {
@@ -147,9 +145,6 @@ interface numbers {
     mul-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
     div-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
     log10-decimal: func(a: decimal) -> result<decimal, error>;
-
-    meta-force-generate-integer: func(i: integer);
-    meta-force-generate-decimal: func(d: decimal);
 }
 
 world built-in {

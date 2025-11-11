@@ -18,16 +18,15 @@ pub fn generate(config: Config) -> TokenStream {
             world: "root",
             path: #path,
             generate_all,
+            generate_unused_types: true,
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             export_macro_name: "__export__",
             runtime_path: "stdlib::wit_bindgen::rt",
         });
 
         use kontor::built_in::*;
-        use kontor::built_in::context::{Signer};
         use kontor::built_in::foreign::{ContractAddressModel, ContractAddressWriteModel, get_contract_address};
-        use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel};
-        use kontor::built_in::numbers::{DecimalModel, DecimalWriteModel};
+        use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         fn make_keys_iterator<T: FromString>(keys: context::Keys) -> impl Iterator<Item = T> {
             struct KeysIterator<T: FromString> {

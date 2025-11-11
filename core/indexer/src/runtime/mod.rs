@@ -1063,11 +1063,7 @@ impl HasData for Runtime {
     type Data<'a> = &'a mut Runtime;
 }
 
-impl built_in::error::Host for Runtime {
-    async fn meta_force_generate_error(&mut self, _e: built_in::error::Error) -> Result<()> {
-        unimplemented!()
-    }
-}
+impl built_in::error::Host for Runtime {}
 
 impl built_in::crypto::Host for Runtime {}
 
@@ -1927,19 +1923,5 @@ impl built_in::numbers::HostWithStore for Runtime {
             )
             .await?;
         Ok(numerics::log10_decimal(a))
-    }
-
-    async fn meta_force_generate_integer<T>(
-        _accessor: &Accessor<T, Self>,
-        _i: Integer,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
-    async fn meta_force_generate_decimal<T>(
-        _accessor: &Accessor<T, Self>,
-        _d: Decimal,
-    ) -> Result<()> {
-        unimplemented!()
     }
 }
