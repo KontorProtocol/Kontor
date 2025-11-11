@@ -80,7 +80,8 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
 
 async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
-    let process = Command::new("../target/debug/kontor")
+    let program = format!("{}/../target/debug/kontor", env!("CARGO_MANIFEST_DIR"));
+    let process = Command::new(program)
         .arg("--api-port")
         .arg("9333")
         .arg("--data-dir")

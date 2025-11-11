@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 macros = { path = "../macros" }
+wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]

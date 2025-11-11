@@ -2147,7 +2147,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "serial_test",
  "sha2",
  "stdlib",
  "strum",
@@ -3954,6 +3953,7 @@ dependencies = [
  "macrotest",
  "trybuild",
  "wasm-wave 0.240.0",
+ "wit-bindgen 0.47.0",
 ]
 
 [[package]]
@@ -4111,6 +4111,7 @@ dependencies = [
  "indexer",
  "libsql",
  "macros",
+ "serial_test",
  "tempfile",
  "tokio",
  "tracing",
@@ -4883,7 +4884,7 @@ version = "0.14.4+wasi-0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88a5f4a424faf49c3c2c344f166f0662341d470ea185e939657aaff130f0ec4a"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.45.1",
 ]
 
 [[package]]
@@ -5689,6 +5690,58 @@ name = "wit-bindgen"
 version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c573471f125075647d03df72e026074b7203790d41351cd6edc96f46bcccd36"
+
+[[package]]
+name = "wit-bindgen"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a374235c3c0dff10537040b437073d09f1e38f13216b5f3cbc809c6226814e5c"
+dependencies = [
+ "bitflags 2.9.4",
+ "wit-bindgen-rust-macro",
+]
+
+[[package]]
+name = "wit-bindgen-core"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdf62e62178415a705bda25dc01c54ed65c0f956e4efd00ca89447a9a84f4881"
+dependencies = [
+ "anyhow",
+ "heck",
+ "wit-parser 0.240.0",
+]
+
+[[package]]
+name = "wit-bindgen-rust"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6d585319871ca18805056f69ddec7541770fc855820f9944029cb2b75ea108f"
+dependencies = [
+ "anyhow",
+ "heck",
+ "indexmap 2.12.0",
+ "prettyplease",
+ "syn",
+ "wasm-metadata",
+ "wit-bindgen-core",
+ "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust-macro"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde589435d322e88b8f708f70e313f60dfb7975ac4e7c623fef6f1e5685d90e8"
+dependencies = [
+ "anyhow",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "wit-bindgen-core",
+ "wit-bindgen-rust",
+]
 
 [[package]]
 name = "wit-component"

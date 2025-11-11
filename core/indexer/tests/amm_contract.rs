@@ -644,37 +644,37 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_amm_pools() -> Result<()> {
     run_test_amm_pools(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
 async fn test_amm_contract_regtest() -> Result<()> {
     logging::setup();
     run_test_amm_swaps(runtime).await?;

@@ -7,6 +7,7 @@ pub use macros::{
 };
 pub use storage_interface::*;
 pub use wasm_wave;
+pub use wit_bindgen;
 
 pub trait CheckedArithmetics<E, Other = Self> {
     type Output;

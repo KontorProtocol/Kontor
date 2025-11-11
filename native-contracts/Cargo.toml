@@ -16,7 +16,4 @@ too_many_arguments = "allow"
 unit_arg = "allow"
 
 [workspace.dependencies]
-# IMPORTANT
-wit-bindgen = "=0.47.0"
-
 stdlib = { path = "../core/stdlib" }

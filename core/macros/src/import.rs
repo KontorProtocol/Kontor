@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, panic};
 
 use crate::transformers;
 
@@ -20,6 +20,7 @@ pub struct Config {
     tx_index: i64,
     path: String,
     public: Option<bool>,
+    internal: Option<bool>,
 }
 
 pub fn generate(config: Config, test: bool) -> TokenStream {
@@ -30,6 +31,7 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
     let tx_index = config.tx_index;
     let path = config.path;
     let public = config.public.unwrap_or_default();
+    let internal = config.internal.unwrap_or_default();
 
     import(
         path,
@@ -38,17 +40,23 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
         Some((&name, height, tx_index)),
         test,
         public,
+        internal,
     )
 }
 
 pub fn import(
-    path: String,
+    mut path: String,
     module_name: Ident,
     world_name: String,
     contract_id: Option<(&str, i64, i64)>,
     test: bool,
     public: bool,
+    internal: bool,
 ) -> TokenStream {
+    if internal {
+        let mod_dir = env!("CARGO_MANIFEST_DIR");
+        path = [mod_dir, &path].join("/");
+    }
     assert!(fs::metadata(&path).is_ok());
     let mut resolve = Resolve::new();
     resolve.push_dir(&path).unwrap();

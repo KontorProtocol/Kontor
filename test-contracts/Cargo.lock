@@ -7,7 +7,6 @@ name = "amm"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -21,7 +20,6 @@ name = "arith"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -41,7 +39,6 @@ name = "crypto"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -90,7 +87,6 @@ name = "fib"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -224,7 +220,6 @@ name = "pool"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -251,7 +246,6 @@ name = "proxy"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -318,7 +312,6 @@ name = "shared-account"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -327,6 +320,7 @@ version = "0.1.0"
 dependencies = [
  "macros",
  "wasm-wave",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -371,7 +365,6 @@ name = "token"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]

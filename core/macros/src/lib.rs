@@ -11,8 +11,8 @@ mod import;
 mod interface;
 mod model;
 mod root;
-mod runtime;
 mod store;
+mod test;
 mod transformers;
 mod utils;
 mod wavey;
@@ -256,8 +256,8 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let config: runtime::Config = match syn::parse(attr) {
+pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let config: test::Config = match syn::parse(attr) {
         Ok(v) => v,
         Err(e) => {
             return e.to_compile_error().into();
@@ -271,7 +271,7 @@ pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_inputs = &func.sig.inputs;
     let fn_vis = &func.vis;
     let fn_block = &func.block;
-    let contracts_dir = config.contracts_dir;
+    let contracts_dir = config.contracts_dir.unwrap_or("./".to_string());
     let mode = config.mode.unwrap_or("local".to_string());
 
     let body = if mode == "regtest" {

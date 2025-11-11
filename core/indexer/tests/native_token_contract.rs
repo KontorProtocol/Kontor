@@ -55,12 +55,12 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[runtime(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "test-contracts")]
 async fn test_native_token_contract() -> Result<()> {
     run_test_native_token_contract(runtime).await
 }
 
-#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
 async fn test_native_token_contract_regtest() -> Result<()> {
     run_test_native_token_contract(runtime).await
 }

@@ -7,7 +7,6 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-wit-bindgen = { workspace = true }
 stdlib = { workspace = true }
 
 [lib]

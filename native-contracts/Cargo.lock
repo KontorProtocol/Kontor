@@ -288,6 +288,7 @@ version = "0.1.0"
 dependencies = [
  "macros",
  "wasm-wave",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -332,7 +333,6 @@ name = "token"
 version = "0.1.0"
 dependencies = [
  "stdlib",
- "wit-bindgen",
 ]
 
 [[package]]

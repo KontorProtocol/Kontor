@@ -18,3 +18,4 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 wasm-wave = { workspace = true }
+serial_test = { workspace = true }
