@@ -16,8 +16,10 @@ use indexer::{
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
+pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
+pub use tokio;
 use tokio::{fs::File, io::AsyncReadExt, task};
 
 pub struct ContractReader {
@@ -63,7 +65,10 @@ impl ContractReader {
     }
 
     async fn find_contracts(dir: &str) -> Result<Paths> {
-        let pattern = format!("{}/**/target/wasm32-unknown-unknown/release/*.wasm.br", dir);
+        let pattern = format!(
+            "../../{}/**/target/wasm32-unknown-unknown/release/*.wasm.br",
+            dir
+        );
         Ok(
             task::spawn_blocking(move || glob::glob(&pattern).expect("Invalid glob pattern"))
                 .await?,
