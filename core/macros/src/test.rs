@@ -5,4 +5,5 @@ use darling::FromMeta;
 pub struct Config {
     pub contracts_dir: Option<String>,
     pub mode: Option<String>,
+    pub logging: Option<bool>,
 }

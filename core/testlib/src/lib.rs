@@ -2,7 +2,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use bon::Builder;
 use glob::Paths;
-pub use indexer::testlib_exports::*;
 use indexer::{
     database::{
         queries::{
@@ -16,11 +15,13 @@ use indexer::{
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
+pub use indexer::{logging::setup as logging, testlib_exports::*};
 pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
 pub use tokio;
 use tokio::{fs::File, io::AsyncReadExt, task};
+pub use tracing;
 
 pub struct ContractReader {
     dir: String,

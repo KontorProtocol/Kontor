@@ -313,10 +313,19 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    let logging = if config.logging.unwrap_or(false) {
+        quote! {
+            logging();
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         #[tokio::test]
         #serial
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
+            #logging
             #body
         }
     };
