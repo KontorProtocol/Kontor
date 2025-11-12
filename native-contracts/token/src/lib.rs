@@ -54,14 +54,19 @@ impl Guest for Token {
     fn burn_and_release(ctx: &CoreContext, n: Decimal) -> Result<(), Error> {
         let core = ctx.proc_context();
         Self::burn(&core, n)?;
-        Self::transfer(
-            &core,
-            ctx.signer_proc_context().signer().to_string(),
-            core.model()
-                .ledger()
-                .get(core.signer().to_string())
-                .unwrap_or_default(),
-        )
+        let balance = core
+            .model()
+            .ledger()
+            .get(core.signer().to_string())
+            .unwrap_or_default();
+        if balance > 0.into() {
+            Self::transfer(
+                &core,
+                ctx.signer_proc_context().signer().to_string(),
+                balance,
+            )?;
+        }
+        Ok(())
     }
 
     fn mint(ctx: &ProcContext, n: Decimal) -> Result<(), Error> {
