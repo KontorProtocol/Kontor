@@ -2,6 +2,7 @@ pub mod api;
 pub mod bitcoin_client;
 pub mod bitcoin_follower;
 pub mod block;
+pub mod built_info;
 pub mod config;
 pub mod database;
 pub mod legacy_test_utils;

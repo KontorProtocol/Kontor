@@ -10,6 +10,7 @@ use libsql::Connection;
 
 use crate::{
     block::filter_map,
+    built_info,
     database::{
         queries::{
             self, get_checkpoint_latest, get_transaction_by_txid, get_transactions_paginated,
@@ -39,8 +40,10 @@ use super::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Info {
+    pub version: String,
+    pub commit: Option<String>,
     pub available: bool,
     pub height: i64,
     pub checkpoint: Option<String>,
@@ -54,6 +57,8 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
         .unwrap_or((env.config.starting_block_height - 1) as i64);
     let checkpoint = get_checkpoint_latest(&conn).await?.map(|c| c.hash);
     Ok(Info {
+        version: built_info::PKG_VERSION.to_string(),
+        commit: built_info::GIT_COMMIT_HASH_SHORT.map(String::from),
         available: true,
         height,
         checkpoint,

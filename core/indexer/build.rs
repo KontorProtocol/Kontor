@@ -40,6 +40,8 @@ fn build(contract_dir: &std::path::Path) {
 }
 
 fn main() {
+    built::write_built_file().expect("Failed to acquire build-time information");
+
     // Get the path to the contracts directory
     let mut cd = std::env::current_dir().unwrap();
     cd.pop();
