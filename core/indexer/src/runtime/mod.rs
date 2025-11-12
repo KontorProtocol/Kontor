@@ -574,10 +574,12 @@ impl Runtime {
         {
             result = Err(e);
         }
-        let gas = self.gas_consumed(
-            starting_fuel,
-            store.get_fuel().expect("Fuel should be available"),
-        );
+        let gas = self
+            .gas_consumed(
+                starting_fuel,
+                store.get_fuel().expect("Fuel should be available"),
+            )
+            .max(1);
 
         if is_op_result && !signer.is_core() {
             tracing::info!(
