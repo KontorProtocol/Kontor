@@ -3,6 +3,8 @@
 [![CI](https://github.com/KontorProtocol/Kontor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KontorProtocol/Kontor/actions)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+> **⚠️ WARNING: This code is unaudited and experimental. Use at your own risk.**
+
 This repo contains the indexer for the [Kontor Protocol](https://docs.kontor.network/), comprised of:
 
 - **Bitcoin follower**: Reconciles streams of block data from Bitcoin's ZMQ socket and RPC API.
