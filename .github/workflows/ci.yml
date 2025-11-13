@@ -73,7 +73,6 @@ jobs:
   test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    environment: mainnet
     strategy:
       matrix:
         os: [ubuntu-x86-4cpu, macos-latest]
