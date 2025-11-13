@@ -1,6 +1,6 @@
 # Kontor
 
-[![CI](https://github.com/UnspendableLabs/Kontor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UnspendableLabs/Kontor/actions)
+[![CI](https://github.com/KontorProtocol/Kontor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KontorProtocol/Kontor/actions)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 This repo contains the indexer for the [Kontor Protocol](https://docs.kontor.network/), comprised of:
@@ -77,7 +77,7 @@ Compiled binaries including `bitcoind` are located in `build/bin`. **This direct
 ### Run Tests
 
 ```bash
-git clone https://github.com/UnspendableLabs/Kontor.git
+git clone https://github.com/KontorProtocol/Kontor.git
 cd Kontor/core
 cargo test
 ```
