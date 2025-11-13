@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     logging::setup();
     info!("Kontor");
     info!(
-        "{}@{}",
+        "Version {}@{}",
         built_info::PKG_VERSION,
         built_info::GIT_COMMIT_HASH_SHORT.unwrap_or("unknown")
     );
