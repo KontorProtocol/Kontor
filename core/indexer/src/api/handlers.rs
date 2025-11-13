@@ -43,7 +43,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Info {
     pub version: String,
-    pub commit: Option<String>,
     pub available: bool,
     pub height: i64,
     pub checkpoint: Option<String>,
@@ -58,7 +57,6 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
     let checkpoint = get_checkpoint_latest(&conn).await?.map(|c| c.hash);
     Ok(Info {
         version: built_info::PKG_VERSION.to_string(),
-        commit: built_info::GIT_COMMIT_HASH_SHORT.map(String::from),
         available: true,
         height,
         checkpoint,
