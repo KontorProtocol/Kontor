@@ -26,7 +26,7 @@ help: consider importing one of these items
   |
 1 + use core::error::Error;
   |
-    and 1 other candidate
+  = and 1 other candidate
 
 error[E0601]: `main` function not found in crate `$CRATE`
   --> tests/ui/store_invalid_result_inner.rs:11:2

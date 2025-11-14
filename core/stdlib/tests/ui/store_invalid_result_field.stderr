@@ -18,15 +18,15 @@ error[E0412]: cannot find type `Error` in this scope
    |
 help: consider importing one of these items
    |
-1  + use std::error::Error;
+ 1 + use std::error::Error;
    |
-1  + use std::fmt::Error;
+ 1 + use std::fmt::Error;
    |
-1  + use std::io::Error;
+ 1 + use std::io::Error;
    |
-1  + use core::error::Error;
+ 1 + use core::error::Error;
    |
-     and 1 other candidate
+   = and 1 other candidate
 
 error[E0601]: `main` function not found in crate `$CRATE`
   --> tests/ui/store_invalid_result_field.rs:11:2
