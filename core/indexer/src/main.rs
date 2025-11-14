@@ -17,7 +17,10 @@ use tracing::{error, info};
 async fn main() -> Result<()> {
     logging::setup();
     info!("Kontor");
-    info!(version = built_info::PKG_VERSION);
+    info!(
+        version = built_info::PKG_VERSION,
+        target = built_info::TARGET
+    );
     let config = Config::try_parse()?;
     info!("{:#?}", config);
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;

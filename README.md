@@ -46,6 +46,8 @@ sudo apt install cmake pkgconf libevent-dev libboost-all-dev libzmq3-dev brotli
 
 If rust tooling is not installed follow steps from [rust-lang.org](https://rust-lang.org/tools/install/)
 
+The project uses the latest Rust which can be installed with `rustup install stable`.
+
 Add wasm compile target:
 ```bash
 rustup target add wasm32-unknown-unknown

@@ -9,7 +9,7 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wasmtime = { version = "=38.0.3", features = ["wave", "component-model-async"] }
+wasmtime = { version = "=38.0.4", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.47.0"
 wit-component = "=0.240.0"
 wit-parser = "=0.240.0"
