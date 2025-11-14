@@ -12,7 +12,7 @@ interface!(name = "token", path = "../test-contracts/token/wit");
 
 /// Simple load test: process many blocks with many contract calls
 /// Each contract call creates a transaction and mines a block automatically in regtest
-#[runtime(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_token_contract_load() -> Result<()> {
     logging::setup();
 
@@ -25,7 +25,7 @@ async fn test_token_contract_load() -> Result<()> {
     let token = runtime.publish(&minter, "token").await?;
 
     // Mint a large supply
-    token::mint(runtime, &token, &minter, "1000000000".into()).await?;
+    let _ = token::mint(runtime, &token, &minter, "1000000000".into()).await?;
 
     // Create a pool of users
     let mut users = vec![];
