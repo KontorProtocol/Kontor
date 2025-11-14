@@ -12,6 +12,7 @@ interface!(name = "token", path = "../test-contracts/token/wit");
 
 /// API load test: make many view calls to measure API throughput
 #[testlib::test(contracts_dir = "test-contracts", mode = "regtest", logging)]
+#[ignore = "Load tests run in CI"]
 async fn test_api_view_calls_load() -> Result<()> {
     let num_requests = 10_000; // Total API requests
 

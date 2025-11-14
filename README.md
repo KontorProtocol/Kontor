@@ -87,6 +87,10 @@ cd Kontor/core
 cargo test
 ```
 
+Some machines may not have the resources to compile all tests concurrently. In these cases, use the `--jobs` flag or the `CARGO_BUILD_JOBS` environment variable to limit the number of simultaneous compilation jobs.
+
+Long running tests are ignored by default. To run them, use the `--ignored` or `--include-ignored` flags.
+
 ## Docker
 
 Build the Alpine-based image:

@@ -263,9 +263,9 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
             return e.to_compile_error().into();
         }
     };
-    let mut func = parse_macro_input!(item as ItemFn);
+    let func = parse_macro_input!(item as ItemFn);
 
-    func.attrs = vec![];
+    let attrs = func.attrs;
     let fn_name = &func.sig.ident;
     let fn_generics = &func.sig.generics;
     let fn_inputs = &func.sig.inputs;
@@ -324,6 +324,7 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output = quote! {
         #[tokio::test]
         #serial
+        #(#attrs)*
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
             #logging
             #body

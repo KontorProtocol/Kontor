@@ -14,7 +14,7 @@ env:
 jobs:
   quality-checks:
     name: Lint & Security Audit
-    runs-on: ubuntu-x86-4cpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -78,8 +78,8 @@ jobs:
         os: [ubuntu-x86-4cpu, macos-latest]
         test-type: [standard, optimized]
         exclude:
-          # Only run optimized tests on one OS to save CI time
-          - os: macos-latest
+          # Only run optimized tests on macOS to save CI time
+          - os: ubuntu-x86-4cpu
             test-type: optimized
     steps:
       - uses: actions/checkout@v4
@@ -133,11 +133,11 @@ jobs:
       - name: Run tests (standard)
         if: matrix.test-type == 'standard'
         working-directory: ./core
-        run: cargo test --workspace -- --skip test_token_contract_load --skip test_api_view_calls_load
-      - name: Run tests (optimized - prop & load tests only)
+        run: cargo test --workspace
+      - name: Run tests (optimized - long running tests only)
         if: matrix.test-type == 'optimized'
         working-directory: ./core
-        run: cargo test --release --workspace --test '*_prop' --test '*_load_tests'
+        run: cargo test --release --workspace -- --ignored
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
@@ -149,7 +149,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-x86-4cpu
+          - runner: ubuntu-x86-4cpu-1
             platform: linux/amd64
             arch: amd64
           - runner: ubuntu-arm64-4cpu
@@ -204,7 +204,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-x86-4cpu
+          - runner: ubuntu-x86-4cpu-1
             platform: linux/amd64
             arch: amd64
           - runner: ubuntu-arm64-4cpu
@@ -278,7 +278,7 @@ jobs:
 
   docker-manifest:
     name: Docker - Publish Multi-Arch Image
-    runs-on: ubuntu-x86-4cpu
+    runs-on: ubuntu-latest
     timeout-minutes: 600
     needs: docker-build
     if: github.event_name == 'pull_request'
