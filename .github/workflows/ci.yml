@@ -133,7 +133,7 @@ jobs:
       - name: Run tests (standard)
         if: matrix.test-type == 'standard'
         working-directory: ./core
-        run: cargo test --workspace
+        run: cargo test --workspace -- --skip test_token_contract_load --skip test_api_view_calls_load
       - name: Run tests (optimized - prop & load tests only)
         if: matrix.test-type == 'optimized'
         working-directory: ./core
