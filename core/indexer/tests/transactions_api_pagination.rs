@@ -21,7 +21,7 @@ use indexer::{
 use libsql::params;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,6 +114,7 @@ async fn create_test_app() -> Result<Router> {
         bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
         config: Config::new_na(),
         cancel_token: CancellationToken::new(),
+        available: Arc::new(RwLock::new(true)),
         result_subscriber: ResultSubscriber::default(),
         runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
         reader,

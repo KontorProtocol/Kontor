@@ -59,7 +59,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
     Ok(Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
-        available: true,
+        available: *env.available.read().await,
         height,
         checkpoint,
     })
@@ -257,6 +257,9 @@ pub async fn post_contract(
     State(env): State<Env>,
     Json(ViewExpr { expr }): Json<ViewExpr>,
 ) -> Result<ResultEvent> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
+    }
     let contract_address = extract_contract_address(&address)?;
     let func_name = expr
         .split("(")
@@ -300,6 +303,9 @@ pub async fn get_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
 ) -> Result<ContractResponse> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
+    }
     let contract_address = extract_contract_address(&address)?;
     let runtime = env.runtime.lock().await;
     let contract_id = runtime

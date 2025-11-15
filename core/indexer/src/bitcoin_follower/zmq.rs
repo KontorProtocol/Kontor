@@ -207,10 +207,12 @@ pub async fn run<C: BitcoinRpc>(
     f: TransactionFilterMap,
     tx: UnboundedSender<ZmqEvent>,
 ) -> Result<JoinHandle<Result<()>>> {
+    info!("Starting ZMQ listener");
     let (socket_tx, mut socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
     let socket_cancel_token = CancellationToken::new();
     let ctx = zmq::Context::new();
+    info!("Setting up socket");
     let socket = ctx
         .socket(zmq::SUB)
         .context("Failed to create ZMQ socket")?;
@@ -231,16 +233,19 @@ pub async fn run<C: BitcoinRpc>(
         .context("Failed to connect monitor socket")?;
     monitor_socket.set_rcvhwm(0)?;
     monitor_socket.set_rcvtimeo(1000)?;
+    info!("Running monitor socket");
     let monitor_socket_handle =
         run_monitor_socket(monitor_socket, socket_cancel_token.clone(), monitor_tx);
 
     socket
         .connect(addr)
         .context("Could not connect to ZMQ address")?;
+    info!("Running socket");
     let socket_handle = run_socket(socket, socket_cancel_token.clone(), socket_tx.clone());
 
     Ok(task::spawn(async move {
         defer! {
+            warn!("In ZMQ listener defer");
             socket_cancel_token.cancel();
             if socket_handle.join().is_err() {
                 error!("Socket thread panicked on join");
@@ -254,6 +259,7 @@ pub async fn run<C: BitcoinRpc>(
 
         let mut last_sequence_number: Option<u32> = None;
         let mut last_raw_transaction: Option<bitcoin::Transaction> = None;
+        info!("ZMQ listener started");
         loop {
             select! {
                 biased;

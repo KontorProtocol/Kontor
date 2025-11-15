@@ -108,10 +108,8 @@ impl<I: BlockchainInfo, F: BlockFetcher, M: MempoolFetcher> Reconciler<I, F, M> 
                     let Some(last_height) = self.state.latest_block_height else {
                         bail!("must have start height before using ZMQ");
                     };
+                    info!("Switching to RPC mode");
                     self.fetcher.start(last_height + 1);
-                }
-                while !self.zmq_rx.is_empty() {
-                    self.zmq_rx.recv().await;
                 }
                 vec![]
             }

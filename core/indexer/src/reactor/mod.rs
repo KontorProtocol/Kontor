@@ -87,14 +87,21 @@ impl Reactor {
         };
 
         // ensure 0 (native) block exists
-        insert_processed_block(
-            conn,
-            BlockRow::builder()
-                .height(0)
-                .hash(new_mock_block_hash(0))
-                .build(),
-        )
-        .await?;
+        if select_block_at_height(conn, 0)
+            .await
+            .expect("Failed to select block at height 0")
+            .is_none()
+        {
+            info!("Creating native block");
+            insert_processed_block(
+                conn,
+                BlockRow::builder()
+                    .height(0)
+                    .hash(new_mock_block_hash(0))
+                    .build(),
+            )
+            .await?;
+        }
         let storage = Storage::builder()
             .height(0)
             .tx_index(0)
@@ -281,6 +288,7 @@ impl Reactor {
         }
 
         set_block_processed(&conn, height as i64).await?;
+        info!("Block processed");
 
         Ok(())
     }

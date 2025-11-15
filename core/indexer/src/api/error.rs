@@ -9,6 +9,8 @@ pub enum HttpError {
     NotFound(String),
     #[error("Bad request: {0}")]
     BadRequest(String),
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl HttpError {
@@ -16,6 +18,7 @@ impl HttpError {
         match self {
             HttpError::NotFound(_) => StatusCode::NOT_FOUND,
             HttpError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            HttpError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 }

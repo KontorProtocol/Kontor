@@ -9,7 +9,7 @@ use indexer::reactor::results::ResultSubscriber;
 use indexer::runtime::Runtime;
 use indexer::{api, block, built_info, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -45,9 +45,26 @@ async fn main() -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
-    delete_unprocessed_blocks(&writer.connection()).await?;
+    let deleted_count = delete_unprocessed_blocks(&writer.connection()).await?;
+    info!("Deleted {} unprocessed blocks", deleted_count);
 
+    let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
+    let result_subscriber = ResultSubscriber::default();
+    handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
+    handles.push(
+        api::run(Env {
+            config: config.clone(),
+            cancel_token: cancel_token.clone(),
+            available: available.clone(),
+            reader: reader.clone(),
+            result_subscriber,
+            bitcoin: bitcoin.clone(),
+            runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
+        })
+        .await?,
+    );
+
     let (ctrl, ctrl_rx) = bitcoin_follower::ctrl::CtrlChannel::create();
     let (init_tx, init_rx) = oneshot::channel();
     handles.push(reactor::run(
@@ -73,21 +90,12 @@ async fn main() -> Result<()> {
         .await?,
     );
     init_rx.await?;
+    {
+        let mut available = available.write().await;
+        *available = true;
+    }
 
-    let result_subscriber = ResultSubscriber::default();
-    handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
-    handles.push(
-        api::run(Env {
-            config: config.clone(),
-            cancel_token: cancel_token.clone(),
-            reader: reader.clone(),
-            result_subscriber,
-            bitcoin: bitcoin.clone(),
-            runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
-        })
-        .await?,
-    );
-
+    info!("Initialized");
     for handle in handles {
         let _ = handle.await;
     }

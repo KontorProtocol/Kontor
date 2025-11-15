@@ -14,7 +14,7 @@ use indexer::{
     runtime::Runtime,
     test_utils::{new_mock_block_hash, new_test_db},
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
@@ -33,6 +33,7 @@ async fn test_websocket_server() -> Result<()> {
         api::run(Env {
             config: Config::new_na(),
             cancel_token: cancel_token.clone(),
+            available: Arc::new(RwLock::new(true)),
             reader: reader.clone(),
             result_subscriber: result_subscriber.clone(), // Clone for shared use
             bitcoin,

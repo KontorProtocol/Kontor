@@ -57,6 +57,7 @@ async fn zmq_runner<C: BitcoinRpc>(
             select! {
                 _ = sleep(Duration::from_secs(10)) => {}
                 _ = cancel_token.cancelled() => {
+                    info!("cancelled");
                     return Ok(());
                 }
             }

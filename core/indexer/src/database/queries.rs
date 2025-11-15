@@ -59,13 +59,7 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
             params![],
         )
         .await?;
-    let block = rows.next().await?.map(|r| from_row(&r)).transpose()?;
-    if let Some(BlockRow { height, .. }) = block
-        && height == 0
-    {
-        return Ok(None);
-    }
-    Ok(block)
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
 pub async fn set_block_processed(conn: &Connection, height: i64) -> Result<(), Error> {
@@ -77,10 +71,10 @@ pub async fn set_block_processed(conn: &Connection, height: i64) -> Result<(), E
     Ok(())
 }
 
-pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<(), Error> {
-    conn.execute("DELETE FROM blocks WHERE processed = 0", params![])
-        .await?;
-    Ok(())
+pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<u64, Error> {
+    Ok(conn
+        .execute("DELETE FROM blocks WHERE processed = 0", params![])
+        .await?)
 }
 
 pub async fn select_block_by_height_or_hash(
@@ -100,9 +94,6 @@ pub async fn select_block_at_height(
     conn: &Connection,
     height: i64,
 ) -> Result<Option<BlockRow>, Error> {
-    if height == 0 {
-        return Ok(None);
-    }
     let mut rows = conn
         .query(
             "SELECT height, hash FROM blocks WHERE height = ?",
@@ -116,9 +107,6 @@ pub async fn select_processed_block_at_height(
     conn: &Connection,
     height: i64,
 ) -> Result<Option<BlockRow>, Error> {
-    if height == 0 {
-        return Ok(None);
-    }
     let mut rows = conn
         .query(
             "SELECT height, hash FROM blocks WHERE height = ? AND processed = 1",

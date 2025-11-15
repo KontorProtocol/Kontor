@@ -19,7 +19,7 @@ use indexer::{
     block::Block,
     database::{self, queries},
     reactor,
-    test_utils::{await_block_at_height, gen_random_block, new_test_db},
+    test_utils::{await_block_at_height, gen_random_block, new_mock_block_hash, new_test_db},
 };
 
 #[derive(Debug)]
@@ -237,7 +237,6 @@ proptest! {
             // wipe blocks from earlier runs
             let conn = &db.writer.connection();
             queries::rollback_to_height(conn, 0).await.unwrap();
-            assert!(queries::select_block_latest(conn).await.unwrap().is_none());
 
             let cancel_token = CancellationToken::new();
             let (ctrl, mut ctrl_rx) = CtrlChannel::create();
@@ -268,7 +267,10 @@ proptest! {
                         ctrl_rx.recv(),
                         ).await.unwrap().unwrap();
                     assert_eq!(start.start_height, expect.start_height);
-                    assert_eq!(start.last_hash, expect.last_hash);
+                    // model does not take into account native block
+                    if start.last_hash != Some(new_mock_block_hash(0)) {
+                        assert_eq!(start.last_hash, expect.last_hash);
+                    }
 
                     event_tx = start.event_tx;
                 }
