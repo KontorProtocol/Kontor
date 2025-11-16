@@ -75,11 +75,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-x86-4cpu, macos-latest]
+        os: [ubuntu-x86-8cpu, macos-latest]
         test-type: [standard, optimized]
         exclude:
-          # Only run optimized tests on macOS to save CI time
-          - os: ubuntu-x86-4cpu
+          # Only run optimized tests on ubuntu-x86-8cpu
+          - os: macos-latest
             test-type: optimized
     steps:
       - uses: actions/checkout@v4
@@ -149,7 +149,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-x86-4cpu-1
+          - runner: ubuntu-x86-4cpu
             platform: linux/amd64
             arch: amd64
           - runner: ubuntu-arm64-4cpu
@@ -204,7 +204,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-x86-4cpu-1
+          - runner: ubuntu-x86-4cpu
             platform: linux/amd64
             arch: amd64
           - runner: ubuntu-arm64-4cpu
