@@ -36,7 +36,6 @@ RUN apk add --no-cache \
     musl-dev \
     zeromq-dev \
     boost-dev \
-    openssl-dev \
     pkgconfig \
     cmake \
     make \
