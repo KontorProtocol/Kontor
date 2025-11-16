@@ -19,7 +19,6 @@ use bon::Builder;
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 use std::{collections::HashSet, str::FromStr};
 
 use crate::bitcoin_client::Client;
@@ -31,9 +30,7 @@ const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 
-#[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
-
 pub struct InstructionQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -41,7 +38,6 @@ pub struct InstructionQuery {
     pub script_data: Vec<u8>,
 }
 
-#[serde_as]
 #[derive(Serialize, Deserialize, Builder)]
 pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
@@ -218,7 +214,6 @@ pub struct CommitOutputs {
     pub reveal_inputs: RevealInputs,
 }
 
-#[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RevealParticipantQuery {
     pub address: String,
@@ -228,7 +223,6 @@ pub struct RevealParticipantQuery {
     pub envelope: Option<u64>,
 }
 
-#[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct RevealQuery {
     pub commit_txid: String,
