@@ -70,7 +70,3 @@ once_cell = "=1.21.3"
 [build-dependencies]
 glob = { workspace = true }
 built = { version = "=0.8.0", features = ["git2"] }
-
-[[test]]
-name = "compose"
-path = "tests/compose/mod.rs"

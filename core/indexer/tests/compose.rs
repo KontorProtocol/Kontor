@@ -12,19 +12,21 @@ use indexer::witness_data::TokenBalance;
 use testlib::*;
 use tracing::info;
 
-use crate::commit_reveal::test_commit_reveal;
-use crate::commit_reveal_random_keypair::test_commit_reveal_ordinals;
-use crate::compose_api::{
+mod compose_tests;
+
+use compose_tests::commit_reveal::test_commit_reveal;
+use compose_tests::commit_reveal_random_keypair::test_commit_reveal_ordinals;
+use compose_tests::compose_api::{
     test_compose, test_compose_all_fields, test_compose_duplicate_address_and_duplicate_utxo,
     test_compose_insufficient_funds, test_compose_invalid_address, test_compose_missing_params,
     test_compose_nonexistent_utxo, test_compose_param_bounds_and_fee_rate,
     test_reveal_with_op_return_mempool_accept,
 };
-use crate::compose_commit_unit::{
+use compose_tests::compose_commit_unit::{
     test_compose_commit_psbt_inputs_have_metadata,
     test_compose_commit_unique_vout_mapping_even_with_identical_chunks,
 };
-use crate::compose_helpers::{
+use compose_tests::compose_helpers::{
     test_build_tap_script_address_type_is_p2tr,
     test_build_tap_script_and_script_address_empty_data_errs,
     test_build_tap_script_and_script_address_multi_push_and_structure,
@@ -35,15 +37,15 @@ use crate::compose_helpers::{
     test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance,
     test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness,
 };
-use crate::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
-use crate::legacy_segwit_envelope::{
+use compose_tests::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
+use compose_tests::legacy_segwit_envelope::{
     test_legacy_segwit_envelope_psbt_inscription,
     test_legacy_segwit_psbt_inscription_invalid_token_data,
     test_legacy_segwit_psbt_inscription_with_wrong_internal_key_without_checksig,
     test_legacy_segwit_psbt_inscription_without_checksig,
     test_legacy_segwit_psbt_inscription_wrong_internal_key,
 };
-use crate::legacy_segwit_swap::{
+use compose_tests::legacy_segwit_swap::{
     test_legacy_segwit_swap_psbt_with_incorrect_prefix,
     test_legacy_segwit_swap_psbt_with_insufficient_funds,
     test_legacy_segwit_swap_psbt_with_long_witness_stack,
@@ -52,22 +54,22 @@ use crate::legacy_segwit_swap::{
     test_legacy_segwit_swap_psbt_without_prefix, test_legacy_segwit_swap_psbt_without_secret,
     test_legacy_segwit_swap_psbt_without_token_balance,
 };
-use crate::legacy_taproot_envelope::{
+use compose_tests::legacy_taproot_envelope::{
     test_legacy_taproot_envelope_psbt_inscription,
     test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig,
     test_legacy_taproot_inscription_without_checksig,
     test_legacy_taproot_inscription_wrong_internal_key,
     test_legacy_tapscript_inscription_invalid_token_data,
 };
-use crate::legacy_taproot_swap::{
+use compose_tests::legacy_taproot_swap::{
     test_legacy_taproot_swap, test_taproot_swap_psbt_with_incorrect_prefix,
     test_taproot_swap_with_long_witness_stack, test_taproot_swap_with_wrong_token,
     test_taproot_swap_with_wrong_token_amount, test_taproot_swap_without_control_block,
     test_taproot_swap_without_tapscript, test_taproot_swap_without_token_balance,
 };
-use crate::multi_psbt_integration::test_portal_coordinated_commit_reveal_flow_integration;
-use crate::multi_psbt_integration_breakdown::test_portal_coordinated_compose_flow;
-use crate::multi_psbt_security::{
+use compose_tests::multi_psbt_integration::test_portal_coordinated_commit_reveal_flow_integration;
+use compose_tests::multi_psbt_integration_breakdown::test_portal_coordinated_compose_flow;
+use compose_tests::multi_psbt_security::{
     test_async_node_sign_and_merge_flows, test_commit_outputs_whitelist_including_portal,
     test_commit_psbt_security_invariants,
     test_commit_shortfall_is_offset_by_reveal_surplus_after_signing, test_inputs_sequences_are_rbf,
@@ -82,38 +84,19 @@ use crate::multi_psbt_security::{
     test_tapscript_prefix_structure_pubkey_then_op_checksig,
     test_witness_stack_shapes_commit_and_reveal,
 };
-use crate::multi_psbt_tx_validation::{
+use compose_tests::multi_psbt_tx_validation::{
     test_node_cannot_steal_in_reveal_rejected, test_portal_cannot_steal_change_rejected,
     test_portal_reorders_commit_inputs_before_sign_rejected,
     test_pre_sign_node_refuses_on_reveal_output_remap,
     test_pre_sign_node_refuses_on_underfunded_script_output,
     test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
 };
-use crate::regtest_commit_reveal::test_taproot_transaction_regtest;
-use crate::signature_replay_fails::{
+use compose_tests::regtest_commit_reveal::test_taproot_transaction_regtest;
+use compose_tests::signature_replay_fails::{
     test_psbt_signature_replay_fails, test_signature_replay_fails,
 };
-use crate::size_limit::test_compose_progressive_size_limit_testnet;
-use crate::swap::test_swap_psbt;
-
-mod commit_reveal;
-mod commit_reveal_random_keypair;
-mod compose_api;
-mod compose_commit_unit;
-mod compose_helpers;
-mod legacy_commit_reveal_p2wsh;
-mod legacy_segwit_envelope;
-mod legacy_segwit_swap;
-mod legacy_taproot_envelope;
-mod legacy_taproot_swap;
-mod multi_psbt_integration;
-mod multi_psbt_integration_breakdown;
-mod multi_psbt_security;
-mod multi_psbt_tx_validation;
-mod regtest_commit_reveal;
-mod signature_replay_fails;
-mod size_limit;
-mod swap;
+use compose_tests::size_limit::test_compose_progressive_size_limit_testnet;
+use compose_tests::swap::test_swap_psbt;
 
 async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result<()> {
     info!("test_commit_reveal_chained_reveal");
