@@ -113,7 +113,6 @@ async fn create_test_app() -> Result<Router> {
     Ok(Router::new()
         .route("/api/blocks/{identifier}", get(get_block))
         .route("/api/blocks/latest", get(get_block_latest))
-        .route("/api/blocks/{height}/transactions", get(get_transactions))
         .route("/api/transactions", get(get_transactions))
         .route("/api/transactions/{txid}", get(get_transaction))
         .with_state(env))
@@ -315,7 +314,7 @@ async fn test_get_transactions_at_height() -> Result<()> {
     let app = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get("/api/blocks/800000/transactions").await;
+    let response: TestResponse = server.get("/api/transactions?height=800000").await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
@@ -335,7 +334,7 @@ async fn test_get_transactions_at_height_empty() -> Result<()> {
     let app = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get("/api/blocks/999999/transactions").await;
+    let response: TestResponse = server.get("/api/transactions?height=999999").await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;

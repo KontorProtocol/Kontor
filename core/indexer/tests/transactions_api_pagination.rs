@@ -123,7 +123,6 @@ async fn create_test_app() -> Result<Router> {
     Ok(Router::new()
         .route("/api/blocks/{identifier}", get(get_block))
         .route("/api/blocks/latest", get(get_block_latest))
-        .route("/api/blocks/{height}/transactions", get(get_transactions))
         .route("/api/transactions", get(get_transactions))
         .route("/api/transactions/{txid}", get(get_transaction))
         .with_state(env))
@@ -133,6 +132,7 @@ async fn collect_all_transactions_with_cursor(
     server: &TestServer,
     endpoint: &str,
     limit: u32,
+    height: Option<u32>,
 ) -> Result<Vec<TransactionRow>> {
     let mut all_transactions = Vec::new();
     let mut cursor: Option<String> = None;
@@ -145,11 +145,13 @@ async fn collect_all_transactions_with_cursor(
             panic!("Too many iterations, possible infinite loop");
         }
 
-        let url = if let Some(ref c) = cursor {
-            format!("{}?limit={}&cursor={}", endpoint, limit, c)
-        } else {
-            format!("{}?limit={}", endpoint, limit)
-        };
+        let mut url = format!("{}?limit={}", endpoint, limit);
+        if let Some(c) = cursor.as_ref() {
+            url += &format!("&cursor={}", c);
+        }
+        if let Some(h) = height {
+            url += &format!("&height={}", h);
+        }
 
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -176,6 +178,7 @@ async fn collect_all_transactions_with_offset(
     server: &TestServer,
     endpoint: &str,
     limit: u32,
+    height: Option<u32>,
 ) -> Result<Vec<TransactionRow>> {
     let mut all_transactions = Vec::new();
     let mut offset = 0;
@@ -188,7 +191,10 @@ async fn collect_all_transactions_with_offset(
             panic!("Too many iterations, possible infinite loop");
         }
 
-        let url = format!("{}?limit={}&offset={}", endpoint, limit, offset);
+        let mut url = format!("{}?limit={}&offset={}", endpoint, limit, offset);
+        if let Some(h) = height {
+            url += &format!("&height={}", h);
+        }
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -214,9 +220,9 @@ async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
     // Test with different page sizes
     for limit in [1, 2, 3, 5, 7, 10] {
         let cursor_transactions =
-            collect_all_transactions_with_cursor(&server, "/api/transactions", limit).await?;
+            collect_all_transactions_with_cursor(&server, "/api/transactions", limit, None).await?;
         let offset_transactions =
-            collect_all_transactions_with_offset(&server, "/api/transactions", limit).await?;
+            collect_all_transactions_with_offset(&server, "/api/transactions", limit, None).await?;
 
         // Both methods should return the same transactions in the same order
         assert_eq!(
@@ -286,10 +292,10 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
     // Test pagination for height 800000 (5 transactions)
     for limit in [1, 2, 3, 4, 5, 6] {
         let cursor_transactions =
-            collect_all_transactions_with_cursor(&server, "/api/blocks/800000/transactions", limit)
+            collect_all_transactions_with_cursor(&server, "/api/transactions", limit, Some(800000))
                 .await?;
         let offset_transactions =
-            collect_all_transactions_with_offset(&server, "/api/blocks/800000/transactions", limit)
+            collect_all_transactions_with_offset(&server, "/api/transactions", limit, Some(800000))
                 .await?;
 
         // Both methods should return the same transactions
@@ -350,10 +356,10 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
     // Test pagination for height 800002 (7 transactions)
     for limit in [1, 2, 3, 4, 5, 6, 7, 8] {
         let cursor_transactions =
-            collect_all_transactions_with_cursor(&server, "/api/blocks/800002/transactions", limit)
+            collect_all_transactions_with_cursor(&server, "/api/transactions", limit, Some(800002))
                 .await?;
         let offset_transactions =
-            collect_all_transactions_with_offset(&server, "/api/blocks/800002/transactions", limit)
+            collect_all_transactions_with_offset(&server, "/api/transactions", limit, Some(800002))
                 .await?;
 
         // Both methods should return the same transactions
@@ -393,7 +399,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 
     // Test with limit=1 to ensure every transaction is returned exactly once
     let transactions =
-        collect_all_transactions_with_cursor(&server, "/api/transactions", 1).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 1, None).await?;
 
     // Create a set of unique transaction IDs to check for duplicates
     let mut seen_txids = std::collections::HashSet::new();
@@ -407,7 +413,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 
     // Test height with single transaction (800003)
     let single_tx =
-        collect_all_transactions_with_cursor(&server, "/api/blocks/800003/transactions", 1).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 1, Some(800003)).await?;
     assert_eq!(
         single_tx.len(),
         1,
@@ -418,7 +424,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 
     // Test empty height (800006 - no transactions)
     let empty_result =
-        collect_all_transactions_with_cursor(&server, "/api/blocks/800006/transactions", 10)
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 10, Some(800006))
             .await?;
     assert_eq!(
         empty_result.len(),
@@ -436,7 +442,7 @@ async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
 
     // Test that cursor pagination works correctly when page size equals total count
     let height_800001_all =
-        collect_all_transactions_with_cursor(&server, "/api/blocks/800001/transactions", 3).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 3, Some(800001)).await?;
     assert_eq!(
         height_800001_all.len(),
         3,
@@ -445,7 +451,7 @@ async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
 
     // Test that cursor pagination works correctly when page size exceeds total count
     let height_800001_large =
-        collect_all_transactions_with_cursor(&server, "/api/blocks/800001/transactions", 10)
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 10, Some(800001))
             .await?;
     assert_eq!(
         height_800001_large.len(),
@@ -472,13 +478,13 @@ async fn test_cursor_consistency_across_different_limits() -> Result<()> {
 
     // Collect all transactions with different page sizes
     let results_limit_1 =
-        collect_all_transactions_with_cursor(&server, "/api/transactions", 1).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 1, None).await?;
     let results_limit_3 =
-        collect_all_transactions_with_cursor(&server, "/api/transactions", 3).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 3, None).await?;
     let results_limit_7 =
-        collect_all_transactions_with_cursor(&server, "/api/transactions", 7).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 7, None).await?;
     let results_limit_22 =
-        collect_all_transactions_with_cursor(&server, "/api/transactions", 22).await?;
+        collect_all_transactions_with_cursor(&server, "/api/transactions", 22, None).await?;
 
     // All should return the same transactions in the same order
     let all_results = [
