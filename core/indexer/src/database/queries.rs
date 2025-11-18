@@ -6,13 +6,12 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         CheckpointRow, ContractListRow, ContractResultRow, ContractRow, OpResultId, PaginationMeta,
-        TransactionCursor, TransactionRow,
+        TransactionCursor, TransactionQuery, TransactionRow,
     },
     runtime::ContractAddress,
 };
 
 use super::types::{BlockRow, ContractStateRow};
-use libsql::Transaction;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -530,20 +529,18 @@ pub async fn get_transactions_at_height(
 }
 
 pub async fn get_transactions_paginated(
-    tx: &Transaction,
-    height: Option<i64>,
-    cursor: Option<String>,
-    offset: Option<i64>,
-    limit: i64,
+    conn: &Connection,
+    query: TransactionQuery,
 ) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
     let mut where_clauses = Vec::new();
 
     // Build height filter
-    if height.is_some() {
+    if query.height.is_some() {
         where_clauses.push("t.height = :height");
     }
 
-    let cursor_decoded = cursor
+    let cursor_decoded = query
+        .cursor
         .as_ref()
         .map(|c| TransactionCursor::decode(c).map_err(|_| Error::InvalidCursor))
         .transpose()?;
@@ -565,11 +562,11 @@ pub async fn get_transactions_paginated(
 
     // Get total count first
     let count_query = format!("SELECT COUNT(*) FROM transactions t {}", where_sql);
-    let mut count_rows = tx
+    let mut count_rows = conn
         .query(
             &count_query,
             named_params! {
-                ":height": height,
+                ":height": query.height,
                 ":cursor_height": cursor_height,
                 ":cursor_index": cursor_index,
             },
@@ -582,35 +579,34 @@ pub async fn get_transactions_paginated(
         .map_or(0, |r| r.get::<i64>(0).unwrap_or(0));
 
     // Build OFFSET clause
-    let offset_clause = cursor
+    let offset_clause = query
+        .cursor
         .is_none()
-        .then_some(offset)
+        .then_some(query.offset)
         .flatten()
         .map_or(String::from(""), |_| "OFFSET :offset".to_string());
 
-    let query = format!(
-        r#"
-         SELECT t.txid, t.height, t.tx_index
-         FROM transactions t
-         {where_sql}
-         ORDER BY t.height DESC, t.tx_index DESC
-         LIMIT :limit
-         {offset_clause}
-         "#,
-        where_sql = where_sql,
-        offset_clause = offset_clause
-    );
-
     // Execute main query with ALL named parameters
-    let mut rows = tx
+    let mut rows = conn
         .query(
-            &query,
+            &format!(
+                r#"
+                     SELECT t.txid, t.height, t.tx_index
+                     FROM transactions t
+                     {where_sql}
+                     ORDER BY t.height DESC, t.tx_index DESC
+                     LIMIT :limit
+                     {offset_clause}
+                     "#,
+                where_sql = where_sql,
+                offset_clause = offset_clause
+            ),
             named_params! {
-                ":height": height,
+                ":height": query.height,
                 ":cursor_height": cursor_height,
                 ":cursor_index": cursor_index,
-                ":offset": offset,
-                ":limit": (limit + 1),
+                ":offset": query.offset,
+                ":limit": (query.limit() + 1),
             },
         )
         .await?;
@@ -620,7 +616,7 @@ pub async fn get_transactions_paginated(
         transactions.push(from_row(&row)?);
     }
 
-    let has_more = transactions.len() > limit as usize;
+    let has_more = transactions.len() > query.limit() as usize;
 
     if has_more {
         transactions.pop();
@@ -628,7 +624,7 @@ pub async fn get_transactions_paginated(
 
     let next_cursor = transactions
         .last()
-        .filter(|_| offset.is_none() && has_more)
+        .filter(|_| query.offset.is_none() && has_more)
         .map(|last_tx| {
             TransactionCursor {
                 height: last_tx.height,
@@ -637,7 +633,8 @@ pub async fn get_transactions_paginated(
             .encode()
         });
 
-    let next_offset = (cursor.is_none() && has_more).then(|| offset.unwrap_or(0) + limit);
+    let next_offset =
+        (query.cursor.is_none() && has_more).then(|| query.offset.unwrap_or(0) + query.limit());
 
     let pagination = PaginationMeta {
         next_cursor,

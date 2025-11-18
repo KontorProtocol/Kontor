@@ -145,12 +145,18 @@ pub struct PaginationQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct TransactionQuery {
     pub cursor: Option<String>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     pub height: Option<i64>,
+}
+
+impl TransactionQuery {
+    pub fn limit(&self) -> i64 {
+        self.limit.map_or(20, |l| l.clamp(0, 1000))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

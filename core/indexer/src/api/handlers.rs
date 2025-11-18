@@ -140,8 +140,6 @@ pub async fn get_transactions(
     Query(query): Query<TransactionQuery>,
     State(env): State<Env>,
 ) -> Result<TransactionListResponse> {
-    let limit = query.limit.map_or(20, |l| l.clamp(1, 1000));
-
     if query.cursor.is_some() && query.offset.is_some() {
         return Err(HttpError::BadRequest(
             "Cannot specify both cursor and offset parameters".to_string(),
@@ -149,15 +147,9 @@ pub async fn get_transactions(
         .into());
     }
 
-    // Start a transaction
     let conn = env.reader.connection().await?;
-    let tx = conn.transaction().await?;
 
-    let (transactions, pagination) =
-        get_transactions_paginated(&tx, query.height, query.cursor, query.offset, limit).await?;
-
-    // Commit the transaction
-    tx.commit().await?;
+    let (transactions, pagination) = get_transactions_paginated(&conn, query).await?;
 
     Ok(TransactionListResponse {
         transactions,

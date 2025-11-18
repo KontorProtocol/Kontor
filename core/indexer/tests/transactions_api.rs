@@ -385,10 +385,10 @@ async fn test_get_transactions_limit_bounds() -> Result<()> {
     let server = TestServer::new(app)?;
 
     // Test minimum limit
-    let response: TestResponse = server.get("/api/transactions?limit=0").await;
+    let response: TestResponse = server.get("/api/transactions?limit=-1").await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 1); // Clamped to 1
+    assert_eq!(result.result.transactions.len(), 0); // Clamped to 0
 
     // Test maximum limit
     let response: TestResponse = server.get("/api/transactions?limit=2000").await;
