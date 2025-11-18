@@ -140,7 +140,7 @@ pub async fn get_transactions(
     Query(query): Query<TransactionQuery>,
     State(env): State<Env>,
 ) -> Result<TransactionListResponse> {
-    if query.cursor.is_some() && query.offset.is_some() {
+    if query.cursor().is_some() && query.offset.is_some() {
         return Err(HttpError::BadRequest(
             "Cannot specify both cursor and offset parameters".to_string(),
         )

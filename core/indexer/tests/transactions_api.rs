@@ -12,7 +12,7 @@ use indexer::{
     config::Config,
     database::{
         queries::{insert_processed_block, insert_transaction},
-        types::{BlockRow, TransactionCursor, TransactionListResponse, TransactionRow},
+        types::{BlockRow, TransactionListResponse, TransactionRow},
     },
     reactor::results::ResultSubscriber,
     runtime::Runtime,
@@ -278,10 +278,7 @@ async fn test_get_transactions_with_cursor() -> Result<()> {
 
     let cursor = result.result.pagination.next_cursor.unwrap();
 
-    let decoded_cursor = TransactionCursor::decode(&cursor)?;
-
-    assert_eq!(decoded_cursor.height, 800001);
-    assert_eq!(decoded_cursor.index, 0);
+    assert_eq!(cursor, 3);
 
     // Use cursor for next page
     let response: TestResponse = server
@@ -300,7 +297,7 @@ async fn test_get_transactions_cursor_and_offset_error() -> Result<()> {
     let app = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get("/api/transactions?cursor=test&offset=10").await;
+    let response: TestResponse = server.get("/api/transactions?cursor=1&offset=10").await;
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
     let error_body = response.text();
@@ -405,9 +402,7 @@ async fn test_get_transactions_invalid_cursor() -> Result<()> {
     let server = TestServer::new(app)?;
 
     let response: TestResponse = server.get("/api/transactions?cursor=invalid_cursor").await;
-    assert_eq!(response.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
-    let error_body = response.text();
-    assert!(error_body.contains("Invalid cursor format"));
+    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
     Ok(())
 }

@@ -1,9 +1,8 @@
 use anyhow::Result;
-use base64::Engine;
 use indexer::{
     database::{
         queries::{get_transactions_paginated, insert_block, insert_transaction},
-        types::{BlockRow, TransactionCursor, TransactionQuery, TransactionRow},
+        types::{BlockRow, TransactionQuery, TransactionRow},
     },
     test_utils::new_test_db,
 };
@@ -79,10 +78,8 @@ async fn test_basic_pagination_no_filters() -> Result<()> {
     assert!(meta.next_offset.is_some());
     assert_eq!(meta.next_offset, Some(3));
     assert!(meta.next_cursor.is_some());
-    let cursor = meta.next_cursor.clone().unwrap();
-    let decoded_cursor = TransactionCursor::decode(&cursor)?;
-    assert_eq!(decoded_cursor.height, 800001);
-    assert_eq!(decoded_cursor.index, 2);
+    let cursor = meta.next_cursor.unwrap();
+    assert_eq!(cursor, 8);
 
     // Verify ordering (DESC by height, then DESC by tx_index)
     assert_eq!(transactions[0].height, 800002);
@@ -163,10 +160,8 @@ async fn test_cursor_pagination() -> Result<()> {
     assert!(meta1.next_cursor.is_some());
     assert!(meta1.next_offset.is_some());
 
-    let cursor = meta1.next_cursor.clone().unwrap();
-    let decoded_cursor = TransactionCursor::decode(&cursor)?;
-    assert_eq!(decoded_cursor.height, 800001);
-    assert_eq!(decoded_cursor.index, 2);
+    let cursor = meta1.next_cursor.unwrap();
+    assert_eq!(cursor, 8);
 
     // Create NEW connection for second transaction
     let tx2 = reader.connection().await?.transaction().await?;
@@ -185,10 +180,8 @@ async fn test_cursor_pagination() -> Result<()> {
     assert!(meta2.next_cursor.is_some());
     assert!(meta2.next_offset.is_none());
 
-    let cursor = meta2.next_cursor.clone().unwrap();
-    let decoded_cursor = TransactionCursor::decode(&cursor)?;
-    assert_eq!(decoded_cursor.height, 800000);
-    assert_eq!(decoded_cursor.index, 4);
+    let cursor = meta2.next_cursor.unwrap();
+    assert_eq!(cursor, 5);
 
     // Create NEW connection for third transaction
     let tx3 = reader.connection().await?.transaction().await?;
@@ -206,10 +199,8 @@ async fn test_cursor_pagination() -> Result<()> {
     assert!(meta3.has_more);
     assert!(meta3.next_cursor.is_some());
 
-    let cursor = meta3.next_cursor.clone().unwrap();
-    let decoded_cursor = TransactionCursor::decode(&cursor)?;
-    assert_eq!(decoded_cursor.height, 800000);
-    assert_eq!(decoded_cursor.index, 1);
+    let cursor = meta3.next_cursor.unwrap();
+    assert_eq!(cursor, 2);
 
     let tx4 = reader.connection().await?.transaction().await?;
     let (page4, meta4) = get_transactions_paginated(
@@ -327,18 +318,11 @@ async fn test_cursor_and_offset_conflict() -> Result<()> {
     setup_test_data(&conn).await?;
     let tx = reader.connection().await?.transaction().await?;
 
-    // This should be handled at the handler level, but let's test the query behavior
-    let cursor = TransactionCursor {
-        height: 800001,
-        index: 1,
-    }
-    .encode();
-
     // When both cursor and offset are provided, cursor takes precedence
     let (transactions, meta) = get_transactions_paginated(
         &tx,
         TransactionQuery::builder()
-            .cursor(cursor)
+            .cursor(9)
             .offset(5)
             .limit(3)
             .build(),
@@ -351,7 +335,7 @@ async fn test_cursor_and_offset_conflict() -> Result<()> {
 
     // Should return transactions with (height, tx_index) < (800001, 1)
     for tx in &transactions {
-        assert!(tx.height < 800001 || (tx.height == 800001 && tx.tx_index < 1));
+        assert!(tx.height == 800001);
     }
 
     Ok(())
@@ -376,59 +360,6 @@ async fn test_empty_result_set() -> Result<()> {
     assert!(!meta.has_more);
     assert!(meta.next_offset.is_none());
     assert!(meta.next_cursor.is_none());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_cursor_encoding_decoding() -> Result<()> {
-    let original = TransactionCursor {
-        height: 800001,
-        index: 42,
-    };
-
-    let encoded = original.encode();
-    let decoded = TransactionCursor::decode(&encoded)?;
-
-    assert_eq!(original.height, decoded.height);
-    assert_eq!(original.index, decoded.index);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_invalid_cursor() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-    setup_test_data(&conn).await?;
-
-    // Test with invalid base64
-    let tx = reader.connection().await?.transaction().await?;
-    let result = get_transactions_paginated(
-        &tx,
-        TransactionQuery::builder()
-            .cursor("invalid_cursor".to_string())
-            .limit(3)
-            .build(),
-    )
-    .await;
-    assert!(result.is_err());
-    tx.rollback().await?; // Rollback since we expect an error
-
-    // Test with valid base64 but invalid format
-    let invalid_cursor =
-        base64::engine::general_purpose::STANDARD.encode("invalid:format:too:many:parts");
-    let tx = reader.connection().await?.transaction().await?; // NEW connection
-    let result = get_transactions_paginated(
-        &tx,
-        TransactionQuery::builder()
-            .cursor(invalid_cursor)
-            .limit(3)
-            .build(),
-    )
-    .await;
-    assert!(result.is_err());
-    tx.rollback().await?; // Rollback since we expect an error
 
     Ok(())
 }
@@ -477,16 +408,10 @@ async fn test_cursor_boundary_conditions() -> Result<()> {
     setup_test_data(&conn).await?;
 
     // Cursor pointing to the very first transaction
-    let cursor = TransactionCursor {
-        height: 800002,
-        index: 1,
-    }
-    .encode();
-
     let tx = reader.connection().await?.transaction().await?;
     let (transactions, meta) = get_transactions_paginated(
         &tx,
-        TransactionQuery::builder().cursor(cursor).limit(10).build(),
+        TransactionQuery::builder().cursor(10).limit(10).build(),
     )
     .await?;
     tx.commit().await?;
@@ -495,16 +420,10 @@ async fn test_cursor_boundary_conditions() -> Result<()> {
     assert!(!meta.has_more);
 
     // Cursor pointing beyond all transactions
-    let cursor = TransactionCursor {
-        height: 900000,
-        index: 0,
-    }
-    .encode();
-
     let tx = reader.connection().await?.transaction().await?; // NEW connection
     let (transactions, meta) = get_transactions_paginated(
         &tx,
-        TransactionQuery::builder().cursor(cursor).limit(10).build(),
+        TransactionQuery::builder().cursor(11).limit(10).build(),
     )
     .await?;
     tx.commit().await?;
@@ -512,19 +431,10 @@ async fn test_cursor_boundary_conditions() -> Result<()> {
     assert_eq!(transactions.len(), 10);
     assert!(!meta.has_more);
 
-    // Cursor pointing before all transactions
-    let cursor = TransactionCursor {
-        height: 700000,
-        index: 0,
-    }
-    .encode();
-
     let tx = reader.connection().await?.transaction().await?; // NEW connection
-    let (transactions, meta) = get_transactions_paginated(
-        &tx,
-        TransactionQuery::builder().cursor(cursor).limit(10).build(),
-    )
-    .await?;
+    let (transactions, meta) =
+        get_transactions_paginated(&tx, TransactionQuery::builder().cursor(0).limit(10).build())
+            .await?;
     tx.commit().await?;
 
     assert_eq!(transactions.len(), 0);

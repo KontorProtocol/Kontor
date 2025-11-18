@@ -135,7 +135,7 @@ async fn collect_all_transactions_with_cursor(
     height: Option<u32>,
 ) -> Result<Vec<TransactionRow>> {
     let mut all_transactions = Vec::new();
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<i64> = None;
     let mut iterations = 0;
     const MAX_ITERATIONS: usize = 50; // Safety limit
 
@@ -525,7 +525,7 @@ async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
     let server = TestServer::new(app)?;
 
     // Test that total_count decreases as we paginate (showing remaining items)
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<i64> = None;
     let mut page_count = 0;
     let limit = 3;
     let mut previous_total_count = None;
