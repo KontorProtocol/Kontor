@@ -372,7 +372,7 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
                 size,
                 bytes
             ) SELECT
-                COALESCE(MAX(id), 1) + 1,
+                COALESCE(MAX(id), 0) + 1,
                 ?,
                 ?,
                 ?,
