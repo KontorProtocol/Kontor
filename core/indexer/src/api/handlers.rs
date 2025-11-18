@@ -272,6 +272,8 @@ pub async fn post_contract(
         .execute(None, &contract_address, &expr)
         .await;
     let metadata = ResultEventMetadata::builder()
+        // height is meaningless for view expressions
+        .height(0)
         .contract_address(contract_address)
         .func_name(func_name.to_string())
         .gas(0)

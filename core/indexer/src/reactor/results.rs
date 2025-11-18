@@ -21,6 +21,8 @@ use crate::{
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ResultEventMetadata {
+    #[builder(default = 0)]
+    pub height: i64,
     #[builder(default = ContractAddress { name: String::new(), height: 0, tx_index: 0 })]
     pub contract_address: ContractAddress,
     #[builder(default = String::new())]
@@ -53,6 +55,7 @@ impl ResultEvent {
     pub async fn get_by_op_result_id(conn: &Connection, id: &OpResultId) -> Result<Option<Self>> {
         Ok(if let Some(row) = get_op_result(conn, id).await? {
             let metadata = ResultEventMetadata::builder()
+                .height(row.height)
                 .contract_address(
                     get_contract_address_from_id(conn, row.contract_id)
                         .await?

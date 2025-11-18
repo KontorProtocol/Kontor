@@ -84,7 +84,7 @@ Compiled binaries including `bitcoind` are located in `build/bin`. **This direct
 ```bash
 git clone https://github.com/KontorProtocol/Kontor.git
 cd Kontor/core
-cargo test
+cargo test --workspace
 ```
 
 Some machines may not have the resources to compile all tests concurrently. In these cases, use the `--jobs` flag or the `CARGO_BUILD_JOBS` environment variable to limit the number of simultaneous compilation jobs.

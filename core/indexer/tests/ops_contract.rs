@@ -44,10 +44,12 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
         }
     );
     let result = ops[0].result.as_ref();
+    let height = reg_tester.height().await;
     assert!(result.is_some());
     if let Some(ResultEvent::Ok { metadata, value }) = result {
+        assert_eq!(metadata.height, height);
         assert_eq!(metadata.contract_address.name, "token");
-        assert_eq!(metadata.contract_address.height, reg_tester.height().await);
+        assert_eq!(metadata.contract_address.height, height);
         assert_eq!(metadata.contract_address.tx_index, 2);
         assert_eq!(
             metadata.op_result_id,

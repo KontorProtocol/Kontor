@@ -618,6 +618,7 @@ impl Runtime {
             .expect("Failed to insert contract result");
         self.result_id_counter.increment().await;
         let metadata = ResultEventMetadata::builder()
+            .height(self.storage.height)
             .contract_address(contract_address.clone())
             .func_name(func_name.to_string())
             .maybe_op_result_id(

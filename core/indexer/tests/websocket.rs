@@ -133,7 +133,10 @@ async fn test_websocket_server() -> Result<()> {
         Response::Result {
             id: test_subscription_id,
             result: ResultEvent::Err {
-                metadata: ResultEventMetadata::builder().op_result_id(test_id).build(),
+                metadata: ResultEventMetadata::builder()
+                    .height(1)
+                    .op_result_id(test_id)
+                    .build(),
                 message: "Procedure failed. Error messages are ephemeral.".to_string()
             }
         }
