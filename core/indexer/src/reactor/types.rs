@@ -38,6 +38,15 @@ impl Op {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// HERE 
+// not use cbor!
+// look at serde site, look at list of all serialization methods 
+// DETERMINITSTIC AND SMALL -- postcard? common library EXPLICITLY SAYS DETERMISTIC
+
+// reveal endpoint takes arbitrary data? 
+// reproduce byte for byte script data
+// that would require deterministic serialization
+
 pub enum Inst {
     #[serde(rename = "p")]
     Publish {
