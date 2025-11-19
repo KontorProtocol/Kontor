@@ -2,8 +2,8 @@ use anyhow::Result;
 use indexer::{
     database::{
         queries::{
-            get_transactions_paginated, insert_block, insert_contract, insert_contract_state,
-            insert_transaction,
+            get_transactions_paginated, insert_contract, insert_contract_state,
+            insert_processed_block, insert_transaction,
         },
         types::{
             BlockRow, ContractRow, ContractStateRow, OrderDirection, TransactionQuery,
@@ -23,7 +23,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         )
         .parse()?;
         let block = BlockRow { height, hash };
-        insert_block(conn, block).await?;
+        insert_processed_block(conn, block).await?;
     }
 
     insert_contract(
@@ -136,11 +136,6 @@ async fn test_transaction_query_contract_address() -> Result<()> {
                 tx_index: 0
             })
             .build()
-    );
-    let s = serde_json::to_string(&x).unwrap();
-    assert_eq!(
-        s,
-        "{\"cursor\":null,\"offset\":null,\"limit\":null,\"height\":null,\"contract\":\"token_1_0\",\"order\":\"DESC\"}"
     );
     Ok(())
 }

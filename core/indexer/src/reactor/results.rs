@@ -26,7 +26,7 @@ pub struct ResultEventMetadata {
     #[builder(default = ContractAddress { name: String::new(), height: 0, tx_index: 0 })]
     pub contract_address: ContractAddress,
     #[builder(default = String::new())]
-    pub func_name: String,
+    pub func: String,
     #[builder(default = 0)]
     pub gas: u64,
     pub op_result_id: Option<OpResultId>,
@@ -61,7 +61,7 @@ impl ResultEvent {
                         .await?
                         .expect("Contract address must exist"),
                 )
-                .func_name(row.func_name)
+                .func(row.func)
                 .op_result_id(id.clone())
                 .gas(row.gas as u64)
                 .build();
@@ -83,8 +83,8 @@ impl ResultEvent {
 pub enum ResultEventFilter {
     All,
     Contract {
-        contract_address: ContractAddress,
-        func_name: Option<String>,
+        contract: ContractAddress,
+        func: Option<String>,
     },
     OpResultId(OpResultId),
 }
@@ -187,22 +187,15 @@ impl ResultSubscriptions {
         let subscription_id = Uuid::new_v4();
         let subscription = match &filter {
             ResultEventFilter::All => Ok(self.recurring_subscriptions.0.subscribe()),
-            ResultEventFilter::Contract {
-                contract_address,
-                func_name,
-            } => {
+            ResultEventFilter::Contract { contract, func } => {
                 let entry = self
                     .recurring_subscriptions
                     .1
-                    .entry(contract_address.to_string())
+                    .entry(contract.to_string())
                     .or_default();
-                Ok(match func_name {
+                Ok(match func {
                     None => entry.0.subscribe(),
-                    Some(func_name) => entry
-                        .1
-                        .entry(func_name.to_string())
-                        .or_default()
-                        .subscribe(),
+                    Some(func) => entry.1.entry(func.to_string()).or_default().subscribe(),
                 })
             }
             ResultEventFilter::OpResultId(op_result_id) => {
@@ -220,26 +213,23 @@ impl ResultSubscriptions {
                     self.recurring_subscriptions.0.unsubscribe();
                     true
                 }
-                ResultEventFilter::Contract {
-                    contract_address,
-                    func_name,
-                } => {
+                ResultEventFilter::Contract { contract, func } => {
                     match self
                         .recurring_subscriptions
                         .1
-                        .get_mut(&contract_address.to_string())
+                        .get_mut(&contract.to_string())
                     {
                         Some(entry) => {
-                            let unsubscribed = match &func_name {
+                            let unsubscribed = match &func {
                                 None => {
                                     entry.0.unsubscribe();
                                     true
                                 }
-                                Some(func_name) => match entry.1.get_mut(func_name) {
+                                Some(func) => match entry.1.get_mut(func) {
                                     Some(subscription) => {
                                         subscription.unsubscribe();
                                         if subscription.is_empty() {
-                                            entry.1.remove(func_name);
+                                            entry.1.remove(func);
                                         }
                                         true
                                     }
@@ -247,9 +237,7 @@ impl ResultSubscriptions {
                                 },
                             };
                             if entry.0.is_empty() && entry.1.is_empty() {
-                                self.recurring_subscriptions
-                                    .1
-                                    .remove(&contract_address.to_string());
+                                self.recurring_subscriptions.1.remove(&contract.to_string());
                             }
                             unsubscribed
                         }
@@ -276,7 +264,7 @@ impl ResultSubscriptions {
             .get(&event.metadata().contract_address.to_string())
         {
             let _ = entry.0.sender.send(event.clone());
-            if let Some(entry) = entry.1.get(&event.metadata().func_name) {
+            if let Some(entry) = entry.1.get(&event.metadata().func) {
                 let _ = entry.sender.send(event.clone());
             }
         }

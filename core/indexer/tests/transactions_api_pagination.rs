@@ -12,7 +12,9 @@ use indexer::{
     config::Config,
     database::{
         Reader, Writer,
-        queries::{insert_block, insert_contract, insert_contract_state, insert_transaction},
+        queries::{
+            insert_contract, insert_contract_state, insert_processed_block, insert_transaction,
+        },
         types::{BlockRow, ContractRow, ContractStateRow, PaginatedResponse, TransactionRow},
     },
     reactor::results::ResultSubscriber,
@@ -38,7 +40,7 @@ async fn create_test_app(reader: Reader, writer: Writer) -> Result<Router> {
             height,
             hash: format!("{:064x}", height).parse()?,
         };
-        insert_block(&conn, block).await?;
+        insert_processed_block(&conn, block).await?;
     }
 
     insert_contract(

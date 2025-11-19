@@ -1,0 +1,244 @@
+use anyhow::Result;
+use indexer::{
+    database::{
+        queries::{
+            get_results_paginated, insert_block, insert_contract, insert_contract_result,
+            insert_processed_block,
+        },
+        types::{BlockRow, ContractResultRow, ContractRow, ResultQuery},
+    },
+    test_utils::{new_mock_block_hash, new_test_db},
+};
+use testlib::ContractAddress;
+
+#[tokio::test]
+async fn test_get_results_query() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .build(),
+    )
+    .await?;
+
+    let contract_1_id = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("token".to_string())
+            .height(1)
+            .tx_index(1)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+
+    let contract_2_id = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("storage".to_string())
+            .height(1)
+            .tx_index(2)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_1_id)
+            .height(1)
+            .tx_index(3)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_2_id)
+            .height(1)
+            .tx_index(4)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash(new_mock_block_hash(2))
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_1_id)
+            .height(2)
+            .tx_index(1)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_2_id)
+            .height(2)
+            .tx_index(2)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(3)
+            .hash(new_mock_block_hash(3))
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_1_id)
+            .height(3)
+            .tx_index(1)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_2_id)
+            .height(3)
+            .tx_index(2)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(4)
+            .hash(new_mock_block_hash(4))
+            .build(),
+    )
+    .await?;
+
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_1_id)
+            .height(4)
+            .tx_index(1)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    // ignores unprocessed block result
+    let (_, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(1)
+            .build(),
+    )
+    .await?;
+    assert_eq!(meta.total_count, 6);
+
+    // contract filtering
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 1,
+            })
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(1)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].contract_name, "token");
+    assert_eq!(results[0].contract_height, 1);
+    assert_eq!(results[0].contract_tx_index, 1);
+    assert_eq!(meta.total_count, 3);
+
+    // height filtering
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .height(2)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 1,
+            })
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(1)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results[0].height, 2);
+    assert_eq!(meta.total_count, 1);
+
+    // start height
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .start_height(2)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 1,
+            })
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(1)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results[0].height, 2);
+    assert_eq!(meta.total_count, 2);
+    assert!(meta.next_cursor.is_some());
+
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .maybe_cursor(meta.next_cursor)
+            .start_height(2)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 1,
+            })
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(1)
+            .build(),
+    )
+    .await?;
+
+    assert_eq!(results[0].height, 3);
+    assert_eq!(meta.total_count, 1);
+    assert!(!meta.has_more);
+    assert!(meta.next_cursor.is_none());
+
+    Ok(())
+}

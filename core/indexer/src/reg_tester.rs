@@ -179,7 +179,7 @@ pub struct RegTesterInner {
 
 pub struct InstructionResult {
     pub contract_address: ContractAddress,
-    pub func_name: String,
+    pub func: String,
     pub value: String,
     pub commit_tx_hex: String,
     pub reveal_tx_hex: String,
@@ -314,14 +314,14 @@ impl RegTesterInner {
                     metadata:
                         ResultEventMetadata {
                             contract_address,
-                            func_name,
+                            func,
                             ..
                         },
                     value,
                     ..
                 } => Ok(InstructionResult {
                     contract_address,
-                    func_name,
+                    func,
                     value,
                     commit_tx_hex,
                     reveal_tx_hex,

@@ -161,7 +161,7 @@ impl Storage {
         &self,
         result_index: i64,
         contract_id: i64,
-        func_name: String,
+        func: String,
         gas: i64,
         value: Option<String>,
     ) -> Result<i64> {
@@ -174,7 +174,7 @@ impl Storage {
                 .input_index(self.input_index)
                 .op_index(self.op_index)
                 .result_index(result_index)
-                .func_name(func_name)
+                .func(func)
                 .gas(gas)
                 .maybe_value(value)
                 .build(),

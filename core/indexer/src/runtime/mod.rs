@@ -620,7 +620,7 @@ impl Runtime {
         let metadata = ResultEventMetadata::builder()
             .height(self.storage.height)
             .contract_address(contract_address.clone())
-            .func_name(func_name.to_string())
+            .func(func_name.to_string())
             .maybe_op_result_id(
                 if is_op_result
                     && (!signer.is_core()

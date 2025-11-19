@@ -13,12 +13,13 @@ use crate::{
     built_info,
     database::{
         queries::{
-            self, get_blocks_paginated, get_checkpoint_latest, get_transaction_by_txid,
-            get_transactions_paginated, select_block_by_height_or_hash, select_block_latest,
+            self, get_blocks_paginated, get_checkpoint_latest, get_results_paginated,
+            get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
+            select_block_latest,
         },
         types::{
-            BlockQuery, BlockRow, ContractListRow, OpResultId, PaginatedResponse, TransactionQuery,
-            TransactionRow,
+            BlockQuery, BlockRow, ContractListRow, ContractResultPublicRow, OpResultId,
+            PaginatedResponse, ResultQuery, TransactionQuery, TransactionRow,
         },
     },
     reactor::{
@@ -250,7 +251,7 @@ pub async fn post_contract(
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let func_name = expr
+    let func = expr
         .split("(")
         .next()
         .ok_or(anyhow!("Invalid wave expression"))?;
@@ -264,7 +265,7 @@ pub async fn post_contract(
         // height is meaningless for view expressions
         .height(0)
         .contract_address(contract_address)
-        .func_name(func_name.to_string())
+        .func(func.to_string())
         .gas(0)
         .build();
     Ok(match result {
@@ -309,4 +310,61 @@ pub async fn get_contract(
 
     let wit = runtime.storage.component_wit(contract_id).await?;
     Ok(ContractResponse { wit }.into())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultRow {
+    pub id: i64,
+    pub height: i64,
+    pub tx_index: i64,
+    pub input_index: i64,
+    pub op_index: i64,
+    pub result_index: i64,
+    pub func: String,
+    pub gas: i64,
+    pub value: Option<String>,
+    pub contract: String,
+}
+
+impl From<ContractResultPublicRow> for ResultRow {
+    fn from(row: ContractResultPublicRow) -> Self {
+        ResultRow {
+            id: row.id,
+            height: row.height,
+            tx_index: row.tx_index,
+            input_index: row.input_index,
+            op_index: row.op_index,
+            result_index: row.result_index,
+            func: row.func,
+            gas: row.gas,
+            value: row.value,
+            contract: ContractAddress {
+                name: row.contract_name,
+                height: row.contract_height,
+                tx_index: row.tx_index,
+            }
+            .to_string(),
+        }
+    }
+}
+
+pub async fn get_results(
+    Query(query): Query<ResultQuery>,
+    State(env): State<Env>,
+) -> Result<PaginatedResponse<ResultRow>> {
+    validate_query(query.cursor, query.offset)?;
+    if query.start_height.is_some() && query.height.is_some() {
+        return Err(HttpError::BadRequest(
+            "start_height and height cannot be used together".to_string(),
+        )
+        .into());
+    }
+
+    let (results, pagination) =
+        get_results_paginated(&*env.reader.connection().await?, query).await?;
+    Ok(PaginatedResponse {
+        results: results.into_iter().map(Into::into).collect(),
+        pagination,
+    }
+    .into())
 }

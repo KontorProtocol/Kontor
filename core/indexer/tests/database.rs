@@ -590,6 +590,7 @@ async fn test_contract_result_operations() -> Result<()> {
     insert_transaction(&conn, tx1.clone()).await?;
 
     let result = ContractResultRow::builder()
+        .id(1)
         .tx_index(tx1.tx_index)
         .height(height)
         .value("".to_string())

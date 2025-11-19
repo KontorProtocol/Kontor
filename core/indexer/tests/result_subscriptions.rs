@@ -145,8 +145,8 @@ async fn test_subscriber_recurring() -> Result<()> {
             .build(),
     )
     .await?;
-    let func_name = "foo";
-    let contract_address = ContractAddress {
+    let func = "foo";
+    let contract = ContractAddress {
         name: "test".to_string(),
         height: 1,
         tx_index: 1,
@@ -154,15 +154,15 @@ async fn test_subscriber_recurring() -> Result<()> {
     insert_contract(
         &conn,
         ContractRow::builder()
-            .name(contract_address.name.clone())
-            .height(contract_address.height)
-            .tx_index(contract_address.tx_index)
+            .name(contract.name.clone())
+            .height(contract.height)
+            .tx_index(contract.tx_index)
             .bytes(vec![])
             .build(),
     )
     .await?;
 
-    let contract_address_1 = ContractAddress {
+    let contract_1 = ContractAddress {
         name: "test1".to_string(),
         height: 1,
         tx_index: 1,
@@ -170,9 +170,9 @@ async fn test_subscriber_recurring() -> Result<()> {
     insert_contract(
         &conn,
         ContractRow::builder()
-            .name(contract_address_1.name.clone())
-            .height(contract_address_1.height)
-            .tx_index(contract_address_1.tx_index)
+            .name(contract_1.name.clone())
+            .height(contract_1.height)
+            .tx_index(contract_1.tx_index)
             .bytes(vec![])
             .build(),
     )
@@ -186,8 +186,8 @@ async fn test_subscriber_recurring() -> Result<()> {
         .subscribe(
             &conn,
             ResultEventFilter::Contract {
-                contract_address: contract_address.clone(),
-                func_name: None,
+                contract: contract.clone(),
+                func: None,
             },
         )
         .await?;
@@ -195,16 +195,16 @@ async fn test_subscriber_recurring() -> Result<()> {
         .subscribe(
             &conn,
             ResultEventFilter::Contract {
-                contract_address: contract_address.clone(),
-                func_name: Some(func_name.to_string()),
+                contract: contract.clone(),
+                func: Some(func.to_string()),
             },
         )
         .await?;
 
     let event = ResultEvent::Ok {
         metadata: ResultEventMetadata::builder()
-            .contract_address(contract_address.clone())
-            .func_name(func_name.to_string())
+            .contract_address(contract.clone())
+            .func(func.to_string())
             .build(),
         value: "".to_string(),
     };
@@ -224,8 +224,8 @@ async fn test_subscriber_recurring() -> Result<()> {
 
     let event = ResultEvent::Ok {
         metadata: ResultEventMetadata::builder()
-            .contract_address(contract_address.clone())
-            .func_name("bar".to_string())
+            .contract_address(contract.clone())
+            .func("bar".to_string())
             .build(),
         value: "".to_string(),
     };
@@ -247,8 +247,8 @@ async fn test_subscriber_recurring() -> Result<()> {
 
     let event = ResultEvent::Ok {
         metadata: ResultEventMetadata::builder()
-            .contract_address(contract_address_1.clone())
-            .func_name(func_name.to_string())
+            .contract_address(contract_1.clone())
+            .func(func.to_string())
             .build(),
         value: "".to_string(),
     };
@@ -274,7 +274,7 @@ async fn test_subscriber_recurring() -> Result<()> {
         subscriptions
             .recurring_subscriptions
             .1
-            .contains_key(&contract_address.to_string())
+            .contains_key(&contract.to_string())
     );
 
     assert!(subscriptions.unsubscribe(sub_id_3).await?);
@@ -282,7 +282,7 @@ async fn test_subscriber_recurring() -> Result<()> {
         !subscriptions
             .recurring_subscriptions
             .1
-            .contains_key(&contract_address.to_string())
+            .contains_key(&contract.to_string())
     );
 
     assert!(subscriptions.unsubscribe(sub_id_1).await?);

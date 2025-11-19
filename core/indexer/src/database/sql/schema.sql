@@ -47,8 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract
 CREATE INDEX IF NOT EXISTS idx_contract_state_contract_tx ON contract_state (contract_id, height DESC, tx_index DESC);
 
 CREATE TABLE IF NOT EXISTS contract_results (
+  id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,
-  func_name TEXT NOT NULL,
+  func TEXT NOT NULL,
   height INTEGER NOT NULL,
   tx_index INTEGER NOT NULL,
   input_index INTEGER NOT NULL,
@@ -63,5 +64,6 @@ CREATE TABLE IF NOT EXISTS contract_results (
     input_index,
     op_index,
     result_index
-  ) FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+  ),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );

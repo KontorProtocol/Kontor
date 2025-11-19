@@ -184,17 +184,39 @@ pub struct TransactionQuery {
     pub cursor: Option<i64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
-    pub height: Option<i64>,
-    #[serde_as(as = "Option<DisplayFromStr>")]
-    pub contract: Option<ContractAddress>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
+
+    pub height: Option<i64>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub contract: Option<ContractAddress>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ResultQuery {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub cursor: Option<i64>,
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+    #[builder(default)]
+    #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
+    #[serde(default)]
+    pub order: OrderDirection,
+
+    pub height: Option<i64>,
+    pub start_height: Option<i64>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub contract: Option<ContractAddress>,
+    pub func: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultRow {
+    #[builder(default = 0)]
+    pub id: i64,
     pub height: i64,
     pub tx_index: i64,
     #[builder(default = 0)]
@@ -206,7 +228,7 @@ pub struct ContractResultRow {
     #[builder(default = 0)]
     pub contract_id: i64,
     #[builder(default = "".to_string())]
-    pub func_name: String,
+    pub func: String,
     pub gas: i64,
     pub value: Option<String>,
 }
@@ -214,6 +236,38 @@ pub struct ContractResultRow {
 impl ContractResultRow {
     pub fn size(&self) -> u64 {
         self.value.as_ref().map_or(0, |v| v.len() as u64)
+    }
+}
+
+// provide contract address instead of internal contract id
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ContractResultPublicRow {
+    #[builder(default = 0)]
+    pub id: i64,
+    pub height: i64,
+    pub tx_index: i64,
+    #[builder(default = 0)]
+    pub input_index: i64,
+    #[builder(default = 0)]
+    pub op_index: i64,
+    #[builder(default = 0)]
+    pub result_index: i64,
+    #[builder(default = "".to_string())]
+    pub func: String,
+    pub gas: i64,
+    pub value: Option<String>,
+    pub contract_name: String,
+    pub contract_height: i64,
+    pub contract_tx_index: i64,
+}
+
+impl HasRowId for ContractResultPublicRow {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
+    fn id_name() -> String {
+        "id".to_string()
     }
 }
 
