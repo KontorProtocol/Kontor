@@ -13,7 +13,7 @@ use indexer::{
     database::{
         Reader, Writer,
         queries::{insert_block, insert_contract, insert_contract_state, insert_transaction},
-        types::{BlockRow, ContractRow, ContractStateRow, TransactionListResponse, TransactionRow},
+        types::{BlockRow, ContractRow, ContractStateRow, PaginatedResponse, TransactionRow},
     },
     reactor::results::ResultSubscriber,
     runtime::Runtime,
@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionListResponseWrapper {
-    result: TransactionListResponse,
+    result: PaginatedResponse<TransactionRow>,
 }
 
 async fn create_test_app(reader: Reader, writer: Writer) -> Result<Router> {
@@ -197,7 +197,7 @@ async fn collect_all_transactions_with_cursor(
 
         let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
 
-        all_transactions.extend(result.result.transactions);
+        all_transactions.extend(result.result.results);
 
         if !result.result.pagination.has_more {
             break;
@@ -239,7 +239,7 @@ async fn collect_all_transactions_with_offset(
 
         let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
 
-        all_transactions.extend(result.result.transactions);
+        all_transactions.extend(result.result.results);
 
         if !result.result.pagination.has_more {
             break;
@@ -633,7 +633,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
     let response: TestResponse = server.get(url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);
@@ -650,7 +650,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
     let response: TestResponse = server.get(&url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);
@@ -666,7 +666,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
     let response: TestResponse = server.get(&url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);
@@ -688,7 +688,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     let response: TestResponse = server.get(url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);
@@ -705,7 +705,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     let response: TestResponse = server.get(&url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);
@@ -721,7 +721,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     let response: TestResponse = server.get(&url).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    let transactions = result.result.transactions;
+    let transactions = result.result.results;
     let meta = result.result.pagination;
 
     assert_eq!(transactions.len(), 1);

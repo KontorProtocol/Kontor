@@ -12,7 +12,7 @@ use indexer::{
     config::Config,
     database::{
         queries::{insert_processed_block, insert_transaction},
-        types::{BlockRow, TransactionListResponse, TransactionRow},
+        types::{BlockRow, PaginatedResponse, TransactionRow},
     },
     reactor::results::ResultSubscriber,
     runtime::Runtime,
@@ -30,7 +30,7 @@ struct BlockResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionListResponseWrapper {
-    result: TransactionListResponse,
+    result: PaginatedResponse<TransactionRow>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,14 +212,14 @@ async fn test_get_transactions_all() -> Result<()> {
     // This is correct - deserialize to the wrapper type first
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
 
-    assert_eq!(result.result.transactions.len(), 3);
+    assert_eq!(result.result.results.len(), 3);
     assert_eq!(result.result.pagination.total_count, 3);
     assert!(!result.result.pagination.has_more);
 
     // Verify ordering (DESC by height, tx_index)
-    assert_eq!(result.result.transactions[0].height, 800001);
-    assert_eq!(result.result.transactions[1].height, 800000);
-    assert_eq!(result.result.transactions[2].height, 800000);
+    assert_eq!(result.result.results[0].height, 800001);
+    assert_eq!(result.result.results[1].height, 800000);
+    assert_eq!(result.result.results[2].height, 800000);
 
     Ok(())
 }
@@ -233,7 +233,7 @@ async fn test_get_transactions_with_limit() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 3);
+    assert_eq!(result.result.results.len(), 3);
     assert_eq!(result.result.pagination.total_count, 3);
     assert!(!result.result.pagination.has_more);
     assert!(result.result.pagination.next_offset.is_none());
@@ -251,7 +251,7 @@ async fn test_get_transactions_with_offset() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 2);
+    assert_eq!(result.result.results.len(), 2);
     assert_eq!(result.result.pagination.total_count, 3);
     assert!(!result.result.pagination.has_more);
 
@@ -268,9 +268,9 @@ async fn test_get_transactions_with_cursor() -> Result<()> {
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
 
     assert_eq!(response.status_code(), StatusCode::OK);
-    assert_eq!(result.result.transactions[0].height, 800001);
-    assert_eq!(result.result.transactions[0].tx_index, 0);
-    assert_eq!(result.result.transactions.len(), 1);
+    assert_eq!(result.result.results[0].height, 800001);
+    assert_eq!(result.result.results[0].tx_index, 0);
+    assert_eq!(result.result.results.len(), 1);
     assert_eq!(result.result.pagination.total_count, 3);
     assert!(result.result.pagination.has_more);
     assert!(result.result.pagination.next_offset.is_some());
@@ -287,7 +287,7 @@ async fn test_get_transactions_with_cursor() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
 
-    assert_eq!(result.result.transactions.len(), 2);
+    assert_eq!(result.result.results.len(), 2);
 
     Ok(())
 }
@@ -315,11 +315,11 @@ async fn test_get_transactions_at_height() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 2);
+    assert_eq!(result.result.results.len(), 2);
     assert_eq!(result.result.pagination.total_count, 2);
 
     // All transactions should be at height 800000
-    for tx in &result.result.transactions {
+    for tx in &result.result.results {
         assert_eq!(tx.height, 800000);
     }
 
@@ -335,7 +335,7 @@ async fn test_get_transactions_at_height_empty() -> Result<()> {
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 0);
+    assert_eq!(result.result.results.len(), 0);
     assert_eq!(result.result.pagination.total_count, 0);
 
     Ok(())
@@ -385,13 +385,13 @@ async fn test_get_transactions_limit_bounds() -> Result<()> {
     let response: TestResponse = server.get("/api/transactions?limit=-1").await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 0); // Clamped to 0
+    assert_eq!(result.result.results.len(), 0); // Clamped to 0
 
     // Test maximum limit
     let response: TestResponse = server.get("/api/transactions?limit=2000").await;
     assert_eq!(response.status_code(), StatusCode::OK);
     let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.transactions.len(), 3); // All available transactions
+    assert_eq!(result.result.results.len(), 3); // All available transactions
 
     Ok(())
 }

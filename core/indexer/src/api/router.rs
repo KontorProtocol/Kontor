@@ -18,7 +18,7 @@ use tower_http::{
 use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
-    get_contract, get_contracts, get_index, get_transaction, get_transaction_inspect,
+    get_blocks, get_contract, get_contracts, get_index, get_transaction, get_transaction_inspect,
     get_transactions, post_compose, post_contract, post_transaction_hex_inspect, stop,
 };
 
@@ -97,6 +97,7 @@ pub fn new(context: Env) -> Router {
                 .nest(
                     "/blocks",
                     Router::new()
+                        .route("/", get(get_blocks))
                         .route("/latest", get(get_block_latest))
                         .route("/{height|hash}", get(get_block))
                         .route("/{height}/transactions", get(get_transactions)),

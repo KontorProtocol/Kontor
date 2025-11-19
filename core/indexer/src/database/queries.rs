@@ -6,8 +6,8 @@ use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        CheckpointRow, ContractListRow, ContractResultRow, ContractRow, HasRowId, OpResultId,
-        OrderDirection, PaginationMeta, TransactionQuery, TransactionRow,
+        BlockQuery, CheckpointRow, ContractListRow, ContractResultRow, ContractRow, HasRowId,
+        OpResultId, OrderDirection, PaginationMeta, TransactionQuery, TransactionRow,
     },
     runtime::ContractAddress,
 };
@@ -129,6 +129,26 @@ pub async fn select_block_with_hash(
         )
         .await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn get_blocks_paginated(
+    conn: &Connection,
+    query: BlockQuery,
+) -> Result<(Vec<BlockRow>, PaginationMeta), Error> {
+    let var = "b";
+    get_paginated(
+        conn,
+        var,
+        "b.height, b.hash",
+        &format!("blocks {}", var),
+        vec!["processed = 1".to_string()],
+        vec![],
+        query.order,
+        query.cursor,
+        query.offset,
+        query.limit,
+    )
+    .await
 }
 
 pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
@@ -531,6 +551,14 @@ pub async fn get_transactions_at_height(
     Ok(results)
 }
 
+pub fn filter_cursor(cursor: Option<i64>) -> Option<i64> {
+    cursor.filter(|&c| c >= 0)
+}
+
+pub fn clamp_limit(limit: Option<i64>) -> i64 {
+    limit.map_or(20, |l| l.clamp(0, 1000))
+}
+
 pub async fn get_paginated<T>(
     conn: &Connection,
     var: &str,
@@ -541,15 +569,19 @@ pub async fn get_paginated<T>(
     order: OrderDirection,
     cursor: Option<i64>,
     offset: Option<i64>,
-    limit: i64,
+    limit: Option<i64>,
 ) -> Result<(Vec<T>, PaginationMeta), Error>
 where
     T: DeserializeOwned + HasRowId,
 {
+    let cursor = filter_cursor(cursor);
+    let limit = clamp_limit(limit);
+
     if let Some(cursor) = cursor {
         where_clauses.push(format!(
-            "{}.id {} :cursor",
+            "{}.{} {} :cursor",
             var,
+            T::id_name(),
             if order == OrderDirection::Desc {
                 "<"
             } else {
@@ -569,8 +601,11 @@ where
     let total_count = conn
         .query(
             &format!(
-                "SELECT COUNT(DISTINCT {}.id) FROM {} {}",
-                var, from, where_sql
+                "SELECT COUNT(DISTINCT {}.{}) FROM {} {}",
+                var,
+                T::id_name(),
+                from,
+                where_sql
             ),
             params.clone(),
         )
@@ -598,7 +633,7 @@ where
                 SELECT {selects}
                 FROM {from}
                 {where_sql}
-                ORDER BY {var}.id {order}
+                ORDER BY {var}.{id_name} {order}
                 LIMIT :limit
                 {offset_clause}
                 "#,
@@ -606,6 +641,7 @@ where
                 from = from,
                 where_sql = where_sql,
                 var = var,
+                id_name = T::id_name(),
                 order = order,
                 offset_clause = offset_clause
             ),
@@ -672,9 +708,9 @@ pub async fn get_transactions_paginated(
         where_clauses,
         params,
         query.order,
-        query.cursor(),
+        query.cursor,
         query.offset,
-        query.limit(),
+        query.limit,
     )
     .await
 }

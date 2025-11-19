@@ -9,6 +9,7 @@ use crate::{block::Block, runtime::ContractAddress};
 
 pub trait HasRowId {
     fn id(&self) -> i64;
+    fn id_name() -> String;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
@@ -55,6 +56,16 @@ impl From<&Block> for BlockRow {
     }
 }
 
+impl HasRowId for BlockRow {
+    fn id(&self) -> i64 {
+        self.height
+    }
+
+    fn id_name() -> String {
+        "height".to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CheckpointRow {
     pub height: i64,
@@ -91,6 +102,10 @@ pub struct TransactionRow {
 impl HasRowId for TransactionRow {
     fn id(&self) -> i64 {
         self.id
+    }
+
+    fn id_name() -> String {
+        "id".to_string()
     }
 }
 
@@ -144,27 +159,31 @@ pub struct PaginationMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionListResponse {
-    pub transactions: Vec<TransactionRow>,
+pub struct PaginatedResponse<T> {
+    pub results: Vec<T>,
     pub pagination: PaginationMeta,
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaginationQuery {
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct BlockQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<i64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
+    #[builder(default)]
+    #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
+    #[serde(default)]
+    pub order: OrderDirection,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    cursor: Option<i64>,
+    pub cursor: Option<i64>,
     pub offset: Option<i64>,
-    limit: Option<i64>,
+    pub limit: Option<i64>,
     pub height: Option<i64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
@@ -172,28 +191,6 @@ pub struct TransactionQuery {
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
-}
-
-impl TransactionQuery {
-    pub fn cursor(&self) -> Option<i64> {
-        if let Some(cursor) = self.cursor
-            && cursor < 0
-        {
-            return None;
-        }
-        self.cursor
-    }
-
-    pub fn limit(&self) -> i64 {
-        self.limit.map_or(20, |l| l.clamp(0, 1000))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionPaginationQuery {
-    pub cursor: Option<String>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]

@@ -13,11 +13,11 @@ use crate::{
     built_info,
     database::{
         queries::{
-            self, get_checkpoint_latest, get_transaction_by_txid, get_transactions_paginated,
-            select_block_by_height_or_hash, select_block_latest,
+            self, get_blocks_paginated, get_checkpoint_latest, get_transaction_by_txid,
+            get_transactions_paginated, select_block_by_height_or_hash, select_block_latest,
         },
         types::{
-            BlockRow, ContractListRow, OpResultId, TransactionListResponse, TransactionQuery,
+            BlockQuery, BlockRow, ContractListRow, OpResultId, PaginatedResponse, TransactionQuery,
             TransactionRow,
         },
     },
@@ -136,23 +136,41 @@ pub async fn post_compose_reveal(
     Ok(outputs.into())
 }
 
+pub fn validate_query(
+    cursor: Option<i64>,
+    offset: Option<i64>,
+) -> std::result::Result<(), HttpError> {
+    if cursor.is_some() && offset.is_some() {
+        return Err(HttpError::BadRequest(
+            "Cannot specify both cursor and offset parameters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn get_blocks(
+    Query(query): Query<BlockQuery>,
+    State(env): State<Env>,
+) -> Result<PaginatedResponse<BlockRow>> {
+    validate_query(query.cursor, query.offset)?;
+    let (results, pagination) =
+        get_blocks_paginated(&*env.reader.connection().await?, query).await?;
+    Ok(PaginatedResponse {
+        results,
+        pagination,
+    }
+    .into())
+}
+
 pub async fn get_transactions(
     Query(query): Query<TransactionQuery>,
     State(env): State<Env>,
-) -> Result<TransactionListResponse> {
-    if query.cursor().is_some() && query.offset.is_some() {
-        return Err(HttpError::BadRequest(
-            "Cannot specify both cursor and offset parameters".to_string(),
-        )
-        .into());
-    }
-
-    let conn = env.reader.connection().await?;
-
-    let (transactions, pagination) = get_transactions_paginated(&conn, query).await?;
-
-    Ok(TransactionListResponse {
-        transactions,
+) -> Result<PaginatedResponse<TransactionRow>> {
+    validate_query(query.cursor, query.offset)?;
+    let (results, pagination) =
+        get_transactions_paginated(&*env.reader.connection().await?, query).await?;
+    Ok(PaginatedResponse {
+        results,
         pagination,
     }
     .into())
