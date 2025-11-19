@@ -38,12 +38,12 @@ impl Op {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// HERE 
+// HERE
 // not use cbor!
-// look at serde site, look at list of all serialization methods 
+// look at serde site, look at list of all serialization methods
 // DETERMINITSTIC AND SMALL -- postcard? common library EXPLICITLY SAYS DETERMISTIC
 
-// reveal endpoint takes arbitrary data? 
+// reveal endpoint takes arbitrary data?
 // reproduce byte for byte script data
 // that would require deterministic serialization
 
