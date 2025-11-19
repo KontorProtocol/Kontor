@@ -27,12 +27,28 @@ fn bench_serialize(c: &mut Criterion) {
             black_box(bytes)
         })
     });
+
+    c.bench_function("bcs serialize WitnessData", |b| {
+        b.iter(|| {
+            let bytes = bcs::to_bytes(black_box(&payload)).unwrap();
+            black_box(bytes)
+        })
+    });
+
+    c.bench_function("postcard serialize WitnessData", |b| {
+        b.iter(|| {
+            let bytes = postcard::to_allocvec(black_box(&payload)).unwrap();
+            black_box(bytes)
+        })
+    });
 }
 
 fn bench_deserialize(c: &mut Criterion) {
     let payload = sample_payload();
     let bytes_cbor4ii = cbor4ii::serde::to_vec(Vec::new(), &payload).unwrap();
     let bytes_dagcbor = serde_ipld_dagcbor::to_vec(&payload).unwrap();
+    let bytes_bcs = bcs::to_bytes(&payload).unwrap();
+    let bytes_postcard = postcard::to_allocvec(&payload).unwrap();
 
     c.bench_function("cbor4ii deserialize WitnessData", |b| {
         b.iter(|| {
@@ -45,6 +61,20 @@ fn bench_deserialize(c: &mut Criterion) {
         b.iter(|| {
             let value: WitnessData =
                 serde_ipld_dagcbor::from_slice(black_box(&bytes_dagcbor)).unwrap();
+            black_box(value)
+        })
+    });
+
+    c.bench_function("bcs deserialize WitnessData", |b| {
+        b.iter(|| {
+            let value: WitnessData = bcs::from_bytes(black_box(&bytes_bcs)).unwrap();
+            black_box(value)
+        })
+    });
+
+    c.bench_function("postcard deserialize WitnessData", |b| {
+        b.iter(|| {
+            let value: WitnessData = postcard::from_bytes(black_box(&bytes_postcard)).unwrap();
             black_box(value)
         })
     });

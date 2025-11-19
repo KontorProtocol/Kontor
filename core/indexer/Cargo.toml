@@ -69,6 +69,8 @@ once_cell = "=1.21.3"
 cbor4ii = { version = "0.3", features = ["serde1"] }
 serde_ipld_dagcbor = "=0.6.4"
 criterion = "0.5"
+bcs = "0.1"
+postcard = { version = "1", features = ["alloc"] }
 
 [build-dependencies]
 glob = { workspace = true }

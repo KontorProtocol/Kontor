@@ -34,10 +34,32 @@ fn test_cbor4ii_and_dagcbor_determinism_and_size() {
         serde_ipld_dagcbor::from_slice(&dagcbor_bytes_1).expect("dag-cbor deserialize");
     assert_eq!(decoded_dagcbor, payload);
 
+    // bcs (Binary Canonical Serialization)
+    let bcs_bytes_1 = bcs::to_bytes(&payload).expect("bcs serialize");
+    let bcs_bytes_2 = bcs::to_bytes(&payload).expect("bcs serialize");
+    assert_eq!(bcs_bytes_1, bcs_bytes_2, "bcs not deterministic");
+
+    let decoded_bcs: WitnessData = bcs::from_bytes(&bcs_bytes_1).expect("bcs deserialize");
+    assert_eq!(decoded_bcs, payload);
+
+    // postcard (deterministic given fixed field order; no maps here)
+    let postcard_bytes_1 = postcard::to_allocvec(&payload).expect("postcard serialize");
+    let postcard_bytes_2 = postcard::to_allocvec(&payload).expect("postcard serialize");
+    assert_eq!(
+        postcard_bytes_1, postcard_bytes_2,
+        "postcard not deterministic"
+    );
+
+    let decoded_postcard: WitnessData =
+        postcard::from_bytes(&postcard_bytes_1).expect("postcard deserialize");
+    assert_eq!(decoded_postcard, payload);
+
     // Size compare (printed for human inspection during test runs)
     println!(
-        "cbor4ii size: {} bytes, dag-cbor size: {} bytes",
+        "cbor4ii size: {} bytes, dag-cbor size: {} bytes, bcs size: {} bytes, postcard size: {} bytes",
         cbor4ii_bytes_1.len(),
-        dagcbor_bytes_1.len()
+        dagcbor_bytes_1.len(),
+        bcs_bytes_1.len(),
+        postcard_bytes_1.len()
     );
 }
