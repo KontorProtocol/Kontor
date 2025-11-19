@@ -221,25 +221,6 @@ pub struct ViewExpr {
     pub expr: String,
 }
 
-fn extract_contract_address(s: &str) -> anyhow::Result<ContractAddress> {
-    let address_parts = s.split("_").collect::<Vec<_>>();
-    if address_parts.len() != 3 {
-        return Err(HttpError::BadRequest("Invalid contract address format".to_string()).into());
-    }
-    let name = address_parts[0].to_string();
-    if let Ok(height) = address_parts[1].parse::<i64>()
-        && let Ok(tx_index) = address_parts[2].parse::<i64>()
-    {
-        Ok(ContractAddress {
-            name,
-            height,
-            tx_index,
-        })
-    } else {
-        Err(HttpError::BadRequest("Invalid parts in contract address".to_string()).into())
-    }
-}
-
 pub async fn post_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
@@ -248,7 +229,9 @@ pub async fn post_contract(
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
-    let contract_address = extract_contract_address(&address)?;
+    let contract_address = address
+        .parse::<ContractAddress>()
+        .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
     let func_name = expr
         .split("(")
         .next()
@@ -296,7 +279,9 @@ pub async fn get_contract(
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
-    let contract_address = extract_contract_address(&address)?;
+    let contract_address = address
+        .parse::<ContractAddress>()
+        .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
     let runtime = env.runtime.lock().await;
     let contract_id = runtime
         .storage

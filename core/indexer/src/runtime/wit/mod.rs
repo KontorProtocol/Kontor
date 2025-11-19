@@ -114,3 +114,27 @@ impl<'de> Deserialize<'de> for kontor::built_in::foreign::ContractAddress {
         deserializer.deserialize_map(ContractAddressVisitor)
     }
 }
+
+impl std::str::FromStr for kontor::built_in::foreign::ContractAddress {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('_').collect();
+        if parts.len() != 3 {
+            return Err(format!("expected 3 parts separated by '_', got: {s}"));
+        }
+        let name = parts[0].to_string();
+        let height = parts[1]
+            .parse::<i64>()
+            .map_err(|e| format!("invalid height: {e}"))?;
+        let tx_index = parts[2]
+            .parse::<i64>()
+            .map_err(|e| format!("invalid tx_index: {e}"))?;
+
+        Ok(kontor::built_in::foreign::ContractAddress {
+            name,
+            height,
+            tx_index,
+        })
+    }
+}

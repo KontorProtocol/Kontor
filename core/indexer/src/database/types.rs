@@ -5,7 +5,11 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
-use crate::block::Block;
+use crate::{block::Block, runtime::ContractAddress};
+
+pub trait HasRowId {
+    fn id(&self) -> i64;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct BlockRow {
@@ -53,6 +57,12 @@ pub struct TransactionRow {
     pub txid: String,
     pub height: i64,
     pub tx_index: i64,
+}
+
+impl HasRowId for TransactionRow {
+    fn id(&self) -> i64 {
+        self.id
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -120,13 +130,15 @@ pub struct PaginationQuery {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     cursor: Option<i64>,
     pub offset: Option<i64>,
     limit: Option<i64>,
     pub height: Option<i64>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub contract: Option<ContractAddress>,
 }
 
 impl TransactionQuery {

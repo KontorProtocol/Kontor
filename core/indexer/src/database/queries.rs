@@ -1,12 +1,13 @@
 use bitcoin::BlockHash;
 use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, named_params, params};
+use serde::de::DeserializeOwned;
 use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        CheckpointRow, ContractListRow, ContractResultRow, ContractRow, OpResultId, PaginationMeta,
-        TransactionQuery, TransactionRow,
+        CheckpointRow, ContractListRow, ContractResultRow, ContractRow, HasRowId, OpResultId,
+        PaginationMeta, TransactionQuery, TransactionRow,
     },
     runtime::ContractAddress,
 };
@@ -23,6 +24,8 @@ pub enum Error {
     InvalidCursor,
     #[error("Out of fuel")]
     OutOfFuel,
+    #[error("Contract not found: {0}")]
+    ContractNotFound(String),
 }
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -528,19 +531,22 @@ pub async fn get_transactions_at_height(
     Ok(results)
 }
 
-pub async fn get_transactions_paginated(
+pub async fn get_paginated<T>(
     conn: &Connection,
-    query: TransactionQuery,
-) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
-    let mut where_clauses = Vec::new();
-    let mut params: Vec<(String, Value)> = Vec::new();
-    if let Some(height) = query.height {
-        where_clauses.push("t.height = :height");
-        params.push((":height".to_string(), Value::Integer(height)));
-    }
-
-    if let Some(cursor) = query.cursor() {
-        where_clauses.push("t.id < :cursor");
+    var: &str,
+    selects: &str,
+    from: &str,
+    mut where_clauses: Vec<String>,
+    mut params: Vec<(String, Value)>,
+    cursor: Option<i64>,
+    offset: Option<i64>,
+    limit: i64,
+) -> Result<(Vec<T>, PaginationMeta), Error>
+where
+    T: DeserializeOwned + HasRowId,
+{
+    if let Some(cursor) = cursor {
+        where_clauses.push(format!("{}.id < :cursor", var));
         params.push((":cursor".to_string(), Value::Integer(cursor)));
     }
 
@@ -553,7 +559,10 @@ pub async fn get_transactions_paginated(
     // Get total count first
     let total_count = conn
         .query(
-            &format!("SELECT COUNT(*) FROM transactions t {}", where_sql),
+            &format!(
+                "SELECT COUNT(DISTINCT {}.id) FROM {} {}",
+                var, from, where_sql
+            ),
             params.clone(),
         )
         .await?
@@ -563,27 +572,29 @@ pub async fn get_transactions_paginated(
 
     // Build OFFSET clause
     let mut offset_clause = "";
-    if query.cursor().is_none()
-        && let Some(offset) = query.offset
+    if cursor.is_none()
+        && let Some(offset) = offset
     {
         offset_clause = "OFFSET :offset";
         params.push((":offset".to_string(), Value::Integer(offset)));
     }
 
-    params.push((":limit".to_string(), Value::Integer(query.limit() + 1)));
+    params.push((":limit".to_string(), Value::Integer(limit + 1)));
 
     // Execute main query with ALL named parameters
     let mut rows = conn
         .query(
             &format!(
                 r#"
-                     SELECT t.id, t.txid, t.height, t.tx_index
-                     FROM transactions t
-                     {where_sql}
-                     ORDER BY t.id DESC
-                     LIMIT :limit
-                     {offset_clause}
-                     "#,
+                         SELECT {selects}
+                         FROM {from}
+                         {where_sql}
+                         ORDER BY t.id DESC
+                         LIMIT :limit
+                         {offset_clause}
+                         "#,
+                selects = selects,
+                from = from,
                 where_sql = where_sql,
                 offset_clause = offset_clause
             ),
@@ -591,24 +602,23 @@ pub async fn get_transactions_paginated(
         )
         .await?;
 
-    let mut transactions: Vec<TransactionRow> = Vec::new();
+    let mut results: Vec<T> = Vec::new();
     while let Some(row) = rows.next().await? {
-        transactions.push(from_row(&row)?);
+        results.push(from_row(&row)?);
     }
 
-    let has_more = transactions.len() > query.limit() as usize;
+    let has_more = results.len() > limit as usize;
 
     if has_more {
-        transactions.pop();
+        results.pop();
     }
 
-    let next_cursor = transactions
+    let next_cursor = results
         .last()
-        .filter(|_| query.offset.is_none() && has_more)
-        .map(|last_tx| last_tx.id);
+        .filter(|_| offset.is_none() && has_more)
+        .map(|last_tx| last_tx.id());
 
-    let next_offset =
-        (query.cursor().is_none() && has_more).then(|| query.offset.unwrap_or(0) + query.limit());
+    let next_offset = (cursor.is_none() && has_more).then(|| offset.unwrap_or(0) + limit);
 
     let pagination = PaginationMeta {
         next_cursor,
@@ -617,7 +627,44 @@ pub async fn get_transactions_paginated(
         total_count,
     };
 
-    Ok((transactions, pagination))
+    Ok((results, pagination))
+}
+
+pub async fn get_transactions_paginated(
+    conn: &Connection,
+    query: TransactionQuery,
+) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
+    let mut where_clauses = Vec::new();
+    let mut params: Vec<(String, Value)> = Vec::new();
+    let var = "t";
+    let mut selects = "t.id, t.txid, t.height, t.tx_index".to_string();
+    let mut from = format!("transactions {}", var);
+    if let Some(address) = &query.contract {
+        let contract_id = get_contract_id_from_address(conn, address)
+            .await?
+            .ok_or(Error::ContractNotFound(address.to_string()))?;
+        selects = format!("DISTINCT {}", selects);
+        from = format!("{} JOIN contract_state c USING (height, tx_index)", from);
+        where_clauses.push(format!("c.contract_id = {}", contract_id));
+    }
+
+    if let Some(height) = query.height {
+        where_clauses.push("t.height = :height".to_string());
+        params.push((":height".to_string(), Value::Integer(height)));
+    }
+
+    get_paginated(
+        conn,
+        var,
+        &selects,
+        &from,
+        where_clauses,
+        params,
+        query.cursor(),
+        query.offset,
+        query.limit(),
+    )
+    .await
 }
 
 pub async fn get_op_result(

@@ -1,11 +1,15 @@
 use anyhow::Result;
 use indexer::{
     database::{
-        queries::{get_transactions_paginated, insert_block, insert_transaction},
-        types::{BlockRow, TransactionQuery, TransactionRow},
+        queries::{
+            get_transactions_paginated, insert_block, insert_contract, insert_contract_state,
+            insert_transaction,
+        },
+        types::{BlockRow, ContractRow, ContractStateRow, TransactionQuery, TransactionRow},
     },
     test_utils::new_test_db,
 };
+use testlib::ContractAddress;
 
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
     // Insert blocks
@@ -18,6 +22,17 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         let block = BlockRow { height, hash };
         insert_block(conn, block).await?;
     }
+
+    insert_contract(
+        conn,
+        ContractRow::builder()
+            .name("token".to_string())
+            .height(800000)
+            .tx_index(1)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
 
     // Insert transactions across multiple heights
     // Height 800000: 5 transactions (tx_index 0-4)
@@ -33,6 +48,17 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         insert_transaction(conn, tx).await?;
     }
 
+    insert_contract_state(
+        conn,
+        ContractStateRow::builder()
+            .contract_id(1)
+            .height(800000)
+            .tx_index(0)
+            .path("foo".to_string())
+            .build(),
+    )
+    .await?;
+
     // Height 800001: 3 transactions (tx_index 0-2)
     for i in 0..3 {
         let tx = TransactionRow::builder()
@@ -45,6 +71,28 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             .build();
         insert_transaction(conn, tx).await?;
     }
+
+    // tests DISTINCT functionality
+    insert_contract_state(
+        conn,
+        ContractStateRow::builder()
+            .contract_id(1)
+            .height(800001)
+            .tx_index(1)
+            .path("bar".to_string())
+            .build(),
+    )
+    .await?;
+    insert_contract_state(
+        conn,
+        ContractStateRow::builder()
+            .contract_id(1)
+            .height(800001)
+            .tx_index(1)
+            .path("biz".to_string())
+            .build(),
+    )
+    .await?;
 
     // Height 800002: 2 transactions (tx_index 0-1)
     for i in 0..2 {
@@ -59,6 +107,38 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         insert_transaction(conn, tx).await?;
     }
 
+    insert_contract_state(
+        conn,
+        ContractStateRow::builder()
+            .contract_id(1)
+            .height(800002)
+            .tx_index(0)
+            .path("baz".to_string())
+            .build(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_contract_address() -> Result<()> {
+    let x = serde_json::from_str::<TransactionQuery>(r#"{"contract": "token_1_0"}"#).unwrap();
+    assert_eq!(
+        x,
+        TransactionQuery::builder()
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 0
+            })
+            .build()
+    );
+    let s = serde_json::to_string(&x).unwrap();
+    assert_eq!(
+        s,
+        "{\"cursor\":null,\"offset\":null,\"limit\":null,\"height\":null,\"contract\":\"token_1_0\"}"
+    );
     Ok(())
 }
 
@@ -94,40 +174,44 @@ async fn test_basic_pagination_no_filters() -> Result<()> {
 
 #[tokio::test]
 async fn test_offset_pagination() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
-
     // First page
     let (page1, meta1) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().limit(3).build()).await?;
+        get_transactions_paginated(&conn, TransactionQuery::builder().limit(3).build()).await?;
     assert_eq!(page1.len(), 3);
     assert_eq!(meta1.next_offset, Some(3));
     assert!(meta1.has_more);
     assert!(meta1.next_cursor.is_some());
 
     // Second page using offset
-    let (page2, meta2) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().offset(3).limit(3).build())
-            .await?;
+    let (page2, meta2) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder().offset(3).limit(3).build(),
+    )
+    .await?;
     assert_eq!(page2.len(), 3);
     assert_eq!(meta2.next_offset, Some(6));
     assert!(meta2.has_more);
     assert!(meta2.next_cursor.is_none()); // offset pagination
 
     // Third page
-    let (page3, meta3) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().offset(6).limit(3).build())
-            .await?;
+    let (page3, meta3) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder().offset(6).limit(3).build(),
+    )
+    .await?;
     assert_eq!(page3.len(), 3);
     assert_eq!(meta3.next_offset, Some(9));
     assert!(meta3.has_more);
 
     // Fourth page (last page)
-    let (page4, meta4) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().offset(9).limit(3).build())
-            .await?;
+    let (page4, meta4) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder().offset(9).limit(3).build(),
+    )
+    .await?;
     assert_eq!(page4.len(), 1); // Only 1 transaction left
     assert_eq!(meta4.next_offset, None); // No more pages
     assert!(!meta4.has_more);
@@ -145,15 +229,13 @@ async fn test_offset_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 
     // First page with cursor pagination
-    let tx1 = reader.connection().await?.transaction().await?;
     let (page1, meta1) =
-        get_transactions_paginated(&tx1, TransactionQuery::builder().limit(3).build()).await?;
-    tx1.commit().await?; // Commit the transaction
+        get_transactions_paginated(&conn, TransactionQuery::builder().limit(3).build()).await?;
 
     assert_eq!(page1.len(), 3);
     assert!(meta1.has_more);
@@ -163,17 +245,14 @@ async fn test_cursor_pagination() -> Result<()> {
     let cursor = meta1.next_cursor.unwrap();
     assert_eq!(cursor, 8);
 
-    // Create NEW connection for second transaction
-    let tx2 = reader.connection().await?.transaction().await?;
     let (page2, meta2) = get_transactions_paginated(
-        &tx2,
+        &conn,
         TransactionQuery::builder()
             .maybe_cursor(meta1.next_cursor)
             .limit(3)
             .build(),
     )
     .await?;
-    tx2.commit().await?; // Commit the transaction
 
     assert_eq!(page2.len(), 3);
     assert!(meta2.has_more);
@@ -183,17 +262,14 @@ async fn test_cursor_pagination() -> Result<()> {
     let cursor = meta2.next_cursor.unwrap();
     assert_eq!(cursor, 5);
 
-    // Create NEW connection for third transaction
-    let tx3 = reader.connection().await?.transaction().await?;
     let (page3, meta3) = get_transactions_paginated(
-        &tx3,
+        &conn,
         TransactionQuery::builder()
             .maybe_cursor(meta2.next_cursor)
             .limit(3)
             .build(),
     )
     .await?;
-    tx3.commit().await?; // Commit the transaction
 
     assert_eq!(page3.len(), 3);
     assert!(meta3.has_more);
@@ -202,16 +278,14 @@ async fn test_cursor_pagination() -> Result<()> {
     let cursor = meta3.next_cursor.unwrap();
     assert_eq!(cursor, 2);
 
-    let tx4 = reader.connection().await?.transaction().await?;
     let (page4, meta4) = get_transactions_paginated(
-        &tx4,
+        &conn,
         TransactionQuery::builder()
             .maybe_cursor(meta3.next_cursor)
             .limit(3)
             .build(),
     )
     .await?;
-    tx4.commit().await?; // Commit the transaction
 
     assert_eq!(page4.len(), 1);
     assert!(!meta4.has_more);
@@ -230,13 +304,12 @@ async fn test_cursor_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_height_filter() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
     // Filter by height 800001 (should have 3 transactions)
     let (transactions, meta) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder().height(800001).limit(10).build(),
     )
     .await?;
@@ -261,14 +334,13 @@ async fn test_height_filter() -> Result<()> {
 
 #[tokio::test]
 async fn test_height_filter_with_pagination() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
 
     // Filter by height 800000 with limit 2 (should have 5 total, return 2)
     let (page1, meta1) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder().height(800000).limit(2).build(),
     )
     .await?;
@@ -280,7 +352,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
 
     // Get second page
     let (page2, meta2) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder()
             .height(800000)
             .offset(2)
@@ -295,7 +367,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
 
     // Get final page
     let (page3, meta3) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder()
             .height(800000)
             .offset(4)
@@ -313,14 +385,13 @@ async fn test_height_filter_with_pagination() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_and_offset_conflict() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
 
     // When both cursor and offset are provided, cursor takes precedence
     let (transactions, meta) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder()
             .cursor(9)
             .offset(5)
@@ -343,14 +414,13 @@ async fn test_cursor_and_offset_conflict() -> Result<()> {
 
 #[tokio::test]
 async fn test_empty_result_set() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
 
     // Query for non-existent height
     let (transactions, meta) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder().height(999999).limit(10).build(),
     )
     .await?;
@@ -366,14 +436,13 @@ async fn test_empty_result_set() -> Result<()> {
 
 #[tokio::test]
 async fn test_large_limit() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
 
     // Request more than available
     let (transactions, meta) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().limit(100).build()).await?;
+        get_transactions_paginated(&conn, TransactionQuery::builder().limit(100).build()).await?;
 
     assert_eq!(transactions.len(), 10); // All available transactions
     assert!(!meta.has_more);
@@ -385,13 +454,12 @@ async fn test_large_limit() -> Result<()> {
 
 #[tokio::test]
 async fn test_zero_limit() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
-    let tx = reader.connection().await?.transaction().await?;
 
     let (transactions, meta) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().limit(0).build()).await?;
+        get_transactions_paginated(&conn, TransactionQuery::builder().limit(0).build()).await?;
 
     assert_eq!(transactions.len(), 0);
     assert!(meta.has_more); // There are transactions available
@@ -403,42 +471,107 @@ async fn test_zero_limit() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_boundary_conditions() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 
     // Cursor pointing to the very first transaction
-    let tx = reader.connection().await?.transaction().await?;
     let (transactions, meta) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder().cursor(10).limit(10).build(),
     )
     .await?;
-    tx.commit().await?;
 
     assert_eq!(transactions.len(), 9);
     assert!(!meta.has_more);
 
     // Cursor pointing beyond all transactions
-    let tx = reader.connection().await?.transaction().await?; // NEW connection
     let (transactions, meta) = get_transactions_paginated(
-        &tx,
+        &conn,
         TransactionQuery::builder().cursor(11).limit(10).build(),
     )
     .await?;
-    tx.commit().await?;
 
     assert_eq!(transactions.len(), 10);
     assert!(!meta.has_more);
 
-    let tx = reader.connection().await?.transaction().await?; // NEW connection
-    let (transactions, meta) =
-        get_transactions_paginated(&tx, TransactionQuery::builder().cursor(0).limit(10).build())
-            .await?;
-    tx.commit().await?;
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder().cursor(0).limit(10).build(),
+    )
+    .await?;
 
     assert_eq!(transactions.len(), 0);
     assert!(!meta.has_more);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cursor_contract_address_querying() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_test_data(&conn).await?;
+
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 800000,
+                tx_index: 1,
+            })
+            .limit(1)
+            .build(),
+    )
+    .await?;
+
+    assert_eq!(transactions.len(), 1);
+    assert_eq!(transactions[0].height, 800002);
+    assert_eq!(transactions[0].tx_index, 0);
+    assert!(meta.has_more);
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
+    assert_eq!(meta.total_count, 3);
+
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .maybe_cursor(meta.next_cursor)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 800000,
+                tx_index: 1,
+            })
+            .limit(1)
+            .build(),
+    )
+    .await?;
+
+    assert_eq!(transactions.len(), 1);
+    assert_eq!(transactions[0].height, 800001);
+    assert_eq!(transactions[0].tx_index, 1);
+    assert!(meta.has_more);
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
+
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .maybe_cursor(meta.next_cursor)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 800000,
+                tx_index: 1,
+            })
+            .limit(1)
+            .build(),
+    )
+    .await?;
+
+    assert_eq!(transactions.len(), 1);
+    assert_eq!(transactions[0].height, 800000);
+    assert_eq!(transactions[0].tx_index, 0);
+    assert!(!meta.has_more);
+    assert!(meta.next_cursor.is_none());
 
     Ok(())
 }
