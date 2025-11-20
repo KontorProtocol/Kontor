@@ -4,6 +4,7 @@ use bitcoin::script::Instruction;
 use bitcoin::{CompressedPublicKey, ScriptBuf};
 use bitcoin::{Witness, consensus::encode::serialize as serialize_tx, key::Secp256k1};
 
+use indexer::runtime::{deserialize, serialize};
 use indexer::witness_data::TokenBalance;
 use indexer::{legacy_test_utils, test_utils};
 use testlib::RegTester;
@@ -34,8 +35,7 @@ pub async fn test_legacy_segwit_envelope_psbt_inscription(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = test_utils::build_inscription(
         serialized_token_balance.clone(),
@@ -122,7 +122,7 @@ pub async fn test_legacy_segwit_envelope_psbt_inscription(
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -164,8 +164,7 @@ pub async fn test_legacy_segwit_psbt_inscription_invalid_token_data(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = test_utils::build_inscription(
         serialized_token_balance.clone(),
@@ -195,12 +194,7 @@ pub async fn test_legacy_segwit_psbt_inscription_invalid_token_data(
         name: "wrong_token_name".to_string(),
     };
 
-    let mut serialized_malformed_token_balance = Vec::new();
-    ciborium::into_writer(
-        &malformed_token_balance,
-        &mut serialized_malformed_token_balance,
-    )
-    .unwrap();
+    let serialized_malformed_token_balance = serialize(&malformed_token_balance)?;
 
     let malformed_witness_script = test_utils::build_inscription(
         serialized_malformed_token_balance,
@@ -278,7 +272,7 @@ pub async fn test_legacy_segwit_psbt_inscription_invalid_token_data(
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -320,8 +314,7 @@ pub async fn test_legacy_segwit_psbt_inscription_wrong_internal_key(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = test_utils::build_inscription(
         serialized_token_balance.clone(),
@@ -422,7 +415,7 @@ pub async fn test_legacy_segwit_psbt_inscription_wrong_internal_key(
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -464,8 +457,7 @@ pub async fn test_legacy_segwit_psbt_inscription_without_checksig(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = test_utils::build_inscription_without_checksig(
         serialized_token_balance.clone(),
@@ -548,7 +540,7 @@ pub async fn test_legacy_segwit_psbt_inscription_without_checksig(
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(
@@ -590,8 +582,7 @@ pub async fn test_legacy_segwit_psbt_inscription_with_wrong_internal_key_without
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = test_utils::build_inscription_without_checksig(
         serialized_token_balance.clone(),
@@ -689,7 +680,7 @@ pub async fn test_legacy_segwit_psbt_inscription_with_wrong_internal_key_without
         assert_eq!(*op_endif, OP_ENDIF, "Expected OP_ENDIF");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(

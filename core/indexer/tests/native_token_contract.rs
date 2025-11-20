@@ -60,7 +60,7 @@ async fn test_native_token_contract() -> Result<()> {
     run_test_native_token_contract(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
-async fn test_native_token_contract_regtest() -> Result<()> {
-    run_test_native_token_contract(runtime).await
-}
+// #[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+// async fn test_native_token_contract_regtest() -> Result<()> {
+//     run_test_native_token_contract(runtime).await
+// }

@@ -11,6 +11,7 @@ use bitcoin::{
 
 use indexer::legacy_test_utils;
 use indexer::op_return::OpReturnData;
+use indexer::runtime::{deserialize, serialize};
 use indexer::witness_data::TokenBalance;
 use std::collections::HashMap;
 use testlib::RegTester;
@@ -40,8 +41,7 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -127,8 +127,7 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
     assert!(!signature.is_empty(), "Signature should not be empty");
 
     let token_balance_bytes = witness.to_vec()[1].clone();
-    let token_balance_decoded: TokenBalance =
-        ciborium::from_reader(&token_balance_bytes[..]).unwrap();
+    let token_balance_decoded: TokenBalance = deserialize(&token_balance_bytes[..])?;
     assert_eq!(
         token_balance_decoded, token_balance,
         "Token balance in witness doesn't match expected value"
@@ -170,7 +169,7 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let attach_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
+    let attach_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
     assert_eq!(attach_op_return_data, OpReturnData::A { output_index: 0 });
 
     // Assert deserialize swap op_return data
@@ -187,7 +186,7 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let swap_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
+    let swap_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
     assert_eq!(
         swap_op_return_data,
         OpReturnData::S {
@@ -223,8 +222,7 @@ pub async fn test_taproot_swap_psbt_with_incorrect_prefix(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -335,8 +333,7 @@ pub async fn test_taproot_swap_without_tapscript(reg_tester: &mut RegTester) -> 
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -447,8 +444,7 @@ pub async fn test_taproot_swap_with_wrong_token(reg_tester: &mut RegTester) -> R
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -493,8 +489,7 @@ pub async fn test_taproot_swap_with_wrong_token(reg_tester: &mut RegTester) -> R
         name: "wrong_token_name".to_string(),
     };
 
-    let mut serialized_wrong_token_balance = Vec::new();
-    ciborium::into_writer(&wrong_token_balance, &mut serialized_wrong_token_balance).unwrap();
+    let serialized_wrong_token_balance = serialize(&wrong_token_balance)?;
 
     // Build the witness stack for script path spending
     let mut witness = Witness::new();
@@ -566,8 +561,7 @@ pub async fn test_taproot_swap_with_wrong_token_amount(reg_tester: &mut RegTeste
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -611,8 +605,7 @@ pub async fn test_taproot_swap_with_wrong_token_amount(reg_tester: &mut RegTeste
         name: "token_name".to_string(),
     };
 
-    let mut serialized_wrong_token_balance = Vec::new();
-    ciborium::into_writer(&wrong_token_balance, &mut serialized_wrong_token_balance).unwrap();
+    let serialized_wrong_token_balance = serialize(&wrong_token_balance)?;
 
     // Build the witness stack for script path spending
     let mut witness = Witness::new();
@@ -683,8 +676,7 @@ pub async fn test_taproot_swap_without_token_balance(reg_tester: &mut RegTester)
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -793,8 +785,7 @@ pub async fn test_taproot_swap_without_control_block(reg_tester: &mut RegTester)
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -899,8 +890,7 @@ pub async fn test_taproot_swap_with_long_witness_stack(reg_tester: &mut RegTeste
 
     let token_balances = legacy_test_utils::build_long_token_balance();
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balances, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balances)?;
 
     // Create the tapscript with x-only public key
     let tap_script = legacy_test_utils::build_witness_script(
@@ -992,8 +982,7 @@ pub async fn test_taproot_swap_with_long_witness_stack(reg_tester: &mut RegTeste
     assert!(!signature.is_empty(), "Signature should not be empty");
 
     let token_balance_bytes = witness.to_vec()[1].clone();
-    let token_balance_decoded: HashMap<String, i32> =
-        ciborium::from_reader(&token_balance_bytes[..]).unwrap();
+    let token_balance_decoded: HashMap<String, i32> = deserialize(&token_balance_bytes[..])?;
     assert_eq!(
         token_balance_decoded, token_balances,
         "Token balance in witness doesn't match expected value"

@@ -24,6 +24,8 @@ use bitcoin::{
 };
 
 use indexer::op_return::OpReturnData;
+use indexer::runtime::deserialize;
+use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
 use testlib::RegTester;
@@ -51,8 +53,7 @@ pub async fn test_commit_reveal_ordinals(reg_tester: &mut RegTester) -> Result<(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     // Build the inscription script using the random key
     let reveal_script = test_utils::build_inscription(
@@ -121,10 +122,7 @@ pub async fn test_commit_reveal_ordinals(reg_tester: &mut RegTester) -> Result<(
                     op_return_script.push_slice(b"kon");
 
                     let reveal_data = OpReturnData::A { output_index: 0 };
-                    let mut reveal_bytes = Vec::new();
-                    ciborium::into_writer(&reveal_data, &mut reveal_bytes).unwrap();
-                    op_return_script.push_slice(PushBytesBuf::try_from(reveal_bytes)?);
-
+                    op_return_script.push_slice(PushBytesBuf::try_from(serialize(&reveal_data)?)?);
                     op_return_script
                 },
             },
@@ -196,7 +194,7 @@ pub async fn test_commit_reveal_ordinals(reg_tester: &mut RegTester) -> Result<(
         assert_eq!(*op_checksig, OP_CHECKSIG, "Expected OP_CHECKSIG");
 
         // Deserialize the token data
-        let token_data: TokenBalance = ciborium::from_reader(serialized_data.as_bytes())?;
+        let token_data: TokenBalance = deserialize(serialized_data.as_bytes())?;
 
         // Verify the token data
         assert_eq!(

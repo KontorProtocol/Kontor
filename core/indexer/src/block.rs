@@ -6,7 +6,7 @@ use bitcoin::{
 
 use crate::{
     reactor::types::{Inst, Op, OpMetadata},
-    runtime::{deserialize_cbor, wit::Signer},
+    runtime::{deserialize, wit::Signer},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 
                     if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
                         && insts.next().is_none()
-                        && let Ok(inst) = deserialize_cbor::<Inst>(&data)
+                        && let Ok(inst) = deserialize::<Inst>(&data)
                     {
                         let metadata = OpMetadata {
                             input_index: input_index as i64,

@@ -15,6 +15,7 @@ use bitcoin::{
     transaction::{Transaction, TxIn, TxOut, Version},
 };
 use indexer::legacy_test_utils;
+use indexer::runtime::serialize;
 use indexer::witness_data::TokenBalance;
 use testlib::RegTester;
 
@@ -36,8 +37,7 @@ pub async fn test_legacy_commit_reveal_p2wsh(reg_tester: &mut RegTester) -> Resu
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let seller_compressed = CompressedPublicKey::from_private_key(
         &secp,

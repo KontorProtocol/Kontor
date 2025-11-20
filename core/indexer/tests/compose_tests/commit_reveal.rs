@@ -7,6 +7,7 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use indexer::api::compose::compose;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
+use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
 use testlib::RegTester;
@@ -29,8 +30,7 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {

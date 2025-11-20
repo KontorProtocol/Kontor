@@ -39,24 +39,15 @@ impl Op {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Inst {
-    #[serde(rename = "p")]
     Publish {
-        #[serde(rename = "g")]
         gas_limit: u64,
-        #[serde(rename = "n")]
         name: String,
-        #[serde(rename = "b")]
         bytes: Vec<u8>,
     },
-    #[serde(rename = "c")]
     Call {
-        #[serde(rename = "g")]
         gas_limit: u64,
-        #[serde(rename = "c")]
         contract: ContractAddress,
-        #[serde(rename = "e")]
         expr: String,
     },
-    #[serde(rename = "i")]
     Issuance,
 }
