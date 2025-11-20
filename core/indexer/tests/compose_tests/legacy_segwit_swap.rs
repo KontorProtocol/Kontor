@@ -13,6 +13,7 @@ use bitcoin::{
 
 use indexer::legacy_test_utils;
 use indexer::op_return::OpReturnData;
+use indexer::runtime::{deserialize, serialize};
 use indexer::witness_data::TokenBalance;
 use std::collections::HashMap;
 use testlib::RegTester;
@@ -41,8 +42,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_secret(reg_tester: &mut RegTester
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -114,7 +114,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_secret(reg_tester: &mut RegTester
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let attach_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
+    let attach_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
     assert_eq!(attach_op_return_data, OpReturnData::A { output_index: 0 });
 
     // Assert deserialize swap op_return data
@@ -131,7 +131,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_secret(reg_tester: &mut RegTester
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let swap_op_return_data: OpReturnData = ciborium::from_reader(data.as_bytes())?;
+    let swap_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
     assert_eq!(
         swap_op_return_data,
         OpReturnData::S {
@@ -192,8 +192,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_incorrect_prefix(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -284,8 +283,7 @@ pub async fn test_legacy_segwit_swap_psbt_without_secret(reg_tester: &mut RegTes
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -377,8 +375,7 @@ pub async fn test_legacy_segwit_swap_psbt_without_token_balance(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -466,8 +463,7 @@ pub async fn test_legacy_segwit_swap_psbt_without_prefix(reg_tester: &mut RegTes
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -558,8 +554,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_malformed_witness_script(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -661,8 +656,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_wrong_token_name(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -686,15 +680,10 @@ pub async fn test_legacy_segwit_swap_psbt_with_wrong_token_name(
         &attach_tx,
         &witness_script,
     )?;
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(
-        &TokenBalance {
-            value: 1000,
-            name: "wrong_token_name".to_string(),
-        },
-        &mut serialized_token_balance,
-    )
-    .unwrap();
+    let serialized_token_balance = serialize(&TokenBalance {
+        value: 1000,
+        name: "wrong_token_name".to_string(),
+    })?;
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
@@ -763,8 +752,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_insufficient_funds(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -788,15 +776,10 @@ pub async fn test_legacy_segwit_swap_psbt_with_insufficient_funds(
         &attach_tx,
         &witness_script,
     )?;
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(
-        &TokenBalance {
-            value: 900,
-            name: "token_name".to_string(),
-        },
-        &mut serialized_token_balance,
-    )
-    .unwrap();
+    let serialized_token_balance = serialize(&TokenBalance {
+        value: 900,
+        name: "token_name".to_string(),
+    })?;
     let mut witness = Witness::new();
     witness.push(sig.to_vec());
     witness.push(&serialized_token_balance);
@@ -862,8 +845,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_long_witness_stack(
 
     let token_balances = legacy_test_utils::build_long_token_balance();
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balances, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balances)?;
 
     let witness_script = legacy_test_utils::build_witness_script(
         legacy_test_utils::PublicKey::Segwit(&seller_compressed_pubkey),
@@ -954,7 +936,7 @@ pub async fn test_legacy_segwit_swap_psbt_with_long_witness_stack(
         "Fourth element should be witness script"
     );
 
-    let token_balance_decoded: HashMap<String, i32> = ciborium::from_reader(token_balance).unwrap();
+    let token_balance_decoded: HashMap<String, i32> = deserialize(token_balance).unwrap();
     assert_eq!(
         token_balance_decoded, token_balances,
         "Token balance in witness doesn't match expected value"

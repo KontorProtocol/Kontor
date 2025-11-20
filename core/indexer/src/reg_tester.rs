@@ -20,7 +20,7 @@ use crate::{
         types::Inst,
     },
     retry::retry_simple,
-    runtime::{ContractAddress, serialize_cbor, wit::Signer},
+    runtime::{ContractAddress, serialize, wit::Signer},
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -230,7 +230,7 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
-        let script_data = serialize_cbor(&inst)?;
+        let script_data = serialize(&inst)?;
 
         let query = ComposeQuery::builder()
             .instructions(vec![InstructionQuery {
@@ -505,6 +505,13 @@ impl RegTesterInner {
         let response = self.kontor_client.wit(contract_address).await?;
         Ok(response.wit)
     }
+
+    pub async fn checkpoint(&mut self) -> Result<Option<String>> {
+        self.kontor_client
+            .index()
+            .await
+            .map(|index| index.checkpoint)
+    }
 }
 
 #[derive(Clone)]
@@ -654,5 +661,9 @@ impl RegTester {
 
     pub async fn height(&self) -> i64 {
         self.inner.lock().await.height
+    }
+
+    pub async fn checkpoint(&mut self) -> Result<Option<String>> {
+        self.inner.lock().await.checkpoint().await
     }
 }

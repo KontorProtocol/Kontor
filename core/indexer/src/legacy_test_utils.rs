@@ -22,6 +22,7 @@ use bitcoin::{
 use std::collections::HashMap;
 
 use crate::op_return::OpReturnData;
+use crate::runtime::serialize;
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -58,9 +59,7 @@ pub fn build_signed_taproot_attach_tx(
     op_return_script.push_slice(b"kon");
 
     let op_return_data = OpReturnData::A { output_index: 0 };
-    let mut s = Vec::new();
-    ciborium::into_writer(&op_return_data, &mut s).unwrap();
-    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
+    op_return_script.push_slice(PushBytesBuf::try_from(serialize(&op_return_data)?)?);
 
     // Create the transaction
     let mut attach_tx = Transaction {
@@ -276,9 +275,8 @@ pub fn build_signed_buyer_psbt_taproot(
                         let transfer_data = OpReturnData::S {
                             destination: buyer_address.script_pubkey().as_bytes().to_vec(),
                         };
-                        let mut transfer_bytes = Vec::new();
-                        ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
-                        op_return_script.push_slice(PushBytesBuf::try_from(transfer_bytes)?);
+                        op_return_script
+                            .push_slice(PushBytesBuf::try_from(serialize(&transfer_data)?)?);
 
                         op_return_script
                     },
@@ -389,9 +387,7 @@ pub fn build_signed_attach_tx_segwit(
     op_return_script.push_slice(b"kon");
 
     let op_return_data = OpReturnData::A { output_index: 0 };
-    let mut s = Vec::new();
-    ciborium::into_writer(&op_return_data, &mut s).unwrap();
-    op_return_script.push_slice(PushBytesBuf::try_from(s)?);
+    op_return_script.push_slice(PushBytesBuf::try_from(serialize(&op_return_data)?)?);
 
     // Create first transaction to create our special UTXO
     let mut create_tx = Transaction {
@@ -517,9 +513,7 @@ pub fn build_signed_buyer_psbt_segwit(
         destination: buyer_address.script_pubkey().as_bytes().to_vec(),
     };
 
-    let mut s = Vec::new();
-    ciborium::into_writer(&buyer_op_return_data, &mut s).unwrap();
-    buyer_op_return_script.push_slice(PushBytesBuf::try_from(s)?);
+    buyer_op_return_script.push_slice(PushBytesBuf::try_from(serialize(&buyer_op_return_data)?)?);
 
     // Create buyer's PSBT
     let mut buyer_psbt = Psbt {

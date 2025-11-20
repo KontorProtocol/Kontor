@@ -5,8 +5,8 @@ use glob::Paths;
 use indexer::{
     database::{
         queries::{
-            contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
-            insert_transaction,
+            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
+            insert_processed_block, insert_transaction,
         },
         types::{BlockRow, ContractRow, TransactionRow},
     },
@@ -99,6 +99,7 @@ pub trait RuntimeImpl: Send {
         expr: &str,
     ) -> Result<String>;
     async fn issuance(&mut self, signer: &Signer) -> Result<()>;
+    async fn checkpoint(&mut self) -> Result<Option<String>>;
 }
 
 pub struct RuntimeLocal {
@@ -236,6 +237,12 @@ impl RuntimeImpl for RuntimeLocal {
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
         self.runtime.issuance(signer).await
     }
+
+    async fn checkpoint(&mut self) -> Result<Option<String>> {
+        Ok(get_checkpoint_latest(&self.runtime.storage.conn)
+            .await?
+            .map(|r| r.hash))
+    }
 }
 
 pub struct RuntimeRegtest {
@@ -328,6 +335,10 @@ impl RuntimeImpl for RuntimeRegtest {
             .await?;
         Ok(())
     }
+
+    async fn checkpoint(&mut self) -> Result<Option<String>> {
+        self.reg_tester.checkpoint().await
+    }
 }
 
 pub struct Runtime {
@@ -391,5 +402,9 @@ impl Runtime {
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
         self.runtime.issuance(signer).await
+    }
+
+    pub async fn checkpoint(&mut self) -> Result<Option<String>> {
+        self.runtime.checkpoint().await
     }
 }

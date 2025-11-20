@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 pub use wit::Root;
 
-use std::{io::Cursor, sync::Arc};
+use std::sync::Arc;
 
 use wit::kontor::*;
 
@@ -65,14 +65,12 @@ use crate::{
 
 impls!(host = true);
 
-pub fn serialize_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buffer = Vec::new();
-    ciborium::into_writer(value, &mut buffer)?;
-    Ok(buffer)
+pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    Ok(postcard::to_allocvec(value)?)
 }
 
-pub fn deserialize_cbor<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
-    Ok(ciborium::from_reader(&mut Cursor::new(buffer))?)
+pub fn deserialize<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
+    Ok(postcard::from_bytes(buffer)?)
 }
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -736,7 +734,7 @@ impl Runtime {
                     Fuel::Get(bs.len())
                         .consume(accessor, self.gauge.as_ref())
                         .await?;
-                    deserialize_cbor(&bs)
+                    deserialize(&bs)
                 }),
         )
         .await
@@ -815,7 +813,7 @@ impl Runtime {
         Fuel::Path(path.clone())
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let bs = &serialize_cbor(&value)?;
+        let bs = &serialize(&value)?;
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;

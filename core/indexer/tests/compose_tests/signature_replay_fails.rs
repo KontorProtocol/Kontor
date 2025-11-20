@@ -17,6 +17,7 @@ use indexer::api::compose::{
     compose_reveal,
 };
 use indexer::op_return::OpReturnData;
+use indexer::runtime::{deserialize, serialize};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 
@@ -41,8 +42,7 @@ pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<(
         name: "token_name".to_string(),
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&token_balance, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&token_balance)?;
 
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {
@@ -180,8 +180,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
         },
     };
 
-    let mut serialized_token_balance = Vec::new();
-    ciborium::into_writer(&attach_witness_data, &mut serialized_token_balance).unwrap();
+    let serialized_token_balance = serialize(&attach_witness_data)?;
 
     let detach_data = WitnessData::Detach {
         output_index: 0,
@@ -190,8 +189,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
             name: "token_name".to_string(),
         },
     };
-    let mut serialized_detach_data = Vec::new();
-    ciborium::into_writer(&detach_data, &mut serialized_detach_data).unwrap();
+    let serialized_detach_data = serialize(&detach_data)?;
 
     let compose_params = ComposeInputs::builder()
         .instructions(vec![InstructionInputs {
@@ -264,7 +262,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
         _,
     ] = instructions.as_slice()
     {
-        let witness_data: WitnessData = ciborium::from_reader(serialized_data.as_bytes())?;
+        let witness_data: WitnessData = deserialize(serialized_data.as_bytes())?;
         assert_eq!(witness_data, attach_witness_data);
 
         if let WitnessData::Attach {
@@ -277,8 +275,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
                 token_balance,
             };
             let secp = Secp256k1::new();
-            let mut serialized_detach_data = Vec::new();
-            ciborium::into_writer(&detach_data, &mut serialized_detach_data).unwrap();
+            let serialized_detach_data = serialize(&detach_data)?;
 
             let x_only_public_key = XOnlyPublicKey::from_slice(key.as_bytes())?;
             let detach_tap_script = test_utils::build_inscription(
@@ -365,8 +362,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let transfer_data = OpReturnData::D {
         destination: buyer_internal_key,
     };
-    let mut transfer_bytes = Vec::new();
-    ciborium::into_writer(&transfer_data, &mut transfer_bytes).unwrap();
+    let transfer_bytes = serialize(&transfer_data)?;
 
     let reveal_inputs = RevealInputs::builder()
         .commit_txid(attach_reveal_tx.compute_txid())

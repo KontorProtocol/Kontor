@@ -9,6 +9,7 @@ use indexer::api::compose::{
     ComposeInputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
     RevealParticipantInputs, compose, compose_reveal,
 };
+use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use testlib::RegTester;
@@ -29,8 +30,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         },
     };
 
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
@@ -48,8 +48,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
 
-    let mut derived_token_data = Vec::new();
-    ciborium::into_writer(&token_data, &mut derived_token_data).unwrap();
+    let derived_token_data = serialize(&token_data)?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -150,11 +149,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         },
     };
 
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
-    let mut chained_token_data_bytes = Vec::new();
-    ciborium::into_writer(&b"Hello, World!", &mut chained_token_data_bytes).unwrap();
+    let chained_token_data_bytes = serialize(b"Hello, World!")?;
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
@@ -174,8 +171,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
 
-    let mut derived_token_data = Vec::new();
-    ciborium::into_writer(&token_data, &mut derived_token_data).unwrap();
+    let derived_token_data = serialize(&token_data)?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -220,8 +216,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .tap_script
         .clone();
 
-    let mut derived_chained_tap_script = Vec::new();
-    ciborium::into_writer(&b"Hello, World!", &mut derived_chained_tap_script).unwrap();
+    let derived_chained_tap_script = serialize(b"Hello, World!")?;
 
     let derived_chained_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -347,8 +342,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
             name: "T".to_string(),
         },
     };
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
     // duplicate address provided twice
     let query = ComposeQuery::builder()
@@ -566,8 +560,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
             name: "Test Token".to_string(),
         },
     };
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
@@ -605,8 +598,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
             name: "Test Token".to_string(),
         },
     };
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
@@ -638,8 +630,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
             name: "Test Token".to_string(),
         },
     };
-    let mut token_data_bytes = Vec::new();
-    ciborium::into_writer(&token_data, &mut token_data_bytes).unwrap();
+    let token_data_bytes = serialize(&token_data)?;
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
