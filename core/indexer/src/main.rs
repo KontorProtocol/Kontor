@@ -5,7 +5,7 @@ use crate::api::Env;
 use anyhow::Result;
 use clap::Parser;
 use indexer::database::queries::delete_unprocessed_blocks;
-use indexer::reactor::results::ResultSubscriber;
+use indexer::event::EventSubscriber;
 use indexer::runtime::Runtime;
 use indexer::{api, block, built_info, reactor};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
@@ -50,15 +50,15 @@ async fn main() -> Result<()> {
 
     let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
-    let result_subscriber = ResultSubscriber::default();
-    handles.push(result_subscriber.run(cancel_token.clone(), event_rx));
+    let event_subscriber = EventSubscriber::new();
+    handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(
         api::run(Env {
             config: config.clone(),
             cancel_token: cancel_token.clone(),
             available: available.clone(),
             reader: reader.clone(),
-            result_subscriber,
+            event_subscriber: event_subscriber.clone(),
             bitcoin: bitcoin.clone(),
             runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
         })

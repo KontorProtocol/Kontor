@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 
 use crate::runtime::{ContractAddress, wit::Signer};
 
@@ -37,6 +38,7 @@ impl Op {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Inst {
     Publish {
@@ -46,6 +48,7 @@ pub enum Inst {
     },
     Call {
         gas_limit: u64,
+        #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
         expr: String,
     },

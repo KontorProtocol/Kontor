@@ -1,32 +1,16 @@
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
-use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
-use tracing::info;
-use uuid::Uuid;
 
-use crate::{
-    api::ws::{Request, Response},
-    database::types::OpResultId,
-    reactor::results::ResultEventFilter,
-};
+use crate::api::ws::Response;
 
 pub struct WebSocketClient {
     pub stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
-fn to_message<T>(value: &T) -> Result<Message>
-where
-    T: ?Sized + Serialize,
-{
-    let s = serde_json::to_string(value)?;
-    Ok(Message::Text(s.into()))
-}
-
 pub fn from_message(m: Message) -> Result<Response> {
     let text = m.to_text()?;
-    info!("Received message: {}", text);
     Ok(serde_json::from_str(text)?)
 }
 
@@ -46,23 +30,6 @@ impl WebSocketClient {
             Ok(())
         } else {
             Err(anyhow!("Unexpected pong"))
-        }
-    }
-
-    pub async fn subscribe(&mut self, id: &OpResultId) -> Result<Uuid> {
-        self.stream
-            .send(to_message(&Request::Subscribe {
-                filter: ResultEventFilter::OpResultId(id.clone()),
-            })?)
-            .await?;
-        if let Response::SubscribeResponse {
-            id: subscription_id,
-        } = from_message(self.stream.next().await.unwrap()?)?
-        {
-            info!("Subscribed to op result id {} @ {}", id, subscription_id);
-            Ok(subscription_id)
-        } else {
-            Err(anyhow!("Unexpected subscribe response from server"))
         }
     }
 

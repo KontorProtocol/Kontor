@@ -2,7 +2,6 @@ mod component_cache;
 pub mod counter;
 pub mod fuel;
 pub mod numerics;
-pub mod queue;
 mod stack;
 mod storage;
 pub mod token;
@@ -45,15 +44,12 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::TOKEN;
-use crate::reactor::results::ResultEventMetadata;
 use crate::runtime::wit::CoreContext;
 use crate::{
-    database::{Reader, types::OpResultId},
-    reactor::results::ResultEvent,
+    database::Reader,
     runtime::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
-        queue::Queue,
         stack::Stack,
         wit::{
             FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
@@ -95,7 +91,6 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub txid: Txid,
-    pub events: Queue<ResultEvent>,
 }
 
 impl Runtime {
@@ -124,7 +119,6 @@ impl Runtime {
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
             txid: new_mock_transaction(0).txid,
-            events: Queue::new(),
         })
     }
 
@@ -212,10 +206,9 @@ impl Runtime {
             .await
             .expect("Failed to insert contract");
         self.execute(Some(signer), &address, "init()").await?;
-        Ok(
-            wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
-                .expect("Failed to convert address to string"),
-        )
+        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
+            .expect("Failed to convert address to string");
+        Ok(value)
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
@@ -274,7 +267,6 @@ impl Runtime {
                 .handle_procedure(
                     signer,
                     contract_id,
-                    contract_address,
                     &func_name,
                     true,
                     starting_fuel,
@@ -558,7 +550,6 @@ impl Runtime {
         &self,
         signer: &Signer,
         contract_id: i64,
-        contract_address: &ContractAddress,
         func_name: &str,
         is_op_result: bool,
         starting_fuel: u64,
@@ -604,51 +595,18 @@ impl Runtime {
             .expect("Failed to run burn and release gas")
             .expect("Failed to burn and release gas")
         }
+        let value = result.as_ref().map(|v| v.clone()).ok();
         self.storage
             .insert_contract_result(
                 self.result_id_counter.get().await as i64,
                 contract_id,
                 func_name.to_string(),
                 gas as i64,
-                result.as_ref().map(|v| v.clone()).ok(),
+                value,
             )
             .await
             .expect("Failed to insert contract result");
         self.result_id_counter.increment().await;
-        let metadata = ResultEventMetadata::builder()
-            .height(self.storage.height)
-            .contract_address(contract_address.clone())
-            .func(func_name.to_string())
-            .maybe_op_result_id(
-                if is_op_result
-                    && (!signer.is_core()
-                        || func_name == "issuance" && contract_address == &token::address())
-                {
-                    Some(
-                        OpResultId::builder()
-                            .txid(self.txid.to_string())
-                            .input_index(self.storage.input_index)
-                            .op_index(self.storage.op_index)
-                            .build(),
-                    )
-                } else {
-                    None
-                },
-            )
-            .gas(gas)
-            .build();
-        self.events
-            .push(match &result {
-                Ok(value) => ResultEvent::Ok {
-                    metadata,
-                    value: value.clone(),
-                },
-                Err(e) => ResultEvent::Err {
-                    metadata,
-                    message: format!("{:?}", e),
-                },
-            })
-            .await;
         result
     }
 
@@ -705,7 +663,6 @@ impl Runtime {
                 .handle_procedure(
                     signer.as_ref().expect("Signer should be available in proc"),
                     contract_id,
-                    contract_address,
                     &func_name,
                     false,
                     starting_fuel,

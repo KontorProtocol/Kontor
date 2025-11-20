@@ -57,7 +57,6 @@ fastnum = "=0.7.3"
 strum = { version = "=0.27.2", features = ["derive"] }
 rustls-pemfile = "=2.2.0"
 tokio-tungstenite = { version = "=0.28.0", features = ["rustls-tls-webpki-roots"] }
-uuid = { version = "=1.18.1", features = ["v4"] }
 tracing-stackdriver = "=0.10.0"
 regex = "=1.12.2"
 serde_with = "=3.16.0"

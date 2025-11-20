@@ -782,25 +782,29 @@ pub async fn get_results_paginated(
 pub async fn get_op_result(
     conn: &Connection,
     op_result_id: &OpResultId,
-) -> Result<Option<ContractResultRow>, Error> {
+) -> Result<Option<ContractResultPublicRow>, Error> {
     let mut rows = conn
         .query(
             r#"
             SELECT
-                c.id,
-                c.contract_id,
-                c.func,
-                c.height,
-                c.tx_index,
-                c.input_index,
-                c.op_index,
-                c.result_index,
-                c.gas,
-                c.value
-            FROM contract_results c
-            JOIN transactions t ON c.height = t.height AND c.tx_index = t.tx_index
-            WHERE t.txid = :txid AND c.input_index = :input_index AND c.op_index = :op_index
-            ORDER BY c.result_index DESC
+                r.id,
+                r.func,
+                r.height,
+                r.tx_index,
+                r.input_index,
+                r.op_index,
+                r.result_index,
+                r.gas,
+                r.value,
+                c.name as contract_name,
+                c.height as contract_height,
+                c.tx_index as contract_tx_index
+            FROM contract_results r
+            JOIN blocks b USING (height)
+            JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+            JOIN contracts c ON r.contract_id = c.id
+            WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
+            ORDER BY r.result_index DESC
             LIMIT 1
             "#,
             named_params! {

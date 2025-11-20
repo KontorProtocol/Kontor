@@ -1,4 +1,3 @@
-pub mod results;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -18,7 +17,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     bitcoin_follower::{
         ctrl::CtrlChannel,
-        events::{BlockId, Event},
+        events::{BlockId, Event as FollowerEvent},
     },
     block::Block,
     database::{
@@ -30,7 +29,8 @@ use crate::{
         },
         types::{BlockRow, TransactionRow},
     },
-    reactor::{results::ResultEvent, types::Op},
+    event::Event,
+    reactor::types::Op,
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
@@ -40,9 +40,9 @@ struct Reactor {
     writer: database::Writer,
     cancel_token: CancellationToken,
     ctrl: CtrlChannel,
-    bitcoin_event_rx: Option<Receiver<Event>>,
+    bitcoin_event_rx: Option<Receiver<FollowerEvent>>,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<ResultEvent>>,
+    event_tx: Option<mpsc::Sender<Event>>,
     runtime: Runtime,
 
     last_height: u64,
@@ -57,7 +57,7 @@ impl Reactor {
         ctrl: CtrlChannel,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
-        event_tx: Option<mpsc::Sender<ResultEvent>>,
+        event_tx: Option<mpsc::Sender<Event>>,
     ) -> Result<Self> {
         let conn = &*reader.connection().await?;
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
@@ -150,6 +150,9 @@ impl Reactor {
                     while rx.recv().await.is_some() {}
                 }
                 self.bitcoin_event_rx = Some(bitcoin_event_rx);
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.send(Event::Rolledback { height }).await;
+                }
                 Ok(())
             }
             Err(e) => {
@@ -227,7 +230,7 @@ impl Reactor {
 
         info!("# Block Kontor Transactions: {}", block.transactions.len());
 
-        for t in block.transactions {
+        for t in &block.transactions {
             insert_transaction(
                 &conn,
                 TransactionRow::builder()
@@ -237,7 +240,7 @@ impl Reactor {
                     .build(),
             )
             .await?;
-            for op in t.ops {
+            for op in &t.ops {
                 let input_index = op.metadata().input_index;
                 self.runtime
                     .set_context(height as i64, t.index, input_index, 0, t.txid)
@@ -250,8 +253,8 @@ impl Reactor {
                         name,
                         bytes,
                     } => {
-                        self.runtime.set_gas_limit(gas_limit);
-                        let result = self.runtime.publish(&metadata.signer, &name, &bytes).await;
+                        self.runtime.set_gas_limit(*gas_limit);
+                        let result = self.runtime.publish(&metadata.signer, name, bytes).await;
                         if result.is_err() {
                             warn!("Publish operation failed: {:?}", result);
                         }
@@ -262,10 +265,10 @@ impl Reactor {
                         contract,
                         expr,
                     } => {
-                        self.runtime.set_gas_limit(gas_limit);
+                        self.runtime.set_gas_limit(*gas_limit);
                         let result = self
                             .runtime
-                            .execute(Some(&metadata.signer), &contract, &expr)
+                            .execute(Some(&metadata.signer), contract, expr)
                             .await;
                         if result.is_err() {
                             warn!("Call operation failed: {:?}", result);
@@ -278,16 +281,15 @@ impl Reactor {
                         }
                     }
                 };
-
-                if let Some(tx) = self.event_tx.clone() {
-                    for event in self.runtime.events.take_all().await {
-                        tx.send(event).await?;
-                    }
-                }
             }
         }
 
         set_block_processed(&conn, height as i64).await?;
+        if !block.transactions.is_empty()
+            && let Some(tx) = &self.event_tx
+        {
+            let _ = tx.send(Event::Processed { block }).await;
+        }
         info!("Block processed");
 
         Ok(())
@@ -326,27 +328,27 @@ impl Reactor {
                     match option_event {
                         Some(event) => {
                             match event {
-                                Event::BlockInsert((target_height, block)) => {
+                                FollowerEvent::BlockInsert((target_height, block)) => {
                                     info!("Block {}/{} {}", block.height,
                                           target_height, block.hash);
                                     debug!("(implicit) MempoolRemove {}", block.transactions.len());
                                     self.handle_block(block).await?;
                                 },
-                                Event::BlockRemove(BlockId::Height(height)) => {
+                                FollowerEvent::BlockRemove(BlockId::Height(height)) => {
                                     info!("(implicit) MempoolClear");
                                     self.rollback(height).await?;
                                 },
-                                Event::BlockRemove(BlockId::Hash(block_hash)) => {
+                                FollowerEvent::BlockRemove(BlockId::Hash(block_hash)) => {
                                     info!("(implicit) MempoolClear");
                                     self.rollback_hash(block_hash).await?;
                                 },
-                                Event::MempoolRemove(removed) => {
+                                FollowerEvent::MempoolRemove(removed) => {
                                     debug!("MempoolRemove {}", removed.len());
                                 },
-                                Event::MempoolInsert(added) => {
+                                FollowerEvent::MempoolInsert(added) => {
                                     debug!("MempoolInsert {}", added.len());
                                 },
-                                Event::MempoolSet(txs) => {
+                                FollowerEvent::MempoolSet(txs) => {
                                     info!("MempoolSet {}", txs.len());
                                 }
                             }
@@ -381,7 +383,7 @@ pub fn run(
     writer: database::Writer,
     ctrl: CtrlChannel,
     init_tx: Option<oneshot::Sender<bool>>,
-    event_tx: Option<mpsc::Sender<ResultEvent>>,
+    event_tx: Option<mpsc::Sender<Event>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {

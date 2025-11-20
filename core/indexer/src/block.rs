@@ -3,20 +3,21 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
     script::Instruction,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     reactor::types::{Inst, Op, OpMetadata},
     runtime::{deserialize, wit::Signer},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transaction {
     pub txid: Txid,
     pub index: i64,
     pub ops: Vec<Op>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub height: u64,
     pub hash: BlockHash,

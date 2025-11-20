@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use anyhow::anyhow;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,19 +12,16 @@ use crate::{
     built_info,
     database::{
         queries::{
-            self, get_blocks_paginated, get_checkpoint_latest, get_results_paginated,
-            get_transaction_by_txid, get_transactions_paginated, select_block_by_height_or_hash,
-            select_block_latest,
+            self, get_blocks_paginated, get_checkpoint_latest, get_op_result,
+            get_results_paginated, get_transaction_by_txid, get_transactions_paginated,
+            select_block_by_height_or_hash, select_block_latest,
         },
         types::{
             BlockQuery, BlockRow, ContractListRow, ContractResultPublicRow, OpResultId,
             PaginatedResponse, ResultQuery, TransactionQuery, TransactionRow,
         },
     },
-    reactor::{
-        results::{ResultEvent, ResultEventMetadata},
-        types::Op,
-    },
+    reactor::types::Op,
     runtime::ContractAddress,
 };
 
@@ -195,7 +191,7 @@ pub struct TransactionHex {
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct OpWithResult {
     pub op: Op,
-    pub result: Option<ResultEvent>,
+    pub result: Option<ResultRow>,
 }
 
 async fn inspect(conn: &Connection, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
@@ -207,7 +203,7 @@ async fn inspect(conn: &Connection, btx: bitcoin::Transaction) -> Result<Vec<OpW
                 .input_index(op.metadata().input_index)
                 .op_index(0)
                 .build();
-            let result = ResultEvent::get_by_op_result_id(conn, &id).await?;
+            let result = get_op_result(conn, &id).await?.map(Into::into);
             ops.push(OpWithResult { op, result });
         }
     }
@@ -240,41 +236,33 @@ pub struct ViewExpr {
     pub expr: String,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ViewResult {
+    Ok { value: String },
+    Err { message: String },
+}
+
 pub async fn post_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
     Json(ViewExpr { expr }): Json<ViewExpr>,
-) -> Result<ResultEvent> {
+) -> Result<ViewResult> {
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let func = expr
-        .split("(")
-        .next()
-        .ok_or(anyhow!("Invalid wave expression"))?;
     let result = env
         .runtime
         .lock()
         .await
         .execute(None, &contract_address, &expr)
         .await;
-    let metadata = ResultEventMetadata::builder()
-        // height is meaningless for view expressions
-        .height(0)
-        .contract_address(contract_address)
-        .func(func.to_string())
-        .gas(0)
-        .build();
     Ok(match result {
-        Ok(value) => ResultEvent::Ok {
-            metadata,
-            value: value.clone(),
-        },
-        Err(e) => ResultEvent::Err {
-            metadata,
+        Ok(value) => ViewResult::Ok { value },
+        Err(e) => ViewResult::Err {
             message: format!("{:?}", e),
         },
     }
@@ -312,7 +300,7 @@ pub async fn get_contract(
     Ok(ContractResponse { wit }.into())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ResultRow {
     pub id: i64,
     pub height: i64,
@@ -367,4 +355,17 @@ pub async fn get_results(
         pagination,
     }
     .into())
+}
+
+pub async fn get_result(
+    Path(id): Path<String>,
+    State(env): State<Env>,
+) -> Result<Option<ResultRow>> {
+    let id = id
+        .parse::<OpResultId>()
+        .map_err(|_| HttpError::BadRequest("Invalid ID".to_string()))?;
+    Ok(get_op_result(&*env.reader.connection().await?, &id)
+        .await?
+        .map(Into::into)
+        .into())
 }

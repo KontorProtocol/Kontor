@@ -290,7 +290,12 @@ impl RuntimeImpl for RuntimeRegtest {
                 },
             )
             .await
-            .map(|r| r.contract_address)
+            .and_then(|r| {
+                r.result
+                    .contract
+                    .parse::<ContractAddress>()
+                    .map_err(|e| anyhow!("Failed to parse contract address: {}", e))
+            })
             .context("Failed to publish contract")
     }
 
@@ -319,7 +324,11 @@ impl RuntimeImpl for RuntimeRegtest {
                     },
                 )
                 .await
-                .map(|r| r.value)
+                .map(|r| {
+                    r.result
+                        .value
+                        .expect("Handling for error should have already occurred")
+                })
         } else {
             self.reg_tester.view(contract_address, expr).await
         }

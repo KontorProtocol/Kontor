@@ -14,7 +14,7 @@ use indexer::{
         queries::{insert_processed_block, insert_transaction},
         types::{BlockRow, PaginatedResponse, TransactionRow},
     },
-    reactor::results::ResultSubscriber,
+    event::EventSubscriber,
     runtime::Runtime,
     test_utils::new_test_db,
 };
@@ -105,7 +105,7 @@ async fn create_test_app() -> Result<Router> {
         config: Config::new_na(),
         cancel_token: CancellationToken::new(),
         available: Arc::new(RwLock::new(true)),
-        result_subscriber: ResultSubscriber::default(),
+        event_subscriber: EventSubscriber::new(),
         runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
         reader,
     };

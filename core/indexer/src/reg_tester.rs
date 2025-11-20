@@ -4,8 +4,7 @@ use crate::{
     api::{
         client::Client as KontorClient,
         compose::{ComposeOutputs, ComposeQuery, InstructionQuery},
-        handlers::{OpWithResult, TransactionHex},
-        ws::Response,
+        handlers::{OpWithResult, ResultRow, TransactionHex, ViewResult},
         ws_client::WebSocketClient,
     },
     bitcoin_client::{
@@ -15,10 +14,7 @@ use crate::{
     },
     config::RegtestConfig,
     database::types::OpResultId,
-    reactor::{
-        results::{ResultEvent, ResultEventMetadata},
-        types::Inst,
-    },
+    reactor::types::Inst,
     retry::retry_simple,
     runtime::{ContractAddress, serialize, wit::Signer},
     test_utils,
@@ -178,9 +174,7 @@ pub struct RegTesterInner {
 }
 
 pub struct InstructionResult {
-    pub contract_address: ContractAddress,
-    pub func: String,
-    pub value: String,
+    pub result: ResultRow,
     pub commit_tx_hex: String,
     pub reveal_tx_hex: String,
 }
@@ -278,10 +272,6 @@ impl RegTesterInner {
             .await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
         let id = OpResultId::builder().txid(reveal_txid.to_string()).build();
-        self.ws_client
-            .subscribe(&id)
-            .await
-            .context("Failed to subscribe to contract result")?;
         self.bitcoin_client
             .send_raw_transaction(&reveal_tx_hex)
             .await?;
@@ -303,33 +293,25 @@ impl RegTesterInner {
                 .unwrap()
                 .clone(),
         );
-        if let Response::Result { result, .. } = self
-            .ws_client
+        self.ws_client
             .next()
             .await
-            .context("Failed to receive response from websocket")?
-        {
-            match result {
-                ResultEvent::Ok {
-                    metadata:
-                        ResultEventMetadata {
-                            contract_address,
-                            func,
-                            ..
-                        },
-                    value,
-                    ..
-                } => Ok(InstructionResult {
-                    contract_address,
-                    func,
-                    value,
-                    commit_tx_hex,
-                    reveal_tx_hex,
-                }),
-                ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
-            }
+            .context("Failed to receive response from websocket")?;
+
+        let result = self
+            .kontor_client
+            .result(&id)
+            .await?
+            .ok_or(anyhow!("Could not find op result"))?;
+        tracing::info!("Instruction result: {:?}", result);
+        if result.value.is_some() {
+            Ok(InstructionResult {
+                result,
+                commit_tx_hex,
+                reveal_tx_hex,
+            })
         } else {
-            Err(anyhow!("Unexpected response from websocket"))
+            Err(anyhow!("Instruction failed in processing"))
         }
     }
 
@@ -496,8 +478,8 @@ impl RegTesterInner {
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
         let result = self.kontor_client.view(contract_address, expr).await?;
         match result {
-            ResultEvent::Ok { value, .. } => Ok(value),
-            ResultEvent::Err { message, .. } => Err(anyhow!("{}", message)),
+            ViewResult::Ok { value } => Ok(value),
+            ViewResult::Err { message } => Err(anyhow!("{}", message)),
         }
     }
 

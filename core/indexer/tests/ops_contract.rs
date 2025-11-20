@@ -1,11 +1,7 @@
 use anyhow::bail;
 use bitcoin::consensus::encode::deserialize_hex;
 use indexer::{
-    database::types::OpResultId,
-    reactor::{
-        results::ResultEvent,
-        types::{Inst, Op, OpMetadata},
-    },
+    reactor::types::{Inst, Op, OpMetadata},
     reg_tester::InstructionResult,
 };
 use testlib::*;
@@ -46,21 +42,11 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
     let result = ops[0].result.as_ref();
     let height = reg_tester.height().await;
     assert!(result.is_some());
-    if let Some(ResultEvent::Ok { metadata, value }) = result {
-        assert_eq!(metadata.height, height);
-        assert_eq!(metadata.contract_address.name, "token");
-        assert_eq!(metadata.contract_address.height, height);
-        assert_eq!(metadata.contract_address.tx_index, 2);
-        assert_eq!(
-            metadata.op_result_id,
-            Some(
-                OpResultId::builder()
-                    .txid(tx.compute_txid().to_string())
-                    .build()
-            )
-        );
-        assert_eq!(value, "");
-        assert!(metadata.gas > 0);
+    if let Some(result) = result {
+        assert_eq!(result.height, height);
+        assert_eq!(result.contract, format!("token_{}_{}", height, 2));
+        assert_eq!(result.value, Some("".to_string()));
+        assert!(result.gas > 0);
     } else {
         bail!("Unexpected result event: {:?}", result);
     }

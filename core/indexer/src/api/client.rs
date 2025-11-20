@@ -6,11 +6,13 @@ use crate::{
     api::{
         compose::{ComposeOutputs, ComposeQuery},
         error::ErrorResponse,
-        handlers::{ContractResponse, Info, OpWithResult, TransactionHex, ViewExpr},
+        handlers::{
+            ContractResponse, Info, OpWithResult, ResultRow, TransactionHex, ViewExpr, ViewResult,
+        },
         result::ResultResponse,
     },
     config::Config,
-    reactor::results::ResultEvent,
+    database::types::OpResultId,
     runtime::ContractAddress,
 };
 
@@ -94,11 +96,7 @@ impl Client {
         .await
     }
 
-    pub async fn view(
-        &self,
-        contract_address: &ContractAddress,
-        expr: &str,
-    ) -> Result<ResultEvent> {
+    pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<ViewResult> {
         let view_expr = ViewExpr {
             expr: expr.to_string(),
         };
@@ -116,6 +114,16 @@ impl Client {
         Self::handle_response(
             self.client
                 .get(format!("{}/contracts/{}", &self.url, contract_address))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn result(&self, id: &OpResultId) -> Result<Option<ResultRow>> {
+        Self::handle_response(
+            self.client
+                .get(format!("{}/results/{}", &self.url, id))
                 .send()
                 .await?,
         )

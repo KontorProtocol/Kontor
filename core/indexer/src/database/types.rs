@@ -282,6 +282,38 @@ pub struct OpResultId {
 
 impl Display for OpResultId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}:{}", self.txid, self.input_index, self.op_index)
+        write!(f, "{}_{}_{}", self.txid, self.input_index, self.op_index)
+    }
+}
+
+impl std::str::FromStr for OpResultId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('_').collect();
+        if parts.len() != 3 {
+            return Err(format!(
+                "Invalid OpResultId format: expected 3 parts separated by '_', got '{s}'"
+            ));
+        }
+
+        let txid = parts[0].to_string();
+        if txid.is_empty() {
+            return Err("txid cannot be empty".to_string());
+        }
+
+        let input_index = parts[1]
+            .parse::<i64>()
+            .map_err(|e| format!("Failed to parse input_index '{}': {e}", parts[1]))?;
+
+        let op_index = parts[2]
+            .parse::<i64>()
+            .map_err(|e| format!("Failed to parse op_index '{}': {e}", parts[2]))?;
+
+        Ok(OpResultId {
+            txid,
+            input_index,
+            op_index,
+        })
     }
 }

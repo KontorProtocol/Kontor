@@ -5,6 +5,7 @@ pub mod block;
 pub mod built_info;
 pub mod config;
 pub mod database;
+pub mod event;
 pub mod legacy_test_utils;
 pub mod logging;
 pub mod multi_psbt_test_utils;

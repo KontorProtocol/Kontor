@@ -2105,7 +2105,6 @@ dependencies = [
  "tracing-stackdriver",
  "tracing-subscriber",
  "urlencoding",
- "uuid",
  "wasm-wave 0.241.2",
  "wasmtime",
  "wit-component",

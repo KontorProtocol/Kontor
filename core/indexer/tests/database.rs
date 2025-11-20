@@ -578,7 +578,18 @@ async fn test_contract_result_operations() -> Result<()> {
     let height = 800000;
     let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
     let block = BlockRow { height, hash };
-    insert_block(&conn, block).await?;
+    insert_processed_block(&conn, block).await?;
+
+    let contract_id = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("token".to_string())
+            .height(height)
+            .tx_index(1)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
 
     let txid = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     let tx1 = TransactionRow::builder()
@@ -593,6 +604,7 @@ async fn test_contract_result_operations() -> Result<()> {
         .id(1)
         .tx_index(tx1.tx_index)
         .height(height)
+        .contract_id(contract_id)
         .value("".to_string())
         .gas(100)
         .build();
@@ -611,7 +623,8 @@ async fn test_contract_result_operations() -> Result<()> {
     assert_eq!(Some(result.clone()), row);
 
     let row = get_op_result(&conn, &OpResultId::builder().txid(txid.to_string()).build()).await?;
-    assert_eq!(Some(result), row);
+    assert!(row.is_some());
+    assert_eq!(result.id, row.unwrap().id);
 
     Ok(())
 }
