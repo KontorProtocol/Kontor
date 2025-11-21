@@ -1,0 +1,18 @@
+{
+  "name": "postcard-ts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./ts/my-rust-lib.js",
+  "module": "./ts/my-rust-lib.js",
+  "types": "./ts/my-rust-lib.d.ts",
+  "exports": "./ts/my-rust-lib.js",
+  "files": [
+    "ts"
+  ],
+  "dependencies": {
+    "@bytecodealliance/jco": "^1.15.3"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.12"
+  }
+}
