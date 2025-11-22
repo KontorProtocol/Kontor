@@ -1,5 +1,5 @@
 {
-  "name": "postcard-ts",
+  "name": "kontor-ts",
   "version": "0.1.0",
   "type": "module",
   "main": "./ts/my-rust-lib.js",

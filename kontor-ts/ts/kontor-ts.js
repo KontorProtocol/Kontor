@@ -799,7 +799,7 @@ function deserializeInst(arg0) {
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
-    const module0 = fetchCompile(new URL('./postcard-ts.core.wasm', import.meta.url));
+    const module0 = fetchCompile(new URL('./kontor-ts.core.wasm', import.meta.url));
     ({ exports: exports0 } = yield instantiateCore(yield module0));
     memory0 = exports0.memory;
     realloc0 = exports0.cabi_realloc;
