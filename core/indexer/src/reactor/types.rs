@@ -40,19 +40,22 @@ impl Op {
     }
 }
 
-#[serde_as]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Inst {
-    Publish {
-        gas_limit: u64,
-        name: String,
-        bytes: Vec<u8>,
-    },
-    Call {
-        gas_limit: u64,
-        #[serde_as(as = "DisplayFromStr")]
-        contract: ContractAddress,
-        expr: String,
-    },
-    Issuance,
+impl From<indexer_types::ContractAddress> for ContractAddress {
+    fn from(value: indexer_types::ContractAddress) -> Self {
+        Self {
+            name: value.name,
+            height: value.height,
+            tx_index: value.tx_index,
+        }
+    }
+}
+
+impl From<ContractAddress> for indexer_types::ContractAddress {
+    fn from(value: ContractAddress) -> Self {
+        Self {
+            name: value.name,
+            height: value.height,
+            tx_index: value.tx_index,
+        }
+    }
 }

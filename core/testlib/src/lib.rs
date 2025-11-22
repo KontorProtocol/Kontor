@@ -10,12 +10,12 @@ use indexer::{
         },
         types::{BlockRow, ContractRow, TransactionRow},
     },
-    reactor::types::Inst,
     reg_tester::{self, generate_taproot_address},
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
+use indexer_types::Inst;
 pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
@@ -319,7 +319,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     identity,
                     Inst::Call {
                         gas_limit: 10_000,
-                        contract: contract_address.clone(),
+                        contract: contract_address.clone().into(),
                         expr: expr.to_string(),
                     },
                 )

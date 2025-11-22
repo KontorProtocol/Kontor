@@ -1,9 +1,10 @@
 use anyhow::bail;
 use bitcoin::consensus::encode::deserialize_hex;
 use indexer::{
-    reactor::types::{Inst, Op, OpMetadata},
+    reactor::types::{Op, OpMetadata},
     reg_tester::InstructionResult,
 };
+use indexer_types::Inst;
 use testlib::*;
 
 #[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]

@@ -7,10 +7,10 @@ use bitcoin::{
 };
 use indexer::{
     api::compose::{ComposeInputs, InstructionInputs, compose},
-    runtime::serialize,
     test_utils,
     witness_data::TokenBalance,
 };
+use indexer_types::serialize;
 use testlib::RegTester;
 
 pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Result<()> {

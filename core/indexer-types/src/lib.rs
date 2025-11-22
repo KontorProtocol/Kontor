@@ -6,9 +6,9 @@ pub use wit_bindgen;
 
 #[derive(Debug, Clone)]
 pub struct ContractAddress {
-    name: String,
-    height: u64,
-    tx_index: u64,
+    pub name: String,
+    pub height: u64,
+    pub tx_index: u64,
 }
 
 contract_address!(ContractAddress);

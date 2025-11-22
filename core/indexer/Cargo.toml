@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 stdlib = { path = "../stdlib" }
 macros = { path = "../macros" }
+indexer-types = { path = "../indexer-types" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -28,7 +29,6 @@ tempfile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
-postcard = { workspace = true }
 
 backon = { version = "=1.6.0", features = ["tokio-sleep"] }
 base64 = "=0.22.1"

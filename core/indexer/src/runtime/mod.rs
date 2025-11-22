@@ -33,6 +33,7 @@ pub use wit::kontor::built_in::numbers::{
 };
 
 use anyhow::{Result, anyhow};
+use indexer_types::{deserialize, serialize};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -60,14 +61,6 @@ use crate::{
 };
 
 impls!(host = true);
-
-pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    Ok(postcard::to_allocvec(value)?)
-}
-
-pub fn deserialize<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
-    Ok(postcard::from_bytes(buffer)?)
-}
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

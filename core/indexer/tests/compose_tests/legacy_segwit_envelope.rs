@@ -4,9 +4,9 @@ use bitcoin::script::Instruction;
 use bitcoin::{CompressedPublicKey, ScriptBuf};
 use bitcoin::{Witness, consensus::encode::serialize as serialize_tx, key::Secp256k1};
 
-use indexer::runtime::{deserialize, serialize};
 use indexer::witness_data::TokenBalance;
 use indexer::{legacy_test_utils, test_utils};
+use indexer_types::{deserialize, serialize};
 use testlib::RegTester;
 use tracing::info;
 
