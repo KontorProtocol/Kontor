@@ -9,6 +9,7 @@ pub struct OpMetadata {
     pub signer: Signer,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Publish {
@@ -20,6 +21,7 @@ pub enum Op {
     Call {
         metadata: OpMetadata,
         gas_limit: u64,
+        #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
         expr: String,
     },

@@ -66,8 +66,8 @@ interface foreign {
 
     record contract-address {
         name: string,
-        height: s64,
-        tx-index: s64,
+        height: u64,
+        tx-index: u64,
     }
 
     call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;

@@ -1,6 +1,6 @@
 use wasmtime::component::{Type, Val};
 
-pub fn default_val_for_type(ty: &Type) -> Val {
+pub fn default_val_for_type(ty: Type) -> Val {
     match ty {
         Type::Bool => Val::Bool(false),
         Type::S8 => Val::S8(0),
@@ -20,7 +20,7 @@ pub fn default_val_for_type(ty: &Type) -> Val {
             let fields = record_ty
                 .fields()
                 .map(|field| {
-                    let field_val = default_val_for_type(&field.ty);
+                    let field_val = default_val_for_type(field.ty);
                     (field.name.to_string(), field_val)
                 })
                 .collect::<Vec<_>>();
@@ -29,7 +29,7 @@ pub fn default_val_for_type(ty: &Type) -> Val {
         Type::Tuple(tuple_ty) => {
             let fields = tuple_ty
                 .types()
-                .map(|ty| default_val_for_type(&ty))
+                .map(default_val_for_type)
                 .collect::<Vec<_>>();
             Val::Tuple(fields)
         }
@@ -38,7 +38,7 @@ pub fn default_val_for_type(ty: &Type) -> Val {
                 .cases()
                 .next()
                 .expect("Variant must have at least one case");
-            let payload = first_case.ty.map(|ty| Box::new(default_val_for_type(&ty)));
+            let payload = first_case.ty.map(|ty| Box::new(default_val_for_type(ty)));
             Val::Variant(first_case.name.to_string(), payload)
         }
         Type::Enum(enum_ty) => {
@@ -51,9 +51,9 @@ pub fn default_val_for_type(ty: &Type) -> Val {
         Type::Option(_) => Val::Option(None),
         Type::Result(result_ty) => {
             if let Some(ty) = result_ty.ok() {
-                Val::Result(Ok(Some(Box::new(default_val_for_type(&ty)))))
+                Val::Result(Ok(Some(Box::new(default_val_for_type(ty)))))
             } else if let Some(ty) = result_ty.err() {
-                Val::Result(Err(Some(Box::new(default_val_for_type(&ty)))))
+                Val::Result(Err(Some(Box::new(default_val_for_type(ty)))))
             } else {
                 Val::Result(Ok(None))
             }
