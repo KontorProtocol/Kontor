@@ -188,8 +188,8 @@ impl Runtime {
     pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
         let address = ContractAddress {
             name: name.to_string(),
-            height: self.storage.height,
-            tx_index: self.storage.tx_index,
+            height: self.storage.height as u64,
+            tx_index: self.storage.tx_index as u64,
         };
         if self
             .storage

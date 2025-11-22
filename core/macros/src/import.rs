@@ -16,8 +16,8 @@ use wit_parser::{
 pub struct Config {
     name: String,
     mod_name: Option<String>,
-    height: i64,
-    tx_index: i64,
+    height: u64,
+    tx_index: u64,
     path: String,
     public: Option<bool>,
     internal: Option<bool>,
@@ -48,7 +48,7 @@ pub fn import(
     mut path: String,
     module_name: Ident,
     world_name: String,
-    contract_id: Option<(&str, i64, i64)>,
+    contract_id: Option<(&str, u64, u64)>,
     test: bool,
     public: bool,
     internal: bool,
@@ -160,7 +160,7 @@ pub fn generate_functions(
     resolve: &Resolve,
     test: bool,
     export: &Function,
-    contract_id: Option<(&str, i64, i64)>,
+    contract_id: Option<(&str, u64, u64)>,
 ) -> Result<TokenStream> {
     let fn_name = Ident::new(&export.name.to_snake_case(), Span::call_site());
     let mut params = export

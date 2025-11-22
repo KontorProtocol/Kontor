@@ -149,8 +149,8 @@ impl RuntimeLocal {
                         Some(signer),
                         &ContractAddress {
                             name: name.to_string(),
-                            height,
-                            tx_index,
+                            height: height as u64,
+                            tx_index: tx_index as u64,
                         },
                         "init()",
                     )

@@ -67,8 +67,8 @@ impl<'de> Deserialize<'de> for kontor::built_in::foreign::ContractAddress {
                 A: MapAccess<'de>,
             {
                 let mut name: Option<String> = None;
-                let mut height: Option<i64> = None;
-                let mut tx_index: Option<i64> = None;
+                let mut height: Option<u64> = None;
+                let mut tx_index: Option<u64> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -125,10 +125,10 @@ impl std::str::FromStr for kontor::built_in::foreign::ContractAddress {
         }
         let name = parts[0].to_string();
         let height = parts[1]
-            .parse::<i64>()
+            .parse::<u64>()
             .map_err(|e| format!("invalid height: {e}"))?;
         let tx_index = parts[2]
-            .parse::<i64>()
+            .parse::<u64>()
             .map_err(|e| format!("invalid tx_index: {e}"))?;
 
         Ok(kontor::built_in::foreign::ContractAddress {

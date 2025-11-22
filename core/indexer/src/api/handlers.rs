@@ -328,8 +328,8 @@ impl From<ContractResultPublicRow> for ResultRow {
             value: row.value,
             contract: ContractAddress {
                 name: row.contract_name,
-                height: row.contract_height,
-                tx_index: row.tx_index,
+                height: row.contract_height as u64,
+                tx_index: row.tx_index as u64,
             }
             .to_string(),
         }
