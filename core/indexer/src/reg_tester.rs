@@ -14,9 +14,8 @@ use crate::{
     },
     config::RegtestConfig,
     database::types::OpResultId,
-    reactor::types::Inst,
     retry::retry_simple,
-    runtime::{ContractAddress, serialize, wit::Signer},
+    runtime::{ContractAddress, wit::Signer},
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -29,6 +28,7 @@ use bitcoin::{
     taproot::TaprootBuilder,
     transaction::Version,
 };
+use indexer_types::{Inst, serialize};
 use tempfile::TempDir;
 use tokio::{
     fs,

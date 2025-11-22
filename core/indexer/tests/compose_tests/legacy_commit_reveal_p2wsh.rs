@@ -15,8 +15,8 @@ use bitcoin::{
     transaction::{Transaction, TxIn, TxOut, Version},
 };
 use indexer::legacy_test_utils;
-use indexer::runtime::serialize;
 use indexer::witness_data::TokenBalance;
+use indexer_types::serialize;
 use testlib::RegTester;
 
 pub async fn test_legacy_commit_reveal_p2wsh(reg_tester: &mut RegTester) -> Result<()> {

@@ -7,9 +7,9 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
 use indexer::api::compose::compose;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
+use indexer_types::serialize;
 use testlib::RegTester;
 use tracing::info;
 

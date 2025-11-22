@@ -6,6 +6,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Error, ItemFn, parse_macro_input, spanned::Spanned};
 
 mod contract;
+mod contract_address;
 mod impls;
 mod import;
 mod interface;
@@ -332,4 +333,9 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+#[proc_macro]
+pub fn contract_address(input: TokenStream) -> TokenStream {
+    contract_address::generate(input)
 }

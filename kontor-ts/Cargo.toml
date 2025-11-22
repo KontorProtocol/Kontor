@@ -1,0 +1,16 @@
+[package]
+name = "kontor-ts"
+version = "0.1.0"
+edition = "2024"
+
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=-simd128"]
+
+[dependencies]
+indexer-types = { path = "../core/indexer-types" }
+
+[lib]
+crate-type = ["cdylib"]

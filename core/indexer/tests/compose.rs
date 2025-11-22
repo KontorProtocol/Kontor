@@ -6,9 +6,9 @@ use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, comp
 
 use bitcoin::Psbt;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
+use indexer_types::serialize;
 
 use testlib::*;
 use tracing::info;

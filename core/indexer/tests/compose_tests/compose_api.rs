@@ -9,9 +9,9 @@ use indexer::api::compose::{
     ComposeInputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
     RevealParticipantInputs, compose, compose_reveal,
 };
-use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
+use indexer_types::serialize;
 use testlib::RegTester;
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {

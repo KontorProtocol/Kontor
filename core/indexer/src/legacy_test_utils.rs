@@ -19,10 +19,10 @@ use bitcoin::{
     Network,
     key::{CompressedPublicKey, Secp256k1},
 };
+use indexer_types::serialize;
 use std::collections::HashMap;
 
 use crate::op_return::OpReturnData;
-use crate::runtime::serialize;
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),

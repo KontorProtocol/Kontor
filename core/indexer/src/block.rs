@@ -3,11 +3,12 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
     script::Instruction,
 };
+use indexer_types::{Inst, deserialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    reactor::types::{Inst, Op, OpMetadata},
-    runtime::{deserialize, wit::Signer},
+    reactor::types::{Op, OpMetadata},
+    runtime::wit::Signer,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,7 +82,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                             } => Op::Call {
                                 metadata,
                                 gas_limit,
-                                contract,
+                                contract: contract.into(),
                                 expr,
                             },
                             Inst::Issuance => Op::Issuance { metadata },

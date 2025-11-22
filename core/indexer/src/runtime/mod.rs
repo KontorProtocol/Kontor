@@ -15,7 +15,7 @@ use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub use stdlib::CheckedArithmetics;
-use stdlib::impls;
+use stdlib::{contract_address, impls};
 pub use storage::Storage;
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -33,6 +33,7 @@ pub use wit::kontor::built_in::numbers::{
 };
 
 use anyhow::{Result, anyhow};
+use indexer_types::{deserialize, serialize};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -60,14 +61,6 @@ use crate::{
 };
 
 impls!(host = true);
-
-pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    Ok(postcard::to_allocvec(value)?)
-}
-
-pub fn deserialize<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
-    Ok(postcard::from_bytes(buffer)?)
-}
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

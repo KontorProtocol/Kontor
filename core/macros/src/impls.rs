@@ -16,47 +16,7 @@ pub fn generate(config: Config) -> TokenStream {
     };
 
     quote! {
-        #[automatically_derived]
-        impl std::fmt::Display for kontor::built_in::foreign::ContractAddress {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}_{}_{}", self.name, self.height, self.tx_index)
-            }
-        }
-
-        #[automatically_derived]
-        impl std::str::FromStr for kontor::built_in::foreign::ContractAddress {
-            type Err = String;
-
-            fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-                let parts: Vec<&str> = s.split('_').collect();
-                if parts.len() != 3 {
-                    return Err(format!("expected 3 parts separated by '_', got: {s}"));
-                }
-                let name = parts[0].to_string();
-                let height = parts[1]
-                    .parse::<u64>()
-                    .map_err(|e| format!("invalid height: {e}"))?;
-                let tx_index = parts[2]
-                    .parse::<u64>()
-                    .map_err(|e| format!("invalid tx_index: {e}"))?;
-
-                Ok(kontor::built_in::foreign::ContractAddress {
-                    name,
-                    height,
-                    tx_index,
-                })
-            }
-        }
-
-        #[automatically_derived]
-        impl PartialEq for kontor::built_in::foreign::ContractAddress {
-            fn eq(&self, other: &Self) -> bool {
-                self.name == other.name && self.height == other.height && self.tx_index == other.tx_index
-            }
-        }
-
-        #[automatically_derived]
-        impl Eq for kontor::built_in::foreign::ContractAddress {}
+        contract_address!(kontor::built_in::foreign::ContractAddress);
 
         #[automatically_derived]
         impl PartialEq for kontor::built_in::error::Error {

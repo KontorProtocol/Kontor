@@ -13,10 +13,9 @@ use bitcoin::{
 };
 
 use indexer::legacy_test_utils;
-use indexer::runtime::deserialize;
-use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
+use indexer_types::{deserialize, serialize};
 use testlib::RegTester;
 use tracing::info;
 

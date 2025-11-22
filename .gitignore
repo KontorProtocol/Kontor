@@ -12,5 +12,6 @@
 **/*.so
 !/core/indexer/sqlean*/**/*.so
 !/core/indexer/sqlean*/**/*.dylib
+**/node_modules
 
 .claude

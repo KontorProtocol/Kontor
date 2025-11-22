@@ -26,11 +26,10 @@ use indexer::api::compose::compose_reveal;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::api::compose::{RevealInputs, RevealParticipantInputs};
 use indexer::op_return::OpReturnData;
-use indexer::runtime::deserialize;
-use indexer::runtime::serialize;
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
 use indexer::witness_data::WitnessData;
+use indexer_types::{deserialize, serialize};
 use testlib::RegTester;
 use tracing::info;
 

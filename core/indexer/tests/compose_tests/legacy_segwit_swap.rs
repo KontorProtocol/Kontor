@@ -13,8 +13,8 @@ use bitcoin::{
 
 use indexer::legacy_test_utils;
 use indexer::op_return::OpReturnData;
-use indexer::runtime::{deserialize, serialize};
 use indexer::witness_data::TokenBalance;
+use indexer_types::{deserialize, serialize};
 use std::collections::HashMap;
 use testlib::RegTester;
 use tracing::info;

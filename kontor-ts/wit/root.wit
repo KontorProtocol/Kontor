@@ -1,0 +1,6 @@
+package root:component;
+
+world root {
+  export serialize-inst: func(json-str: string) -> list<u8>;
+  export deserialize-inst: func(bytes: list<u8>) -> string;
+}

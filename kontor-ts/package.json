@@ -1,0 +1,16 @@
+{
+  "name": "kontor-ts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./ts/kontor-ts.js",
+  "module": "./ts/kontor-ts.js",
+  "types": "./ts/kontor-ts.d.ts",
+  "exports": "./ts/kontor-ts.js",
+  "files": [
+    "ts"
+  ],
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.15.3",
+    "vitest": "^4.0.12"
+  }
+}
