@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { serializeInst, deserializeInst } from "../ts/kontor-ts";
+import { serializeInst, deserializeInst } from "kontor-ts";
 
 test("publish", () => {
   let inst = {

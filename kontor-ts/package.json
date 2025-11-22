@@ -2,17 +2,15 @@
   "name": "kontor-ts",
   "version": "0.1.0",
   "type": "module",
-  "main": "./ts/my-rust-lib.js",
-  "module": "./ts/my-rust-lib.js",
-  "types": "./ts/my-rust-lib.d.ts",
-  "exports": "./ts/my-rust-lib.js",
+  "main": "./ts/kontor-ts.js",
+  "module": "./ts/kontor-ts.js",
+  "types": "./ts/kontor-ts.d.ts",
+  "exports": "./ts/kontor-ts.js",
   "files": [
     "ts"
   ],
-  "dependencies": {
-    "@bytecodealliance/jco": "^1.15.3"
-  },
   "devDependencies": {
+    "@bytecodealliance/jco": "^1.15.3",
     "vitest": "^4.0.12"
   }
 }
