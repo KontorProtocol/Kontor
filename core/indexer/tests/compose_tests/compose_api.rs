@@ -248,7 +248,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .push_opcode(OP_IF)
         .push_slice(b"kon")
         .push_opcode(OP_0)
-        .push_slice(PushBytesBuf::try_from(serialize(&derived_chained_instruction)?)?)
+        .push_slice(PushBytesBuf::try_from(serialize(
+            &derived_chained_instruction,
+        )?)?)
         .push_opcode(OP_ENDIF)
         .into_script();
 
