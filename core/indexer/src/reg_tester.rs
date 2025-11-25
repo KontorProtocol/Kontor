@@ -28,7 +28,7 @@ use bitcoin::{
     taproot::TaprootBuilder,
     transaction::Version,
 };
-use indexer_types::{Inst, serialize};
+use indexer_types::Inst;
 use tempfile::TempDir;
 use tokio::{
     fs,
@@ -224,14 +224,12 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
-        let script_data = serialize(&inst)?;
-
         let query = ComposeQuery::builder()
             .instructions(vec![InstructionQuery {
                 address: ident.address.to_string(),
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 funding_utxo_ids: outpoint_to_utxo_id(&ident.next_funding_utxo.0),
-                script_data,
+                script_data: inst,
             }])
             .sat_per_vbyte(2)
             .build();

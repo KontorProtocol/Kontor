@@ -18,6 +18,7 @@ use bon::Builder;
 
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
+use indexer_types::{Inst, serialize};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, str::FromStr};
 
@@ -35,7 +36,7 @@ pub struct InstructionQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
-    pub script_data: Vec<u8>,
+    pub script_data: Inst,
 }
 
 #[derive(Serialize, Deserialize, Builder)]
@@ -43,7 +44,7 @@ pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
     pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
-    pub chained_script_data: Option<Vec<u8>>,
+    pub chained_script_data: Option<Inst>,
 }
 
 #[derive(Serialize, Builder, Clone)]
@@ -115,7 +116,7 @@ impl ComposeInputs {
                         MAX_UTXOS_PER_PARTICIPANT
                     ));
                 }
-                let script_data = instruction_query.script_data.clone();
+                let script_data = serialize(&instruction_query.script_data)?;
                 if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
                     return Err(anyhow!("script data size invalid"));
                 }
@@ -131,13 +132,16 @@ impl ComposeInputs {
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-        let chained_script_data_bytes = query.chained_script_data.clone();
-        if chained_script_data_bytes
-            .as_ref()
-            .is_some_and(|c| c.is_empty() || c.len() > MAX_SCRIPT_BYTES)
-        {
-            return Err(anyhow!("chained script data size invalid"));
-        }
+        let chained_script_data_bytes = match query.chained_script_data.as_ref() {
+            Some(inst) => {
+                let bytes = serialize(inst)?;
+                if bytes.is_empty() || bytes.len() > MAX_SCRIPT_BYTES {
+                    return Err(anyhow!("chained script data size invalid"));
+                }
+                Some(bytes)
+            }
+            None => None,
+        };
         let envelope = query
             .envelope
             .unwrap_or(MIN_ENVELOPE_SATS)

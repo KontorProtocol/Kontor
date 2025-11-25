@@ -11,7 +11,7 @@ use indexer::api::compose::{
 };
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer_types::serialize;
+use indexer_types::{Inst, serialize};
 use testlib::RegTester;
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
@@ -31,13 +31,18 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     };
 
     let token_data_bytes = serialize(&token_data)?;
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "test".to_string(),
+        bytes: token_data_bytes.clone(),
+    };
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: token_data_bytes.clone(),
+            script_data: instruction.clone(),
         }])
         .sat_per_vbyte(2)
         .build();
@@ -48,7 +53,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
 
-    let derived_token_data = serialize(&token_data)?;
+    let derived_token_data = serialize(&instruction)?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -151,18 +156,30 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let token_data_bytes = serialize(&token_data)?;
 
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "test".to_string(),
+        bytes: token_data_bytes.clone(),
+    };
+
     let chained_token_data_bytes = serialize(b"Hello, World!")?;
+
+    let chained_instructions = Inst::Publish {
+        gas_limit: 50_000,
+        name: "chained".to_string(),
+        bytes: chained_token_data_bytes.clone(),
+    };
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: token_data_bytes.clone(),
+            script_data: instruction.clone(),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
-        .chained_script_data(chained_token_data_bytes)
+        .chained_script_data(chained_instructions.clone())
         .build();
 
     let compose_outputs = reg_tester.compose(query).await?;
@@ -171,7 +188,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
 
-    let derived_token_data = serialize(&token_data)?;
+    let derived_token_data = serialize(&instruction)?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -218,6 +235,12 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
 
+    let derived_chained_instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "chained".to_string(),
+        bytes: derived_chained_tap_script.clone(),
+    };
+
     let derived_chained_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
         .push_opcode(OP_CHECKSIG)
@@ -225,7 +248,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .push_opcode(OP_IF)
         .push_slice(b"kon")
         .push_opcode(OP_0)
-        .push_slice(PushBytesBuf::try_from(derived_chained_tap_script)?)
+        .push_slice(PushBytesBuf::try_from(serialize(&derived_chained_instruction)?)?)
         .push_opcode(OP_ENDIF)
         .into_script();
 
@@ -301,26 +324,15 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 pub async fn test_compose_missing_params(reg_tester: &mut RegTester) -> Result<()> {
-    let identity = reg_tester.identity().await?;
-    let seller_address = identity.address;
-    let keypair = identity.keypair;
-    let (internal_key, _parity) = keypair.x_only_public_key();
-    let (out_point, _utxo_for_output) = identity.next_funding_utxo;
-
     let query = ComposeQuery::builder()
-        .instructions(vec![InstructionQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: vec![],
-        }])
+        .instructions(vec![])
         .sat_per_vbyte(2)
         .envelope(600)
         .build();
 
     match reg_tester.compose(query).await {
         Ok(_) => panic!("Expected error, got success"),
-        Err(e) => assert!(e.to_string().contains("script data size invalid")),
+        Err(e) => assert!(e.to_string().contains("No instructions provided")),
     }
     Ok(())
 }
@@ -344,6 +356,12 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     };
     let token_data_bytes = serialize(&token_data)?;
 
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "test".to_string(),
+        bytes: token_data_bytes.clone(),
+    };
+
     // duplicate address provided twice
     let query = ComposeQuery::builder()
         .instructions(vec![
@@ -351,13 +369,13 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 address: seller_address.to_string(),
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-                script_data: token_data_bytes.clone(),
+                script_data: instruction.clone(),
             },
             InstructionQuery {
                 address: seller_address.to_string(),
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-                script_data: token_data_bytes.clone(),
+                script_data: instruction.clone(),
             },
         ])
         .sat_per_vbyte(2)
@@ -380,7 +398,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 "{}:{},{}:{}",
                 out_point1.txid, out_point1.vout, out_point1.txid, out_point1.vout
             ),
-            script_data: token_data_bytes.clone(),
+            script_data: instruction,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -403,13 +421,17 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
     let (out_point, _utxo_for_output) = identity.next_funding_utxo;
 
     // Oversized script_data
-    let oversized = vec![0u8; 387 * 1024 + 1];
+    let oversized_inst = Inst::Publish {
+        gas_limit: 50_000,
+        name: "oversized".to_string(),
+        bytes: vec![0u8; 387 * 1024 + 1],
+    };
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout).to_string(),
-            script_data: oversized,
+            script_data: oversized_inst,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -420,16 +442,24 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
     }
 
     // Oversized chained_script_data
-    let chained_oversized_b64 = vec![0u8; 387 * 1024 + 1];
+    let chained_oversized_inst = Inst::Publish {
+        gas_limit: 50_000,
+        name: "chain-oversized".to_string(),
+        bytes: vec![0u8; 387 * 1024 + 1],
+    };
     let query2 = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: b"x".to_vec(),
+            script_data: Inst::Publish {
+                gas_limit: 50_000,
+                name: "chain-oversized".to_string(),
+                bytes: b"x".to_vec(),
+            },
         }])
         .sat_per_vbyte(2)
-        .chained_script_data(chained_oversized_b64)
+        .chained_script_data(chained_oversized_inst)
         .build();
 
     match reg_tester.compose(query2).await {
@@ -443,7 +473,11 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: b"x".to_vec(),
+            script_data: Inst::Publish {
+                gas_limit: 50_000,
+                name: "fee-rate".to_string(),
+                bytes: b"x".to_vec(),
+            },
         }])
         .sat_per_vbyte(0)
         .build();
@@ -562,6 +596,12 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
     };
     let token_data_bytes = serialize(&token_data)?;
 
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "nonexistent-utxo".to_string(),
+        bytes: token_data_bytes,
+    };
+
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
@@ -569,7 +609,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
             // Ensure a guaranteed-nonexistent txid in regtest
             funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
                 .to_string(),
-            script_data: token_data_bytes,
+            script_data: instruction,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -599,13 +639,18 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
         },
     };
     let token_data_bytes = serialize(&token_data)?;
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "invalid-address".to_string(),
+        bytes: token_data_bytes,
+    };
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: token_data_bytes,
+            script_data: instruction,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -631,13 +676,18 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
         },
     };
     let token_data_bytes = serialize(&token_data)?;
+    let instruction = Inst::Publish {
+        gas_limit: 50_000,
+        name: "insufficient-funds".to_string(),
+        bytes: token_data_bytes,
+    };
 
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: token_data_bytes,
+            script_data: instruction,
         }])
         .sat_per_vbyte(4)
         .envelope(5_000_000_001)
