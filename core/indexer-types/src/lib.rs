@@ -1,9 +1,9 @@
 use anyhow::Result;
+use bitcoin::XOnlyPublicKey;
 use macros::contract_address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 pub use wit_bindgen;
-use bitcoin::XOnlyPublicKey;
 
 #[derive(Debug, Clone)]
 pub struct ContractAddress {
