@@ -5,6 +5,16 @@ interface context {
         to-string: func() -> string;
     }
 
+    variant op-return-data {
+        pub-key(string),
+    }
+
+    resource transaction {
+        id: func() -> string;
+        utxo-id: func() -> string;
+        op-return-data: func() -> option<op-return-data>;
+    }
+
     resource keys {
         next: func() -> option<string>;
     }
@@ -47,6 +57,7 @@ interface context {
         view-context: func() -> view-context;
         generate-id: func() -> string;
         storage: func() -> proc-storage;
+        transaction: func() -> transaction;
     }
 
     resource fall-context {

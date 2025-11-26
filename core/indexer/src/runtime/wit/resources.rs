@@ -106,3 +106,5 @@ impl HasContractId for CoreContext {
         self.contract_id
     }
 }
+
+pub struct Transaction {}

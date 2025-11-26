@@ -242,8 +242,16 @@ impl Reactor {
             .await?;
             for op in &t.ops {
                 let input_index = op.metadata().input_index;
+                let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
                 self.runtime
-                    .set_context(height as i64, t.index, input_index, 0, t.txid)
+                    .set_context(
+                        height as i64,
+                        t.index,
+                        input_index,
+                        0,
+                        t.txid,
+                        op_return_data.map(Into::into),
+                    )
                     .await;
 
                 match op {

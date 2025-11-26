@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
-use crate::runtime::{ContractAddress, wit::Signer};
+use crate::runtime::{ContractAddress, kontor::built_in::context::OpReturnData, wit::Signer};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpMetadata {
@@ -56,6 +56,14 @@ impl From<ContractAddress> for indexer_types::ContractAddress {
             name: value.name,
             height: value.height,
             tx_index: value.tx_index,
+        }
+    }
+}
+
+impl From<indexer_types::OpReturnData> for OpReturnData {
+    fn from(value: indexer_types::OpReturnData) -> Self {
+        match value {
+            indexer_types::OpReturnData::PubKey(x) => Self::PubKey(x.to_string()),
         }
     }
 }

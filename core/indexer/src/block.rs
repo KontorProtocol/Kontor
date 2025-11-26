@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bitcoin::{
     BlockHash, Txid, XOnlyPublicKey,
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
@@ -16,6 +18,7 @@ pub struct Transaction {
     pub txid: Txid,
     pub index: i64,
     pub ops: Vec<Op>,
+    pub op_return_data: HashMap<u64, indexer_types::OpReturnData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,9 +101,20 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
         return None;
     }
 
+    let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
+    let mut op_return_data = HashMap::new();
+    if let Some(op_return) = op_return
+        && let Ok(entries) = deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(
+            op_return.script_pubkey.as_bytes(),
+        )
+    {
+        op_return_data = HashMap::from_iter(entries);
+    }
+
     Some(Transaction {
         txid: tx.compute_txid(),
         index: tx_index as i64,
         ops,
+        op_return_data,
     })
 }

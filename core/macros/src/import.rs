@@ -84,6 +84,7 @@ pub fn import(
     for (_id, def) in resolve.types.iter().filter(|(_, def)| {
         if let Some(name) = def.name.as_deref() {
             ![
+                "transaction",
                 "contract-address",
                 "view-context",
                 "view-storage",

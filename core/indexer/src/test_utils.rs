@@ -15,6 +15,7 @@ use bitcoin::{
 };
 use libsql::Connection;
 use rand::prelude::*;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -292,6 +293,7 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
         txid: Txid::from_slice(&bytes).unwrap(),
         index: 0,
         ops: vec![],
+        op_return_data: HashMap::new(),
     }
 }
 

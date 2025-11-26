@@ -45,7 +45,8 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::TOKEN;
-use crate::runtime::wit::CoreContext;
+use crate::runtime::kontor::built_in::context::OpReturnData;
+use crate::runtime::wit::{CoreContext, Transaction};
 use crate::{
     database::Reader,
     runtime::{
@@ -84,6 +85,7 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub txid: Txid,
+    pub op_return_data: Option<OpReturnData>,
 }
 
 impl Runtime {
@@ -112,6 +114,7 @@ impl Runtime {
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
             txid: new_mock_transaction(0).txid,
+            op_return_data: None,
         })
     }
 
@@ -132,6 +135,7 @@ impl Runtime {
         input_index: i64,
         op_index: i64,
         txid: Txid,
+        op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
         self.storage.tx_index = tx_index;
@@ -140,6 +144,7 @@ impl Runtime {
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
         self.txid = txid;
+        self.op_return_data = op_return_data;
         if let Some(gauge) = self.gauge.as_ref() {
             gauge.reset().await;
         }
@@ -170,7 +175,7 @@ impl Runtime {
     }
 
     pub async fn publish_native_contracts(&mut self) -> Result<()> {
-        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid)
+        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
@@ -837,6 +842,18 @@ impl Runtime {
         Ok(table.push(Signer::new_contract_id(contract_id))?)
     }
 
+    async fn _proc_transaction<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        _: Resource<ProcContext>,
+    ) -> Result<Resource<Transaction>> {
+        Fuel::ProcTransaction
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Transaction {})?)
+    }
+
     async fn _proc_view_context<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -1406,6 +1423,16 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
+    async fn transaction<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Transaction>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_transaction(accessor, self_)
+            .await
+    }
+
     async fn view_context<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
@@ -1527,6 +1554,35 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
             .with(|mut access| access.get().clone())
             ._core_signer_proc_context(accessor, self_)
             .await
+    }
+}
+
+impl built_in::context::HostTransaction for Runtime {}
+
+impl built_in::context::HostTransactionWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Transaction>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
+        Ok(accessor.with(|mut access| access.get().txid.to_string()))
+    }
+
+    async fn utxo_id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
+        Ok(accessor.with(|mut access| {
+            let runtime = access.get();
+            format!("{}:{}", runtime.txid, runtime.storage.input_index)
+        }))
+    }
+
+    async fn op_return_data<T>(
+        accessor: &Accessor<T, Self>,
+        _: Resource<Transaction>,
+    ) -> Result<Option<OpReturnData>> {
+        Ok(accessor.with(|mut access| access.get().op_return_data.clone()))
     }
 }
 

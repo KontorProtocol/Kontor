@@ -1,8 +1,8 @@
 mod resources;
 
 pub use resources::{
-    CoreContext, FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
-    ViewStorage,
+    CoreContext, FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, Transaction,
+    ViewContext, ViewStorage,
 };
 
 wasmtime::component::bindgen!({
@@ -16,6 +16,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.view-storage": ViewStorage,
         "kontor:built-in/context.proc-storage": ProcStorage,
         "kontor:built-in/context.keys": Keys,
+        "kontor:built-in/context.transaction": Transaction,
     },
     additional_derives: [stdlib::Wavey],
     imports: {
