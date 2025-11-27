@@ -22,7 +22,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             height % 100
         )
         .parse()?;
-        let block = BlockRow { height, hash };
+        let block = BlockRow::builder().height(height).hash(hash).build();
         insert_processed_block(conn, block).await?;
     }
 

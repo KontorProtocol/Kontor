@@ -31,8 +31,8 @@ pub enum Error {
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT OR REPLACE INTO blocks (height, hash) VALUES (?, ?)",
-        (block.height, block.hash.to_string()),
+        "INSERT OR REPLACE INTO blocks (height, hash, relevant) VALUES (?, ?, ?)",
+        (block.height, block.hash.to_string(), block.relevant),
     )
     .await?;
     Ok(conn.last_insert_rowid())
@@ -40,8 +40,8 @@ pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Err
 
 pub async fn insert_processed_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT OR REPLACE INTO blocks (height, hash, processed) VALUES (?, ?, 1)",
-        (block.height, block.hash.to_string()),
+        "INSERT OR REPLACE INTO blocks (height, hash, relevant, processed) VALUES (?, ?, ?, 1)",
+        (block.height, block.hash.to_string(), block.relevant),
     )
     .await?;
     Ok(conn.last_insert_rowid())
@@ -58,7 +58,7 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
 pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT 1",
+            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT 1",
             params![],
         )
         .await?;
@@ -86,7 +86,7 @@ pub async fn select_block_by_height_or_hash(
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash FROM blocks WHERE height = ? OR hash = ?",
+            "SELECT height, hash, relevant FROM blocks WHERE height = ? OR hash = ?",
             params![identifier, identifier],
         )
         .await?;
@@ -99,7 +99,7 @@ pub async fn select_block_at_height(
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash FROM blocks WHERE height = ?",
+            "SELECT height, hash, relevant FROM blocks WHERE height = ?",
             params![height],
         )
         .await?;
@@ -112,7 +112,7 @@ pub async fn select_processed_block_at_height(
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash FROM blocks WHERE height = ? AND processed = 1",
+            "SELECT height, hash, relevant FROM blocks WHERE height = ? AND processed = 1",
             params![height],
         )
         .await?;
@@ -125,7 +125,7 @@ pub async fn select_block_with_hash(
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash FROM blocks WHERE hash = ?",
+            "SELECT height, hash, relevant FROM blocks WHERE hash = ?",
             params![hash.to_string()],
         )
         .await?;
@@ -137,13 +137,19 @@ pub async fn get_blocks_paginated(
     query: BlockQuery,
 ) -> Result<(Vec<BlockRow>, PaginationMeta), Error> {
     let var = "b";
+    let mut where_clauses = vec!["processed = 1".to_string()];
+    let mut params = vec![];
+    if let Some(relevant) = query.relevant {
+        where_clauses.push("b.relevant = :relevant".to_string());
+        params.push((":relevant".to_string(), Value::from(relevant)));
+    }
     get_paginated(
         conn,
         var,
-        "b.height, b.hash",
+        "b.height, b.hash, b.relevant",
         &format!("blocks {}", var),
-        vec!["processed = 1".to_string()],
-        vec![],
+        where_clauses,
+        params,
         query.order,
         query.cursor,
         query.offset,

@@ -168,6 +168,7 @@ impl RuntimeLocal {
             BlockRow::builder()
                 .height(0)
                 .hash(new_mock_block_hash(0))
+                .relevant(true)
                 .build(),
         )
         .await?;
@@ -176,6 +177,7 @@ impl RuntimeLocal {
             BlockRow::builder()
                 .height(1)
                 .hash(new_mock_block_hash(1))
+                .relevant(true)
                 .build(),
         )
         .await?;

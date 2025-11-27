@@ -36,10 +36,10 @@ async fn create_test_app(reader: Reader, writer: Writer) -> Result<Router> {
     let conn = writer.connection();
     // Insert blocks for heights 800000-800005
     for height in 800000..=800005 {
-        let block = BlockRow {
-            height,
-            hash: format!("{:064x}", height).parse()?,
-        };
+        let block = BlockRow::builder()
+            .height(height)
+            .hash(format!("{:064x}", height).parse()?)
+            .build();
         insert_processed_block(&conn, block).await?;
     }
 

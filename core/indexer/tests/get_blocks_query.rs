@@ -86,3 +86,47 @@ async fn test_get_blocks_query() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_get_blocks_query_relevant() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(100)
+            .hash(new_mock_block_hash(100))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(101)
+            .hash(new_mock_block_hash(101))
+            .build(),
+    )
+    .await?;
+
+    let (blocks, meta) =
+        get_blocks_paginated(&conn, BlockQuery::builder().relevant(true).build()).await?;
+
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].height, 100);
+    assert!(!meta.has_more);
+    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.total_count, 1);
+
+    let (blocks, meta) =
+        get_blocks_paginated(&conn, BlockQuery::builder().relevant(false).build()).await?;
+
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].height, 101);
+    assert!(!meta.has_more);
+    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.total_count, 1);
+
+    Ok(())
+}

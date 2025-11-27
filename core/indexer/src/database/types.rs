@@ -45,6 +45,8 @@ impl std::str::FromStr for OrderDirection {
 pub struct BlockRow {
     pub height: i64,
     pub hash: BlockHash,
+    #[builder(default = false)]
+    pub relevant: bool,
 }
 
 impl From<&Block> for BlockRow {
@@ -52,6 +54,7 @@ impl From<&Block> for BlockRow {
         BlockRow {
             height: b.height as i64,
             hash: b.hash,
+            relevant: !b.transactions.is_empty(),
         }
     }
 }
@@ -175,6 +178,7 @@ pub struct BlockQuery {
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
+    pub relevant: Option<bool>,
 }
 
 #[serde_as]

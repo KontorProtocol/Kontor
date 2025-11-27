@@ -44,18 +44,18 @@ async fn create_test_app() -> Result<Router> {
     let conn = writer.connection();
 
     // Insert blocks
-    let block1 = BlockRow {
-        height: 800000,
-        hash: "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?,
-    };
-    let block2 = BlockRow {
-        height: 800001,
-        hash: "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?,
-    };
-    let block3 = BlockRow {
-        height: 800002,
-        hash: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?,
-    };
+    let block1 = BlockRow::builder()
+        .height(800000)
+        .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?)
+        .build();
+    let block2 = BlockRow::builder()
+        .height(800001)
+        .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?)
+        .build();
+    let block3 = BlockRow::builder()
+        .height(800002)
+        .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
+        .build();
 
     insert_processed_block(&conn, block1).await?;
     insert_processed_block(&conn, block2).await?;

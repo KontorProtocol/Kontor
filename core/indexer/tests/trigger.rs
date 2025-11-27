@@ -18,10 +18,10 @@ async fn test_checkpoint_trigger() -> Result<()> {
     let conn = writer.connection();
 
     for height in 1..=200 {
-        let block = BlockRow {
-            height,
-            hash: bitcoin::BlockHash::from_byte_array([height as u8; 32]),
-        };
+        let block = BlockRow::builder()
+            .height(height)
+            .hash(bitcoin::BlockHash::from_byte_array([height as u8; 32]))
+            .build();
         insert_block(&conn, block).await?;
     }
 

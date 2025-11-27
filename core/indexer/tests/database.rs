@@ -29,7 +29,7 @@ use libsql::{Connection, params};
 async fn test_database() -> Result<()> {
     let height: i64 = 800000;
     let hash = new_mock_block_hash(height as u32);
-    let block = BlockRow { height, hash };
+    let block = BlockRow::builder().height(height).hash(hash).build();
 
     let (reader, writer, _temp_dir) = new_test_db().await?;
 
@@ -54,7 +54,7 @@ async fn test_transaction() -> Result<()> {
     let tx = writer.connection().transaction().await?;
     let height = 800000;
     let hash = new_mock_block_hash(height as u32);
-    let block = BlockRow { height, hash };
+    let block = BlockRow::builder().height(height).hash(hash).build();
     insert_processed_block(&tx, block).await?;
     assert!(select_block_latest(&tx).await?.is_some());
     tx.commit().await?;
@@ -85,7 +85,7 @@ async fn test_contract_state_operations() -> Result<()> {
     // First insert a block to satisfy foreign key constraints
     let height = 800000;
     let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
-    let block = BlockRow { height, hash };
+    let block = BlockRow::builder().height(height).hash(hash).build();
     insert_block(&conn, block).await?;
 
     // Insert a transaction for the contract state
@@ -153,10 +153,7 @@ async fn test_contract_state_operations() -> Result<()> {
     // Test with a newer version of the same contract state
     let height2 = 800001;
     let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
-    let block2 = BlockRow {
-        height: height2,
-        hash: hash2,
-    };
+    let block2 = BlockRow::builder().height(height2).hash(hash2).build();
     insert_block(&conn, block2).await?;
 
     let txid2 = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
@@ -220,7 +217,7 @@ async fn test_transaction_operations() -> Result<()> {
     // Insert a block first
     let height = 800000;
     let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
-    let block = BlockRow { height, hash };
+    let block = BlockRow::builder().height(height).hash(hash).build();
     insert_block(&conn, block).await?;
 
     let tx1 = TransactionRow::builder()
@@ -270,10 +267,7 @@ async fn test_transaction_operations() -> Result<()> {
     // Insert transactions at a different height
     let height2 = 800001;
     let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
-    let block2 = BlockRow {
-        height: height2,
-        hash: hash2,
-    };
+    let block2 = BlockRow::builder().height(height2).hash(hash2).build();
     insert_block(&conn, block2).await?;
 
     let tx4 = TransactionRow::builder()
@@ -306,18 +300,18 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     let conn = writer.connection();
 
     // Insert test blocks
-    let block1 = BlockRow {
-        height: 800000,
-        hash: "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?,
-    };
-    let block2 = BlockRow {
-        height: 800001,
-        hash: "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?,
-    };
-    let block3 = BlockRow {
-        height: 123456,
-        hash: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?,
-    };
+    let block1 = BlockRow::builder()
+        .height(800000)
+        .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?)
+        .build();
+    let block2 = BlockRow::builder()
+        .height(800001)
+        .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?)
+        .build();
+    let block3 = BlockRow::builder()
+        .height(123456)
+        .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
+        .build();
 
     insert_block(&conn, block1.clone()).await?;
     insert_block(&conn, block2.clone()).await?;
@@ -376,10 +370,10 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     assert!(result.is_none());
 
     // Test 9: Height 0 (edge case)
-    let block_zero = BlockRow {
-        height: 0,
-        hash: "0000000000000000000000000000000000000000000000000000000000000000".parse()?,
-    };
+    let block_zero = BlockRow::builder()
+        .height(0)
+        .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
+        .build();
     insert_block(&conn, block_zero.clone()).await?;
 
     let result = select_block_by_height_or_hash(&conn, "0").await?;
@@ -499,10 +493,10 @@ async fn test_map_keys() -> Result<()> {
     let conn = writer.connection();
 
     let height = 800000;
-    let block1 = BlockRow {
-        height,
-        hash: "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?,
-    };
+    let block1 = BlockRow::builder()
+        .height(height)
+        .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?)
+        .build();
 
     insert_block(&conn, block1.clone()).await?;
 
@@ -577,7 +571,7 @@ async fn test_contract_result_operations() -> Result<()> {
     // Insert a block first
     let height = 800000;
     let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
-    let block = BlockRow { height, hash };
+    let block = BlockRow::builder().height(height).hash(hash).build();
     insert_processed_block(&conn, block).await?;
 
     let contract_id = insert_contract(

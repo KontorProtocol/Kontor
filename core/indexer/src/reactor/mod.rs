@@ -98,6 +98,7 @@ impl Reactor {
                 BlockRow::builder()
                     .height(0)
                     .hash(new_mock_block_hash(0))
+                    .relevant(true)
                     .build(),
             )
             .await?;
@@ -219,14 +220,7 @@ impl Reactor {
         self.option_last_hash = Some(hash);
 
         let conn = self.writer.connection();
-        insert_block(
-            &conn,
-            BlockRow {
-                height: height as i64,
-                hash,
-            },
-        )
-        .await?;
+        insert_block(&conn, (&block).into()).await?;
 
         info!("# Block Kontor Transactions: {}", block.transactions.len());
 
