@@ -16,10 +16,9 @@ use indexer::api::compose::{
     ComposeInputs, InstructionInputs, RevealInputs, RevealParticipantInputs, compose,
     compose_reveal,
 };
-use indexer::op_return::OpReturnData;
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer_types::{deserialize, serialize};
+use indexer_types::{OpReturnData, deserialize, serialize};
 
 use testlib::RegTester;
 use tracing::info;
@@ -359,9 +358,7 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     seller_detach_psbt.inputs[0].final_script_witness = Some(witness);
 
     // Create transfer data pointing to output 2 (buyer's address)
-    let transfer_data = OpReturnData::D {
-        destination: buyer_internal_key,
-    };
+    let transfer_data = OpReturnData::PubKey(buyer_internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
 
     let reveal_inputs = RevealInputs::builder()

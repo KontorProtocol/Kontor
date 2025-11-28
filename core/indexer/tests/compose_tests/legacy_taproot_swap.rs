@@ -9,8 +9,7 @@ use bitcoin::{
     key::Secp256k1,
 };
 
-use indexer::legacy_test_utils;
-use indexer::op_return::OpReturnData;
+use indexer::legacy_test_utils::{self, LegacyOpReturnData};
 use indexer::witness_data::TokenBalance;
 use indexer_types::{deserialize, serialize};
 use std::collections::HashMap;
@@ -169,8 +168,11 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let attach_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
-    assert_eq!(attach_op_return_data, OpReturnData::A { output_index: 0 });
+    let attach_op_return_data: LegacyOpReturnData = deserialize(data.as_bytes())?;
+    assert_eq!(
+        attach_op_return_data,
+        LegacyOpReturnData::A { output_index: 0 }
+    );
 
     // Assert deserialize swap op_return data
     let swap_op_return_script = &final_tx.output[1].script_pubkey; // OP_RETURN is the second output
@@ -186,10 +188,10 @@ pub async fn test_legacy_taproot_swap(reg_tester: &mut RegTester) -> Result<()> 
         panic!("Invalid OP_RETURN script format");
     };
     assert_eq!(prefix.as_bytes(), b"kon");
-    let swap_op_return_data: OpReturnData = deserialize(data.as_bytes())?;
+    let swap_op_return_data: LegacyOpReturnData = deserialize(data.as_bytes())?;
     assert_eq!(
         swap_op_return_data,
-        OpReturnData::S {
+        LegacyOpReturnData::S {
             destination: buyer_address.script_pubkey().as_bytes().to_vec(),
         }
     );

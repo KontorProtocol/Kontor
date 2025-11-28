@@ -9,7 +9,6 @@ pub mod event;
 pub mod legacy_test_utils;
 pub mod logging;
 pub mod multi_psbt_test_utils;
-pub mod op_return;
 pub mod reactor;
 pub mod reg_tester;
 pub mod retry;

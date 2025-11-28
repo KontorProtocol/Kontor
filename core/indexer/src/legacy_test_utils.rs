@@ -22,11 +22,27 @@ use bitcoin::{
 use indexer_types::serialize;
 use std::collections::HashMap;
 
-use crate::op_return::OpReturnData;
-
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
     Taproot(&'a XOnlyPublicKey),
+}
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub enum LegacyOpReturnData {
+    A {
+        #[serde(rename = "o")]
+        output_index: u32,
+    }, // attach
+    S {
+        #[serde(rename = "d")]
+        destination: Vec<u8>,
+    }, // swap
+    D {
+        #[serde(rename = "d")]
+        destination: XOnlyPublicKey,
+    }, // detach
 }
 
 pub fn build_witness_script(key: PublicKey, serialized_token_balance: &[u8]) -> ScriptBuf {
@@ -58,7 +74,7 @@ pub fn build_signed_taproot_attach_tx(
     op_return_script.push_opcode(OP_RETURN);
     op_return_script.push_slice(b"kon");
 
-    let op_return_data = OpReturnData::A { output_index: 0 };
+    let op_return_data = LegacyOpReturnData::A { output_index: 0 };
     op_return_script.push_slice(PushBytesBuf::try_from(serialize(&op_return_data)?)?);
 
     // Create the transaction
@@ -272,7 +288,7 @@ pub fn build_signed_buyer_psbt_taproot(
                         op_return_script.push_slice(b"kon");
 
                         // Create transfer data pointing to output 2 (buyer's address)
-                        let transfer_data = OpReturnData::S {
+                        let transfer_data = LegacyOpReturnData::S {
                             destination: buyer_address.script_pubkey().as_bytes().to_vec(),
                         };
                         op_return_script
@@ -386,7 +402,7 @@ pub fn build_signed_attach_tx_segwit(
     op_return_script.push_opcode(OP_RETURN);
     op_return_script.push_slice(b"kon");
 
-    let op_return_data = OpReturnData::A { output_index: 0 };
+    let op_return_data = LegacyOpReturnData::A { output_index: 0 };
     op_return_script.push_slice(PushBytesBuf::try_from(serialize(&op_return_data)?)?);
 
     // Create first transaction to create our special UTXO
@@ -509,7 +525,7 @@ pub fn build_signed_buyer_psbt_segwit(
     buyer_op_return_script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
     buyer_op_return_script.push_slice(b"kon");
 
-    let buyer_op_return_data = OpReturnData::S {
+    let buyer_op_return_data = LegacyOpReturnData::S {
         destination: buyer_address.script_pubkey().as_bytes().to_vec(),
     };
 
