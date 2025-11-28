@@ -3,6 +3,7 @@ pub mod commit_reveal_random_keypair;
 pub mod compose_api;
 pub mod compose_commit_unit;
 pub mod compose_helpers;
+pub mod compose_token;
 pub mod legacy_commit_reveal_p2wsh;
 pub mod legacy_segwit_envelope;
 pub mod legacy_segwit_swap;
