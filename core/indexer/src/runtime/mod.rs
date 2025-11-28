@@ -45,7 +45,7 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::TOKEN;
-use crate::runtime::kontor::built_in::context::OpReturnData;
+use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, Transaction};
 use crate::{
     database::Reader,
@@ -84,7 +84,7 @@ pub struct Runtime {
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
-    pub txid: Txid,
+    pub txid: Option<Txid>,
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
 }
@@ -114,7 +114,7 @@ impl Runtime {
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
-            txid: new_mock_transaction(0).txid,
+            txid: None,
             previous_output: None,
             op_return_data: None,
         })
@@ -146,7 +146,7 @@ impl Runtime {
         self.storage.op_index = op_index;
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
-        self.txid = txid;
+        self.txid = Some(txid);
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
         if let Some(gauge) = self.gauge.as_ref() {
@@ -808,7 +808,11 @@ impl Runtime {
         Ok(hex::encode(
             &hash_bytes(
                 &[
-                    self.txid.to_raw_hash().to_byte_array().to_vec(),
+                    self.txid
+                        .expect("txid is not set")
+                        .to_raw_hash()
+                        .to_byte_array()
+                        .to_vec(),
                     count.to_le_bytes().to_vec(),
                 ]
                 .concat(),
@@ -1579,14 +1583,20 @@ impl built_in::context::HostTransactionWithStore for Runtime {
     }
 
     async fn id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
-        Ok(accessor.with(|mut access| access.get().txid.to_string()))
+        Ok(accessor
+            .with(|mut access| access.get().txid)
+            .expect("transaction id called without txid present")
+            .to_string())
     }
 
-    async fn utxo_id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
-        let previous_output = accessor
+    async fn out_point<T>(
+        accessor: &Accessor<T, Self>,
+        _: Resource<Transaction>,
+    ) -> Result<OutPoint> {
+        Ok(accessor
             .with(|mut access| access.get().previous_output)
-            .expect("utxo_id called without previous_output present");
-        Ok(format!("{}:{}", previous_output.txid, previous_output.vout))
+            .expect("utxo_id called without previous_output present")
+            .into())
     }
 
     async fn op_return_data<T>(

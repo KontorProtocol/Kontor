@@ -9,9 +9,14 @@ interface context {
         pub-key(string),
     }
 
+    record out-point {
+        txid: string,
+        vout: u64,
+    }
+
     resource transaction {
         id: func() -> string;
-        utxo-id: func() -> string;
+        out-point: func() -> out-point;
         op-return-data: func() -> option<op-return-data>;
     }
 

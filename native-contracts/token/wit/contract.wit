@@ -39,4 +39,6 @@ world root {
 	export balance: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 	export balances: func(ctx: borrow<view-context>) -> list<balance>;
 	export total-supply: func(ctx: borrow<view-context>) -> decimal;
+	export attach: func(ctx: borrow<proc-context>, vout: u64, amt: decimal) -> result<transfer, error>;
+	export detach: func(ctx: borrow<proc-context>) -> result<transfer, error>;
 }

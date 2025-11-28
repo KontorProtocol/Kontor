@@ -1,5 +1,7 @@
 use wasmtime::component::{Type, Val};
 
+use crate::runtime::kontor::built_in::context::OutPoint;
+
 pub fn default_val_for_type(ty: Type) -> Val {
     match ty {
         Type::Bool => Val::Bool(false),
@@ -65,6 +67,15 @@ pub fn default_val_for_type(ty: Type) -> Val {
         }
         _ => {
             panic!("Unknnown type encountered")
+        }
+    }
+}
+
+impl From<bitcoin::OutPoint> for OutPoint {
+    fn from(value: bitcoin::OutPoint) -> Self {
+        Self {
+            txid: value.txid.to_string(),
+            vout: value.vout as u64,
         }
     }
 }

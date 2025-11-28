@@ -10,6 +10,10 @@ struct TokenStorage {
     pub total_supply: Decimal,
 }
 
+fn make_utxo_id(txid: String, vout: u64) -> String {
+    format!("{}:{}", txid, vout)
+}
+
 fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
     if n <= 0.into() {
         return Err(Error::Message("Amount must be positive".to_string()));
@@ -28,6 +32,22 @@ fn mint(model: &TokenStorageWriteModel, dst: String, amt: Decimal) -> Result<Min
     ledger.set(dst.clone(), new_amt);
     model.try_update_total_supply(|t| t.add(amt))?;
     Ok(Mint { dst, amt: new_amt })
+}
+
+fn transfer(ctx: &ProcContext, src: String, dst: String, amt: Decimal) -> Result<Transfer, Error> {
+    assert_gt_zero(amt)?;
+    let ledger = ctx.model().ledger();
+
+    let src_amt = ledger.get(&src).unwrap_or_default();
+    let dst_amt = ledger.get(&dst).unwrap_or_default();
+
+    if src_amt < amt {
+        return Err(Error::Message("insufficient funds".to_string()));
+    }
+
+    ledger.set(src.clone(), src_amt.sub(amt)?);
+    ledger.set(dst.clone(), dst_amt.add(amt)?);
+    Ok(Transfer { src, dst, amt })
 }
 
 impl Guest for Token {
@@ -79,20 +99,28 @@ impl Guest for Token {
     }
 
     fn transfer(ctx: &ProcContext, dst: String, amt: Decimal) -> Result<Transfer, Error> {
-        assert_gt_zero(amt)?;
         let src = ctx.signer().to_string();
-        let ledger = ctx.model().ledger();
+        transfer(ctx, src, dst, amt)
+    }
 
-        let src_amt = ledger.get(&src).unwrap_or_default();
-        let dst_amt = ledger.get(&dst).unwrap_or_default();
+    fn attach(ctx: &ProcContext, vout: u64, amt: Decimal) -> Result<Transfer, Error> {
+        let dst = make_utxo_id(ctx.transaction().id(), vout);
+        Self::transfer(ctx, dst, amt)
+    }
 
-        if src_amt < amt {
-            return Err(Error::Message("insufficient funds".to_string()));
+    fn detach(ctx: &ProcContext) -> Result<Transfer, Error> {
+        let out_point = ctx.transaction().out_point();
+        let src = make_utxo_id(out_point.txid, out_point.vout);
+        let amt = ctx
+            .model()
+            .ledger()
+            .get(&src)
+            .ok_or(Error::Message("Source has no balance".to_string()))?;
+        if let Some(context::OpReturnData::PubKey(dst)) = ctx.transaction().op_return_data() {
+            transfer(ctx, src, dst, amt)
+        } else {
+            Err(Error::Message("invalid OP_RETURN data".to_string()))
         }
-
-        ledger.set(src.clone(), src_amt.sub(amt)?);
-        ledger.set(dst.clone(), dst_amt.add(amt)?);
-        Ok(Transfer { src, dst, amt })
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<Decimal> {
