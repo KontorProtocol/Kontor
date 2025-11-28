@@ -16,7 +16,7 @@ use bitcoin::psbt::Input;
 use bitcoin::psbt::Output;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::taproot::{TaprootBuilder, TaprootSpendInfo};
+use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
 use bitcoin::{ScriptBuf, consensus::encode::serialize as serialize_tx, key::Secp256k1};
 use indexer::api::compose::compose;
@@ -34,9 +34,6 @@ struct SwapTestContext {
     raw_attach_reveal_tx_hex: String,
     raw_psbt_hex: String,
     final_tx: Transaction,
-    attach_reveal_tx: Transaction,
-    detach_tap_script: ScriptBuf,
-    detach_taproot_spend_info: TaprootSpendInfo,
 }
 
 struct SwapTestParams {
@@ -264,9 +261,6 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
         raw_attach_reveal_tx_hex,
         raw_psbt_hex,
         final_tx,
-        attach_reveal_tx,
-        detach_tap_script,
-        detach_taproot_spend_info: detach_tapscript_spend_info,
     })
 }
 
