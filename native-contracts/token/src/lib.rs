@@ -82,7 +82,10 @@ impl Guest for Token {
         if amt > 0.into() {
             Self::transfer(&core, ctx.signer_proc_context().signer().to_string(), amt)?;
         }
-        Ok(burn)
+        Ok(Burn {
+            src: ctx.signer_proc_context().signer().to_string(),
+            ..burn
+        })
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
