@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bitcoin::{
     BlockHash, Txid, XOnlyPublicKey,
-    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
+    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
 use indexer_types::{Inst, deserialize};
@@ -103,13 +103,23 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
     }
 
     let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
+    tracing::info!("op_return: {:#?}", op_return);
     let mut op_return_data = HashMap::new();
-    if let Some(op_return) = op_return
-        && let Ok(entries) = deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(
-            op_return.script_pubkey.as_bytes(),
-        )
-    {
-        op_return_data = HashMap::from_iter(entries);
+
+    if let Some(op_return) = op_return {
+        let mut op_return_instructions = op_return.script_pubkey.instructions();
+        if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
+            && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
+            && let Ok(entries) =
+                deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(data.as_bytes())
+        {
+            tracing::info!(
+                "DESRIALIZE! {:#?}",
+                deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(data.as_bytes())
+            );
+            op_return_data = HashMap::from_iter(entries);
+            tracing::info!("op_return_data: {:#?}", op_return_data);
+        }
     }
 
     Some(Transaction {

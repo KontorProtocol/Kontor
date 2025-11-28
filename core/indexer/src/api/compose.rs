@@ -627,11 +627,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let mut op_return_added = false;
     // Optional OP_RETURN first (keeps vsize expectations stable)
     if let Some(data) = params.op_return_data.clone() {
-        // Enforce total payload size including tag; policy considers total push size
-        let mut payload = Vec::with_capacity(3 + data.len());
-        payload.extend_from_slice(b"kon");
-        payload.extend_from_slice(&data);
-        if payload.len() > MAX_OP_RETURN_BYTES {
+        if data.len() > MAX_OP_RETURN_BYTES {
             return Err(anyhow!(
                 "OP_RETURN data exceeds {} bytes",
                 MAX_OP_RETURN_BYTES
@@ -642,7 +638,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             script_pubkey: {
                 let mut s = ScriptBuf::new();
                 s.push_opcode(OP_RETURN);
-                s.push_slice(PushBytesBuf::try_from(payload)?);
+                s.push_slice(PushBytesBuf::try_from(data)?);
                 s
             },
         });

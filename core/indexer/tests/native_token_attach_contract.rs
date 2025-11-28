@@ -5,12 +5,23 @@ use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
 use indexer::api::compose::{ComposeQuery, InstructionQuery, RevealParticipantQuery, RevealQuery};
 use indexer::bitcoin_client::client::RegtestRpc;
+use indexer::database::types::OpResultId;
 use indexer::reactor::types::Op;
 use indexer::test_utils;
-use indexer_types::{ContractAddress, Inst, OpReturnData, serialize};
-use testlib::RegTester;
+use indexer_types::{Inst, serialize};
+use testlib::*;
 
-pub async fn test_compose_token_attach_and_detach(reg_tester: &mut RegTester) -> Result<()> {
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../native-contracts/token/wit",
+);
+
+pub async fn test_compose_token_attach_and_detach(
+    runtime: &mut Runtime,
+    reg_tester: &mut RegTester,
+) -> Result<()> {
     let secp = Secp256k1::new();
 
     let mut identity = reg_tester.identity().await?;
@@ -23,19 +34,32 @@ pub async fn test_compose_token_attach_and_detach(reg_tester: &mut RegTester) ->
     let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
 
+    let mut buyer_identity = reg_tester.identity().await?;
+
     let attach_inst = Inst::Call {
         gas_limit: 50_000,
-        contract: ContractAddress {
+        contract: indexer_types::ContractAddress {
             name: "token".to_string(),
             height: 0,
             tx_index: 0,
         },
-        expr: "attach(0, 10)".to_string(),
+        expr: format!(
+            "{}({})",
+            "attach",
+            [
+                stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(0)).unwrap(),
+                stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(
+                    Decimal::from(2)
+                ))
+                .unwrap()
+            ]
+            .join(", ")
+        ),
     };
 
     let detach_inst = Inst::Call {
         gas_limit: 50_000,
-        contract: ContractAddress {
+        contract: indexer_types::ContractAddress {
             name: "token".to_string(),
             height: 0,
             tx_index: 0,
@@ -112,7 +136,10 @@ pub async fn test_compose_token_attach_and_detach(reg_tester: &mut RegTester) ->
             commit_script_data: chained_script_data_bytes,
             envelope: None,
         }],
-        op_return_data: Some(serialize(&OpReturnData::PubKey(internal_key))?),
+        op_return_data: Some(serialize(&vec![(
+            0,
+            indexer_types::OpReturnData::PubKey(buyer_identity.x_only_public_key()),
+        )])?),
         envelope: None,
         chained_script_data: None,
     };
@@ -160,34 +187,90 @@ pub async fn test_compose_token_attach_and_detach(reg_tester: &mut RegTester) ->
     let bitcoin_client = reg_tester.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&commit_tx_hex).await?;
     bitcoin_client.send_raw_transaction(&reveal_tx_hex).await?;
+    bitcoin_client
+        .generate_to_address(1, &seller_address.to_string())
+        .await?;
+    let id = OpResultId::builder()
+        .txid(reveal_transaction.compute_txid().to_string())
+        .build();
+
+    reg_tester.wait_next_block().await?;
+    let attach_result = reg_tester
+        .kontor_client()
+        .await
+        .result(&id)
+        .await?
+        .ok_or(anyhow::anyhow!("Could not find op result"))?;
+
+    let attach_result: Result<token::Transfer, testlib::Error> =
+        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(
+            &stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(
+                &stdlib::wasm_wave::value::Type::result(
+                    Some(<token::Transfer>::wave_type()),
+                    Some(<testlib::Error>::wave_type()),
+                ),
+                &attach_result.value.expect("Expected value"),
+            )
+            .unwrap(),
+        )
+        .map(|v| v.unwrap().into_owned().into())
+        .map_err(|e| e.unwrap().into_owned().into());
+    let transfer = attach_result?;
+
+    let utxo_id = format!("{}:{}", reveal_transaction.compute_txid(), 0);
+
+    assert_eq!(transfer.src, internal_key.to_string());
+    assert_eq!(transfer.dst, utxo_id);
+
+    let balance = token::balance(runtime, &utxo_id).await?;
+    assert_eq!(balance, Some(Decimal::from(2)));
+
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
+
     bitcoin_client
         .generate_to_address(1, &seller_address.to_string())
         .await?;
 
-    let attach_ops = reg_tester.transaction_hex_inspect(&reveal_tx_hex).await?;
-    assert_eq!(attach_ops.len(), 1, "Expected one op in reveal transaction");
-    if let Op::Call { expr, .. } = &attach_ops[0].op {
-        assert_eq!(expr, "attach(0, 10)", "Expected attach(0, 10) call");
-    } else {
-        panic!("Expected Call op for attach(), got {:?}", attach_ops[0].op);
-    }
-    assert!(
-        attach_ops[0].result.is_some(),
-        "Expected attach() to have a result"
-    );
+    let id = OpResultId::builder()
+        .txid(detach_transaction.compute_txid().to_string())
+        .build();
 
-    let ops = reg_tester.transaction_hex_inspect(&detach_tx_hex).await?;
-    assert_eq!(ops.len(), 1, "Expected one op in detach transaction");
-    if let Op::Call { expr, .. } = &ops[0].op {
-        assert_eq!(expr, "detach()", "Expected detach() call");
-    } else {
-        panic!("Expected Call op for detach(), got {:?}", ops[0].op);
-    }
-    assert!(
-        ops[0].result.is_some(),
-        "Expected detach() to have a result"
-    );
+    reg_tester.wait_next_block().await?;
+    let detach_result = reg_tester
+        .kontor_client()
+        .await
+        .result(&id)
+        .await?
+        .ok_or(anyhow::anyhow!("Could not find op result"))?;
+
+    let detach_result: Result<token::Transfer, testlib::Error> =
+        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(
+            &stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(
+                &stdlib::wasm_wave::value::Type::result(
+                    Some(<token::Transfer>::wave_type()),
+                    Some(<testlib::Error>::wave_type()),
+                ),
+                &detach_result.value.expect("Expected value"),
+            )
+            .unwrap(),
+        )
+        .map(|v| v.unwrap().into_owned().into())
+        .map_err(|e| e.unwrap().into_owned().into());
+    let transfer = detach_result?;
+
+    println!("UTXO ID: {}", utxo_id);
+    println!("BUYER KEY: {}", buyer_identity.x_only_public_key());
+    println!("SELLER KEY: {:?}", internal_key.to_string());
+    assert_eq!(transfer.src, utxo_id);
+    assert_eq!(transfer.dst, buyer_identity.x_only_public_key().to_string());
+
+    let balance = token::balance(runtime, &buyer_identity.x_only_public_key().to_string()).await?;
+    assert_eq!(balance, Some(Decimal::from(2)));
 
     Ok(())
+}
+
+#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+async fn test_native_token_attach_contract_regtest() -> Result<()> {
+    test_compose_token_attach_and_detach(runtime, &mut reg_tester).await
 }

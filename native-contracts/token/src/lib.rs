@@ -119,11 +119,13 @@ impl Guest for Token {
             .ledger()
             .get(&src)
             .ok_or(Error::Message("Source has no balance".to_string()))?;
-        if let Some(context::OpReturnData::PubKey(dst)) = ctx.transaction().op_return_data() {
-            transfer(ctx, src, dst, amt)
-        } else {
-            Err(Error::Message("invalid OP_RETURN data".to_string()))
-        }
+        let dst =
+            if let Some(context::OpReturnData::PubKey(dst)) = ctx.transaction().op_return_data() {
+                dst
+            } else {
+                ctx.signer().to_string()
+            };
+        transfer(ctx, src, dst, amt)
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<Decimal> {

@@ -227,7 +227,12 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        tracing::info!("Executing contract {} with expr {}", contract_address, expr);
+        tracing::info!(
+            "Executing contract {} with expr {} at input index {}",
+            contract_address,
+            expr,
+            self.storage.input_index
+        );
         let (
             mut store,
             contract_id,

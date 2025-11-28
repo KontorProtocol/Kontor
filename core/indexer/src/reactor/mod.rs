@@ -237,7 +237,9 @@ impl Reactor {
             for op in &t.ops {
                 let metadata = op.metadata();
                 let input_index = metadata.input_index;
+                info!("t.op_return_data: {:#?}", t.op_return_data);
                 let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
+                info!("Op return data: {:#?}", op_return_data);
                 self.runtime
                     .set_context(
                         height as i64,

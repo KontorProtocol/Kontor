@@ -269,7 +269,7 @@ impl RegTesterInner {
             .send_raw_transaction(&commit_tx_hex)
             .await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
-        let id = OpResultId::builder().txid(reveal_txid.to_string()).build();
+        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
         self.bitcoin_client
             .send_raw_transaction(&reveal_tx_hex)
             .await?;
@@ -571,6 +571,21 @@ impl RegTester {
 
     pub async fn bitcoin_client(&self) -> BitcoinClient {
         self.inner.lock().await.bitcoin_client.clone()
+    }
+
+    pub async fn kontor_client(&self) -> KontorClient {
+        self.inner.lock().await.kontor_client.clone()
+    }
+
+    pub async fn wait_next_block(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .ws_client
+            .next()
+            .await
+            .context("Failed to receive response from websocket")?;
+        inner.height += 1;
+        Ok(())
     }
 
     pub async fn mempool_accept_result(
