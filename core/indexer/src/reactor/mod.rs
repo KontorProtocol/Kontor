@@ -235,7 +235,8 @@ impl Reactor {
             )
             .await?;
             for op in &t.ops {
-                let input_index = op.metadata().input_index;
+                let metadata = op.metadata();
+                let input_index = metadata.input_index;
                 let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
                 self.runtime
                     .set_context(
@@ -244,6 +245,7 @@ impl Reactor {
                         input_index,
                         0,
                         t.txid,
+                        Some(metadata.previous_output),
                         op_return_data.map(Into::into),
                     )
                     .await;

@@ -5,6 +5,7 @@ use crate::runtime::{ContractAddress, kontor::built_in::context::OpReturnData, w
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpMetadata {
+    pub previous_output: bitcoin::OutPoint,
     pub input_index: i64,
     pub signer: Signer,
 }

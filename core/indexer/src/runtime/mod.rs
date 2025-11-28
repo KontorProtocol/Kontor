@@ -85,6 +85,7 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub txid: Txid,
+    pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
 }
 
@@ -114,6 +115,7 @@ impl Runtime {
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
             txid: new_mock_transaction(0).txid,
+            previous_output: None,
             op_return_data: None,
         })
     }
@@ -135,6 +137,7 @@ impl Runtime {
         input_index: i64,
         op_index: i64,
         txid: Txid,
+        previous_output: Option<bitcoin::OutPoint>,
         op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
@@ -144,6 +147,7 @@ impl Runtime {
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
         self.txid = txid;
+        self.previous_output = previous_output;
         self.op_return_data = op_return_data;
         if let Some(gauge) = self.gauge.as_ref() {
             gauge.reset().await;
@@ -175,7 +179,7 @@ impl Runtime {
     }
 
     pub async fn publish_native_contracts(&mut self) -> Result<()> {
-        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid, None)
+        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid, None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
@@ -265,6 +269,7 @@ impl Runtime {
                 .handle_procedure(
                     signer,
                     contract_id,
+                    contract_address,
                     &func_name,
                     true,
                     starting_fuel,
@@ -548,6 +553,7 @@ impl Runtime {
         &self,
         signer: &Signer,
         contract_id: i64,
+        contract_address: &ContractAddress,
         func_name: &str,
         is_op_result: bool,
         starting_fuel: u64,
@@ -592,6 +598,10 @@ impl Runtime {
             .await
             .expect("Failed to run burn and release gas")
             .expect("Failed to burn and release gas")
+        }
+        // don't write result for native token hold function
+        if contract_address == &token::address() && func_name == "hold" {
+            return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
         self.storage
@@ -661,6 +671,7 @@ impl Runtime {
                 .handle_procedure(
                     signer.as_ref().expect("Signer should be available in proc"),
                     contract_id,
+                    contract_address,
                     &func_name,
                     false,
                     starting_fuel,
@@ -1572,10 +1583,10 @@ impl built_in::context::HostTransactionWithStore for Runtime {
     }
 
     async fn utxo_id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
-        Ok(accessor.with(|mut access| {
-            let runtime = access.get();
-            format!("{}:{}", runtime.txid, runtime.storage.input_index)
-        }))
+        let previous_output = accessor
+            .with(|mut access| access.get().previous_output)
+            .expect("utxo_id called without previous_output present");
+        Ok(format!("{}:{}", previous_output.txid, previous_output.vout))
     }
 
     async fn op_return_data<T>(

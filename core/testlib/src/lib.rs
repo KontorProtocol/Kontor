@@ -186,7 +186,7 @@ impl RuntimeLocal {
         let mut runtime = IndexerRuntime::new(storage, component_cache).await?;
         runtime.publish_native_contracts().await?;
         runtime
-            .set_context(1, 1, 0, 0, new_mock_transaction(0).txid, None)
+            .set_context(1, 1, 0, 0, new_mock_transaction(0).txid, None, None)
             .await;
         Ok(Self { runtime, _db_dir })
     }

@@ -64,6 +64,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                         && let Ok(inst) = deserialize::<Inst>(&data)
                     {
                         let metadata = OpMetadata {
+                            previous_output: input.previous_output,
                             input_index: input_index as i64,
                             signer: Signer::XOnlyPubKey(signer.to_string()),
                         };

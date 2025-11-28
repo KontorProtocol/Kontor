@@ -24,7 +24,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
         )
         .await?;
 
-    let tx = deserialize_hex::<bitcoin::Transaction>(&reveal_tx_hex)?;
+    let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&reveal_tx_hex)?;
 
     let ops = reg_tester.transaction_hex_inspect(&reveal_tx_hex).await?;
     assert_eq!(ops.len(), 1);
@@ -32,6 +32,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
         ops[0].op,
         Op::Publish {
             metadata: OpMetadata {
+                previous_output: reveal_tx.input[0].previous_output,
                 input_index: 0,
                 signer: Signer::XOnlyPubKey(ident.x_only_public_key().to_string())
             },
@@ -54,7 +55,9 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
 
     assert_eq!(
         ops,
-        reg_tester.transaction_inspect(&tx.compute_txid()).await?
+        reg_tester
+            .transaction_inspect(&reveal_tx.compute_txid())
+            .await?
     );
 
     Ok(())
