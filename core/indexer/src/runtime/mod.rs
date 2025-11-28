@@ -585,7 +585,7 @@ impl Runtime {
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
                 async move {
-                    token::api::burn_and_release(
+                    token::api::release(
                         &mut runtime,
                         &Signer::Core(Box::new(signer.clone())),
                         Decimal::from(gas)
@@ -597,7 +597,7 @@ impl Runtime {
             })
             .await
             .expect("Failed to run burn and release gas")
-            .expect("Failed to burn and release gas")
+            .expect("Failed to burn and release gas");
         }
         // don't write result for native token hold function
         if contract_address == &token::address() && func_name == "hold" {

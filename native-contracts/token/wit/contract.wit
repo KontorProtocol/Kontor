@@ -7,19 +7,35 @@ world root {
 	use kontor:built-in/numbers.{decimal};
 
   record balance {
-		key: string,
-		value: decimal,
+		acc: string,
+		amt: decimal,
 	}
 
-	export issuance: func(ctx: borrow<core-context>, n: decimal) -> result<_, error>;
-	export hold: func(ctx: borrow<core-context>, n: decimal) -> result<_, error>;
-	export burn-and-release: func(ctx: borrow<core-context>, n: decimal) -> result<_, error>;
+	record transfer {
+		src: string,
+		dst: string,
+		amt: decimal,
+	}
+
+	record burn {
+	  src: string,
+	  amt: decimal,
+	}
+
+	record mint {
+	  dst: string,
+	  amt: decimal,
+	}
+
+	export issuance: func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
+	export hold: func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
+	export release: func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
 
 	export init: func(ctx: borrow<proc-context>);
 
-	export mint: func(ctx: borrow<proc-context>, n: decimal) -> result<_, error>;
-	export burn: func(ctx: borrow<proc-context>, n: decimal) -> result<_, error>;
-	export transfer: func(ctx: borrow<proc-context>, to: string, n: decimal) -> result<_, error>;
+	export mint: func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
+	export burn: func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
+	export transfer: func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
 	export balance: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 	export balances: func(ctx: borrow<view-context>) -> list<balance>;
 	export total-supply: func(ctx: borrow<view-context>) -> decimal;
