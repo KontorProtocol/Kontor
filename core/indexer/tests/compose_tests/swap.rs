@@ -22,7 +22,10 @@ use bitcoin::{ScriptBuf, consensus::encode::serialize as serialize_tx, key::Secp
 use indexer::api::compose::compose;
 use indexer::api::compose::compose_reveal;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::api::compose::{RevealInputs, RevealParticipantInputs};
+use indexer::api::compose::{
+    RevealInputs, RevealParticipantInputs, TapLeafScript, TapScriptPair,
+    build_tap_script_and_script_address,
+};
 use indexer::test_utils;
 use indexer_types::OpReturnData;
 use indexer_types::{ContractAddress, Inst, serialize};
@@ -90,18 +93,21 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
             x_only_public_key: seller_internal_key,
             funding_utxos: vec![(seller_out_point, seller_utxo_for_output.clone())],
             script_data: serialized_instruction,
+            chained_script_data: Some(serialized_detach_data.clone()),
         }])
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
-        .chained_script_data(serialized_detach_data.clone())
         .envelope(546)
         .build();
 
     let compose_outputs = compose(compose_params)?;
     let mut attach_commit_tx = compose_outputs.commit_transaction;
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
-    let attach_tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let attach_tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
     let detach_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_script_pair
         .as_ref()
         .unwrap()
         .tap_script
@@ -197,6 +203,24 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let transfer_data = OpReturnData::PubKey(buyer_internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
 
+    // Build TapScriptPair for commit_tap_script_pair
+    let (tap_script, tap_info, _) =
+        build_tap_script_and_script_address(seller_internal_key, serialized_detach_data.clone())?;
+    let commit_tap = TapScriptPair {
+        tap_script: tap_script.clone(),
+        tap_leaf_script: TapLeafScript {
+            leaf_version: LeafVersion::TapScript,
+            script: tap_script.clone(),
+            control_block: ScriptBuf::from_bytes(
+                tap_info
+                    .control_block(&(tap_script, LeafVersion::TapScript))
+                    .expect("control block")
+                    .serialize(),
+            ),
+        },
+        script_data_chunk: serialized_detach_data,
+    };
+
     let reveal_inputs = RevealInputs::builder()
         .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
@@ -208,15 +232,17 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
                 vout: 0,
             },
             commit_prevout: attach_reveal_tx.output[0].clone(),
-            commit_script_data: serialized_detach_data,
+            commit_tap_script_pair: commit_tap,
+            chained_script_data: None,
         }])
         .op_return_data(transfer_bytes)
         .envelope(546)
         .build();
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
 
-    // Create buyer's PSBT that combines with seller's PSBT
-    let mut buyer_psbt = buyer_reveal_outputs.psbt;
+    // Create buyer's PSBT from reveal outputs
+    let psbt_bytes = hex::decode(&buyer_reveal_outputs.psbt_hex)?;
+    let mut buyer_psbt: Psbt = Psbt::deserialize(&psbt_bytes)?;
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone(); // seller's signed input
 

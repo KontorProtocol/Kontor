@@ -72,19 +72,22 @@ pub async fn test_compose_token_attach_and_detach(
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: attach_inst.clone(),
+            chained_script_data: Some(detach_inst.clone()),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
-        .chained_script_data(detach_inst.clone())
         .build();
 
     let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
     let mut reveal_transaction = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_script_pair
         .as_ref()
         .unwrap()
         .tap_script
@@ -134,13 +137,13 @@ pub async fn test_compose_token_attach_and_detach(
             commit_vout: 0,
             commit_script_data: chained_script_data_bytes,
             envelope: None,
+            chained_script_data: None,
         }],
         op_return_data: Some(serialize(&vec![(
             0,
             indexer_types::OpReturnData::PubKey(buyer_identity.x_only_public_key()),
         )])?),
         envelope: None,
-        chained_script_data: None,
     };
 
     let detach_outputs = reg_tester.compose_reveal(reveal_query).await?;

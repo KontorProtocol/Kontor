@@ -43,6 +43,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: instruction.clone(),
+            chained_script_data: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -51,7 +52,10 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut commit_transaction = compose_outputs.commit_transaction;
 
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
 
     let derived_token_data = serialize(&instruction)?;
 
@@ -176,17 +180,20 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: instruction.clone(),
+            chained_script_data: Some(chained_instructions.clone()),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
-        .chained_script_data(chained_instructions.clone())
         .build();
 
     let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
 
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
 
     let derived_token_data = serialize(&instruction)?;
 
@@ -227,7 +234,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let mut reveal_transaction = compose_outputs.reveal_transaction;
 
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_script_pair
         .as_ref()
         .unwrap()
         .tap_script
@@ -372,12 +379,14 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
                 script_data: instruction.clone(),
+                chained_script_data: None,
             },
             InstructionQuery {
                 address: seller_address.to_string(),
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
                 script_data: instruction.clone(),
+                chained_script_data: None,
             },
         ])
         .sat_per_vbyte(2)
@@ -401,6 +410,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 out_point1.txid, out_point1.vout, out_point1.txid, out_point1.vout
             ),
             script_data: instruction,
+            chained_script_data: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -434,6 +444,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout).to_string(),
             script_data: oversized_inst,
+            chained_script_data: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -459,9 +470,9 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
                 name: "chain-oversized".to_string(),
                 bytes: b"x".to_vec(),
             },
+            chained_script_data: Some(chained_oversized_inst),
         }])
         .sat_per_vbyte(2)
-        .chained_script_data(chained_oversized_inst)
         .build();
 
     match reg_tester.compose(query2).await {
@@ -480,6 +491,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
                 name: "fee-rate".to_string(),
                 bytes: b"x".to_vec(),
             },
+            chained_script_data: None,
         }])
         .sat_per_vbyte(0)
         .build();
@@ -508,6 +520,7 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
             script_data: b"Hello, world!".to_vec(),
+            chained_script_data: None,
         }])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
@@ -516,7 +529,10 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
     let compose_outputs = compose(compose_params)?;
 
     let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
     // Initial reveal tx (unused after recomposition with OP_RETURN)
     let _initial_reveal_tx = compose_outputs.reveal_transaction;
 
@@ -532,10 +548,10 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
                 vout: 0,
             },
             commit_prevout: commit_tx.output[0].clone(),
-            commit_script_data: compose_outputs.per_participant[0]
-                .commit
-                .script_data_chunk
+            commit_tap_script_pair: compose_outputs.per_participant[0]
+                .commit_tap_script_pair
                 .clone(),
+            chained_script_data: None,
         }])
         .op_return_data(vec![0xAB; 10])
         .envelope(546)
@@ -612,6 +628,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
             funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
                 .to_string(),
             script_data: instruction,
+            chained_script_data: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -653,6 +670,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: instruction,
+            chained_script_data: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -690,6 +708,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: instruction,
+            chained_script_data: None,
         }])
         .sat_per_vbyte(4)
         .envelope(5_000_000_001)
@@ -742,17 +761,20 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             script_data: instruction.clone(),
+            chained_script_data: Some(chained_instructions.clone()),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
-        .chained_script_data(chained_instructions.clone())
         .build();
 
     let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
 
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_script_pair
+        .tap_script
+        .clone();
 
     let derived_token_data = serialize(&instruction)?;
 
@@ -793,7 +815,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let mut reveal_transaction = compose_outputs.reveal_transaction;
 
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_script_pair
         .as_ref()
         .unwrap()
         .tap_script
@@ -895,10 +917,10 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             commit_vout: 0,
             commit_script_data: chained_script_data_bytes,
             envelope: None,
+            chained_script_data: None,
         }],
         op_return_data: Some(serialize(&OpReturnData::PubKey(internal_key))?),
         envelope: None,
-        chained_script_data: None,
     };
 
     let detach_outputs = reg_tester.compose_reveal(reveal_query).await?;

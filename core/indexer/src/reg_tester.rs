@@ -230,6 +230,7 @@ impl RegTesterInner {
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 funding_utxo_ids: outpoint_to_utxo_id(&ident.next_funding_utxo.0),
                 script_data: inst,
+                chained_script_data: None,
             }])
             .sat_per_vbyte(2)
             .build();
@@ -243,7 +244,9 @@ impl RegTesterInner {
             0,
             None,
         )?;
-        let tap_script = &compose_res.per_participant[0].commit.tap_script;
+        let tap_script = &compose_res.per_participant[0]
+            .commit_tap_script_pair
+            .tap_script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -252,7 +255,9 @@ impl RegTesterInner {
         test_utils::sign_script_spend(
             &secp,
             &taproot_spend_info,
-            &compose_res.per_participant[0].commit.tap_script,
+            &compose_res.per_participant[0]
+                .commit_tap_script_pair
+                .tap_script,
             &mut compose_res.reveal_transaction,
             &[compose_res.commit_transaction.output[0].clone()],
             &ident.keypair,

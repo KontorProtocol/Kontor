@@ -67,6 +67,7 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
             x_only_public_key: n.internal_key,
             funding_utxos: vec![n.next_funding_utxo.clone()],
             script_data: script_datas[i].clone(),
+            chained_script_data: None,
         })
         .collect();
 
@@ -156,7 +157,10 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
 
     for (i, p) in all_participants.iter().enumerate() {
         // Build spend info from tapscript chunk
-        let tap_script = compose_outputs.per_participant[i].commit.tap_script.clone();
+        let tap_script = compose_outputs.per_participant[i]
+            .commit_tap_script_pair
+            .tap_script
+            .clone();
         let tap_info = bitcoin::taproot::TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .expect("leaf")

@@ -1,10 +1,11 @@
 use anyhow::Result;
 use bitcoin::script::Instruction;
-use bitcoin::taproot::LeafVersion::TapScript;
+use bitcoin::taproot::LeafVersion;
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
-    RevealInputs, RevealParticipantInputs, build_dummy_tx, build_tap_script_and_script_address,
-    calculate_change_single, compose_reveal, estimate_reveal_fee_for_address, tx_vbytes_est,
+    RevealInputs, RevealParticipantInputs, TapLeafScript, TapScriptPair, build_dummy_tx,
+    build_tap_script_and_script_address, calculate_change_single, compose_reveal,
+    estimate_reveal_fee_for_address, tx_vbytes_est,
 };
 use std::str::FromStr;
 use testlib::RegTester;
@@ -35,7 +36,7 @@ pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
         build_tap_script_and_script_address(xonly, data.clone()).expect("build tapscript");
     // Control block should be derivable
     let _cb = tap_info
-        .control_block(&(tap_script.clone(), TapScript))
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
         .expect("control block");
     // Script address should be P2TR-like spk length 34
     assert_eq!(script_addr.script_pubkey().len(), 34);
@@ -88,7 +89,7 @@ async fn build_commit_components(
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
     let control_block = ScriptBuf::from_bytes(
         tap_info
-            .control_block(&(tap_script.clone(), TapScript))
+            .control_block(&(tap_script.clone(), LeafVersion::TapScript))
             .expect("cb")
             .serialize(),
     );
@@ -128,7 +129,7 @@ pub async fn test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness(
     let (tap_script, tap_info, _addr) =
         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
     let cb = tap_info
-        .control_block(&(tap_script.clone(), TapScript))
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
         .expect("cb");
     let mut tx = build_dummy_tx(
         vec![bitcoin::TxIn {
@@ -193,28 +194,18 @@ pub async fn test_calculate_change_single_monotonic_fee_rate_and_owner_output_ef
     reg_tester: &mut RegTester,
 ) -> Result<()> {
     info!("test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect");
-    let (txin, txout, tap_script, control_block) =
+    let (_txin, txout, tap_script, control_block) =
         build_commit_components(20_000, reg_tester).await?;
 
     let low_fee = FeeRate::from_sat_per_vb(1).unwrap();
     let high_fee = FeeRate::from_sat_per_vb(10).unwrap();
 
-    let ch_low = calculate_change_single(
-        vec![],
-        (txin.clone(), txout.clone()),
-        &tap_script,
-        &control_block,
-        low_fee,
-    )
-    .expect("some change");
-    let ch_high = calculate_change_single(
-        vec![],
-        (txin.clone(), txout.clone()),
-        &tap_script,
-        &control_block,
-        high_fee,
-    )
-    .expect("some change");
+    let ch_low =
+        calculate_change_single(vec![], txout.clone(), &tap_script, &control_block, low_fee)
+            .expect("some change");
+    let ch_high =
+        calculate_change_single(vec![], txout.clone(), &tap_script, &control_block, high_fee)
+            .expect("some change");
     assert!(ch_low > ch_high);
 
     // Adding an owner output (e.g., envelope) reduces available change
@@ -224,7 +215,7 @@ pub async fn test_calculate_change_single_monotonic_fee_rate_and_owner_output_ef
     };
     let ch_with_owner = calculate_change_single(
         vec![owner_output],
-        (txin, txout),
+        txout,
         &tap_script,
         &control_block,
         low_fee,
@@ -238,36 +229,18 @@ pub async fn test_calculate_change_single_insufficient_returns_none(
     reg_tester: &mut RegTester,
 ) -> Result<()> {
     info!("test_calculate_change_single_insufficient_returns_none");
-    let (txin, mut txout, tap_script, control_block) =
+    let (_txin, mut txout, tap_script, control_block) =
         build_commit_components(0, reg_tester).await?;
     // With zero input value and any fee rate, change cannot cover fee+outputs
     let fee = FeeRate::from_sat_per_vb(5).unwrap();
-    let res = calculate_change_single(
-        vec![],
-        (txin, txout.clone()),
-        &tap_script,
-        &control_block,
-        fee,
-    );
+    let res = calculate_change_single(vec![], txout.clone(), &tap_script, &control_block, fee);
     assert!(res.is_none());
 
     // Tiny input also should be None for realistic fee rates
     txout.value = Amount::from_sat(10);
     let res2 = calculate_change_single(
         vec![],
-        (
-            bitcoin::TxIn {
-                previous_output: OutPoint {
-                    txid: Txid::from_str(
-                        "0000000000000000000000000000000000000000000000000000000000000002",
-                    )
-                    .unwrap(),
-                    vout: 0,
-                },
-                ..Default::default()
-            },
-            txout,
-        ),
+        txout,
         &tap_script,
         &control_block,
         FeeRate::from_sat_per_vb(100).unwrap(),
@@ -309,11 +282,25 @@ pub async fn test_compose_reveal_op_return_size_validation(
     let keypair = identity.keypair;
     let (xonly, _parity) = keypair.x_only_public_key();
     let commit_data = b"data".to_vec();
-    let (_tap_script, _tap_info, script_addr) =
+    let (tap_script, tap_info, script_addr) =
         build_tap_script_and_script_address(xonly, commit_data.clone()).expect("build");
     let commit_prevout = bitcoin::TxOut {
         value: Amount::from_sat(10_000),
         script_pubkey: script_addr.script_pubkey(),
+    };
+    let commit_tap_script_pair = TapScriptPair {
+        tap_script: tap_script.clone(),
+        tap_leaf_script: TapLeafScript {
+            leaf_version: LeafVersion::TapScript,
+            script: tap_script.clone(),
+            control_block: ScriptBuf::from_bytes(
+                tap_info
+                    .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+                    .expect("control block")
+                    .serialize(),
+            ),
+        },
+        script_data_chunk: commit_data,
     };
     let participant = RevealParticipantInputs {
         address: script_addr.clone(),
@@ -326,7 +313,8 @@ pub async fn test_compose_reveal_op_return_size_validation(
             vout: 0,
         },
         commit_prevout: commit_prevout.clone(),
-        commit_script_data: commit_data,
+        commit_tap_script_pair,
+        chained_script_data: None,
     };
 
     // With single-push OP_RETURN, total payload includes the tag ("kon").

@@ -26,7 +26,7 @@ use crate::bitcoin_client::Client;
 
 // Hardening limits
 const MAX_PARTICIPANTS: usize = 1000;
-const MAX_SCRIPT_BYTES: usize = 387 * 1024; // 16 KiB
+const MAX_SCRIPT_BYTES: usize = 387 * 1024; // 387 KiB
 const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
@@ -37,6 +37,7 @@ pub struct InstructionQuery {
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
     pub script_data: Inst,
+    pub chained_script_data: Option<Inst>,
 }
 
 #[derive(Serialize, Deserialize, Builder)]
@@ -44,7 +45,6 @@ pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
     pub sat_per_vbyte: u64,
     pub envelope: Option<u64>,
-    pub chained_script_data: Option<Inst>,
 }
 
 #[derive(Serialize, Builder, Clone)]
@@ -53,6 +53,7 @@ pub struct InstructionInputs {
     pub x_only_public_key: XOnlyPublicKey,
     pub funding_utxos: Vec<(OutPoint, TxOut)>,
     pub script_data: Vec<u8>,
+    pub chained_script_data: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Builder)]
@@ -60,7 +61,6 @@ pub struct ComposeInputs {
     pub instructions: Vec<InstructionInputs>,
     pub fee_rate: FeeRate,
     pub envelope: u64,
-    pub chained_script_data: Option<Vec<u8>>,
 }
 
 impl ComposeInputs {
@@ -120,11 +120,22 @@ impl ComposeInputs {
                 if script_data.is_empty() || script_data.len() > MAX_SCRIPT_BYTES {
                     return Err(anyhow!("script data size invalid"));
                 }
+                let chained_script_data = match instruction_query.chained_script_data.as_ref() {
+                    Some(inst) => {
+                        let bytes = serialize(inst)?;
+                        if bytes.is_empty() || bytes.len() > MAX_SCRIPT_BYTES {
+                            return Err(anyhow!("chained script data size invalid"));
+                        }
+                        Some(bytes)
+                    }
+                    None => None,
+                };
                 Ok(InstructionInputs {
                     address,
                     x_only_public_key,
                     funding_utxos,
                     script_data,
+                    chained_script_data,
                 })
             }))
             .await?;
@@ -132,16 +143,6 @@ impl ComposeInputs {
         let fee_rate =
             FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-        let chained_script_data_bytes = match query.chained_script_data.as_ref() {
-            Some(inst) => {
-                let bytes = serialize(inst)?;
-                if bytes.is_empty() || bytes.len() > MAX_SCRIPT_BYTES {
-                    return Err(anyhow!("chained script data size invalid"));
-                }
-                Some(bytes)
-            }
-            None => None,
-        };
         let envelope = query
             .envelope
             .unwrap_or(MIN_ENVELOPE_SATS)
@@ -151,7 +152,6 @@ impl ComposeInputs {
             instructions,
             fee_rate,
             envelope,
-            chained_script_data: chained_script_data_bytes,
         })
     }
 }
@@ -177,8 +177,8 @@ pub struct ParticipantScripts {
     pub index: u32,
     pub address: String,
     pub x_only_public_key: String,
-    pub commit: TapScriptPair,
-    pub chained: Option<TapScriptPair>,
+    pub commit_tap_script_pair: TapScriptPair,
+    pub chained_tap_script_pair: Option<TapScriptPair>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Builder)]
@@ -214,7 +214,6 @@ pub struct CommitOutputs {
     pub commit_transaction: Transaction,
     pub commit_transaction_hex: String,
     pub commit_psbt_hex: String,
-    pub per_participant_tap: Vec<TapScriptPair>,
     pub reveal_inputs: RevealInputs,
 }
 
@@ -225,6 +224,7 @@ pub struct RevealParticipantQuery {
     pub commit_vout: u32,
     pub commit_script_data: Vec<u8>,
     pub envelope: Option<u64>,
+    pub chained_script_data: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -234,7 +234,6 @@ pub struct RevealQuery {
     pub participants: Vec<RevealParticipantQuery>,
     pub op_return_data: Option<Vec<u8>>,
     pub envelope: Option<u64>,
-    pub chained_script_data: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -243,7 +242,8 @@ pub struct RevealParticipantInputs {
     pub x_only_public_key: XOnlyPublicKey,
     pub commit_outpoint: OutPoint,
     pub commit_prevout: TxOut,
-    pub commit_script_data: Vec<u8>,
+    pub commit_tap_script_pair: TapScriptPair,
+    pub chained_script_data: Option<Vec<u8>>,
 }
 
 #[derive(Builder, Serialize, Clone)]
@@ -253,7 +253,6 @@ pub struct RevealInputs {
     pub participants: Vec<RevealParticipantInputs>,
     pub op_return_data: Option<Vec<u8>>,
     pub envelope: u64,
-    pub chained_script_data: Option<Vec<u8>>,
 }
 
 impl RevealInputs {
@@ -288,14 +287,35 @@ impl RevealInputs {
                 .get(commit_outpoint.vout as usize)
                 .cloned()
                 .ok_or_else(|| anyhow!("commit vout {} out of bounds", commit_outpoint.vout))?;
-            let commit_script_data = p.commit_script_data.clone();
+
+            // Build TapScriptPair from raw commit_script_data
+            let (tap_script, tap_info, _) = build_tap_script_and_script_address(
+                x_only_public_key,
+                p.commit_script_data.clone(),
+            )?;
+            let tap_leaf = TapLeafScript {
+                leaf_version: LeafVersion::TapScript,
+                script: tap_script.clone(),
+                control_block: ScriptBuf::from_bytes(
+                    tap_info
+                        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+                        .ok_or_else(|| anyhow!("Failed to create control block"))?
+                        .serialize(),
+                ),
+            };
+            let commit_tap_script_pair = TapScriptPair {
+                tap_script,
+                tap_leaf_script: tap_leaf,
+                script_data_chunk: p.commit_script_data.clone(),
+            };
 
             participants_inputs.push(RevealParticipantInputs {
                 address,
                 x_only_public_key,
                 commit_outpoint,
                 commit_prevout,
-                commit_script_data,
+                commit_tap_script_pair,
+                chained_script_data: p.chained_script_data.clone(),
             });
         }
 
@@ -305,7 +325,6 @@ impl RevealInputs {
             .envelope
             .unwrap_or(MIN_ENVELOPE_SATS)
             .max(MIN_ENVELOPE_SATS);
-        let chained_script_data = query.chained_script_data.clone();
 
         Ok(Self {
             commit_tx,
@@ -313,24 +332,27 @@ impl RevealInputs {
             participants: participants_inputs,
             op_return_data,
             envelope,
-            chained_script_data,
         })
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RevealParticipantOutputs {
+    pub address: String,
+    pub x_only_public_key: String,
+    pub commit_tap_script_pair: TapScriptPair,
+    pub chained_tap_script_pair: Option<TapScriptPair>,
 }
 
 #[derive(Builder, Serialize, Deserialize)]
 pub struct RevealOutputs {
     pub transaction: Transaction,
     pub transaction_hex: String,
-    pub psbt: Psbt,
     pub psbt_hex: String,
-    // { "<address>": { tap_script, tap_leaf_script } }
-    pub per_participant_chained_tap: Vec<TapScriptPair>,
+    pub participants: Vec<RevealParticipantOutputs>,
 }
 
 pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
-    // Clone addresses for response mapping prior to move
-    let instructions_clone = params.instructions.clone();
     // Build the commit tx
     let commit_outputs = compose_commit(CommitInputs {
         instructions: params.instructions,
@@ -338,36 +360,32 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
         envelope: params.envelope,
     })?;
 
-    // Build the reveal tx using reveal_inputs prepared during commit (inject chained data now)
-    let mut reveal_inputs = commit_outputs.reveal_inputs.clone();
-    reveal_inputs.chained_script_data = params.chained_script_data.clone();
-    let reveal_outputs = compose_reveal(reveal_inputs)?;
+    // Build the reveal tx
+    let reveal_outputs = compose_reveal(commit_outputs.reveal_inputs.clone())?;
 
-    // Build the final outputs
-    let compose_outputs = ComposeOutputs::builder()
+    // Map reveal participant outputs to ParticipantScripts
+    let per_participant: Vec<ParticipantScripts> = reveal_outputs
+        .participants
+        .iter()
+        .enumerate()
+        .map(|(idx, p)| ParticipantScripts {
+            index: idx as u32,
+            address: p.address.clone(),
+            x_only_public_key: p.x_only_public_key.clone(),
+            commit_tap_script_pair: p.commit_tap_script_pair.clone(),
+            chained_tap_script_pair: p.chained_tap_script_pair.clone(),
+        })
+        .collect();
+
+    Ok(ComposeOutputs::builder()
         .commit_transaction(commit_outputs.commit_transaction)
         .commit_transaction_hex(commit_outputs.commit_transaction_hex)
         .commit_psbt_hex(commit_outputs.commit_psbt_hex)
-        .reveal_transaction(reveal_outputs.transaction.clone())
+        .reveal_transaction(reveal_outputs.transaction)
         .reveal_transaction_hex(reveal_outputs.transaction_hex)
         .reveal_psbt_hex(reveal_outputs.psbt_hex)
-        .per_participant(
-            commit_outputs
-                .per_participant_tap
-                .into_iter()
-                .enumerate()
-                .map(|(idx, commit_pair)| ParticipantScripts {
-                    index: idx as u32,
-                    address: instructions_clone[idx].address.to_string(),
-                    x_only_public_key: instructions_clone[idx].x_only_public_key.to_string(),
-                    commit: commit_pair,
-                    chained: reveal_outputs.per_participant_chained_tap.get(idx).cloned(),
-                })
-                .collect(),
-        )
-        .build();
-
-    Ok(compose_outputs)
+        .per_participant(per_participant)
+        .build())
 }
 
 pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
@@ -386,15 +404,15 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     }
 
     let mut per_participant_tap: Vec<TapScriptPair> = Vec::with_capacity(num_instructions);
-    let mut per_participant_selected_tx_outs: Vec<Vec<TxOut>> =
-        Vec::with_capacity(num_instructions);
 
     for instruction in params.instructions.iter() {
-        let chunk = instruction.script_data.clone();
+        let inst_per_participant = instruction.script_data.clone();
 
         // Build tapscript for this address
-        let (tap_script, tap_info, script_spendable_address) =
-            build_tap_script_and_script_address(instruction.x_only_public_key, chunk.clone())?;
+        let (tap_script, tap_info, script_spendable_address) = build_tap_script_and_script_address(
+            instruction.x_only_public_key,
+            inst_per_participant.clone(),
+        )?; // here
 
         // Estimate reveal fee using helper
         let reveal_fee = estimate_reveal_fee_for_address(
@@ -529,80 +547,27 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         per_participant_tap.push(TapScriptPair {
             tap_script: tap_script.clone(),
             tap_leaf_script: tap_leaf,
-            script_data_chunk: chunk,
+            script_data_chunk: inst_per_participant,
         });
-        per_participant_selected_tx_outs
-            .push(selected.into_iter().map(|(_, tx_out)| tx_out).collect());
     }
 
     let commit_transaction = commit_psbt.unsigned_tx.clone();
     let commit_transaction_hex = hex::encode(serialize_tx(&commit_transaction));
     let commit_psbt_hex = commit_psbt.serialize_hex();
 
-    // Build reveal inputs here for convenience
-    use std::collections::HashMap;
-    let commit_txid = commit_transaction.compute_txid();
-    let mut participants: Vec<RevealParticipantInputs> =
-        Vec::with_capacity(params.instructions.len());
-    // Track how many times we've assigned a given script_pubkey to ensure unique vout selection
-    let mut spk_usage_counts: HashMap<ScriptBuf, u32> = HashMap::new();
-    for (idx, instruction) in params.instructions.iter().enumerate() {
-        let pair = &per_participant_tap[idx];
-        let (_tap, _info, script_addr) = build_tap_script_and_script_address(
-            instruction.x_only_public_key,
-            pair.script_data_chunk.clone(),
-        )?;
-        let spk = script_addr.script_pubkey();
-        let desired_occurrence = *spk_usage_counts.get(&spk).unwrap_or(&0);
-        let mut seen = 0u32;
-        let vout = commit_transaction
-            .output
-            .iter()
-            .enumerate()
-            .find_map(|(i, o)| {
-                if o.script_pubkey == spk {
-                    if seen == desired_occurrence {
-                        Some(i as u32)
-                    } else {
-                        seen += 1;
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                anyhow!(
-                    "failed to locate unique commit vout for {}",
-                    instruction.address
-                )
-            })?;
-        *spk_usage_counts.entry(spk.clone()).or_insert(0) += 1;
-        let commit_outpoint = OutPoint {
-            txid: commit_txid,
-            vout,
-        };
-        let commit_prevout = commit_transaction.output[vout as usize].clone();
-        participants.push(RevealParticipantInputs {
-            address: instruction.address.clone(),
-            x_only_public_key: instruction.x_only_public_key,
-            commit_outpoint,
-            commit_prevout,
-            commit_script_data: pair.script_data_chunk.clone(),
-        });
-    }
-    let reveal_inputs = RevealInputs::builder()
-        .commit_tx(commit_transaction.clone())
-        .fee_rate(params.fee_rate)
-        .participants(participants)
-        .envelope(params.envelope)
-        .build();
+    // Derive reveal inputs from commit transaction
+    let reveal_inputs = derive_reveal_inputs_from_commit(
+        &commit_transaction,
+        &per_participant_tap,
+        &params.instructions,
+        params.fee_rate,
+        params.envelope,
+    )?;
 
     Ok(CommitOutputs::builder()
         .commit_transaction(commit_transaction)
         .commit_transaction_hex(commit_transaction_hex)
         .commit_psbt_hex(commit_psbt_hex)
-        .per_participant_tap(per_participant_tap)
         .reveal_inputs(reveal_inputs)
         .build())
 }
@@ -623,8 +588,6 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         output: vec![],
     };
 
-    // Track whether we've already added an OP_RETURN; policy generally allows only one
-    let mut op_return_added = false;
     // Optional OP_RETURN first (keeps vsize expectations stable)
     if let Some(data) = params.op_return_data.clone() {
         if data.len() > MAX_OP_RETURN_BYTES {
@@ -642,39 +605,22 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 s
             },
         });
-        op_return_added = true;
     }
 
-    // Precompute commit tapscripts/control blocks per participant for sizing and PSBT
-    let mut commit_scripts: Vec<(ScriptBuf, ScriptBuf)> =
+    // Build participant outputs, adding chained outputs and computing change
+    let mut participant_outputs: Vec<RevealParticipantOutputs> =
         Vec::with_capacity(params.participants.len());
+
     for p in params.participants.iter() {
-        let (tap_script, tap_info, _) =
-            build_tap_script_and_script_address(p.x_only_public_key, p.commit_script_data.clone())?;
-        let control_block = tap_info
-            .control_block(&(tap_script.clone(), LeafVersion::TapScript))
-            .ok_or(anyhow!("Failed to create control block"))?
-            .serialize();
-        commit_scripts.push((tap_script, ScriptBuf::from_bytes(control_block)));
-    }
-
-    // If chained_script_data is present, split it evenly across participants and add per-owner chained outputs
-    let mut per_participant_chained_tap: Vec<TapScriptPair> =
-        Vec::with_capacity(params.participants.len());
-    if let Some(chained) = params.chained_script_data.clone() {
-        let n = params.participants.len();
-        let chunks = split_even_chunks(&chained, n)?;
-        for (i, p) in params.participants.iter().enumerate() {
-            let chunk = chunks[i].clone();
-
+        // Build chained tap info if participant has chained_script_data
+        let chained_tap_script_pair = if let Some(ref chained) = p.chained_script_data {
             let (ch_tap, ch_info, ch_addr) =
-                build_tap_script_and_script_address(p.x_only_public_key, chunk.clone())?;
-            // Per-owner chained output at envelope value
+                build_tap_script_and_script_address(p.x_only_public_key, chained.clone())?;
+            // Add chained output at envelope value
             reveal_transaction.output.push(TxOut {
                 value: Amount::from_sat(params.envelope),
                 script_pubkey: ch_addr.script_pubkey(),
             });
-            // Record mapping for response
             let tap_leaf = TapLeafScript {
                 leaf_version: LeafVersion::TapScript,
                 script: ch_tap.clone(),
@@ -685,72 +631,55 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                         .serialize(),
                 ),
             };
-            per_participant_chained_tap.push(TapScriptPair {
+            Some(TapScriptPair {
                 tap_script: ch_tap,
                 tap_leaf_script: tap_leaf,
-                script_data_chunk: chunk,
-            });
-        }
-    }
+                script_data_chunk: chained.clone(),
+            })
+        } else {
+            None
+        };
 
-    // For each owner, compute standalone change using single-input sizing with fixed witness shape
-    for (i, p) in params.participants.iter().enumerate() {
+        // Compute change using commit_tap directly (no rebuild needed)
         let mut owner_outputs: Vec<TxOut> = Vec::new();
-        if params.chained_script_data.is_some() {
+        if p.chained_script_data.is_some() {
             // One P2TR chained output at envelope
             owner_outputs.push(TxOut {
                 value: Amount::from_sat(params.envelope),
                 script_pubkey: ScriptBuf::from_bytes(vec![0; 34]),
             });
         }
-        let (ref tap_script, ref control_block) = commit_scripts[i];
         if let Some(v) = calculate_change_single(
             owner_outputs,
-            (
-                reveal_transaction.input[i].clone(),
-                p.commit_prevout.clone(),
-            ),
-            tap_script,
-            control_block,
+            p.commit_prevout.clone(),
+            &p.commit_tap_script_pair.tap_script,
+            &p.commit_tap_script_pair.tap_leaf_script.control_block,
             params.fee_rate,
-        ) {
-            if params.chained_script_data.is_some() {
-                if v > params.envelope {
-                    reveal_transaction.output.push(TxOut {
-                        value: Amount::from_sat(v),
-                        script_pubkey: p.address.script_pubkey(),
-                    });
-                }
-            } else if v >= MIN_ENVELOPE_SATS {
-                reveal_transaction.output.push(TxOut {
-                    value: Amount::from_sat(v),
-                    script_pubkey: p.address.script_pubkey(),
-                });
-            } else if !op_return_added {
-                // Fallback: add a single OP_RETURN (at most one per tx) to avoid dust outputs
-                reveal_transaction.output.push(TxOut {
-                    value: Amount::from_sat(0),
-                    script_pubkey: {
-                        let mut s = ScriptBuf::new();
-                        s.push_opcode(OP_RETURN);
-                        s.push_slice(b"kon");
-                        s
-                    },
-                });
-                op_return_added = true;
-            }
+        ) && v >= params.envelope
+        {
+            reveal_transaction.output.push(TxOut {
+                value: Amount::from_sat(v),
+                script_pubkey: p.address.script_pubkey(),
+            });
         }
+        participant_outputs.push(RevealParticipantOutputs {
+            address: p.address.to_string(),
+            x_only_public_key: p.x_only_public_key.to_string(),
+            commit_tap_script_pair: p.commit_tap_script_pair.clone(),
+            chained_tap_script_pair,
+        });
     }
 
-    // Now that reveal_transaction is finalized, build PSBT and set metadata
+    // Build PSBT and set metadata using commit_tap directly
     let mut psbt = Psbt::from_unsigned_tx(reveal_transaction.clone())?;
     for (idx, p) in params.participants.iter().enumerate() {
         psbt.inputs[idx].witness_utxo = Some(p.commit_prevout.clone());
         psbt.inputs[idx].tap_internal_key = Some(p.x_only_public_key);
-        // Use commit script merkle root
-        let (tap_script, tap_info, _) =
-            build_tap_script_and_script_address(p.x_only_public_key, p.commit_script_data.clone())?;
-        let _ = tap_script; // not needed further here
+        // Derive merkle root from commit_tap
+        let (_, tap_info, _) = build_tap_script_and_script_address(
+            p.x_only_public_key,
+            p.commit_tap_script_pair.script_data_chunk.clone(),
+        )?;
         if let Some(root) = tap_info.merkle_root() {
             psbt.inputs[idx].tap_merkle_root = Some(root);
         } else {
@@ -763,9 +692,8 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let reveal_outputs = RevealOutputs::builder()
         .transaction(reveal_transaction)
         .transaction_hex(reveal_transaction_hex)
-        .psbt(psbt)
         .psbt_hex(psbt_hex)
-        .per_participant_chained_tap(per_participant_chained_tap)
+        .participants(participant_outputs)
         .build();
 
     Ok(reveal_outputs)
@@ -811,14 +739,13 @@ pub fn build_tap_script_and_script_address(
 
 pub fn calculate_change_single(
     outputs: Vec<TxOut>,
-    input_tuple: (TxIn, TxOut),
+    input_prevout: TxOut,
     tap_script: &ScriptBuf,
     control_block: &ScriptBuf,
     fee_rate: FeeRate,
 ) -> Option<u64> {
     // Sum actual input value
-    let (_txin, txout) = input_tuple;
-    let input_sum = txout.value.to_sat();
+    let input_sum = input_prevout.value.to_sat();
 
     // Prepare output script lengths (existing owner outputs + dummy change spk len = 34)
     let mut spk_lens: Vec<usize> = outputs.iter().map(|o| o.script_pubkey.len()).collect();
@@ -987,4 +914,78 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
     }
 
     Ok(funding_utxos)
+}
+
+/// Derives RevealInputs from commit transaction and instruction data.
+/// This maps each participant to their commit output vout, handling duplicate tapscript addresses.
+pub fn derive_reveal_inputs_from_commit(
+    commit_transaction: &Transaction,
+    per_participant_tap: &[TapScriptPair],
+    instructions: &[InstructionInputs],
+    fee_rate: FeeRate,
+    envelope: u64,
+) -> Result<RevealInputs> {
+    use std::collections::HashMap;
+
+    let commit_txid = commit_transaction.compute_txid();
+
+    let mut participants: Vec<RevealParticipantInputs> = Vec::with_capacity(instructions.len());
+
+    // Track how many times we've assigned a given script_pubkey to ensure unique vout selection
+    let mut spk_usage_counts: HashMap<ScriptBuf, u32> = HashMap::new();
+
+    for (idx, instruction) in instructions.iter().enumerate() {
+        let pair = &per_participant_tap[idx];
+        let (_tap, _info, script_addr) = build_tap_script_and_script_address(
+            instruction.x_only_public_key,
+            pair.script_data_chunk.clone(),
+        )?;
+        let spk = script_addr.script_pubkey();
+        let desired_occurrence = *spk_usage_counts.get(&spk).unwrap_or(&0);
+        let mut seen = 0u32; // come back to this
+        let vout = commit_transaction
+            .output
+            .iter()
+            .enumerate()
+            .find_map(|(i, o)| {
+                if o.script_pubkey == spk {
+                    if seen == desired_occurrence {
+                        Some(i as u32)
+                    } else {
+                        seen += 1;
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to locate unique commit vout for {}",
+                    instruction.address
+                )
+            })?;
+        *spk_usage_counts.entry(spk.clone()).or_insert(0) += 1;
+        let commit_outpoint = OutPoint {
+            txid: commit_txid,
+            vout,
+        };
+        let commit_prevout = commit_transaction.output[vout as usize].clone();
+        participants.push(RevealParticipantInputs {
+            address: instruction.address.clone(),
+            x_only_public_key: instruction.x_only_public_key,
+            commit_outpoint,
+            commit_prevout,
+            commit_tap_script_pair: pair.clone(),
+            chained_script_data: instruction.chained_script_data.clone(),
+        });
+    }
+
+    Ok(RevealInputs {
+        commit_tx: commit_transaction.clone(),
+        fee_rate,
+        participants,
+        op_return_data: None,
+        envelope,
+    })
 }

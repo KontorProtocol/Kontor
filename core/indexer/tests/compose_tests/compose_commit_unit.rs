@@ -27,12 +27,14 @@ pub async fn test_compose_commit_unique_vout_mapping_even_with_identical_chunks(
                 x_only_public_key: internal_key,
                 funding_utxos: vec![utxo1],
                 script_data: chunks[0].clone(),
+                chained_script_data: None,
             },
             InstructionInputs {
                 address: addr.clone(),
                 x_only_public_key: internal_key,
                 funding_utxos: vec![utxo2],
                 script_data: chunks[1].clone(),
+                chained_script_data: None,
             },
         ])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
@@ -70,6 +72,7 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
             x_only_public_key: internal_key,
             funding_utxos: vec![next_funding_utxo],
             script_data: b"x".to_vec(),
+            chained_script_data: None,
         }])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
