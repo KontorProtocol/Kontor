@@ -31,6 +31,7 @@ const MAX_SCRIPT_BYTES: usize = 387 * 1024; // 387 KiB
 const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
+const P2TR_OUTPUT_SIZE: usize = 34; // P2TR script pubkey size in bytes
 
 #[derive(Serialize, Deserialize, Clone, Builder)]
 pub struct InstructionQuery {
@@ -376,7 +377,51 @@ pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {
 }
 
 pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
-    // Start with an empty commit PSBT
+    if params.instructions.is_empty() {
+        return Err(anyhow!("No instructions provided"));
+    }
+
+    // Phase 1: Build all tap scripts first to calculate reveal fees
+    let mut tap_script_data: Vec<(ScriptBuf, Address, ControlBlock, Vec<u8>)> =
+        Vec::with_capacity(params.instructions.len());
+
+    for instruction in params.instructions.iter() {
+        let (tap_script, _, script_spendable_address, control_block) =
+            build_tap_script_and_script_address(
+                instruction.x_only_public_key,
+                instruction.script_data.clone(),
+            )?;
+        tap_script_data.push((
+            tap_script,
+            script_spendable_address,
+            control_block,
+            instruction.script_data.clone(),
+        ));
+    }
+
+    // Phase 2: Calculate reveal fees using delta-based accounting
+    let reveal_fee_inputs: Vec<RevealFeeEstimateInput> = params
+        .instructions
+        .iter()
+        .zip(tap_script_data.iter())
+        .map(
+            |(inst, (tap_script, _, control_block, _))| RevealFeeEstimateInput {
+                tap_script: tap_script.clone(),
+                control_block_bytes: control_block.serialize(),
+                has_chained: inst.chained_script_data.is_some(),
+                change_spk_len: inst.address.script_pubkey().len(),
+            },
+        )
+        .collect();
+
+    let reveal_fees = estimate_reveal_fees_delta(
+        &reveal_fee_inputs,
+        params.fee_rate,
+        false, // commit doesn't know about op_return yet
+        params.envelope,
+    )?;
+
+    // Phase 3: Build commit transaction using pre-calculated reveal fees
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -384,53 +429,38 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         output: vec![],
     })?;
 
-    if params.instructions.is_empty() {
-        return Err(anyhow!("No instructions provided"));
-    }
-
-    // Collect data needed to build RevealParticipantInputs after we have txid
     let mut participant_data: Vec<PendingParticipant> =
         Vec::with_capacity(params.instructions.len());
 
-    // Steps for building the commit psbt:
-    // TODO
-    for instruction in params.instructions.iter() {
-        let inst_script_data = instruction.script_data.clone();
-
-        // Build tapscript for this address
-        let (tap_script, _, script_spendable_address, control_block) =
-            build_tap_script_and_script_address(
-                instruction.x_only_public_key,
-                inst_script_data.clone(),
-            )?;
-
-        // Estimate reveal fee
+    for (i, instruction) in params.instructions.iter().enumerate() {
+        let (tap_script, script_spendable_address, control_block, inst_script_data) =
+            tap_script_data[i].clone();
+        let reveal_fee = reveal_fees[i];
         let has_chained = instruction.chained_script_data.is_some();
-        let reveal_fee = estimate_script_spend_fee(
-            &tap_script,
-            &control_block.serialize(),
-            has_chained,
-            params.fee_rate,
-        )
-        .ok_or(anyhow!("fee calculation overflow"))?;
 
         // Script output value must cover:
         // 1. envelope: dust floor for change output in the reveal
-        // 2. reveal_fee: miner fee for the reveal tx
-        // 3. chained_envelope: if chained, the value locked in the chained output (another envelope)
+        // 2. reveal_fee: miner fee for the reveal tx (delta-based)
+        // 3. chained_envelope: if chained, the value locked in the chained output
         let chained_envelope = if has_chained { params.envelope } else { 0 };
         let script_spend_output_value = params
             .envelope
             .saturating_add(reveal_fee)
             .saturating_add(chained_envelope);
 
-        // Shuffle UTXOs
+        // Shuffle UTXOs for privacy
         let mut utxos: Vec<(OutPoint, TxOut)> = instruction.funding_utxos.clone();
         utxos.shuffle(&mut rng());
 
-        // Select UTXOs and compute this participant's fee contribution
-        let (selected, participant_fee) =
-            select_utxos_for_commit(utxos, script_spend_output_value, params.fee_rate)?;
+        // Select UTXOs using delta-based fee accounting for commit
+        let (selected, participant_commit_fee) = select_utxos_for_commit(
+            &commit_psbt.unsigned_tx,
+            utxos,
+            script_spend_output_value,
+            params.fee_rate,
+            params.envelope,
+            &instruction.address,
+        )?;
         let selected_sum: u64 = selected.iter().map(|(_, txo)| txo.value.to_sat()).sum();
 
         // Append selected inputs to the PSBT
@@ -454,8 +484,9 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         });
         commit_psbt.outputs.push(bitcoin::psbt::Output::default());
 
-        // Add change output if above dust
-        let change = selected_sum.saturating_sub(script_spend_output_value + participant_fee);
+        // Add change output if above dust threshold
+        let change =
+            selected_sum.saturating_sub(script_spend_output_value + participant_commit_fee);
         if change >= params.envelope {
             commit_psbt.unsigned_tx.output.push(TxOut {
                 value: Amount::from_sat(change),
@@ -464,7 +495,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         }
 
-        // Build TapScriptPair
+        // Build TapScriptPair for reveal
         let tap_script_pair = TapScriptPair {
             tap_script: tap_script.clone(),
             tap_leaf_script: TapLeafScript {
@@ -521,7 +552,31 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
 }
 
 pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
-    // Start with empty PSBT (consistent with compose_commit)
+    // Phase 1: Calculate reveal fees using delta-based accounting
+    let reveal_fee_inputs: Vec<RevealFeeEstimateInput> = params
+        .participants
+        .iter()
+        .map(|p| RevealFeeEstimateInput {
+            tap_script: p.commit_tap_script_pair.tap_script.clone(),
+            control_block_bytes: p
+                .commit_tap_script_pair
+                .tap_leaf_script
+                .control_block
+                .as_bytes()
+                .to_vec(),
+            has_chained: p.chained_script_data.is_some(),
+            change_spk_len: p.address.script_pubkey().len(),
+        })
+        .collect();
+
+    let reveal_fees = estimate_reveal_fees_delta(
+        &reveal_fee_inputs,
+        params.fee_rate,
+        params.op_return_data.is_some(),
+        params.envelope,
+    )?;
+
+    // Phase 2: Build reveal transaction
     let mut psbt = Psbt::from_unsigned_tx(Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -549,11 +604,13 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         psbt.outputs.push(bitcoin::psbt::Output::default());
     }
 
-    // Single loop: add inputs, outputs, and PSBT metadata for each participant
     let mut participant_scripts: Vec<ParticipantScripts> =
         Vec::with_capacity(params.participants.len());
 
-    for p in params.participants.iter() {
+    for (i, p) in params.participants.iter().enumerate() {
+        let reveal_fee = reveal_fees[i];
+        let has_chained = p.chained_script_data.is_some();
+
         // Add input
         psbt.unsigned_tx.input.push(TxIn {
             previous_output: p.commit_outpoint,
@@ -588,30 +645,17 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             None
         };
 
-        // Compute and add change output
-        let tap_script = &p.commit_tap_script_pair.tap_script;
-        let control_block = &p.commit_tap_script_pair.tap_leaf_script.control_block;
-        let has_chained = p.chained_script_data.is_some();
-        let fixed_output_sum = if has_chained { params.envelope } else { 0 };
+        // Calculate change using delta-based reveal fee
+        let chained_output_value = if has_chained { params.envelope } else { 0 };
+        let change = p
+            .commit_prevout
+            .value
+            .to_sat()
+            .saturating_sub(chained_output_value + reveal_fee);
 
-        let change = estimate_script_spend_fee(
-            tap_script,
-            control_block.as_bytes(),
-            has_chained,
-            params.fee_rate,
-        )
-        .and_then(|fee| {
-            p.commit_prevout
-                .value
-                .to_sat()
-                .checked_sub(fixed_output_sum + fee)
-        });
-
-        if let Some(v) = change
-            && v >= params.envelope
-        {
+        if change >= params.envelope {
             psbt.unsigned_tx.output.push(TxOut {
-                value: Amount::from_sat(v),
+                value: Amount::from_sat(change),
                 script_pubkey: p.address.script_pubkey(),
             });
             psbt.outputs.push(bitcoin::psbt::Output::default());
@@ -703,6 +747,95 @@ pub fn build_tap_script_and_script_address(
 // Fee Estimation
 // ============================================================================
 
+/// Input for delta-based reveal fee estimation.
+#[derive(Clone)]
+pub struct RevealFeeEstimateInput {
+    pub tap_script: ScriptBuf,
+    pub control_block_bytes: Vec<u8>,
+    pub has_chained: bool,
+    pub change_spk_len: usize,
+}
+
+/// Estimate reveal fees for all participants using delta-based accounting.
+///
+/// Builds a dummy reveal transaction incrementally, measuring the vsize delta
+/// each participant adds. This ensures "fair share" fee distribution where
+/// each participant pays only for their marginal contribution to the shared tx.
+///
+/// Returns a Vec of per-participant reveal fees.
+pub fn estimate_reveal_fees_delta(
+    participants: &[RevealFeeEstimateInput],
+    fee_rate: FeeRate,
+    has_op_return: bool,
+    envelope: u64,
+) -> Result<Vec<u64>> {
+    if participants.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Start with base reveal transaction structure
+    let mut dummy_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    };
+
+    // Add OP_RETURN if present (fixed overhead, charged to first participant)
+    if has_op_return {
+        dummy_tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::new_op_return(&PushBytesBuf::try_from(
+                vec![0u8; MAX_OP_RETURN_BYTES],
+            )?),
+        });
+    }
+
+    let mut fees = Vec::with_capacity(participants.len());
+
+    for p in participants {
+        let vsize_before = dummy_tx.vsize() as u64;
+
+        // Add input with script-spend witness
+        let mut txin = TxIn::default();
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        w.push(p.tap_script.as_bytes());
+        w.push(&p.control_block_bytes);
+        txin.witness = w;
+        dummy_tx.input.push(txin);
+
+        // Add chained output if present
+        if p.has_chained {
+            dummy_tx.output.push(TxOut {
+                value: Amount::from_sat(envelope),
+                script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
+            });
+        }
+
+        // Add change output (assume it exists for fee calculation - worst case)
+        dummy_tx.output.push(TxOut {
+            value: Amount::from_sat(envelope),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; p.change_spk_len]),
+        });
+
+        let vsize_after = dummy_tx.vsize() as u64;
+        let delta = vsize_after.saturating_sub(vsize_before);
+        let fee = fee_rate
+            .fee_vb(delta)
+            .ok_or(anyhow!("fee calculation overflow"))?
+            .to_sat();
+        fees.push(fee);
+    }
+
+    Ok(fees)
+}
+
+/// Calculate transaction virtual size (vbytes) accounting for witness discount.
+fn tx_vsize(tx: &Transaction) -> u64 {
+    tx.vsize() as u64
+}
+
 /// Estimate fee for a tx assuming key-spend inputs (64-byte signature witnesses).
 pub fn estimate_key_spend_fee(tx: &Transaction, fee_rate: FeeRate) -> Option<u64> {
     let mut dummy = tx.clone();
@@ -714,44 +847,25 @@ pub fn estimate_key_spend_fee(tx: &Transaction, fee_rate: FeeRate) -> Option<u64
     fee_rate.fee_vb(dummy.vsize() as u64).map(|a| a.to_sat())
 }
 
-/// Estimate fee for a script-spend reveal tx.
-/// All outputs are P2TR (34 bytes). has_chained adds a second output.
-fn estimate_script_spend_fee(
-    tap_script: &ScriptBuf,
-    control_block_bytes: &[u8],
-    has_chained: bool,
-    fee_rate: FeeRate,
-) -> Option<u64> {
-    let num_outputs = if has_chained { 2 } else { 1 };
-    let tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![{
-            let mut txin = TxIn::default();
-            let mut w = Witness::new();
-            w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-            w.push(tap_script.as_bytes());
-            w.push(control_block_bytes);
-            txin.witness = w;
-            txin
-        }],
-        output: (0..num_outputs)
-            .map(|_| TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]), // P2TR
-            })
-            .collect(),
-    };
-    fee_rate.fee_vb(tx.vsize() as u64).map(|a| a.to_sat())
-}
-
-/// Select UTXOs for a commit participant.
+/// Select UTXOs for a commit participant using delta-based fee accounting.
+///
+/// This function accurately calculates fees by measuring the actual vsize delta
+/// that this participant adds to the shared transaction, rather than assuming
+/// a fixed transaction structure.
+///
 /// Returns (selected_utxos, participant_fee) or errors if insufficient funds.
 pub fn select_utxos_for_commit(
+    current_tx: &Transaction,
     utxos: Vec<(OutPoint, TxOut)>,
     script_output_value: u64,
     fee_rate: FeeRate,
+    envelope: u64,
+    change_address: &Address,
 ) -> Result<(Vec<(OutPoint, TxOut)>, u64)> {
+    if utxos.is_empty() {
+        return Err(anyhow!("No UTXOs provided"));
+    }
+
     let mut selected: Vec<(OutPoint, TxOut)> = Vec::new();
     let mut selected_sum: u64 = 0;
 
@@ -759,37 +873,90 @@ pub fn select_utxos_for_commit(
         selected_sum += txout.value.to_sat();
         selected.push((outpoint, txout));
 
-        // Fee for N key-spend inputs + 2 P2TR outputs
-        let fee = estimate_commit_fee(selected.len(), fee_rate)
-            .ok_or_else(|| anyhow!("fee calculation overflow"))?;
-        let required = script_output_value + fee;
+        // Estimate fees with and without change output
+        let (fee_with_change, fee_no_change) =
+            estimate_participant_commit_fees(current_tx, &selected, change_address, fee_rate)?;
 
-        if selected_sum >= required {
-            return Ok((selected, fee));
+        // Check if we can afford script output + fee + dust-threshold change
+        let required_with_change = script_output_value
+            .saturating_add(fee_with_change)
+            .saturating_add(envelope);
+
+        if selected_sum >= required_with_change {
+            // Change will be >= envelope, so use fee that accounts for change output
+            return Ok((selected, fee_with_change));
+        }
+
+        // Check if we can afford script output + fee (no change, or sub-dust change)
+        let required_no_change = script_output_value.saturating_add(fee_no_change);
+
+        if selected_sum >= required_no_change {
+            // Change would be < envelope, so no change output - use lower fee
+            return Ok((selected, fee_no_change));
         }
     }
 
     Err(anyhow!("Insufficient funds"))
 }
 
-/// Estimate commit fee for N inputs + 2 P2TR outputs (script + change)
-fn estimate_commit_fee(num_inputs: usize, fee_rate: FeeRate) -> Option<u64> {
-    let tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: (0..num_inputs).map(|_| TxIn::default()).collect(),
-        output: vec![
-            TxOut {
-                value: Amount::ZERO,
-                script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
-            },
-            TxOut {
-                value: Amount::ZERO,
-                script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
-            },
-        ],
-    };
-    estimate_key_spend_fee(&tx, fee_rate)
+/// Estimate commit fees for a participant with and without change output.
+///
+/// Builds temporary transactions to measure the exact vsize delta this
+/// participant adds to the commit transaction.
+///
+/// Returns (fee_with_change, fee_without_change).
+fn estimate_participant_commit_fees(
+    base_tx: &Transaction,
+    selected_utxos: &[(OutPoint, TxOut)],
+    change_address: &Address,
+    fee_rate: FeeRate,
+) -> Result<(u64, u64)> {
+    let base_vb = tx_vsize(base_tx);
+
+    // Build temp tx with this participant's inputs (with dummy witnesses) and outputs
+    let mut temp_tx = base_tx.clone();
+
+    for (outpoint, _) in selected_utxos.iter() {
+        let mut txin = TxIn {
+            previous_output: *outpoint,
+            ..Default::default()
+        };
+        // Add dummy key-spend witness (64-byte Schnorr signature)
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        txin.witness = w;
+        temp_tx.input.push(txin);
+    }
+
+    // Add script output (P2TR size = 34 bytes)
+    temp_tx.output.push(TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
+    });
+
+    // Add change output
+    temp_tx.output.push(TxOut {
+        value: Amount::ZERO,
+        script_pubkey: change_address.script_pubkey(),
+    });
+
+    let vb_with_change = tx_vsize(&temp_tx);
+    let delta_with_change = vb_with_change.saturating_sub(base_vb);
+    let fee_with_change = fee_rate
+        .fee_vb(delta_with_change)
+        .ok_or(anyhow!("fee calculation overflow"))?
+        .to_sat();
+
+    // Remove change output and recalculate
+    temp_tx.output.pop();
+    let vb_no_change = tx_vsize(&temp_tx);
+    let delta_no_change = vb_no_change.saturating_sub(base_vb);
+    let fee_no_change = fee_rate
+        .fee_vb(delta_no_change)
+        .ok_or(anyhow!("fee calculation overflow"))?
+        .to_sat();
+
+    Ok((fee_with_change, fee_no_change))
 }
 
 async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(OutPoint, TxOut)>> {
