@@ -202,20 +202,27 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let transfer_data = OpReturnData::PubKey(buyer_internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
 
+    // Use the chained TapScriptPair from compose_outputs as the commit script for the detach reveal
+    let detach_tap_script_pair = compose_outputs.per_participant[0]
+        .chained_tap_script_pair
+        .clone()
+        .unwrap();
+
     let reveal_inputs = RevealInputs::builder()
         .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .participants(vec![RevealParticipantInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            commit_outpoint: OutPoint {
-                txid: attach_reveal_tx.compute_txid(),
-                vout: 0,
-            },
-            commit_prevout: attach_reveal_tx.output[0].clone(),
-            commit_script_data: serialized_detach_data,
-            chained_script_data: None,
-        }])
+        .participants(vec![
+            RevealParticipantInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .commit_outpoint(OutPoint {
+                    txid: attach_reveal_tx.compute_txid(),
+                    vout: 0,
+                })
+                .commit_prevout(attach_reveal_tx.output[0].clone())
+                .commit_tap_script_pair(detach_tap_script_pair)
+                .build(),
+        ])
         .op_return_data(transfer_bytes)
         .envelope(546)
         .build();

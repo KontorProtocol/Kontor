@@ -272,6 +272,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let chained_script_address =
         Address::p2tr_tweaked(chained_taproot_spend_info.output_key(), KnownHrp::Mainnet);
 
+    println!("commit_transaction!!!!!!!!!: {:#?}", commit_transaction);
+    println!("reveal_transaction!!!!!!!!!: {:#?}", reveal_transaction);
+
     assert_eq!(reveal_transaction.input.len(), 1);
     assert_eq!(
         reveal_transaction.input[0].previous_output.txid,
@@ -279,7 +282,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     );
     assert_eq!(reveal_transaction.input[0].previous_output.vout, 0);
 
-    assert_eq!(reveal_transaction.output.len(), 1);
+    assert_eq!(reveal_transaction.output.len(), 2);
     assert_eq!(reveal_transaction.output[0].value.to_sat(), 600);
     assert_eq!(
         reveal_transaction.output[0].script_pubkey,
@@ -550,10 +553,9 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
                     vout: 0,
                 })
                 .commit_prevout(commit_tx.output[0].clone())
-                .commit_script_data(
+                .commit_tap_script_pair(
                     compose_outputs.per_participant[0]
                         .commit_tap_script_pair
-                        .script_data_chunk
                         .clone(),
                 )
                 .build(),
@@ -866,7 +868,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     );
     assert_eq!(reveal_transaction.input[0].previous_output.vout, 0);
 
-    assert_eq!(reveal_transaction.output.len(), 1);
+    assert_eq!(reveal_transaction.output.len(), 2);
     assert_eq!(reveal_transaction.output[0].value.to_sat(), 600);
     assert_eq!(
         reveal_transaction.output[0].script_pubkey,

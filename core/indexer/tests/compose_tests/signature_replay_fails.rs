@@ -385,7 +385,11 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
                     vout: 0,
                 })
                 .commit_prevout(attach_reveal_tx.output[0].clone())
-                .commit_script_data(serialized_detach_data)
+                .commit_tap_script_pair(
+                    compose_outputs.per_participant[0]
+                        .commit_tap_script_pair
+                        .clone(),
+                )
                 .build(),
         ])
         .op_return_data(transfer_bytes)

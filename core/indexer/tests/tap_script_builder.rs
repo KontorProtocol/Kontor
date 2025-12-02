@@ -28,7 +28,7 @@ async fn test_build_tap_script_and_script_address_empty() -> Result<()> {
 async fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 519];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -61,7 +61,7 @@ async fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 521];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -98,7 +98,7 @@ async fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 520];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -131,7 +131,7 @@ async fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_small_chunking() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 1000];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -187,7 +187,7 @@ async fn test_build_tap_script_and_script_address_small_chunking() -> Result<()>
 async fn test_build_tap_script_and_script_address_large_chunking() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 2700];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -240,7 +240,7 @@ async fn test_build_tap_script_progressive_size_limit() -> Result<()> {
         let data = vec![0xFF; current_size];
 
         // Should succeed - let any errors propagate
-        let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+        let (script, _, _, _) = build_tap_script_and_script_address(key, data.clone())?;
 
         // Verify basic script structure
         let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
