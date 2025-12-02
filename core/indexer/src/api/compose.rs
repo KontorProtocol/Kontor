@@ -172,7 +172,6 @@ pub struct TapLeafScript {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TapScriptPair {
-    pub tap_script: ScriptBuf,
     pub tap_leaf_script: TapLeafScript,
     pub script_data_chunk: Vec<u8>,
 }
@@ -249,15 +248,6 @@ pub struct RevealParticipantInputs {
     pub chained_script_data: Option<Vec<u8>>,
 }
 
-/// Intermediate data collected during commit loop, before txid is known
-struct PendingParticipant {
-    address: Address,
-    x_only_public_key: XOnlyPublicKey,
-    vout: u32,
-    tap_script_pair: TapScriptPair,
-    chained_script_data: Option<Vec<u8>>,
-}
-
 #[derive(Builder, Serialize, Clone)]
 pub struct RevealInputs {
     pub commit_tx: Transaction,
@@ -305,15 +295,20 @@ impl RevealInputs {
                 x_only_public_key,
                 p.commit_script_data.clone(),
             )?;
-            let commit_tap_script_pair =
-                build_tap_script_pair(tap_script, &control_block, p.commit_script_data.clone());
 
             participants_inputs.push(RevealParticipantInputs {
                 address,
                 x_only_public_key,
                 commit_outpoint,
                 commit_prevout,
-                commit_tap_script_pair,
+                commit_tap_script_pair: TapScriptPair {
+                    tap_leaf_script: TapLeafScript {
+                        leaf_version: LeafVersion::TapScript,
+                        script: tap_script,
+                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
+                    },
+                    script_data_chunk: p.commit_script_data.clone(),
+                },
                 chained_script_data: p.chained_script_data.clone(),
             });
         }
@@ -337,7 +332,6 @@ impl RevealInputs {
 pub struct RevealOutputs {
     pub transaction: Transaction,
     pub transaction_hex: String,
-    pub psbt: Psbt,
     pub psbt_hex: String,
     pub participants: Vec<ParticipantScripts>,
 }
@@ -401,7 +395,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                 tap_script: tap_script.clone(),
                 control_block_bytes: control_block.serialize(),
                 has_chained: inst.chained_script_data.is_some(),
-                change_spk_len: inst.address.script_pubkey().len(),
             },
         )
         .collect();
@@ -421,12 +414,10 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         output: vec![],
     })?;
 
-    let mut participant_data: Vec<PendingParticipant> =
-        Vec::with_capacity(params.instructions.len());
+    let mut script_vouts: Vec<u32> = Vec::with_capacity(params.instructions.len());
 
     for (i, instruction) in params.instructions.iter().enumerate() {
-        let (tap_script, script_spendable_address, control_block, inst_script_data) =
-            tap_script_data[i].clone();
+        let (_, script_spendable_address, _, _) = tap_script_data[i].clone();
         let reveal_fee = reveal_fees[i];
         let has_chained = instruction.chained_script_data.is_some();
 
@@ -444,16 +435,16 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         let mut utxos: Vec<(OutPoint, TxOut)> = instruction.funding_utxos.clone();
         utxos.shuffle(&mut rng());
 
-        // Select UTXOs using delta-based fee accounting for commit
+        // Select UTXOs using delta-based fee accounting for commit TODO: SHOULD WE DO THIS
         let (selected, participant_commit_fee) = select_utxos_for_commit(
             &commit_psbt.unsigned_tx,
             utxos,
             script_spend_output_value,
             params.fee_rate,
             params.envelope,
-            &instruction.address,
         )
         .map_err(|e| anyhow!("participant {}: {}", i, e))?;
+
         let selected_sum: u64 = selected.iter().map(|(_, txo)| txo.value.to_sat()).sum();
 
         // Append selected inputs to the PSBT
@@ -469,8 +460,10 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             });
         }
 
+        // Track vout before adding script output
+        script_vouts.push(commit_psbt.unsigned_tx.output.len() as u32);
+
         // Add script output
-        let script_vout = commit_psbt.unsigned_tx.output.len() as u32;
         commit_psbt.unsigned_tx.output.push(TxOut {
             value: Amount::from_sat(script_spend_output_value),
             script_pubkey: script_spendable_address.script_pubkey(),
@@ -487,17 +480,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             });
             commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         }
-
-        // Build TapScriptPair for reveal
-        let tap_script_pair = build_tap_script_pair(tap_script, &control_block, inst_script_data);
-
-        participant_data.push(PendingParticipant {
-            address: instruction.address.clone(),
-            x_only_public_key: instruction.x_only_public_key,
-            vout: script_vout,
-            tap_script_pair,
-            chained_script_data: instruction.chained_script_data.clone(),
-        });
     }
 
     let commit_transaction = commit_psbt.unsigned_tx.clone();
@@ -506,19 +488,33 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     let commit_txid = commit_transaction.compute_txid();
 
     // Build RevealParticipantInputs now that we have txid
-    let participants: Vec<RevealParticipantInputs> = participant_data
-        .into_iter()
-        .map(|p| RevealParticipantInputs {
-            address: p.address,
-            x_only_public_key: p.x_only_public_key,
-            commit_outpoint: OutPoint {
-                txid: commit_txid,
-                vout: p.vout,
+    let participants: Vec<RevealParticipantInputs> = params
+        .instructions
+        .iter()
+        .zip(tap_script_data.iter())
+        .zip(script_vouts.iter())
+        .map(
+            |((inst, (tap_script, _, control_block, script_data)), &vout)| {
+                RevealParticipantInputs {
+                    address: inst.address.clone(),
+                    x_only_public_key: inst.x_only_public_key,
+                    commit_outpoint: OutPoint {
+                        txid: commit_txid,
+                        vout,
+                    },
+                    commit_prevout: commit_transaction.output[vout as usize].clone(),
+                    commit_tap_script_pair: TapScriptPair {
+                        tap_leaf_script: TapLeafScript {
+                            leaf_version: LeafVersion::TapScript,
+                            script: tap_script.clone(),
+                            control_block: ScriptBuf::from_bytes(control_block.serialize()),
+                        },
+                        script_data_chunk: script_data.clone(),
+                    },
+                    chained_script_data: inst.chained_script_data.clone(),
+                }
             },
-            commit_prevout: commit_transaction.output[p.vout as usize].clone(),
-            commit_tap_script_pair: p.tap_script_pair,
-            chained_script_data: p.chained_script_data,
-        })
+        )
         .collect();
 
     let reveal_inputs = RevealInputs::builder()
@@ -542,7 +538,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         .participants
         .iter()
         .map(|p| RevealFeeEstimateInput {
-            tap_script: p.commit_tap_script_pair.tap_script.clone(),
+            tap_script: p.commit_tap_script_pair.tap_leaf_script.script.clone(),
             control_block_bytes: p
                 .commit_tap_script_pair
                 .tap_leaf_script
@@ -550,7 +546,6 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 .as_bytes()
                 .to_vec(),
             has_chained: p.chained_script_data.is_some(),
-            change_spk_len: p.address.script_pubkey().len(),
         })
         .collect();
 
@@ -617,11 +612,14 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 script_pubkey: ch_addr.script_pubkey(),
             });
             psbt.outputs.push(bitcoin::psbt::Output::default());
-            Some(build_tap_script_pair(
-                ch_tap,
-                &ch_control_block,
-                chained.clone(),
-            ))
+            Some(TapScriptPair {
+                tap_leaf_script: TapLeafScript {
+                    leaf_version: LeafVersion::TapScript,
+                    script: ch_tap,
+                    control_block: ScriptBuf::from_bytes(ch_control_block.serialize()),
+                },
+                script_data_chunk: chained.clone(),
+            })
         } else {
             None
         };
@@ -671,7 +669,6 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     Ok(RevealOutputs::builder()
         .transaction(reveal_transaction)
         .transaction_hex(reveal_transaction_hex)
-        .psbt(psbt)
         .psbt_hex(psbt_hex)
         .participants(participant_scripts)
         .build())
@@ -724,23 +721,6 @@ pub fn build_tap_script_and_script_address(
     ))
 }
 
-/// Build a TapScriptPair from a tap script, control block, and script data.
-fn build_tap_script_pair(
-    tap_script: ScriptBuf,
-    control_block: &ControlBlock,
-    script_data: Vec<u8>,
-) -> TapScriptPair {
-    TapScriptPair {
-        tap_script: tap_script.clone(),
-        tap_leaf_script: TapLeafScript {
-            leaf_version: LeafVersion::TapScript,
-            script: tap_script,
-            control_block: ScriptBuf::from_bytes(control_block.serialize()),
-        },
-        script_data_chunk: script_data,
-    }
-}
-
 // ============================================================================
 // Fee Estimation
 // ============================================================================
@@ -751,7 +731,6 @@ pub struct RevealFeeEstimateInput {
     pub tap_script: ScriptBuf,
     pub control_block_bytes: Vec<u8>,
     pub has_chained: bool,
-    pub change_spk_len: usize,
 }
 
 /// Estimate reveal fees for all participants using delta-based accounting.
@@ -811,10 +790,10 @@ pub fn estimate_reveal_fees_delta(
             });
         }
 
-        // Add change output (assume it exists for fee calculation - worst case)
+        // Add change output (assume it exists for fee calculation)
         dummy_tx.output.push(TxOut {
             value: Amount::from_sat(envelope),
-            script_pubkey: ScriptBuf::from_bytes(vec![0u8; p.change_spk_len]),
+            script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
         });
 
         let vsize_after = dummy_tx.vsize() as u64;
@@ -847,13 +826,13 @@ pub fn estimate_key_spend_fee(tx: &Transaction, fee_rate: FeeRate) -> Option<u64
 /// a fixed transaction structure.
 ///
 /// Returns (selected_utxos, participant_fee) or errors if insufficient funds.
+/// // TODO: is this necessary???
 pub fn select_utxos_for_commit(
     current_tx: &Transaction,
     utxos: Vec<(OutPoint, TxOut)>,
-    script_output_value: u64,
+    script_spend_output_value: u64,
     fee_rate: FeeRate,
     envelope: u64,
-    change_address: &Address,
 ) -> Result<(Vec<(OutPoint, TxOut)>, u64)> {
     if utxos.is_empty() {
         return Err(anyhow!("no UTXOs provided"));
@@ -869,10 +848,10 @@ pub fn select_utxos_for_commit(
 
         // Estimate fees with and without change output
         let (fee_with_change, fee_no_change) =
-            estimate_participant_commit_fees(current_tx, &selected, change_address, fee_rate)?;
+            estimate_participant_commit_fees(current_tx, &selected, fee_rate)?;
 
         // Check if we can afford script output + fee + dust-threshold change
-        let required_with_change = script_output_value
+        let required_with_change = script_spend_output_value
             .saturating_add(fee_with_change)
             .saturating_add(envelope);
 
@@ -882,7 +861,7 @@ pub fn select_utxos_for_commit(
         }
 
         // Check if we can afford script output + fee (no change scenario)
-        let required_no_change = script_output_value.saturating_add(fee_no_change);
+        let required_no_change = script_spend_output_value.saturating_add(fee_no_change);
 
         if selected_sum >= required_no_change {
             // Calculate what change would actually be if we used fee_no_change
@@ -901,7 +880,7 @@ pub fn select_utxos_for_commit(
     }
 
     Err(anyhow!(
-        "insufficient funds: have {} sats, need {} sats",
+        "Insufficient funds: have {} sats, need {} sats",
         selected_sum,
         last_required
     ))
@@ -916,7 +895,6 @@ pub fn select_utxos_for_commit(
 fn estimate_participant_commit_fees(
     base_tx: &Transaction,
     selected_utxos: &[(OutPoint, TxOut)],
-    change_address: &Address,
     fee_rate: FeeRate,
 ) -> Result<(u64, u64)> {
     let base_vb = base_tx.vsize() as u64;
@@ -945,7 +923,7 @@ fn estimate_participant_commit_fees(
     // Add change output
     temp_tx.output.push(TxOut {
         value: Amount::ZERO,
-        script_pubkey: change_address.script_pubkey(),
+        script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
     });
 
     let vb_with_change = temp_tx.vsize() as u64;

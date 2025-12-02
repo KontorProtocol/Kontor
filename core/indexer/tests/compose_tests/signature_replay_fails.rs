@@ -61,7 +61,8 @@ pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<(
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_script_pair
-        .tap_script
+        .tap_leaf_script
+        .script
         .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
 
@@ -216,13 +217,15 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
     let attach_tap_script = compose_outputs.per_participant[0]
         .commit_tap_script_pair
-        .tap_script
+        .tap_leaf_script
+        .script
         .clone();
     let detach_tap_script = compose_outputs.per_participant[0]
         .chained_tap_script_pair
         .as_ref()
         .unwrap()
-        .tap_script
+        .tap_leaf_script
+        .script
         .clone();
 
     let prevouts = vec![seller_utxo_for_output.clone()];
@@ -398,7 +401,8 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
 
     // Create buyer's PSBT that combines with seller's PSBT
-    let mut buyer_psbt = buyer_reveal_outputs.psbt;
+    let mut buyer_psbt =
+        Psbt::deserialize(&hex::decode(&buyer_reveal_outputs.psbt_hex).unwrap()).unwrap();
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
     // Add buyer funding input as a second input

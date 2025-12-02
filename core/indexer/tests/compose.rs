@@ -27,16 +27,38 @@ use compose_tests::compose_commit_unit::{
     test_compose_commit_psbt_inputs_have_metadata,
     test_compose_commit_unique_vout_mapping_even_with_identical_chunks,
 };
-// use compose_tests::compose_helpers::{
-//     test_build_tap_script_address_type_is_p2tr,
-//     test_build_tap_script_and_script_address_empty_data_errs,
-//     test_build_tap_script_and_script_address_multi_push_and_structure,
-//     test_build_tap_script_chunk_boundaries_push_count,
-//     test_calculate_change_single_insufficient_returns_none,
-//     test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect,
-//     test_compose_reveal_op_return_size_validation,
-//     test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance,
-// };
+use compose_tests::compose_helpers::{
+    test_build_tap_script_address_type_is_p2tr,
+    test_build_tap_script_and_script_address_empty_data_errs,
+    test_build_tap_script_and_script_address_multi_push_and_structure,
+    test_build_tap_script_chunk_boundaries_push_count,
+    test_compose_reveal_op_return_size_validation, test_estimate_key_spend_fee_deterministic,
+    test_estimate_key_spend_fee_does_not_modify_original_tx, test_estimate_key_spend_fee_empty_tx,
+    test_estimate_key_spend_fee_fee_rate_scaling, test_estimate_key_spend_fee_high_fee_rate,
+    test_estimate_key_spend_fee_many_inputs, test_estimate_key_spend_fee_minimum_fee_rate,
+    test_estimate_key_spend_fee_more_outputs_higher_fee,
+    test_estimate_key_spend_fee_multiple_inputs_scales_linearly,
+    test_estimate_key_spend_fee_overwrites_existing_witness,
+    test_estimate_key_spend_fee_signature_size_is_64_bytes,
+    test_estimate_key_spend_fee_single_input, test_estimate_key_spend_fee_with_real_commit_tx,
+    test_estimate_reveal_fees_delta_chained_adds_output_fee,
+    test_estimate_reveal_fees_delta_control_block_size_matters,
+    test_estimate_reveal_fees_delta_deterministic,
+    test_estimate_reveal_fees_delta_empty_participants_returns_empty,
+    test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee,
+    test_estimate_reveal_fees_delta_fee_rate_scaling,
+    test_estimate_reveal_fees_delta_high_fee_rate,
+    test_estimate_reveal_fees_delta_larger_script_higher_fee,
+    test_estimate_reveal_fees_delta_many_participants,
+    test_estimate_reveal_fees_delta_minimum_fee_rate,
+    test_estimate_reveal_fees_delta_mixed_chained_participants,
+    test_estimate_reveal_fees_delta_multiple_participants_independent_deltas,
+    test_estimate_reveal_fees_delta_op_return_is_base_overhead,
+    test_estimate_reveal_fees_delta_op_return_not_in_participant_fees,
+    test_estimate_reveal_fees_delta_single_participant_returns_single_fee,
+    test_estimate_reveal_fees_delta_very_large_script,
+    test_estimate_reveal_fees_delta_with_realistic_scripts,
+};
 use compose_tests::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
 use compose_tests::legacy_segwit_envelope::{
     test_legacy_segwit_envelope_psbt_inscription,
@@ -137,14 +159,15 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_script_pair
-        .tap_script
+        .tap_leaf_script
+        .script
         .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
     let chained_pair = compose_outputs.per_participant[0]
         .chained_tap_script_pair
         .clone()
         .unwrap();
-    let chained_tap_script = chained_pair.tap_script.clone();
+    let chained_tap_script = chained_pair.tap_leaf_script.script.clone();
 
     let transfer_data = OpReturnData::PubKey(internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
@@ -366,20 +389,47 @@ async fn test_compose_regtest() -> Result<()> {
         .await?;
     test_compose_commit_psbt_inputs_have_metadata(&mut reg_tester.clone()).await?;
 
-    // info!("compose_helpers");
-    // test_build_tap_script_and_script_address_empty_data_errs(&mut reg_tester.clone()).await?;
-    // test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
-    //     .await?;
-    // test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
-    // test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect(
-    //     &mut reg_tester.clone(),
-    // )
-    // .await?;
-    // test_calculate_change_single_insufficient_returns_none(&mut reg_tester.clone()).await?;
-    // test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance(&mut reg_tester.clone())
-    //     .await?;
-    // test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
-    // test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
+    info!("compose_helpers");
+    test_build_tap_script_and_script_address_empty_data_errs(&mut reg_tester.clone()).await?;
+    test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
+        .await?;
+    test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
+    test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
+    test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
+
+    info!("estimate_reveal_fees_delta");
+    test_estimate_reveal_fees_delta_empty_participants_returns_empty();
+    test_estimate_reveal_fees_delta_single_participant_returns_single_fee();
+    test_estimate_reveal_fees_delta_fee_rate_scaling();
+    test_estimate_reveal_fees_delta_larger_script_higher_fee();
+    test_estimate_reveal_fees_delta_chained_adds_output_fee();
+    test_estimate_reveal_fees_delta_op_return_is_base_overhead();
+    test_estimate_reveal_fees_delta_op_return_not_in_participant_fees();
+    test_estimate_reveal_fees_delta_multiple_participants_independent_deltas();
+    test_estimate_reveal_fees_delta_deterministic();
+    test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee();
+    test_estimate_reveal_fees_delta_minimum_fee_rate();
+    test_estimate_reveal_fees_delta_high_fee_rate();
+    test_estimate_reveal_fees_delta_mixed_chained_participants();
+    test_estimate_reveal_fees_delta_very_large_script();
+    test_estimate_reveal_fees_delta_many_participants();
+    test_estimate_reveal_fees_delta_control_block_size_matters();
+    test_estimate_reveal_fees_delta_with_realistic_scripts(&mut reg_tester.clone()).await?;
+
+    info!("estimate_key_spend_fee");
+    test_estimate_key_spend_fee_empty_tx();
+    test_estimate_key_spend_fee_single_input();
+    test_estimate_key_spend_fee_multiple_inputs_scales_linearly();
+    test_estimate_key_spend_fee_fee_rate_scaling();
+    test_estimate_key_spend_fee_more_outputs_higher_fee();
+    test_estimate_key_spend_fee_deterministic();
+    test_estimate_key_spend_fee_overwrites_existing_witness();
+    test_estimate_key_spend_fee_does_not_modify_original_tx();
+    test_estimate_key_spend_fee_minimum_fee_rate();
+    test_estimate_key_spend_fee_high_fee_rate();
+    test_estimate_key_spend_fee_many_inputs();
+    test_estimate_key_spend_fee_signature_size_is_64_bytes();
+    test_estimate_key_spend_fee_with_real_commit_tx(&mut reg_tester.clone()).await?;
 
     info!("legacy_taproot_envelope");
     test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;

@@ -48,7 +48,8 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
     let mut spend_tx = compose_outputs.reveal_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_script_pair
-        .tap_script
+        .tap_leaf_script
+        .script
         .clone();
 
     // Sign the attach transaction

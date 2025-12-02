@@ -46,7 +46,8 @@ pub async fn test_compose_progressive_size_limit_testnet(reg_tester: &mut RegTes
         let mut spend_tx = compose_outputs.reveal_transaction;
         let tap_script = compose_outputs.per_participant[0]
             .commit_tap_script_pair
-            .tap_script
+            .tap_leaf_script
+            .script
             .clone();
 
         // Sign commit inputs with correctly ordered prevouts matching the selected inputs
