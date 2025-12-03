@@ -165,23 +165,17 @@ impl ComposeInputs {
 pub struct TapLeafScript {
     #[serde(rename = "leafVersion")]
     pub leaf_version: LeafVersion,
-    pub script: ScriptBuf,
+    pub tap_script: ScriptBuf,
     #[serde(rename = "controlBlock")]
     pub control_block: ScriptBuf,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TapScriptPair {
-    pub tap_leaf_script: TapLeafScript,
-    pub script_data_chunk: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ParticipantScripts {
     pub address: String,
     pub x_only_public_key: String,
-    pub commit_tap_script_pair: TapScriptPair,
-    pub chained_tap_script_pair: Option<TapScriptPair>,
+    pub commit_tap_leaf_script: TapLeafScript,
+    pub chained_tap_leaf_script: Option<TapLeafScript>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Builder)]
@@ -244,7 +238,7 @@ pub struct RevealParticipantInputs {
     pub x_only_public_key: XOnlyPublicKey,
     pub commit_outpoint: OutPoint,
     pub commit_prevout: TxOut,
-    pub commit_tap_script_pair: TapScriptPair,
+    pub commit_tap_leaf_script: TapLeafScript,
     pub chained_script_data: Option<Vec<u8>>,
 }
 
@@ -301,13 +295,10 @@ impl RevealInputs {
                 x_only_public_key,
                 commit_outpoint,
                 commit_prevout,
-                commit_tap_script_pair: TapScriptPair {
-                    tap_leaf_script: TapLeafScript {
-                        leaf_version: LeafVersion::TapScript,
-                        script: tap_script,
-                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
-                    },
-                    script_data_chunk: p.commit_script_data.clone(),
+                commit_tap_leaf_script: TapLeafScript {
+                    leaf_version: LeafVersion::TapScript,
+                    tap_script,
+                    control_block: ScriptBuf::from_bytes(control_block.serialize()),
                 },
                 chained_script_data: p.chained_script_data.clone(),
             });
@@ -367,46 +358,20 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         return Err(anyhow!("No instructions provided"));
     }
 
-    // Phase 1: Build all tap scripts first to calculate reveal fees
+    // Initialize structures for single-pass processing
     let mut tap_script_data: Vec<(ScriptBuf, Address, ControlBlock, Vec<u8>)> =
         Vec::with_capacity(params.instructions.len());
+    let mut script_vouts: Vec<u32> = Vec::with_capacity(params.instructions.len());
 
-    for instruction in params.instructions.iter() {
-        let (tap_script, _, script_spendable_address, control_block) =
-            build_tap_script_and_script_address(
-                instruction.x_only_public_key,
-                instruction.script_data.clone(),
-            )?;
-        tap_script_data.push((
-            tap_script,
-            script_spendable_address,
-            control_block,
-            instruction.script_data.clone(),
-        ));
-    }
+    // Dummy tx for delta-based reveal fee calculation
+    let mut dummy_reveal_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    };
 
-    // Phase 2: Calculate reveal fees using delta-based accounting
-    let reveal_fee_inputs: Vec<RevealFeeEstimateInput> = params
-        .instructions
-        .iter()
-        .zip(tap_script_data.iter())
-        .map(
-            |(inst, (tap_script, _, control_block, _))| RevealFeeEstimateInput {
-                tap_script: tap_script.clone(),
-                control_block_bytes: control_block.serialize(),
-                has_chained: inst.chained_script_data.is_some(),
-            },
-        )
-        .collect();
-
-    let reveal_fees = estimate_reveal_fees_delta(
-        &reveal_fee_inputs,
-        params.fee_rate,
-        false, // commit doesn't know about op_return yet
-        params.envelope,
-    )?;
-
-    // Phase 3: Build commit transaction using pre-calculated reveal fees
+    // Commit PSBT we're building
     let mut commit_psbt = Psbt::from_unsigned_tx(Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -414,24 +379,39 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         output: vec![],
     })?;
 
-    let mut script_vouts: Vec<u32> = Vec::with_capacity(params.instructions.len());
-
+    // Single loop: build tap scripts, calculate reveal fees, build commit tx
     for (i, instruction) in params.instructions.iter().enumerate() {
-        let (_, script_spendable_address, _, _) = tap_script_data[i].clone();
-        let reveal_fee = reveal_fees[i];
+        // 1. Build tap script for this participant
+        let (tap_script, _, script_spendable_address, control_block) =
+            build_tap_script_and_script_address(
+                instruction.x_only_public_key,
+                instruction.script_data.clone(),
+            )?;
+
+        // 2. Calculate reveal fee delta using helper
         let has_chained = instruction.chained_script_data.is_some();
+        let reveal_fee = calculate_reveal_fee_delta(
+            &mut dummy_reveal_tx,
+            &tap_script,
+            &control_block.serialize(),
+            has_chained,
+            params.fee_rate,
+            params.envelope,
+        )?;
+
+        // 3. Build commit transaction outputs for this participant
 
         // Script output value must cover:
         // 1. envelope: dust floor for change output in the reveal
         // 2. reveal_fee: miner fee for the reveal tx (delta-based)
         // 3. chained_envelope: if chained, the value locked in the chained output
         let chained_envelope = if has_chained { params.envelope } else { 0 };
-        let script_spend_output_value = params
+        let script_spend_output_value = params // make mutable, get rid of above conditional
             .envelope
             .saturating_add(reveal_fee)
             .saturating_add(chained_envelope);
 
-        // Shuffle UTXOs for privacy
+        // Shuffle UTXOs for privacy Make it deterministic! seed derived based
         let mut utxos: Vec<(OutPoint, TxOut)> = instruction.funding_utxos.clone();
         utxos.shuffle(&mut rng());
 
@@ -480,6 +460,14 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             });
             commit_psbt.outputs.push(bitcoin::psbt::Output::default());
         }
+
+        // Store tap script data for building RevealParticipantInputs after loop
+        tap_script_data.push((
+            tap_script,
+            script_spendable_address,
+            control_block,
+            instruction.script_data.clone(),
+        ));
     }
 
     let commit_transaction = commit_psbt.unsigned_tx.clone();
@@ -494,7 +482,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
         .zip(tap_script_data.iter())
         .zip(script_vouts.iter())
         .map(
-            |((inst, (tap_script, _, control_block, script_data)), &vout)| {
+            |((inst, (tap_script, _, control_block, _script_data)), &vout)| {
                 RevealParticipantInputs {
                     address: inst.address.clone(),
                     x_only_public_key: inst.x_only_public_key,
@@ -503,13 +491,10 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                         vout,
                     },
                     commit_prevout: commit_transaction.output[vout as usize].clone(),
-                    commit_tap_script_pair: TapScriptPair {
-                        tap_leaf_script: TapLeafScript {
-                            leaf_version: LeafVersion::TapScript,
-                            script: tap_script.clone(),
-                            control_block: ScriptBuf::from_bytes(control_block.serialize()),
-                        },
-                        script_data_chunk: script_data.clone(),
+                    commit_tap_leaf_script: TapLeafScript {
+                        leaf_version: LeafVersion::TapScript,
+                        tap_script: tap_script.clone(),
+                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
                     },
                     chained_script_data: inst.chained_script_data.clone(),
                 }
@@ -533,38 +518,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
 }
 
 pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
-    // Phase 1: Calculate reveal fees using delta-based accounting
-    let reveal_fee_inputs: Vec<RevealFeeEstimateInput> = params
-        .participants
-        .iter()
-        .map(|p| RevealFeeEstimateInput {
-            tap_script: p.commit_tap_script_pair.tap_leaf_script.script.clone(),
-            control_block_bytes: p
-                .commit_tap_script_pair
-                .tap_leaf_script
-                .control_block
-                .as_bytes()
-                .to_vec(),
-            has_chained: p.chained_script_data.is_some(),
-        })
-        .collect();
-
-    let reveal_fees = estimate_reveal_fees_delta(
-        &reveal_fee_inputs,
-        params.fee_rate,
-        params.op_return_data.is_some(),
-        params.envelope,
-    )?;
-
-    // Phase 2: Build reveal transaction
-    let mut psbt = Psbt::from_unsigned_tx(Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![],
-        output: vec![],
-    })?;
-
-    // Optional OP_RETURN first (keeps vsize expectations stable)
+    // Validate OP_RETURN size upfront
     if let Some(ref data) = params.op_return_data {
         if data.len() > MAX_OP_RETURN_BYTES {
             return Err(anyhow!(
@@ -572,6 +526,36 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 MAX_OP_RETURN_BYTES
             ));
         }
+    }
+
+    // Dummy tx for delta-based reveal fee calculation
+    let mut dummy_reveal_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    };
+
+    // Add OP_RETURN to dummy tx first (so it's part of base overhead)
+    if params.op_return_data.is_some() {
+        dummy_reveal_tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::new_op_return(&PushBytesBuf::try_from(
+                vec![0u8; MAX_OP_RETURN_BYTES],
+            )?),
+        });
+    }
+
+    // Build the actual reveal transaction
+    let mut psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+
+    // Add OP_RETURN output first (keeps vsize expectations stable)
+    if let Some(ref data) = params.op_return_data {
         psbt.unsigned_tx.output.push(TxOut {
             value: Amount::from_sat(0),
             script_pubkey: {
@@ -587,9 +571,18 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let mut participant_scripts: Vec<ParticipantScripts> =
         Vec::with_capacity(params.participants.len());
 
-    for (i, p) in params.participants.iter().enumerate() {
-        let reveal_fee = reveal_fees[i];
+    // Single loop: calculate reveal fees and build transaction
+    for p in params.participants.iter() {
+        // Calculate reveal fee delta using helper
         let has_chained = p.chained_script_data.is_some();
+        let reveal_fee = calculate_reveal_fee_delta(
+            &mut dummy_reveal_tx,
+            &p.commit_tap_leaf_script.tap_script,
+            p.commit_tap_leaf_script.control_block.as_bytes(),
+            has_chained,
+            params.fee_rate,
+            params.envelope,
+        )?;
 
         // Add input
         psbt.unsigned_tx.input.push(TxIn {
@@ -612,17 +605,18 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
                 script_pubkey: ch_addr.script_pubkey(),
             });
             psbt.outputs.push(bitcoin::psbt::Output::default());
-            Some(TapScriptPair {
-                tap_leaf_script: TapLeafScript {
-                    leaf_version: LeafVersion::TapScript,
-                    script: ch_tap,
-                    control_block: ScriptBuf::from_bytes(ch_control_block.serialize()),
-                },
-                script_data_chunk: chained.clone(),
+            Some(TapLeafScript {
+                leaf_version: LeafVersion::TapScript,
+                tap_script: ch_tap,
+                control_block: ScriptBuf::from_bytes(ch_control_block.serialize()),
             })
         } else {
             None
         };
+        // one loop adding chained
+
+        // gather change outputs and in same loop, append them at the end
+        // then OP_RETURN at end
 
         // Calculate change using delta-based reveal fee
         let chained_output_value = if has_chained { params.envelope } else { 0 };
@@ -643,8 +637,8 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         participant_scripts.push(ParticipantScripts {
             address: p.address.to_string(),
             x_only_public_key: p.x_only_public_key.to_string(),
-            commit_tap_script_pair: p.commit_tap_script_pair.clone(),
-            chained_tap_script_pair,
+            commit_tap_leaf_script: p.commit_tap_leaf_script.clone(),
+            chained_tap_leaf_script: chained_tap_script_pair,
         });
     }
 
@@ -725,87 +719,53 @@ pub fn build_tap_script_and_script_address(
 // Fee Estimation
 // ============================================================================
 
-/// Input for delta-based reveal fee estimation.
-#[derive(Clone)]
-pub struct RevealFeeEstimateInput {
-    pub tap_script: ScriptBuf,
-    pub control_block_bytes: Vec<u8>,
-    pub has_chained: bool,
-}
-
-/// Estimate reveal fees for all participants using delta-based accounting.
+/// Calculate reveal fee delta for a single participant.
 ///
-/// Builds a dummy reveal transaction incrementally, measuring the vsize delta
-/// each participant adds. This ensures "fair share" fee distribution where
-/// each participant pays only for their marginal contribution to the shared tx.
+/// Mutates the dummy transaction by adding the participant's input and outputs,
+/// then returns the fee based on the vsize delta.
 ///
-/// Returns a Vec of per-participant reveal fees.
-pub fn estimate_reveal_fees_delta(
-    participants: &[RevealFeeEstimateInput],
+/// This is used in the single-pass commit/reveal building loops.
+pub fn calculate_reveal_fee_delta(
+    dummy_tx: &mut Transaction,
+    tap_script: &ScriptBuf,
+    control_block_bytes: &[u8],
+    has_chained: bool,
     fee_rate: FeeRate,
-    has_op_return: bool,
     envelope: u64,
-) -> Result<Vec<u64>> {
-    if participants.is_empty() {
-        return Ok(vec![]);
-    }
+) -> Result<u64> {
+    let vsize_before = dummy_tx.vsize() as u64;
 
-    // Start with base reveal transaction structure
-    let mut dummy_tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![],
-        output: vec![],
-    };
+    // Add input with script-spend witness
+    let mut txin = TxIn::default();
+    let mut w = Witness::new();
+    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+    w.push(tap_script.as_bytes());
+    w.push(control_block_bytes);
+    txin.witness = w;
+    dummy_tx.input.push(txin);
 
-    // Add OP_RETURN if present (fixed overhead, charged to first participant)
-    if has_op_return {
-        dummy_tx.output.push(TxOut {
-            value: Amount::from_sat(0),
-            script_pubkey: ScriptBuf::new_op_return(&PushBytesBuf::try_from(
-                vec![0u8; MAX_OP_RETURN_BYTES],
-            )?),
-        });
-    }
-
-    let mut fees = Vec::with_capacity(participants.len());
-
-    for p in participants {
-        let vsize_before = dummy_tx.vsize() as u64;
-
-        // Add input with script-spend witness
-        let mut txin = TxIn::default();
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        w.push(p.tap_script.as_bytes());
-        w.push(&p.control_block_bytes);
-        txin.witness = w;
-        dummy_tx.input.push(txin);
-
-        // Add chained output if present
-        if p.has_chained {
-            dummy_tx.output.push(TxOut {
-                value: Amount::from_sat(envelope),
-                script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
-            });
-        }
-
-        // Add change output (assume it exists for fee calculation)
+    // Add chained output if present
+    if has_chained {
         dummy_tx.output.push(TxOut {
             value: Amount::from_sat(envelope),
             script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
         });
-
-        let vsize_after = dummy_tx.vsize() as u64;
-        let delta = vsize_after.saturating_sub(vsize_before);
-        let fee = fee_rate
-            .fee_vb(delta)
-            .ok_or(anyhow!("fee calculation overflow"))?
-            .to_sat();
-        fees.push(fee);
     }
 
-    Ok(fees)
+    // Add change output (assume it exists for fee calculation)
+    dummy_tx.output.push(TxOut {
+        value: Amount::from_sat(envelope),
+        script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
+    });
+
+    let vsize_after = dummy_tx.vsize() as u64;
+    let delta = vsize_after.saturating_sub(vsize_before);
+    let fee = fee_rate
+        .fee_vb(delta)
+        .ok_or(anyhow!("fee calculation overflow"))?
+        .to_sat();
+
+    Ok(fee)
 }
 
 /// Estimate fee for a tx assuming key-spend inputs (64-byte signature witnesses).

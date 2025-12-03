@@ -5,402 +5,402 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
-    RevealFeeEstimateInput, RevealInputs, RevealParticipantInputs, TapLeafScript, TapScriptPair,
-    build_tap_script_and_script_address, compose_reveal, estimate_key_spend_fee,
-    estimate_participant_commit_fees, estimate_reveal_fees_delta, select_utxos_for_commit,
+    RevealInputs, RevealParticipantInputs, TapLeafScript, build_tap_script_and_script_address,
+    compose_reveal, estimate_key_spend_fee, estimate_participant_commit_fees,
+    select_utxos_for_commit,
 };
 use std::str::FromStr;
 use testlib::RegTester;
 use tracing::info;
 
-// ============================================================================
-// estimate_reveal_fees_delta tests
-// ============================================================================
-
-/// Helper to create a RevealFeeEstimateInput with a dummy tap script of given size.
-fn make_reveal_fee_input(script_size: usize, has_chained: bool) -> RevealFeeEstimateInput {
-    // Create a dummy script of the specified size
-    let tap_script = ScriptBuf::from_bytes(vec![0u8; script_size]);
-    // Control block is typically 33 bytes (1 byte leaf version + 32 bytes internal key)
-    let control_block_bytes = vec![0u8; 33];
-    RevealFeeEstimateInput {
-        tap_script,
-        control_block_bytes,
-        has_chained,
-    }
-}
-
-/// Helper to create a RevealFeeEstimateInput with realistic tap script from actual data.
-fn make_realistic_reveal_fee_input(
-    xonly: bitcoin::secp256k1::XOnlyPublicKey,
-    data: Vec<u8>,
-    has_chained: bool,
-) -> RevealFeeEstimateInput {
-    let (tap_script, _, _, control_block) =
-        build_tap_script_and_script_address(xonly, data).expect("build tapscript");
-    RevealFeeEstimateInput {
-        tap_script,
-        control_block_bytes: control_block.serialize(),
-        has_chained,
-    }
-}
-
-pub fn test_estimate_reveal_fees_delta_empty_participants_returns_empty() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let result = estimate_reveal_fees_delta(&[], fee_rate, false, 330).unwrap();
-    assert!(
-        result.is_empty(),
-        "Empty participants should return empty fees"
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_single_participant_returns_single_fee() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let input = make_reveal_fee_input(100, false);
-    let result = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
-
-    assert_eq!(
-        result.len(),
-        1,
-        "Single participant should return single fee"
-    );
-    assert!(result[0] > 0, "Fee should be non-zero");
-}
-
-pub fn test_estimate_reveal_fees_delta_fee_rate_scaling() {
-    // Double fee rate should approximately double the fees
-    let input = make_reveal_fee_input(100, false);
-
-    let fee_rate_1 = FeeRate::from_sat_per_vb(5).unwrap();
-    let fee_rate_2 = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fees_1 =
-        estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate_1, false, 330).unwrap();
-    let fees_2 = estimate_reveal_fees_delta(&[input], fee_rate_2, false, 330).unwrap();
-
-    // Fee at 10 sat/vb should be exactly 2x fee at 5 sat/vb
-    assert_eq!(
-        fees_2[0],
-        fees_1[0] * 2,
-        "Doubling fee rate should double the fee"
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_larger_script_higher_fee() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let small_script = make_reveal_fee_input(50, false);
-    let large_script = make_reveal_fee_input(500, false);
-
-    let small_fees = estimate_reveal_fees_delta(&[small_script], fee_rate, false, 330).unwrap();
-    let large_fees = estimate_reveal_fees_delta(&[large_script], fee_rate, false, 330).unwrap();
-
-    assert!(
-        large_fees[0] > small_fees[0],
-        "Larger script should cost more: {} vs {}",
-        large_fees[0],
-        small_fees[0]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_chained_adds_output_fee() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let without_chained = make_reveal_fee_input(100, false);
-    let with_chained = make_reveal_fee_input(100, true);
-
-    let fees_without =
-        estimate_reveal_fees_delta(&[without_chained], fee_rate, false, 330).unwrap();
-    let fees_with = estimate_reveal_fees_delta(&[with_chained], fee_rate, false, 330).unwrap();
-
-    assert!(
-        fees_with[0] > fees_without[0],
-        "Chained output should increase fee: {} vs {}",
-        fees_with[0],
-        fees_without[0]
-    );
-
-    // A P2TR output is 34 bytes, at 10 sat/vb that's 340 sats difference
-    let difference = fees_with[0] - fees_without[0];
-    assert!(
-        difference >= 340,
-        "Chained output should add at least 34 vbytes worth: diff={}",
-        difference
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_op_return_is_base_overhead() {
-    // NOTE: The OP_RETURN is added to the dummy tx BEFORE measuring any participant's delta.
-    // This means it's part of the base transaction overhead and NOT charged to any specific
-    // participant in the per-participant fees. This is important to understand when using
-    // this function - the OP_RETURN cost needs to be accounted for separately if needed.
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let input = make_reveal_fee_input(100, false);
-
-    let fees_without_op_return =
-        estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate, false, 330).unwrap();
-    let fees_with_op_return = estimate_reveal_fees_delta(&[input], fee_rate, true, 330).unwrap();
-
-    // Per-participant fees should be the same - OP_RETURN is base overhead
-    assert_eq!(
-        fees_with_op_return[0], fees_without_op_return[0],
-        "OP_RETURN is base overhead, not charged to participant: {} vs {}",
-        fees_with_op_return[0], fees_without_op_return[0]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_op_return_not_in_participant_fees() {
-    // The OP_RETURN overhead is NOT included in any participant's fee.
-    // It's added before vsize_before is measured for the first participant.
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let input1 = make_reveal_fee_input(100, false);
-    let input2 = make_reveal_fee_input(100, false);
-
-    // Without OP_RETURN
-    let fees_no_op =
-        estimate_reveal_fees_delta(&[input1.clone(), input2.clone()], fee_rate, false, 330)
-            .unwrap();
-
-    // With OP_RETURN
-    let fees_with_op = estimate_reveal_fees_delta(&[input1, input2], fee_rate, true, 330).unwrap();
-
-    // Both participants' fees should be the same regardless of OP_RETURN
-    // because OP_RETURN is measured as part of "base" before any participant delta
-    assert_eq!(
-        fees_with_op[0], fees_no_op[0],
-        "First participant fee should be same: {} vs {}",
-        fees_with_op[0], fees_no_op[0]
-    );
-    assert_eq!(
-        fees_with_op[1], fees_no_op[1],
-        "Second participant fee should be same: {} vs {}",
-        fees_with_op[1], fees_no_op[1]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_multiple_participants_independent_deltas() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // Different sized scripts
-    let small = make_reveal_fee_input(50, false);
-    let medium = make_reveal_fee_input(200, false);
-    let large = make_reveal_fee_input(500, false);
-
-    let fees = estimate_reveal_fees_delta(&[small, medium, large], fee_rate, false, 330).unwrap();
-
-    assert_eq!(fees.len(), 3);
-
-    // Each participant pays for their own contribution
-    // Since scripts are different sizes, fees should be different
-    // Note: fees[0] includes base tx overhead, so it's higher than if we measured just the script
-    assert!(fees[0] > 0);
-    assert!(fees[1] > 0);
-    assert!(fees[2] > 0);
-
-    // Larger scripts should result in higher fees (but first includes base overhead)
-    // Compare 2nd and 3rd which don't have base overhead
-    assert!(
-        fees[2] > fees[1],
-        "Larger script participant should pay more: {} vs {}",
-        fees[2],
-        fees[1]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_deterministic() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let inputs = vec![
-        make_reveal_fee_input(100, false),
-        make_reveal_fee_input(200, true),
-        make_reveal_fee_input(150, false),
-    ];
-
-    let fees1 = estimate_reveal_fees_delta(&inputs, fee_rate, true, 330).unwrap();
-    let fees2 = estimate_reveal_fees_delta(&inputs, fee_rate, true, 330).unwrap();
-
-    assert_eq!(fees1, fees2, "Same inputs should produce same outputs");
-}
-
-pub fn test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee() {
-    // The envelope value is used for output values in the dummy tx, but shouldn't affect vsize
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let input = make_reveal_fee_input(100, false);
-
-    let fees_small_envelope =
-        estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate, false, 330).unwrap();
-    let fees_large_envelope =
-        estimate_reveal_fees_delta(&[input], fee_rate, false, 100_000).unwrap();
-
-    assert_eq!(
-        fees_small_envelope[0], fees_large_envelope[0],
-        "Envelope value should not affect fee calculation"
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_minimum_fee_rate() {
-    // Test with minimum practical fee rate (1 sat/vb)
-    let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
-    let input = make_reveal_fee_input(100, false);
-
-    let fees = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
-
-    assert!(fees[0] > 0, "Even at 1 sat/vb, fee should be non-zero");
-}
-
-pub fn test_estimate_reveal_fees_delta_high_fee_rate() {
-    // Test with high fee rate (100 sat/vb)
-    let fee_rate = FeeRate::from_sat_per_vb(100).unwrap();
-    let input = make_reveal_fee_input(100, false);
-
-    let fees = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
-
-    // At 100 sat/vb, even a small input should cost thousands of sats
-    assert!(
-        fees[0] > 1000,
-        "High fee rate should result in high fees: {}",
-        fees[0]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_mixed_chained_participants() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let no_chain = make_reveal_fee_input(100, false);
-    let with_chain = make_reveal_fee_input(100, true);
-
-    let fees = estimate_reveal_fees_delta(
-        &[no_chain.clone(), with_chain.clone()],
-        fee_rate,
-        false,
-        330,
-    )
-    .unwrap();
-
-    // The chained participant should pay more
-    assert!(
-        fees[1] > fees[0],
-        "Chained participant should pay more: {} vs {}",
-        fees[1],
-        fees[0]
-    );
-
-    // Reversing order should swap which participant pays more
-    let fees_reversed =
-        estimate_reveal_fees_delta(&[with_chain, no_chain], fee_rate, false, 330).unwrap();
-
-    assert!(
-        fees_reversed[0] > fees_reversed[1],
-        "First (chained) should pay more than second: {} vs {}",
-        fees_reversed[0],
-        fees_reversed[1]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_very_large_script() {
-    // Test with a large script (close to max)
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-    let large_input = make_reveal_fee_input(10_000, false); // 10KB script
-
-    let fees = estimate_reveal_fees_delta(&[large_input], fee_rate, false, 330).unwrap();
-
-    // 10KB script should cost significant fees
-    // Witness data is discounted (1/4 weight), so ~2500 vbytes for 10KB
-    // At 10 sat/vb, that's ~25,000 sats minimum
-    assert!(
-        fees[0] > 20_000,
-        "Large script should have high fee: {}",
-        fees[0]
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_many_participants() {
-    let fee_rate = FeeRate::from_sat_per_vb(5).unwrap();
-
-    // 10 participants with varying script sizes
-    let inputs: Vec<RevealFeeEstimateInput> = (0..10)
-        .map(|i| make_reveal_fee_input(50 + i * 50, i % 2 == 0))
-        .collect();
-
-    let fees = estimate_reveal_fees_delta(&inputs, fee_rate, false, 330).unwrap();
-
-    assert_eq!(fees.len(), 10, "Should have fee for each participant");
-
-    // All fees should be non-zero
-    for (i, fee) in fees.iter().enumerate() {
-        assert!(*fee > 0, "Participant {} fee should be non-zero", i);
-    }
-
-    // Total fees should be reasonable (sum of individual contributions)
-    let total: u64 = fees.iter().sum();
-    assert!(
-        total > fees[0],
-        "Total fees should be more than first participant alone"
-    );
-}
-
-pub fn test_estimate_reveal_fees_delta_control_block_size_matters() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // Same tap script but different control block sizes
-    let tap_script = ScriptBuf::from_bytes(vec![0u8; 100]);
-
-    let small_cb = RevealFeeEstimateInput {
-        tap_script: tap_script.clone(),
-        control_block_bytes: vec![0u8; 33], // Minimal control block
-        has_chained: false,
-    };
-
-    let large_cb = RevealFeeEstimateInput {
-        tap_script,
-        control_block_bytes: vec![0u8; 65], // Larger control block (deeper tree)
-        has_chained: false,
-    };
-
-    let fees_small = estimate_reveal_fees_delta(&[small_cb], fee_rate, false, 330).unwrap();
-    let fees_large = estimate_reveal_fees_delta(&[large_cb], fee_rate, false, 330).unwrap();
-
-    assert!(
-        fees_large[0] > fees_small[0],
-        "Larger control block should cost more: {} vs {}",
-        fees_large[0],
-        fees_small[0]
-    );
-}
-
-/// Test with realistic tap scripts built from actual data
-pub async fn test_estimate_reveal_fees_delta_with_realistic_scripts(
-    reg_tester: &mut RegTester,
-) -> Result<()> {
-    info!("test_estimate_reveal_fees_delta_with_realistic_scripts");
-    let identity = reg_tester.identity().await?;
-    let keypair = identity.keypair;
-    let (xonly, _parity) = keypair.x_only_public_key();
-
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // Create realistic inputs with actual tap scripts
-    let small_data = b"small".to_vec();
-    let large_data = vec![0xABu8; 1000]; // 1KB data
-
-    let small_input = make_realistic_reveal_fee_input(xonly, small_data, false);
-    let large_input = make_realistic_reveal_fee_input(xonly, large_data, true);
-
-    let fees = estimate_reveal_fees_delta(&[small_input, large_input], fee_rate, false, 330)?;
-
-    assert_eq!(fees.len(), 2);
-    assert!(fees[0] > 0);
-    assert!(fees[1] > 0);
-
-    // Large input with chained should cost significantly more
-    assert!(
-        fees[1] > fees[0],
-        "Large chained input should cost more: {} vs {}",
-        fees[1],
-        fees[0]
-    );
-
-    Ok(())
-}
+// // ============================================================================
+// // estimate_reveal_fees_delta tests
+// // ============================================================================
+
+// /// Helper to create a RevealFeeEstimateInput with a dummy tap script of given size.
+// fn make_reveal_fee_input(script_size: usize, has_chained: bool) -> RevealFeeEstimateInput {
+//     // Create a dummy script of the specified size
+//     let tap_script = ScriptBuf::from_bytes(vec![0u8; script_size]);
+//     // Control block is typically 33 bytes (1 byte leaf version + 32 bytes internal key)
+//     let control_block_bytes = vec![0u8; 33];
+//     RevealFeeEstimateInput {
+//         tap_script,
+//         control_block_bytes,
+//         has_chained,
+//     }
+// }
+
+// /// Helper to create a RevealFeeEstimateInput with realistic tap script from actual data.
+// fn make_realistic_reveal_fee_input(
+//     xonly: bitcoin::secp256k1::XOnlyPublicKey,
+//     data: Vec<u8>,
+//     has_chained: bool,
+// ) -> RevealFeeEstimateInput {
+//     let (tap_script, _, _, control_block) =
+//         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
+//     RevealFeeEstimateInput {
+//         tap_script,
+//         control_block_bytes: control_block.serialize(),
+//         has_chained,
+//     }
+// }
+
+// pub fn test_estimate_reveal_fees_delta_empty_participants_returns_empty() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let result = estimate_reveal_fees_delta(&[], fee_rate, false, 330).unwrap();
+//     assert!(
+//         result.is_empty(),
+//         "Empty participants should return empty fees"
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_single_participant_returns_single_fee() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let input = make_reveal_fee_input(100, false);
+//     let result = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
+
+//     assert_eq!(
+//         result.len(),
+//         1,
+//         "Single participant should return single fee"
+//     );
+//     assert!(result[0] > 0, "Fee should be non-zero");
+// }
+
+// pub fn test_estimate_reveal_fees_delta_fee_rate_scaling() {
+//     // Double fee rate should approximately double the fees
+//     let input = make_reveal_fee_input(100, false);
+
+//     let fee_rate_1 = FeeRate::from_sat_per_vb(5).unwrap();
+//     let fee_rate_2 = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     let fees_1 =
+//         estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate_1, false, 330).unwrap();
+//     let fees_2 = estimate_reveal_fees_delta(&[input], fee_rate_2, false, 330).unwrap();
+
+//     // Fee at 10 sat/vb should be exactly 2x fee at 5 sat/vb
+//     assert_eq!(
+//         fees_2[0],
+//         fees_1[0] * 2,
+//         "Doubling fee rate should double the fee"
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_larger_script_higher_fee() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     let small_script = make_reveal_fee_input(50, false);
+//     let large_script = make_reveal_fee_input(500, false);
+
+//     let small_fees = estimate_reveal_fees_delta(&[small_script], fee_rate, false, 330).unwrap();
+//     let large_fees = estimate_reveal_fees_delta(&[large_script], fee_rate, false, 330).unwrap();
+
+//     assert!(
+//         large_fees[0] > small_fees[0],
+//         "Larger script should cost more: {} vs {}",
+//         large_fees[0],
+//         small_fees[0]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_chained_adds_output_fee() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     let without_chained = make_reveal_fee_input(100, false);
+//     let with_chained = make_reveal_fee_input(100, true);
+
+//     let fees_without =
+//         estimate_reveal_fees_delta(&[without_chained], fee_rate, false, 330).unwrap();
+//     let fees_with = estimate_reveal_fees_delta(&[with_chained], fee_rate, false, 330).unwrap();
+
+//     assert!(
+//         fees_with[0] > fees_without[0],
+//         "Chained output should increase fee: {} vs {}",
+//         fees_with[0],
+//         fees_without[0]
+//     );
+
+//     // A P2TR output is 34 bytes, at 10 sat/vb that's 340 sats difference
+//     let difference = fees_with[0] - fees_without[0];
+//     assert!(
+//         difference >= 340,
+//         "Chained output should add at least 34 vbytes worth: diff={}",
+//         difference
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_op_return_is_base_overhead() {
+//     // NOTE: The OP_RETURN is added to the dummy tx BEFORE measuring any participant's delta.
+//     // This means it's part of the base transaction overhead and NOT charged to any specific
+//     // participant in the per-participant fees. This is important to understand when using
+//     // this function - the OP_RETURN cost needs to be accounted for separately if needed.
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let input = make_reveal_fee_input(100, false);
+
+//     let fees_without_op_return =
+//         estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate, false, 330).unwrap();
+//     let fees_with_op_return = estimate_reveal_fees_delta(&[input], fee_rate, true, 330).unwrap();
+
+//     // Per-participant fees should be the same - OP_RETURN is base overhead
+//     assert_eq!(
+//         fees_with_op_return[0], fees_without_op_return[0],
+//         "OP_RETURN is base overhead, not charged to participant: {} vs {}",
+//         fees_with_op_return[0], fees_without_op_return[0]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_op_return_not_in_participant_fees() {
+//     // The OP_RETURN overhead is NOT included in any participant's fee.
+//     // It's added before vsize_before is measured for the first participant.
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let input1 = make_reveal_fee_input(100, false);
+//     let input2 = make_reveal_fee_input(100, false);
+
+//     // Without OP_RETURN
+//     let fees_no_op =
+//         estimate_reveal_fees_delta(&[input1.clone(), input2.clone()], fee_rate, false, 330)
+//             .unwrap();
+
+//     // With OP_RETURN
+//     let fees_with_op = estimate_reveal_fees_delta(&[input1, input2], fee_rate, true, 330).unwrap();
+
+//     // Both participants' fees should be the same regardless of OP_RETURN
+//     // because OP_RETURN is measured as part of "base" before any participant delta
+//     assert_eq!(
+//         fees_with_op[0], fees_no_op[0],
+//         "First participant fee should be same: {} vs {}",
+//         fees_with_op[0], fees_no_op[0]
+//     );
+//     assert_eq!(
+//         fees_with_op[1], fees_no_op[1],
+//         "Second participant fee should be same: {} vs {}",
+//         fees_with_op[1], fees_no_op[1]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_multiple_participants_independent_deltas() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     // Different sized scripts
+//     let small = make_reveal_fee_input(50, false);
+//     let medium = make_reveal_fee_input(200, false);
+//     let large = make_reveal_fee_input(500, false);
+
+//     let fees = estimate_reveal_fees_delta(&[small, medium, large], fee_rate, false, 330).unwrap();
+
+//     assert_eq!(fees.len(), 3);
+
+//     // Each participant pays for their own contribution
+//     // Since scripts are different sizes, fees should be different
+//     // Note: fees[0] includes base tx overhead, so it's higher than if we measured just the script
+//     assert!(fees[0] > 0);
+//     assert!(fees[1] > 0);
+//     assert!(fees[2] > 0);
+
+//     // Larger scripts should result in higher fees (but first includes base overhead)
+//     // Compare 2nd and 3rd which don't have base overhead
+//     assert!(
+//         fees[2] > fees[1],
+//         "Larger script participant should pay more: {} vs {}",
+//         fees[2],
+//         fees[1]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_deterministic() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let inputs = vec![
+//         make_reveal_fee_input(100, false),
+//         make_reveal_fee_input(200, true),
+//         make_reveal_fee_input(150, false),
+//     ];
+
+//     let fees1 = estimate_reveal_fees_delta(&inputs, fee_rate, true, 330).unwrap();
+//     let fees2 = estimate_reveal_fees_delta(&inputs, fee_rate, true, 330).unwrap();
+
+//     assert_eq!(fees1, fees2, "Same inputs should produce same outputs");
+// }
+
+// pub fn test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee() {
+//     // The envelope value is used for output values in the dummy tx, but shouldn't affect vsize
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let input = make_reveal_fee_input(100, false);
+
+//     let fees_small_envelope =
+//         estimate_reveal_fees_delta(std::slice::from_ref(&input), fee_rate, false, 330).unwrap();
+//     let fees_large_envelope =
+//         estimate_reveal_fees_delta(&[input], fee_rate, false, 100_000).unwrap();
+
+//     assert_eq!(
+//         fees_small_envelope[0], fees_large_envelope[0],
+//         "Envelope value should not affect fee calculation"
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_minimum_fee_rate() {
+//     // Test with minimum practical fee rate (1 sat/vb)
+//     let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+//     let input = make_reveal_fee_input(100, false);
+
+//     let fees = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
+
+//     assert!(fees[0] > 0, "Even at 1 sat/vb, fee should be non-zero");
+// }
+
+// pub fn test_estimate_reveal_fees_delta_high_fee_rate() {
+//     // Test with high fee rate (100 sat/vb)
+//     let fee_rate = FeeRate::from_sat_per_vb(100).unwrap();
+//     let input = make_reveal_fee_input(100, false);
+
+//     let fees = estimate_reveal_fees_delta(&[input], fee_rate, false, 330).unwrap();
+
+//     // At 100 sat/vb, even a small input should cost thousands of sats
+//     assert!(
+//         fees[0] > 1000,
+//         "High fee rate should result in high fees: {}",
+//         fees[0]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_mixed_chained_participants() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     let no_chain = make_reveal_fee_input(100, false);
+//     let with_chain = make_reveal_fee_input(100, true);
+
+//     let fees = estimate_reveal_fees_delta(
+//         &[no_chain.clone(), with_chain.clone()],
+//         fee_rate,
+//         false,
+//         330,
+//     )
+//     .unwrap();
+
+//     // The chained participant should pay more
+//     assert!(
+//         fees[1] > fees[0],
+//         "Chained participant should pay more: {} vs {}",
+//         fees[1],
+//         fees[0]
+//     );
+
+//     // Reversing order should swap which participant pays more
+//     let fees_reversed =
+//         estimate_reveal_fees_delta(&[with_chain, no_chain], fee_rate, false, 330).unwrap();
+
+//     assert!(
+//         fees_reversed[0] > fees_reversed[1],
+//         "First (chained) should pay more than second: {} vs {}",
+//         fees_reversed[0],
+//         fees_reversed[1]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_very_large_script() {
+//     // Test with a large script (close to max)
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+//     let large_input = make_reveal_fee_input(10_000, false); // 10KB script
+
+//     let fees = estimate_reveal_fees_delta(&[large_input], fee_rate, false, 330).unwrap();
+
+//     // 10KB script should cost significant fees
+//     // Witness data is discounted (1/4 weight), so ~2500 vbytes for 10KB
+//     // At 10 sat/vb, that's ~25,000 sats minimum
+//     assert!(
+//         fees[0] > 20_000,
+//         "Large script should have high fee: {}",
+//         fees[0]
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_many_participants() {
+//     let fee_rate = FeeRate::from_sat_per_vb(5).unwrap();
+
+//     // 10 participants with varying script sizes
+//     let inputs: Vec<RevealFeeEstimateInput> = (0..10)
+//         .map(|i| make_reveal_fee_input(50 + i * 50, i % 2 == 0))
+//         .collect();
+
+//     let fees = estimate_reveal_fees_delta(&inputs, fee_rate, false, 330).unwrap();
+
+//     assert_eq!(fees.len(), 10, "Should have fee for each participant");
+
+//     // All fees should be non-zero
+//     for (i, fee) in fees.iter().enumerate() {
+//         assert!(*fee > 0, "Participant {} fee should be non-zero", i);
+//     }
+
+//     // Total fees should be reasonable (sum of individual contributions)
+//     let total: u64 = fees.iter().sum();
+//     assert!(
+//         total > fees[0],
+//         "Total fees should be more than first participant alone"
+//     );
+// }
+
+// pub fn test_estimate_reveal_fees_delta_control_block_size_matters() {
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     // Same tap script but different control block sizes
+//     let tap_script = ScriptBuf::from_bytes(vec![0u8; 100]);
+
+//     let small_cb = RevealFeeEstimateInput {
+//         tap_script: tap_script.clone(),
+//         control_block_bytes: vec![0u8; 33], // Minimal control block
+//         has_chained: false,
+//     };
+
+//     let large_cb = RevealFeeEstimateInput {
+//         tap_script,
+//         control_block_bytes: vec![0u8; 65], // Larger control block (deeper tree)
+//         has_chained: false,
+//     };
+
+//     let fees_small = estimate_reveal_fees_delta(&[small_cb], fee_rate, false, 330).unwrap();
+//     let fees_large = estimate_reveal_fees_delta(&[large_cb], fee_rate, false, 330).unwrap();
+
+//     assert!(
+//         fees_large[0] > fees_small[0],
+//         "Larger control block should cost more: {} vs {}",
+//         fees_large[0],
+//         fees_small[0]
+//     );
+// }
+
+// /// Test with realistic tap scripts built from actual data
+// pub async fn test_estimate_reveal_fees_delta_with_realistic_scripts(
+//     reg_tester: &mut RegTester,
+// ) -> Result<()> {
+//     info!("test_estimate_reveal_fees_delta_with_realistic_scripts");
+//     let identity = reg_tester.identity().await?;
+//     let keypair = identity.keypair;
+//     let (xonly, _parity) = keypair.x_only_public_key();
+
+//     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+
+//     // Create realistic inputs with actual tap scripts
+//     let small_data = b"small".to_vec();
+//     let large_data = vec![0xABu8; 1000]; // 1KB data
+
+//     let small_input = make_realistic_reveal_fee_input(xonly, small_data, false);
+//     let large_input = make_realistic_reveal_fee_input(xonly, large_data, true);
+
+//     let fees = estimate_reveal_fees_delta(&[small_input, large_input], fee_rate, false, 330)?;
+
+//     assert_eq!(fees.len(), 2);
+//     assert!(fees[0] > 0);
+//     assert!(fees[1] > 0);
+
+//     // Large input with chained should cost significantly more
+//     assert!(
+//         fees[1] > fees[0],
+//         "Large chained input should cost more: {} vs {}",
+//         fees[1],
+//         fees[0]
+//     );
+
+//     Ok(())
+// }
 
 // ============================================================================
 // estimate_key_spend_fee tests
@@ -832,15 +832,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
         value: Amount::from_sat(10_000),
         script_pubkey: script_addr.script_pubkey(),
     };
-    // Build TapScriptPair for the commit script data
-    let commit_tap_script_pair = TapScriptPair {
-        tap_leaf_script: TapLeafScript {
-            leaf_version: LeafVersion::TapScript,
-            script: tap_script,
-            control_block: ScriptBuf::from_bytes(control_block.serialize()),
-        },
-        script_data_chunk: commit_data.clone(),
-    };
+
     let participant = RevealParticipantInputs::builder()
         .address(script_addr.clone())
         .x_only_public_key(xonly)
@@ -852,7 +844,11 @@ pub async fn test_compose_reveal_op_return_size_validation(
             vout: 0,
         })
         .commit_prevout(commit_prevout.clone())
-        .commit_tap_script_pair(commit_tap_script_pair)
+        .commit_tap_leaf_script(TapLeafScript {
+            leaf_version: LeafVersion::TapScript,
+            tap_script,
+            control_block: ScriptBuf::from_bytes(control_block.serialize()),
+        })
         .build();
 
     // With single-push OP_RETURN, total payload includes the tag ("kon").

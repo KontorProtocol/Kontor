@@ -55,23 +55,6 @@ use compose_tests::compose_helpers::{
     test_estimate_participant_commit_fees_single_utxo,
     test_estimate_participant_commit_fees_with_existing_base_tx,
     test_estimate_participant_commit_fees_with_real_utxos,
-    test_estimate_reveal_fees_delta_chained_adds_output_fee,
-    test_estimate_reveal_fees_delta_control_block_size_matters,
-    test_estimate_reveal_fees_delta_deterministic,
-    test_estimate_reveal_fees_delta_empty_participants_returns_empty,
-    test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee,
-    test_estimate_reveal_fees_delta_fee_rate_scaling,
-    test_estimate_reveal_fees_delta_high_fee_rate,
-    test_estimate_reveal_fees_delta_larger_script_higher_fee,
-    test_estimate_reveal_fees_delta_many_participants,
-    test_estimate_reveal_fees_delta_minimum_fee_rate,
-    test_estimate_reveal_fees_delta_mixed_chained_participants,
-    test_estimate_reveal_fees_delta_multiple_participants_independent_deltas,
-    test_estimate_reveal_fees_delta_op_return_is_base_overhead,
-    test_estimate_reveal_fees_delta_op_return_not_in_participant_fees,
-    test_estimate_reveal_fees_delta_single_participant_returns_single_fee,
-    test_estimate_reveal_fees_delta_very_large_script,
-    test_estimate_reveal_fees_delta_with_realistic_scripts,
     test_select_utxos_for_commit_change_above_dust, test_select_utxos_for_commit_change_below_dust,
     test_select_utxos_for_commit_deterministic,
     test_select_utxos_for_commit_edge_case_change_equals_envelope,
@@ -189,16 +172,16 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
 
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_script_pair
-        .tap_leaf_script
-        .script
+        .commit_tap_leaf_script
+        .tap_script
         .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
-    let chained_pair = compose_outputs.per_participant[0]
-        .chained_tap_script_pair
-        .clone()
-        .unwrap();
-    let chained_tap_script = chained_pair.tap_leaf_script.script.clone();
+    let chained_tap_script = compose_outputs.per_participant[0]
+        .chained_tap_leaf_script
+        .as_ref()
+        .unwrap()
+        .tap_script
+        .clone();
 
     let transfer_data = OpReturnData::PubKey(internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
@@ -216,7 +199,13 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
                         vout: 0,
                     })
                     .commit_prevout(reveal_tx.output[0].clone())
-                    .commit_tap_script_pair(chained_pair.clone())
+                    .commit_tap_leaf_script(
+                        compose_outputs.per_participant[0]
+                            .chained_tap_leaf_script
+                            .as_ref()
+                            .unwrap()
+                            .clone(),
+                    )
                     .build(),
             ])
             .envelope(546)
@@ -427,25 +416,6 @@ async fn test_compose_regtest() -> Result<()> {
     test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
     test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
     test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
-
-    info!("estimate_reveal_fees_delta");
-    test_estimate_reveal_fees_delta_empty_participants_returns_empty();
-    test_estimate_reveal_fees_delta_single_participant_returns_single_fee();
-    test_estimate_reveal_fees_delta_fee_rate_scaling();
-    test_estimate_reveal_fees_delta_larger_script_higher_fee();
-    test_estimate_reveal_fees_delta_chained_adds_output_fee();
-    test_estimate_reveal_fees_delta_op_return_is_base_overhead();
-    test_estimate_reveal_fees_delta_op_return_not_in_participant_fees();
-    test_estimate_reveal_fees_delta_multiple_participants_independent_deltas();
-    test_estimate_reveal_fees_delta_deterministic();
-    test_estimate_reveal_fees_delta_envelope_value_does_not_affect_fee();
-    test_estimate_reveal_fees_delta_minimum_fee_rate();
-    test_estimate_reveal_fees_delta_high_fee_rate();
-    test_estimate_reveal_fees_delta_mixed_chained_participants();
-    test_estimate_reveal_fees_delta_very_large_script();
-    test_estimate_reveal_fees_delta_many_participants();
-    test_estimate_reveal_fees_delta_control_block_size_matters();
-    test_estimate_reveal_fees_delta_with_realistic_scripts(&mut reg_tester.clone()).await?;
 
     info!("estimate_key_spend_fee");
     test_estimate_key_spend_fee_empty_tx();

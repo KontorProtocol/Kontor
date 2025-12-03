@@ -245,9 +245,8 @@ impl RegTesterInner {
             None,
         )?;
         let tap_script = &compose_res.per_participant[0]
-            .commit_tap_script_pair
-            .tap_leaf_script
-            .script;
+            .commit_tap_leaf_script
+            .tap_script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -257,9 +256,8 @@ impl RegTesterInner {
             &secp,
             &taproot_spend_info,
             &compose_res.per_participant[0]
-                .commit_tap_script_pair
-                .tap_leaf_script
-                .script,
+                .commit_tap_leaf_script
+                .tap_script,
             &mut compose_res.reveal_transaction,
             &[compose_res.commit_transaction.output[0].clone()],
             &ident.keypair,

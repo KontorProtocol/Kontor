@@ -54,9 +54,8 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     let mut commit_transaction = compose_outputs.commit_transaction;
 
     let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_script_pair
-        .tap_leaf_script
-        .script
+        .commit_tap_leaf_script
+        .tap_script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -193,9 +192,8 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let mut commit_transaction = compose_outputs.commit_transaction;
 
     let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_script_pair
-        .tap_leaf_script
-        .script
+        .commit_tap_leaf_script
+        .tap_script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -237,11 +235,10 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let mut reveal_transaction = compose_outputs.reveal_transaction;
 
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_script_pair
+        .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_leaf_script
-        .script
+        .tap_script
         .clone();
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
@@ -537,9 +534,8 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
 
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_script_pair
-        .tap_leaf_script
-        .script
+        .commit_tap_leaf_script
+        .tap_script
         .clone();
     // Initial reveal tx (unused after recomposition with OP_RETURN)
     let _initial_reveal_tx = compose_outputs.reveal_transaction;
@@ -557,9 +553,9 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
                     vout: 0,
                 })
                 .commit_prevout(commit_tx.output[0].clone())
-                .commit_tap_script_pair(
+                .commit_tap_leaf_script(
                     compose_outputs.per_participant[0]
-                        .commit_tap_script_pair
+                        .commit_tap_leaf_script
                         .clone(),
                 )
                 .build(),
@@ -783,9 +779,8 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let mut commit_transaction = compose_outputs.commit_transaction;
 
     let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_script_pair
-        .tap_leaf_script
-        .script
+        .commit_tap_leaf_script
+        .tap_script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -827,11 +822,10 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let mut reveal_transaction = compose_outputs.reveal_transaction;
 
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_script_pair
+        .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_leaf_script
-        .script
+        .tap_script
         .clone();
 
     let derived_chained_instruction = Inst::Call {
