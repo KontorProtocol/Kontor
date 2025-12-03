@@ -224,13 +224,14 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
+        let instructions = InstructionQuery::builder()
+            .address(ident.address.to_string())
+            .x_only_public_key(ident.x_only_public_key().to_string())
+            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
+            .instruction(inst)
+            .build();
         let query = ComposeQuery::builder()
-            .instructions(vec![InstructionQuery {
-                address: ident.address.to_string(),
-                x_only_public_key: ident.x_only_public_key().to_string(),
-                funding_utxo_ids: outpoint_to_utxo_id(&ident.next_funding_utxo.0),
-                script_data: inst,
-            }])
+            .instructions(vec![instructions])
             .sat_per_vbyte(2)
             .build();
         let mut compose_res = self.kontor_client.compose(query).await?;
@@ -243,7 +244,7 @@ impl RegTesterInner {
             0,
             None,
         )?;
-        let tap_script = &compose_res.per_participant[0].commit.tap_script;
+        let tap_script = &compose_res.per_participant[0].commit_tap_leaf_script.script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -252,7 +253,7 @@ impl RegTesterInner {
         test_utils::sign_script_spend(
             &secp,
             &taproot_spend_info,
-            &compose_res.per_participant[0].commit.tap_script,
+            &compose_res.per_participant[0].commit_tap_leaf_script.script,
             &mut compose_res.reveal_transaction,
             &[compose_res.commit_transaction.output[0].clone()],
             &ident.keypair,

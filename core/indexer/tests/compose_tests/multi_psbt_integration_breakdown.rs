@@ -6,6 +6,7 @@ use indexer::{
     logging,
     multi_psbt_test_utils::{NodeInfo, get_node_addresses, get_portal_info, tx_vbytes},
 };
+use indexer_types::{Inst, serialize};
 use rand::Rng;
 use testlib::RegTester;
 use tracing::info;
@@ -55,18 +56,25 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
     };
     all_participants.push(portal_as_node);
 
-    // Build compose inputs with per-participant script datas (split evenly across participants)
-    let script_data = b"compose-mpsbt-flow-data-0123456789".to_vec();
-    let script_datas =
-        indexer::api::compose::split_even_chunks(&script_data, all_participants.len())?;
     let instruction_inputs: Vec<InstructionInputs> = all_participants
         .iter()
         .enumerate()
-        .map(|(i, n)| InstructionInputs {
-            address: n.address.clone(),
-            x_only_public_key: n.internal_key,
-            funding_utxos: vec![n.next_funding_utxo.clone()],
-            script_data: script_datas[i].clone(),
+        .map(|(i, n)| {
+            InstructionInputs::builder()
+                .address(n.address.clone())
+                .x_only_public_key(n.internal_key)
+                .funding_utxos(vec![n.next_funding_utxo.clone()])
+                .instruction(
+                    serialize(&Inst::Publish {
+                        gas_limit: 50_000,
+                        name: "test".to_string(),
+                        bytes: format!("compose-mpsbt-flow-data-0123456789-{}", i)
+                            .as_bytes()
+                            .to_vec(),
+                    })
+                    .unwrap(),
+                )
+                .build()
         })
         .collect();
 
@@ -156,7 +164,10 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
 
     for (i, p) in all_participants.iter().enumerate() {
         // Build spend info from tapscript chunk
-        let tap_script = compose_outputs.per_participant[i].commit.tap_script.clone();
+        let tap_script = compose_outputs.per_participant[i]
+            .commit_tap_leaf_script
+            .script
+            .clone();
         let tap_info = bitcoin::taproot::TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .expect("leaf")

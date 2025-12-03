@@ -19,21 +19,20 @@ pub async fn test_compose_commit_unique_vout_mapping_even_with_identical_chunks(
     // Two participants with identical script data to force identical tapscripts
     let data = b"same".to_vec();
 
-    let chunks = indexer::api::compose::split_even_chunks(&data, 2).unwrap();
     let inputs = ComposeInputs::builder()
         .instructions(vec![
-            InstructionInputs {
-                address: addr.clone(),
-                x_only_public_key: internal_key,
-                funding_utxos: vec![utxo1],
-                script_data: chunks[0].clone(),
-            },
-            InstructionInputs {
-                address: addr.clone(),
-                x_only_public_key: internal_key,
-                funding_utxos: vec![utxo2],
-                script_data: chunks[1].clone(),
-            },
+            InstructionInputs::builder()
+                .address(addr.clone())
+                .x_only_public_key(internal_key)
+                .funding_utxos(vec![utxo1])
+                .instruction(data.clone())
+                .build(),
+            InstructionInputs::builder()
+                .address(addr.clone())
+                .x_only_public_key(internal_key)
+                .funding_utxos(vec![utxo2])
+                .instruction(data.clone())
+                .build(),
         ])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
@@ -65,12 +64,14 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
     let next_funding_utxo = identity.next_funding_utxo;
 
     let inputs = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: addr.clone(),
-            x_only_public_key: internal_key,
-            funding_utxos: vec![next_funding_utxo],
-            script_data: b"x".to_vec(),
-        }])
+        .instructions(vec![
+            InstructionInputs::builder()
+                .address(addr.clone())
+                .x_only_public_key(internal_key)
+                .funding_utxos(vec![next_funding_utxo])
+                .instruction(b"x".to_vec())
+                .build(),
+        ])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();

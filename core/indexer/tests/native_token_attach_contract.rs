@@ -67,27 +67,32 @@ pub async fn test_compose_token_attach_and_detach(
     };
 
     let query = ComposeQuery::builder()
-        .instructions(vec![InstructionQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            script_data: attach_inst.clone(),
-        }])
+        .instructions(vec![
+            InstructionQuery::builder()
+                .address(seller_address.to_string())
+                .x_only_public_key(internal_key.to_string())
+                .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
+                .instruction(attach_inst.clone())
+                .chained_instruction(detach_inst.clone())
+                .build(),
+        ])
         .sat_per_vbyte(2)
         .envelope(600)
-        .chained_script_data(detach_inst.clone())
         .build();
 
     let compose_outputs = reg_tester.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
     let mut reveal_transaction = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
     let chained_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let commit_prevout = TxOut {
@@ -128,19 +133,19 @@ pub async fn test_compose_token_attach_and_detach(
     let reveal_query = RevealQuery {
         commit_tx_hex: reveal_tx_hex.clone(),
         sat_per_vbyte: 2,
-        participants: vec![RevealParticipantQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            commit_vout: 0,
-            commit_script_data: chained_script_data_bytes,
-            envelope: None,
-        }],
+        participants: vec![
+            RevealParticipantQuery::builder()
+                .address(seller_address.to_string())
+                .x_only_public_key(internal_key.to_string())
+                .commit_vout(0)
+                .commit_script_data(chained_script_data_bytes)
+                .build(),
+        ],
         op_return_data: Some(serialize(&vec![(
             0,
             indexer_types::OpReturnData::PubKey(buyer_identity.x_only_public_key()),
         )])?),
         envelope: None,
-        chained_script_data: None,
     };
 
     let detach_outputs = reg_tester.compose_reveal(reveal_query).await?;

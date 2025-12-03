@@ -29,12 +29,14 @@ pub async fn test_compose_progressive_size_limit_testnet(reg_tester: &mut RegTes
 
         // Compose transaction
         let compose_params = ComposeInputs::builder()
-            .instructions(vec![InstructionInputs {
-                address: seller_address.clone(),
-                x_only_public_key: internal_key,
-                funding_utxos: available_utxos.clone(),
-                script_data: data,
-            }])
+            .instructions(vec![
+                InstructionInputs::builder()
+                    .address(seller_address.clone())
+                    .x_only_public_key(internal_key)
+                    .funding_utxos(available_utxos.clone())
+                    .instruction(data)
+                    .build(),
+            ])
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
             .envelope(546)
             .build();
@@ -42,7 +44,10 @@ pub async fn test_compose_progressive_size_limit_testnet(reg_tester: &mut RegTes
 
         let mut attach_tx = compose_outputs.commit_transaction;
         let mut spend_tx = compose_outputs.reveal_transaction;
-        let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+        let tap_script = compose_outputs.per_participant[0]
+            .commit_tap_leaf_script
+            .script
+            .clone();
 
         // Sign commit inputs with correctly ordered prevouts matching the selected inputs
         let commit_prevouts: Vec<TxOut> = attach_tx

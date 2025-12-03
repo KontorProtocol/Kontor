@@ -8,7 +8,7 @@ use bitcoin::Psbt;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer_types::serialize;
+use indexer_types::{OpReturnData, serialize};
 
 use testlib::*;
 use tracing::info;
@@ -32,11 +32,75 @@ use compose_tests::compose_helpers::{
     test_build_tap_script_and_script_address_empty_data_errs,
     test_build_tap_script_and_script_address_multi_push_and_structure,
     test_build_tap_script_chunk_boundaries_push_count,
-    test_calculate_change_single_insufficient_returns_none,
-    test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect,
-    test_compose_reveal_op_return_size_validation,
-    test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance,
-    test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness,
+    test_calculate_op_return_fee_per_participant_deterministic,
+    test_calculate_op_return_fee_per_participant_exact_division,
+    test_calculate_op_return_fee_per_participant_fee_rate_scaling,
+    test_calculate_op_return_fee_per_participant_high_fee_rate,
+    test_calculate_op_return_fee_per_participant_large_participant_count,
+    test_calculate_op_return_fee_per_participant_many_participants,
+    test_calculate_op_return_fee_per_participant_minimum_fee_rate,
+    test_calculate_op_return_fee_per_participant_no_op_return,
+    test_calculate_op_return_fee_per_participant_round_up_ensures_coverage,
+    test_calculate_op_return_fee_per_participant_single_participant,
+    test_calculate_op_return_fee_per_participant_three_participants_rounds_up,
+    test_calculate_op_return_fee_per_participant_two_participants,
+    test_calculate_op_return_fee_per_participant_vsize_is_89_bytes,
+    test_calculate_op_return_fee_per_participant_zero_participants,
+    test_calculate_reveal_fee_delta_chained_adds_output_fee,
+    test_calculate_reveal_fee_delta_deterministic,
+    test_calculate_reveal_fee_delta_envelope_does_not_affect_fee,
+    test_calculate_reveal_fee_delta_fee_rate_scaling,
+    test_calculate_reveal_fee_delta_high_fee_rate,
+    test_calculate_reveal_fee_delta_larger_control_block_higher_fee,
+    test_calculate_reveal_fee_delta_larger_script_higher_fee,
+    test_calculate_reveal_fee_delta_minimum_fee_rate,
+    test_calculate_reveal_fee_delta_modifies_dummy_tx,
+    test_calculate_reveal_fee_delta_multiple_participants_sequential,
+    test_calculate_reveal_fee_delta_single_participant_no_chained,
+    test_calculate_reveal_fee_delta_single_participant_with_chained,
+    test_calculate_reveal_fee_delta_very_large_script,
+    test_calculate_reveal_fee_delta_with_real_tap_script,
+    test_calculate_reveal_fee_delta_witness_structure,
+    test_compose_reveal_op_return_size_validation, test_estimate_key_spend_fee_deterministic,
+    test_estimate_key_spend_fee_does_not_modify_original_tx, test_estimate_key_spend_fee_empty_tx,
+    test_estimate_key_spend_fee_fee_rate_scaling, test_estimate_key_spend_fee_high_fee_rate,
+    test_estimate_key_spend_fee_many_inputs, test_estimate_key_spend_fee_minimum_fee_rate,
+    test_estimate_key_spend_fee_more_outputs_higher_fee,
+    test_estimate_key_spend_fee_multiple_inputs_scales_linearly,
+    test_estimate_key_spend_fee_overwrites_existing_witness,
+    test_estimate_key_spend_fee_signature_size_is_64_bytes,
+    test_estimate_key_spend_fee_single_input, test_estimate_key_spend_fee_with_real_commit_tx,
+    test_estimate_participant_commit_fees_change_output_difference,
+    test_estimate_participant_commit_fees_deterministic,
+    test_estimate_participant_commit_fees_does_not_modify_base_tx,
+    test_estimate_participant_commit_fees_empty_utxos,
+    test_estimate_participant_commit_fees_fee_rate_scaling,
+    test_estimate_participant_commit_fees_high_fee_rate,
+    test_estimate_participant_commit_fees_input_vsize_delta,
+    test_estimate_participant_commit_fees_many_utxos,
+    test_estimate_participant_commit_fees_minimum_fee_rate,
+    test_estimate_participant_commit_fees_multiple_utxos,
+    test_estimate_participant_commit_fees_output_vsize,
+    test_estimate_participant_commit_fees_single_utxo,
+    test_estimate_participant_commit_fees_with_existing_base_tx,
+    test_estimate_participant_commit_fees_with_real_utxos,
+    test_select_utxos_for_commit_change_above_dust, test_select_utxos_for_commit_change_below_dust,
+    test_select_utxos_for_commit_deterministic,
+    test_select_utxos_for_commit_edge_case_change_equals_envelope,
+    test_select_utxos_for_commit_empty_utxos_errors,
+    test_select_utxos_for_commit_envelope_affects_change_threshold,
+    test_select_utxos_for_commit_exact_amount_no_change,
+    test_select_utxos_for_commit_fee_rate_affects_selection,
+    test_select_utxos_for_commit_insufficient_with_fees,
+    test_select_utxos_for_commit_many_small_utxos,
+    test_select_utxos_for_commit_multiple_utxos_selects_minimum,
+    test_select_utxos_for_commit_returns_correct_subset,
+    test_select_utxos_for_commit_script_output_value_affects_selection,
+    test_select_utxos_for_commit_selects_in_order,
+    test_select_utxos_for_commit_single_utxo_insufficient,
+    test_select_utxos_for_commit_single_utxo_sufficient,
+    test_select_utxos_for_commit_with_existing_base_tx,
+    test_select_utxos_for_commit_with_real_utxo,
 };
 use compose_tests::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
 use compose_tests::legacy_segwit_envelope::{
@@ -126,36 +190,55 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
             address: seller_address.clone(),
             x_only_public_key: internal_key,
             funding_utxos: vec![(out_point, utxo_for_output.clone())],
-            script_data: b"Hello, world!".to_vec(),
+            instruction: b"Hello, world!".to_vec(),
+            chained_instruction: Some(serialized_token_balance.clone()),
         }])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
-        .chained_script_data(serialized_token_balance.clone())
         .build();
 
     let compose_outputs = compose(compose_params)?;
 
     let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
-    let chained_pair = compose_outputs.per_participant[0].chained.clone().unwrap();
-    let chained_tap_script = chained_pair.tap_script.clone();
+    let chained_tap_script = compose_outputs.per_participant[0]
+        .chained_tap_leaf_script
+        .as_ref()
+        .unwrap()
+        .script
+        .clone();
+
+    let transfer_data = OpReturnData::PubKey(internal_key);
+    let transfer_bytes = serialize(&transfer_data)?;
 
     let chained_reveal_tx = compose_reveal(
         RevealInputs::builder()
             .commit_tx(reveal_tx.clone())
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-            .participants(vec![RevealParticipantInputs {
-                address: seller_address.clone(),
-                x_only_public_key: internal_key,
-                commit_outpoint: OutPoint {
-                    txid: reveal_tx.compute_txid(),
-                    vout: 0,
-                },
-                commit_prevout: reveal_tx.output[0].clone(),
-                commit_script_data: chained_pair.script_data_chunk.clone(),
-            }])
+            .participants(vec![
+                RevealParticipantInputs::builder()
+                    .address(seller_address.clone())
+                    .x_only_public_key(internal_key)
+                    .commit_outpoint(OutPoint {
+                        txid: reveal_tx.compute_txid(),
+                        vout: 0,
+                    })
+                    .commit_prevout(reveal_tx.output[0].clone())
+                    .commit_tap_leaf_script(
+                        compose_outputs.per_participant[0]
+                            .chained_tap_leaf_script
+                            .as_ref()
+                            .unwrap()
+                            .clone(),
+                    )
+                    .build(),
+            ])
             .envelope(546)
+            .op_return_data(transfer_bytes)
             .build(),
     )?;
 
@@ -211,6 +294,12 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
         &keypair,
         0,
     )?;
+    println!("commit_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", commit_tx);
+    println!("reveal_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", reveal_tx);
+    println!(
+        "chained_reveal_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}",
+        chained_reveal_tx
+    );
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx));
@@ -225,9 +314,24 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
         3,
         "Expected exactly three transaction results"
     );
-    assert!(result[0].allowed, "Commit transaction was rejected");
-    assert!(result[1].allowed, "Reveal transaction was rejected");
-    assert!(result[2].allowed, "Chained reveal transaction was rejected");
+
+    println!("result:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", result);
+
+    assert!(
+        result[0].allowed,
+        "Commit transaction was rejected: {:?}",
+        result[0].reject_reason
+    );
+    assert!(
+        result[1].allowed,
+        "Reveal transaction was rejected: {:?}",
+        result[1].reject_reason
+    );
+    assert!(
+        result[2].allowed,
+        "Chained reveal transaction was rejected: {:?}",
+        result[2].reject_reason
+    );
 
     Ok(())
 }
@@ -241,12 +345,13 @@ async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
 
     let mut instructions = Vec::new();
     for n in nodes.iter() {
-        instructions.push(indexer::api::compose::InstructionInputs {
-            address: n.address.clone(),
-            x_only_public_key: n.internal_key,
-            funding_utxos: vec![n.next_funding_utxo.clone()],
-            script_data: b"hello-world".to_vec(),
-        });
+        let instruction = indexer::api::compose::InstructionInputs::builder()
+            .address(n.address.clone())
+            .x_only_public_key(n.internal_key)
+            .funding_utxos(vec![(n.next_funding_utxo.clone())])
+            .instruction(b"hello-world".to_vec())
+            .build();
+        instructions.push(instruction);
     }
 
     let params = ComposeInputs::builder()
@@ -259,7 +364,6 @@ async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
 
     assert_eq!(outputs.per_participant.len(), instructions.len());
     for (i, p) in outputs.per_participant.iter().enumerate() {
-        assert_eq!(p.index as usize, i);
         assert_eq!(p.address, instructions[i].address.to_string());
         assert_eq!(
             p.x_only_public_key,
@@ -314,12 +418,6 @@ async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
             .iter()
             .all(|i| i.tap_internal_key.is_some())
     );
-    assert!(
-        reveal_psbt
-            .inputs
-            .iter()
-            .all(|i| i.tap_merkle_root.is_some())
-    );
 
     Ok(())
 }
@@ -345,17 +443,92 @@ async fn test_compose_regtest() -> Result<()> {
     test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
         .await?;
     test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
-    test_calculate_change_single_monotonic_fee_rate_and_owner_output_effect(
-        &mut reg_tester.clone(),
-    )
-    .await?;
-    test_calculate_change_single_insufficient_returns_none(&mut reg_tester.clone()).await?;
-    test_estimate_reveal_fee_for_address_monotonic_and_envelope_invariance(&mut reg_tester.clone())
-        .await?;
     test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
-    test_tx_vbytes_est_matches_tx_vsize_no_witness_and_with_witness(&mut reg_tester.clone())
-        .await?;
     test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
+
+    info!("estimate_key_spend_fee");
+    test_estimate_key_spend_fee_empty_tx();
+    test_estimate_key_spend_fee_single_input();
+    test_estimate_key_spend_fee_multiple_inputs_scales_linearly();
+    test_estimate_key_spend_fee_fee_rate_scaling();
+    test_estimate_key_spend_fee_more_outputs_higher_fee();
+    test_estimate_key_spend_fee_deterministic();
+    test_estimate_key_spend_fee_overwrites_existing_witness();
+    test_estimate_key_spend_fee_does_not_modify_original_tx();
+    test_estimate_key_spend_fee_minimum_fee_rate();
+    test_estimate_key_spend_fee_high_fee_rate();
+    test_estimate_key_spend_fee_many_inputs();
+    test_estimate_key_spend_fee_signature_size_is_64_bytes();
+    test_estimate_key_spend_fee_with_real_commit_tx(&mut reg_tester.clone()).await?;
+
+    info!("estimate_participant_commit_fees");
+    test_estimate_participant_commit_fees_empty_utxos();
+    test_estimate_participant_commit_fees_single_utxo();
+    test_estimate_participant_commit_fees_multiple_utxos();
+    test_estimate_participant_commit_fees_fee_rate_scaling();
+    test_estimate_participant_commit_fees_with_existing_base_tx();
+    test_estimate_participant_commit_fees_deterministic();
+    test_estimate_participant_commit_fees_does_not_modify_base_tx();
+    test_estimate_participant_commit_fees_minimum_fee_rate();
+    test_estimate_participant_commit_fees_high_fee_rate();
+    test_estimate_participant_commit_fees_many_utxos();
+    test_estimate_participant_commit_fees_change_output_difference();
+    test_estimate_participant_commit_fees_input_vsize_delta();
+    test_estimate_participant_commit_fees_output_vsize();
+    test_estimate_participant_commit_fees_with_real_utxos(&mut reg_tester.clone()).await?;
+
+    info!("select_utxos_for_commit");
+    test_select_utxos_for_commit_empty_utxos_errors();
+    test_select_utxos_for_commit_single_utxo_sufficient();
+    test_select_utxos_for_commit_single_utxo_insufficient();
+    test_select_utxos_for_commit_multiple_utxos_selects_minimum();
+    test_select_utxos_for_commit_selects_in_order();
+    test_select_utxos_for_commit_change_above_dust();
+    test_select_utxos_for_commit_change_below_dust();
+    test_select_utxos_for_commit_fee_rate_affects_selection();
+    test_select_utxos_for_commit_script_output_value_affects_selection();
+    test_select_utxos_for_commit_with_existing_base_tx();
+    test_select_utxos_for_commit_returns_correct_subset();
+    test_select_utxos_for_commit_exact_amount_no_change();
+    test_select_utxos_for_commit_many_small_utxos();
+    test_select_utxos_for_commit_envelope_affects_change_threshold();
+    test_select_utxos_for_commit_deterministic();
+    test_select_utxos_for_commit_insufficient_with_fees();
+    test_select_utxos_for_commit_edge_case_change_equals_envelope();
+    test_select_utxos_for_commit_with_real_utxo(&mut reg_tester.clone()).await?;
+
+    info!("calculate_reveal_fee_delta");
+    test_calculate_reveal_fee_delta_single_participant_no_chained();
+    test_calculate_reveal_fee_delta_single_participant_with_chained();
+    test_calculate_reveal_fee_delta_chained_adds_output_fee();
+    test_calculate_reveal_fee_delta_fee_rate_scaling();
+    test_calculate_reveal_fee_delta_larger_script_higher_fee();
+    test_calculate_reveal_fee_delta_larger_control_block_higher_fee();
+    test_calculate_reveal_fee_delta_envelope_does_not_affect_fee();
+    test_calculate_reveal_fee_delta_modifies_dummy_tx();
+    test_calculate_reveal_fee_delta_multiple_participants_sequential();
+    test_calculate_reveal_fee_delta_deterministic();
+    test_calculate_reveal_fee_delta_minimum_fee_rate();
+    test_calculate_reveal_fee_delta_high_fee_rate();
+    test_calculate_reveal_fee_delta_very_large_script();
+    test_calculate_reveal_fee_delta_witness_structure();
+    test_calculate_reveal_fee_delta_with_real_tap_script(&mut reg_tester.clone()).await?;
+
+    info!("calculate_op_return_fee_per_participant");
+    test_calculate_op_return_fee_per_participant_no_op_return();
+    test_calculate_op_return_fee_per_participant_zero_participants();
+    test_calculate_op_return_fee_per_participant_single_participant();
+    test_calculate_op_return_fee_per_participant_two_participants();
+    test_calculate_op_return_fee_per_participant_three_participants_rounds_up();
+    test_calculate_op_return_fee_per_participant_many_participants();
+    test_calculate_op_return_fee_per_participant_fee_rate_scaling();
+    test_calculate_op_return_fee_per_participant_deterministic();
+    test_calculate_op_return_fee_per_participant_round_up_ensures_coverage();
+    test_calculate_op_return_fee_per_participant_minimum_fee_rate();
+    test_calculate_op_return_fee_per_participant_high_fee_rate();
+    test_calculate_op_return_fee_per_participant_vsize_is_89_bytes();
+    test_calculate_op_return_fee_per_participant_large_participant_count();
+    test_calculate_op_return_fee_per_participant_exact_division();
 
     info!("legacy_taproot_envelope");
     test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;

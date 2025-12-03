@@ -2,6 +2,7 @@ use anyhow::Result;
 use bitcoin::key::{Keypair, Secp256k1, XOnlyPublicKey, rand};
 use bitcoin::opcodes::all::OP_ENDIF;
 use bitcoin::script::Instruction;
+use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 
 use indexer::api::compose::build_tap_script_and_script_address;
 use indexer::logging;
@@ -12,6 +13,48 @@ fn generate_test_key() -> XOnlyPublicKey {
     let secp = Secp256k1::new();
     let keypair = Keypair::new(&secp, &mut rand::thread_rng());
     keypair.x_only_public_key().0
+}
+
+/// Helper to verify the control block is correct by independently rebuilding it.
+fn verify_control_block(
+    key: XOnlyPublicKey,
+    script: &bitcoin::ScriptBuf,
+    control_block: &bitcoin::taproot::ControlBlock,
+) {
+    let secp = Secp256k1::new();
+
+    // Rebuild the taproot tree independently
+    let tap_info = TaprootBuilder::new()
+        .add_leaf(0, script.clone())
+        .expect("add leaf")
+        .finalize(&secp, key)
+        .expect("finalize taproot");
+
+    // Derive control block from the independently built tree
+    let expected_cb = tap_info
+        .control_block(&(script.clone(), LeafVersion::TapScript))
+        .expect("derive control block");
+
+    // Verify they match
+    assert_eq!(
+        control_block.serialize(),
+        expected_cb.serialize(),
+        "Control block should match independently derived one"
+    );
+
+    // Verify the leaf version
+    assert_eq!(
+        control_block.leaf_version,
+        LeafVersion::TapScript,
+        "Control block should have TapScript leaf version"
+    );
+
+    // Verify control block is non-empty and has valid structure
+    let cb_bytes = control_block.serialize();
+    assert!(
+        cb_bytes.len() >= 33,
+        "Control block should be at least 33 bytes (leaf version + internal key)"
+    );
 }
 
 #[tokio::test]
@@ -28,7 +71,10 @@ async fn test_build_tap_script_and_script_address_empty() -> Result<()> {
 async fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 519];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+    // Verify control block is correct
+    verify_control_block(key, &script, &control_block);
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -61,7 +107,10 @@ async fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 521];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+    // Verify control block is correct
+    verify_control_block(key, &script, &control_block);
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -98,7 +147,10 @@ async fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 520];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+    // Verify control block is correct
+    verify_control_block(key, &script, &control_block);
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -131,7 +183,10 @@ async fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
 async fn test_build_tap_script_and_script_address_small_chunking() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 1000];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+    // Verify control block is correct
+    verify_control_block(key, &script, &control_block);
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -187,7 +242,10 @@ async fn test_build_tap_script_and_script_address_small_chunking() -> Result<()>
 async fn test_build_tap_script_and_script_address_large_chunking() -> Result<()> {
     let key = generate_test_key();
     let data = vec![0xFF; 2700];
-    let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+    let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+    // Verify control block is correct
+    verify_control_block(key, &script, &control_block);
 
     let script_instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
 
@@ -240,7 +298,21 @@ async fn test_build_tap_script_progressive_size_limit() -> Result<()> {
         let data = vec![0xFF; current_size];
 
         // Should succeed - let any errors propagate
-        let (script, _, _) = build_tap_script_and_script_address(key, data.clone())?;
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data.clone())?;
+
+        // Verify control block has valid structure (skip full rebuild for large scripts - too slow)
+        let cb_bytes = control_block.serialize();
+        assert!(
+            cb_bytes.len() >= 33,
+            "Control block should be at least 33 bytes for size {}",
+            current_size
+        );
+        assert_eq!(
+            control_block.leaf_version,
+            LeafVersion::TapScript,
+            "Control block should have TapScript leaf version for size {}",
+            current_size
+        );
 
         // Verify basic script structure
         let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;

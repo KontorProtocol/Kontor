@@ -85,26 +85,31 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let serialized_detach_data = serialize(&chained_instructions)?;
 
     let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            funding_utxos: vec![(seller_out_point, seller_utxo_for_output.clone())],
-            script_data: serialized_instruction,
-        }])
+        .instructions(vec![
+            InstructionInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .funding_utxos(vec![(seller_out_point, seller_utxo_for_output.clone())])
+                .instruction(serialized_instruction)
+                .chained_instruction(serialized_detach_data.clone())
+                .build(),
+        ])
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
-        .chained_script_data(serialized_detach_data.clone())
         .envelope(546)
         .build();
 
     let compose_outputs = compose(compose_params)?;
     let mut attach_commit_tx = compose_outputs.commit_transaction;
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
-    let attach_tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let attach_tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
     let detach_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let prevouts = vec![seller_utxo_for_output.clone()];
@@ -197,26 +202,36 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let transfer_data = OpReturnData::PubKey(buyer_internal_key);
     let transfer_bytes = serialize(&transfer_data)?;
 
+    // Use the chained TapScriptPair from compose_outputs as the commit script for the detach reveal
+    let detach_tap_script_pair = compose_outputs.per_participant[0]
+        .chained_tap_leaf_script
+        .as_ref()
+        .unwrap()
+        .clone();
+
     let reveal_inputs = RevealInputs::builder()
         .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .participants(vec![RevealParticipantInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            commit_outpoint: OutPoint {
-                txid: attach_reveal_tx.compute_txid(),
-                vout: 0,
-            },
-            commit_prevout: attach_reveal_tx.output[0].clone(),
-            commit_script_data: serialized_detach_data,
-        }])
+        .participants(vec![
+            RevealParticipantInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .commit_outpoint(OutPoint {
+                    txid: attach_reveal_tx.compute_txid(),
+                    vout: 0,
+                })
+                .commit_prevout(attach_reveal_tx.output[0].clone())
+                .commit_tap_leaf_script(detach_tap_script_pair)
+                .build(),
+        ])
         .op_return_data(transfer_bytes)
         .envelope(546)
         .build();
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
 
     // Create buyer's PSBT that combines with seller's PSBT
-    let mut buyer_psbt = buyer_reveal_outputs.psbt;
+    let mut buyer_psbt =
+        Psbt::deserialize(&hex::decode(&buyer_reveal_outputs.psbt_hex).unwrap()).unwrap();
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone(); // seller's signed input
 

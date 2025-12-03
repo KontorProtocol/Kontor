@@ -32,13 +32,14 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
 
     let serialized_token_balance = serialize(&token_balance)?;
 
+    let instruction = InstructionInputs::builder()
+        .address(seller_address.clone())
+        .x_only_public_key(internal_key)
+        .funding_utxos(vec![(out_point, utxo_for_output.clone())])
+        .instruction(serialized_token_balance)
+        .build();
     let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: internal_key,
-            funding_utxos: vec![(out_point, utxo_for_output.clone())],
-            script_data: serialized_token_balance,
-        }])
+        .instructions(vec![instruction])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .envelope(546)
         .build();
@@ -47,7 +48,10 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut attach_tx = compose_outputs.commit_transaction;
     let mut spend_tx = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
 
     // Sign the attach transaction
     test_utils::sign_key_spend(

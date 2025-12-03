@@ -44,12 +44,14 @@ pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<(
     let serialized_token_balance = serialize(&token_balance)?;
 
     let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            funding_utxos: vec![(out_point, utxo_for_output.clone())],
-            script_data: serialized_token_balance.clone(),
-        }])
+        .instructions(vec![
+            InstructionInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .funding_utxos(vec![(out_point, utxo_for_output.clone())])
+                .instruction(serialized_token_balance.clone())
+                .build(),
+        ])
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .envelope(546)
         .build();
@@ -57,7 +59,10 @@ pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<(
     let compose_outputs = compose(compose_params)?;
 
     let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
 
     // 1. SIGN THE ORIGINAL COMMIT
@@ -106,12 +111,14 @@ pub async fn test_signature_replay_fails(reg_tester: &mut RegTester) -> Result<(
     let (buyer_out_point, buyer_utxo_for_output) = buyer_identity.next_funding_utxo;
 
     let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            funding_utxos: vec![(buyer_out_point, buyer_utxo_for_output.clone())],
-            script_data: serialized_token_balance,
-        }])
+        .instructions(vec![
+            InstructionInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .funding_utxos(vec![(buyer_out_point, buyer_utxo_for_output.clone())])
+                .instruction(serialized_token_balance)
+                .build(),
+        ])
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .envelope(546)
         .build();
@@ -191,26 +198,31 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let serialized_detach_data = serialize(&detach_data)?;
 
     let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            funding_utxos: vec![(seller_out_point, seller_utxo_for_output.clone())],
-            script_data: serialized_token_balance,
-        }])
+        .instructions(vec![
+            InstructionInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .funding_utxos(vec![(seller_out_point, seller_utxo_for_output.clone())])
+                .instruction(serialized_token_balance)
+                .chained_instruction(serialized_detach_data.clone())
+                .build(),
+        ])
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .chained_script_data(serialized_detach_data.clone())
         .envelope(546)
         .build();
 
     let compose_outputs = compose(compose_params)?;
     let mut attach_commit_tx = compose_outputs.commit_transaction;
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
-    let attach_tap_script = compose_outputs.per_participant[0].commit.tap_script.clone();
+    let attach_tap_script = compose_outputs.per_participant[0]
+        .commit_tap_leaf_script
+        .script
+        .clone();
     let detach_tap_script = compose_outputs.per_participant[0]
-        .chained
+        .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let prevouts = vec![seller_utxo_for_output.clone()];
@@ -364,23 +376,30 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let reveal_inputs = RevealInputs::builder()
         .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
-        .participants(vec![RevealParticipantInputs {
-            address: seller_address.clone(),
-            x_only_public_key: seller_internal_key,
-            commit_outpoint: OutPoint {
-                txid: attach_reveal_tx.compute_txid(),
-                vout: 0,
-            },
-            commit_prevout: attach_reveal_tx.output[0].clone(),
-            commit_script_data: serialized_detach_data,
-        }])
+        .participants(vec![
+            RevealParticipantInputs::builder()
+                .address(seller_address.clone())
+                .x_only_public_key(seller_internal_key)
+                .commit_outpoint(OutPoint {
+                    txid: attach_reveal_tx.compute_txid(),
+                    vout: 0,
+                })
+                .commit_prevout(attach_reveal_tx.output[0].clone())
+                .commit_tap_leaf_script(
+                    compose_outputs.per_participant[0]
+                        .commit_tap_leaf_script
+                        .clone(),
+                )
+                .build(),
+        ])
         .op_return_data(transfer_bytes)
         .envelope(546)
         .build();
     let buyer_reveal_outputs = compose_reveal(reveal_inputs)?;
 
     // Create buyer's PSBT that combines with seller's PSBT
-    let mut buyer_psbt = buyer_reveal_outputs.psbt;
+    let mut buyer_psbt =
+        Psbt::deserialize(&hex::decode(&buyer_reveal_outputs.psbt_hex).unwrap()).unwrap();
 
     buyer_psbt.inputs[0] = seller_detach_psbt.inputs[0].clone();
     // Add buyer funding input as a second input
