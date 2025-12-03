@@ -86,13 +86,13 @@ pub async fn test_compose_token_attach_and_detach(
     let mut reveal_transaction = compose_outputs.reveal_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
     let chained_tap_script = compose_outputs.per_participant[0]
         .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let commit_prevout = TxOut {

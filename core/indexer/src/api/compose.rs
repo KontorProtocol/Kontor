@@ -166,7 +166,7 @@ impl ComposeInputs {
 pub struct TapLeafScript {
     #[serde(rename = "leafVersion")]
     pub leaf_version: LeafVersion,
-    pub tap_script: ScriptBuf,
+    pub script: ScriptBuf,
     #[serde(rename = "controlBlock")]
     pub control_block: ScriptBuf,
 }
@@ -286,7 +286,7 @@ impl RevealInputs {
                 .ok_or_else(|| anyhow!("commit vout {} out of bounds", commit_outpoint.vout))?;
 
             // Build TapScriptPair from raw commit_script_data
-            let (tap_script, _, control_block) = build_tap_script_and_script_address(
+            let (script, _, control_block) = build_tap_script_and_script_address(
                 x_only_public_key,
                 p.commit_script_data.clone(),
             )?;
@@ -298,7 +298,7 @@ impl RevealInputs {
                 commit_prevout,
                 commit_tap_leaf_script: TapLeafScript {
                     leaf_version: LeafVersion::TapScript,
-                    tap_script,
+                    script,
                     control_block: ScriptBuf::from_bytes(control_block.serialize()),
                 },
                 chained_instruction: p.chained_instruction.clone(),
@@ -476,7 +476,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             commit_prevout: script_output,
             commit_tap_leaf_script: TapLeafScript {
                 leaf_version: LeafVersion::TapScript,
-                tap_script,
+                script: tap_script,
                 control_block: ScriptBuf::from_bytes(control_block.serialize()),
             },
             chained_instruction: instruction.chained_instruction.clone(),
@@ -552,7 +552,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         let has_chained = p.chained_instruction.is_some();
         let participant_delta_fee = calculate_reveal_fee_delta(
             &mut dummy_reveal_tx,
-            &p.commit_tap_leaf_script.tap_script,
+            &p.commit_tap_leaf_script.script,
             p.commit_tap_leaf_script.control_block.as_bytes(),
             has_chained,
             params.fee_rate,
@@ -585,7 +585,7 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             psbt.outputs.push(bitcoin::psbt::Output::default());
             Some(TapLeafScript {
                 leaf_version: LeafVersion::TapScript,
-                tap_script: ch_tap,
+                script: ch_tap,
                 control_block: ScriptBuf::from_bytes(ch_control_block.serialize()),
             })
         } else {

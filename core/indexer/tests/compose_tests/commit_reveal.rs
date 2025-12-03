@@ -50,7 +50,7 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
     let mut spend_tx = compose_outputs.reveal_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
 
     // Sign the attach transaction

@@ -166,7 +166,7 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
         // Build spend info from tapscript chunk
         let tap_script = compose_outputs.per_participant[i]
             .commit_tap_leaf_script
-            .tap_script
+            .script
             .clone();
         let tap_info = bitcoin::taproot::TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())

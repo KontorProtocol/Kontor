@@ -55,7 +55,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -193,7 +193,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -238,7 +238,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
@@ -535,7 +535,7 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
     // Initial reveal tx (unused after recomposition with OP_RETURN)
     let _initial_reveal_tx = compose_outputs.reveal_transaction;
@@ -634,7 +634,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
             // Ensure a guaranteed-nonexistent txid in regtest
             funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
                 .to_string(),
-            instruction: instruction,
+            instruction,
             chained_instruction: None,
         }])
         .sat_per_vbyte(2)
@@ -676,7 +676,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: instruction,
+            instruction,
             chained_instruction: None,
         }])
         .sat_per_vbyte(2)
@@ -714,7 +714,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: instruction,
+            instruction,
             chained_instruction: None,
         }])
         .sat_per_vbyte(4)
@@ -780,7 +780,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
 
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
 
     let derived_token_data = serialize(&instruction)?;
@@ -825,7 +825,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
         .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let derived_chained_instruction = Inst::Call {

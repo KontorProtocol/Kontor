@@ -202,14 +202,14 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
     let mut commit_tx = compose_outputs.commit_transaction;
     let tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
     let mut reveal_tx = compose_outputs.reveal_transaction;
     let chained_tap_script = compose_outputs.per_participant[0]
         .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let transfer_data = OpReturnData::PubKey(internal_key);

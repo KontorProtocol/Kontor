@@ -847,7 +847,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
         .commit_prevout(commit_prevout.clone())
         .commit_tap_leaf_script(TapLeafScript {
             leaf_version: LeafVersion::TapScript,
-            tap_script,
+            script: tap_script,
             control_block: ScriptBuf::from_bytes(control_block.serialize()),
         })
         .build();

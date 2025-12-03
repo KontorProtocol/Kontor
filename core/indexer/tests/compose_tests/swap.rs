@@ -103,13 +103,13 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let mut attach_reveal_tx = compose_outputs.reveal_transaction;
     let attach_tap_script = compose_outputs.per_participant[0]
         .commit_tap_leaf_script
-        .tap_script
+        .script
         .clone();
     let detach_tap_script = compose_outputs.per_participant[0]
         .chained_tap_leaf_script
         .as_ref()
         .unwrap()
-        .tap_script
+        .script
         .clone();
 
     let prevouts = vec![seller_utxo_for_output.clone()];
