@@ -1,9 +1,10 @@
 # Kontor Indexer API
 
-Base URL: `/api` (unless otherwise specified)
+Base URL: `/api`
 
-All endpoints return JSON.  
-All paginated responses use the generic `PaginatedResponse<T>` shape.
+Request and response types are defined in Typescript [here](kontor-ts/bindings.d.ts).
+
+All responses are wrapped in the `ResultResponse<T>` type. If a response is an error then the `ErrorResponse` type is returned.
 
 ## Root
 
@@ -65,7 +66,7 @@ Parses the transaction and returns every detected op with its execution result (
 **Response**: `OpWithResult[]`
 
 ### POST /transactions/inspect
-**Request Body**: `{ "hex": string }`
+**Request Body**: `TransactionHex`
 
 Inspects an arbitrary transaction hex (does **not** need to be indexed).
 
@@ -94,8 +95,6 @@ Only the commit phase (for 2-step reveals).
 
 Only the reveal phase (when you already have a commit).
 
-> Note: `instructions` length is limited to 400 KiB.
-
 ## Contracts
 
 ### GET /contracts
@@ -106,14 +105,31 @@ List all deployed contracts.
 ### GET /contracts/:address
 **Path Param**: `address` – contract address (as string)
 
-**Response**: `ContractResponse` → `{ wit: string }`  
+**Response**: `ContractResponse`
 **404** if contract not found  
 **503** if indexer runtime is not available
 
 ### POST /contracts/:address
 **Path Param**: `address` – contract address  
-**Request Body**: `{ "expr": string }`
+**Request Body**: `ViewExpr`
 
 Execute a read-only view expression against the contract state.
 
 **Response**: `ViewResult`
+**503** if indexer runtime is not available
+
+## Results (Contract Execution Results)
+
+### GET /results
+**Query Parameters** (`ResultQuery`):
+- same pagination fields as others
+- `height?`: number
+- `start_height?`: number (mutually exclusive with height)
+- `contract?`: string
+- `func?`: string (requires contract)
+
+**Response**: `PaginatedResponse<ResultRow>`
+
+### GET /results/:id
+**Path Param**: `id` – txid_inputIndex_opIndex (e.g. a94a8f..._0_0)
+**Response**: `ResultRow | null
