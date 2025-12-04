@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{any, get, post},
 };
+use indexer_types::ErrorResponse;
 use reqwest::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -25,7 +26,6 @@ use crate::api::handlers::{
 
 use super::{
     Env,
-    error::ErrorResponse,
     handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
     ws,
 };

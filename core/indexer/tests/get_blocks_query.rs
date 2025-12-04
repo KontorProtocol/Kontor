@@ -2,10 +2,11 @@ use anyhow::Result;
 use indexer::{
     database::{
         queries::{get_blocks_paginated, insert_block, insert_processed_block},
-        types::{BlockQuery, BlockRow},
+        types::BlockQuery,
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
+use indexer_types::BlockRow;
 
 #[tokio::test]
 async fn test_get_blocks_query() -> Result<()> {

@@ -15,12 +15,13 @@ use indexer::{
         queries::{
             insert_contract, insert_contract_state, insert_processed_block, insert_transaction,
         },
-        types::{BlockRow, ContractRow, ContractStateRow, PaginatedResponse, TransactionRow},
+        types::{ContractRow, ContractStateRow},
     },
     event::EventSubscriber,
     runtime::Runtime,
     test_utils::new_test_db,
 };
+use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
 use libsql::params;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};

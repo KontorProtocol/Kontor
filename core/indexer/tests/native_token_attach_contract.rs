@@ -3,11 +3,12 @@ use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
-use indexer::api::compose::{ComposeQuery, InstructionQuery, RevealParticipantQuery, RevealQuery};
 use indexer::bitcoin_client::client::RegtestRpc;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
-use indexer_types::{Inst, serialize};
+use indexer_types::{
+    ComposeQuery, Inst, InstructionQuery, RevealParticipantQuery, RevealQuery, serialize,
+};
 use testlib::*;
 
 import!(

@@ -13,6 +13,7 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
     BlockHash, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid, Witness, XOnlyPublicKey,
 };
+use indexer_types::BlockRow;
 use indexmap::IndexMap;
 use libsql::Connection;
 use rand::prelude::*;
@@ -25,7 +26,7 @@ use crate::bitcoin_follower::blockchain_info::BlockchainInfo;
 use crate::block::Transaction;
 use crate::{bitcoin_follower::rpc, block::Block};
 
-use crate::database::{Reader, Writer, queries, types::BlockRow};
+use crate::database::{Reader, Writer, queries};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),

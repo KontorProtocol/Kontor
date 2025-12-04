@@ -22,9 +22,10 @@ use bitcoin::{ScriptBuf, consensus::encode::serialize as serialize_tx, key::Secp
 use indexer::api::compose::compose;
 use indexer::api::compose::compose_reveal;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::api::compose::{RevealInputs, RevealParticipantInputs};
 use indexer::test_utils;
 use indexer_types::OpReturnData;
+use indexer_types::RevealInputs;
+use indexer_types::RevealParticipantInputs;
 use indexer_types::{ContractAddress, Inst, serialize};
 use testlib::RegTester;
 use tracing::info;

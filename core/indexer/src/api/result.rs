@@ -1,14 +1,9 @@
 use axum::{Json, response::IntoResponse};
-use serde::{Deserialize, Serialize};
+use indexer_types::ResultResponse;
+use serde::Serialize;
 use ts_rs::TS;
 
 use super::error::Error;
-
-#[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct ResultResponse<T: TS> {
-    pub result: T,
-}
 
 #[derive(Debug)]
 pub struct Response<T: Serialize + TS>(pub Json<ResultResponse<T>>);

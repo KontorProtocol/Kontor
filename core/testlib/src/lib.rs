@@ -8,14 +8,14 @@ use indexer::{
             contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
             insert_processed_block, insert_transaction,
         },
-        types::{BlockRow, ContractRow, TransactionRow},
+        types::ContractRow,
     },
     reg_tester::{self, generate_taproot_address},
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::Inst;
+use indexer_types::{BlockRow, Inst, TransactionRow};
 pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;

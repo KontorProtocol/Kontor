@@ -5,13 +5,13 @@ use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{Address, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut};
 use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
-use indexer::api::compose::{
-    ComposeInputs, ComposeQuery, InstructionInputs, InstructionQuery, RevealInputs,
-    RevealParticipantInputs, RevealParticipantQuery, RevealQuery, compose, compose_reveal,
-};
+use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_reveal};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer_types::{ContractAddress, Inst, OpReturnData, serialize};
+use indexer_types::{
+    ComposeQuery, ContractAddress, Inst, InstructionQuery, OpReturnData, RevealInputs,
+    RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
+};
 use testlib::RegTester;
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {

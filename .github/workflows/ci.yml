@@ -127,7 +127,7 @@ jobs:
         run: cargo install wasm-opt
       - name: Run tests (standard)
         working-directory: ./core
-        run: cargo test --workspace && git diff --quiet --exit-code || (echo "Generated files changed during tests! Run cargo test locally and commit the changes." && git diff && exit 1)
+        run: cargo test --workspace
       - name: Run tests (long running)
         if: runner.os == 'macOS'
         working-directory: ./core

@@ -5,10 +5,11 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
-    RevealInputs, RevealParticipantInputs, TapLeafScript, build_tap_script_and_script_address,
-    calculate_op_return_fee_per_participant, calculate_reveal_fee_delta, compose_reveal,
-    estimate_key_spend_fee, estimate_participant_commit_fees, select_utxos_for_commit,
+    build_tap_script_and_script_address, calculate_op_return_fee_per_participant,
+    calculate_reveal_fee_delta, compose_reveal, estimate_key_spend_fee,
+    estimate_participant_commit_fees, select_utxos_for_commit,
 };
+use indexer_types::{RevealInputs, RevealParticipantInputs, TapLeafScript};
 use std::str::FromStr;
 use testlib::RegTester;
 use tracing::info;

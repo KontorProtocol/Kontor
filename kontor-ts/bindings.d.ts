@@ -19,6 +19,12 @@ export type ComposeOutputs = {
   per_participant: Array<ParticipantScripts>;
 };
 
+export type ComposeQuery = {
+  instructions: Array<InstructionQuery>;
+  sat_per_vbyte: number;
+  envelope: number | null;
+};
+
 export type ContractListRow = {
   id: number;
   name: string;
@@ -37,6 +43,19 @@ export type Info = {
   available: boolean;
   height: number;
   checkpoint: string | null;
+};
+
+export type Inst =
+  | { "Publish": { gas_limit: number; name: string; bytes: Array<number> } }
+  | { "Call": { gas_limit: number; contract: string; expr: string } }
+  | "Issuance";
+
+export type InstructionQuery = {
+  address: string;
+  x_only_public_key: string;
+  funding_utxo_ids: string;
+  instruction: Inst;
+  chained_instruction: Inst | null;
 };
 
 export type Op = {
@@ -102,7 +121,7 @@ export type RevealInputs = {
   fee_rate: number;
   participants: Array<RevealParticipantInputs>;
   op_return_data: Array<number> | null;
-  envelope: bigint;
+  envelope: number;
 };
 
 export type RevealOutputs = {
@@ -121,6 +140,22 @@ export type RevealParticipantInputs = {
   chained_instruction: Array<number> | null;
 };
 
+export type RevealParticipantQuery = {
+  address: string;
+  x_only_public_key: string;
+  commit_vout: number;
+  commit_script_data: Array<number>;
+  chained_instruction: Array<number> | null;
+};
+
+export type RevealQuery = {
+  commit_tx_hex: string;
+  sat_per_vbyte: number;
+  participants: Array<RevealParticipantQuery>;
+  op_return_data: Array<number> | null;
+  envelope: number | null;
+};
+
 export type Signer = { "Core": Signer } | { "XOnlyPubKey": string } | {
   "ContractId": { id: number; id_str: string };
 } | "Nobody";
@@ -131,6 +166,8 @@ export type TapLeafScript = {
   controlBlock: string;
 };
 
+export type TransactionHex = { hex: string };
+
 export type TransactionRow = {
   id: number;
   txid: string;
@@ -139,6 +176,8 @@ export type TransactionRow = {
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };
+
+export type ViewExpr = { expr: string };
 
 export type ViewResult = { "type": "Ok"; value: string } | {
   "type": "Err";

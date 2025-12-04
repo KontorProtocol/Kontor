@@ -5,10 +5,11 @@ use indexer::{
         queries::{
             get_checkpoint_by_height, get_checkpoint_latest, insert_block, insert_contract_state,
         },
-        types::{BlockRow, ContractStateRow},
+        types::ContractStateRow,
     },
     test_utils::new_test_db,
 };
+use indexer_types::BlockRow;
 use libsql::params;
 use sha2::{Digest, Sha256};
 

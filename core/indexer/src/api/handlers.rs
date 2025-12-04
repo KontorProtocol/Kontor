@@ -5,10 +5,15 @@ use axum::{
     extract::{Path, Query, State},
 };
 use bitcoin::consensus::encode;
+use indexer_types::{
+    BlockRow, CommitOutputs, ComposeOutputs, ComposeQuery, ContractListRow, ContractResponse, Info,
+    OpWithResult, PaginatedResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex,
+    TransactionRow, ViewExpr, ViewResult,
+};
 use libsql::Connection;
-use ts_rs::TS;
 
 use crate::{
+    api::compose::reveal_inputs_from_query,
     block::filter_map,
     built_info,
     database::{
@@ -17,37 +22,17 @@ use crate::{
             get_results_paginated, get_transaction_by_txid, get_transactions_paginated,
             select_block_by_height_or_hash, select_block_latest,
         },
-        types::{
-            BlockQuery, BlockRow, ContractListRow, ContractResultPublicRow, OpResultId,
-            PaginatedResponse, ResultQuery, TransactionQuery, TransactionRow,
-        },
+        types::{BlockQuery, ContractResultPublicRow, OpResultId, ResultQuery, TransactionQuery},
     },
-    reactor::types::Op,
     runtime::ContractAddress,
 };
 
 use super::{
     Env,
-    compose::{
-        CommitInputs, CommitOutputs, ComposeInputs, ComposeOutputs, ComposeQuery, RevealInputs,
-        RevealOutputs, RevealQuery, compose, compose_commit, compose_reveal,
-    },
+    compose::{CommitInputs, ComposeInputs, compose, compose_commit, compose_reveal},
     error::HttpError,
     result::Result,
 };
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct Info {
-    pub version: String,
-    pub target: String,
-    pub available: bool,
-    #[ts(type = "number")]
-    pub height: i64,
-    pub checkpoint: Option<String>,
-}
 
 async fn get_info(env: &Env) -> anyhow::Result<Info> {
     let conn = env.reader.connection().await?;
@@ -128,7 +113,7 @@ pub async fn post_compose_reveal(
     State(env): State<Env>,
     Json(query): Json<RevealQuery>,
 ) -> Result<RevealOutputs> {
-    let inputs = RevealInputs::from_query(query, env.config.network)
+    let inputs = reveal_inputs_from_query(query, env.config.network)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let outputs = compose_reveal(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;
@@ -186,18 +171,6 @@ pub async fn get_transaction(
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionHex {
-    pub hex: String,
-}
-
-#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct OpWithResult {
-    pub op: Op,
-    pub result: Option<ResultRow>,
-}
-
 async fn inspect(conn: &Connection, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
@@ -235,19 +208,6 @@ pub async fn get_transaction_inspect(
     inspect(&conn, btx).await
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewExpr {
-    pub expr: String,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-#[serde(tag = "type")]
-pub enum ViewResult {
-    Ok { value: String },
-    Err { message: String },
-}
-
 pub async fn post_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
@@ -279,12 +239,6 @@ pub async fn get_contracts(State(env): State<Env>) -> Result<Vec<ContractListRow
     Ok(queries::get_contracts(&conn).await?.into())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct ContractResponse {
-    pub wit: String,
-}
-
 pub async fn get_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
@@ -304,28 +258,6 @@ pub async fn get_contract(
 
     let wit = runtime.storage.component_wit(contract_id).await?;
     Ok(ContractResponse { wit }.into())
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct ResultRow {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[ts(type = "number")]
-    pub height: i64,
-    #[ts(type = "number")]
-    pub tx_index: i64,
-    #[ts(type = "number")]
-    pub input_index: i64,
-    #[ts(type = "number")]
-    pub op_index: i64,
-    #[ts(type = "number")]
-    pub result_index: i64,
-    pub func: String,
-    #[ts(type = "number")]
-    pub gas: i64,
-    pub value: Option<String>,
-    pub contract: String,
 }
 
 impl From<ContractResultPublicRow> for ResultRow {

@@ -2342,11 +2342,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitcoin",
+ "bon",
  "macros",
  "postcard",
  "serde",
  "serde_json",
  "serde_with",
+ "ts-rs",
  "wit-bindgen 0.48.1",
 ]
 

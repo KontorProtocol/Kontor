@@ -19,11 +19,13 @@ use bon::Builder;
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
-use indexer_types::{Inst, serialize};
+use indexer_types::{
+    CommitOutputs, ComposeOutputs, ComposeQuery, ParticipantScripts, RevealInputs, RevealOutputs,
+    RevealParticipantInputs, RevealQuery, TapLeafScript, serialize,
+};
 use rand::{rng, seq::SliceRandom};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{collections::HashSet, str::FromStr};
-use ts_rs::TS;
 
 use crate::bitcoin_client::Client;
 
@@ -35,22 +37,6 @@ const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 const P2TR_OUTPUT_SIZE: usize = 34; // P2TR script pubkey size in bytes
 const PROTOCOL_TAG: &[u8; 3] = b"kon"; // Protocol envelope marker
-
-#[derive(Serialize, Deserialize, Clone, Builder)]
-pub struct InstructionQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub funding_utxo_ids: String,
-    pub instruction: Inst,
-    pub chained_instruction: Option<Inst>,
-}
-
-#[derive(Serialize, Deserialize, Builder)]
-pub struct ComposeQuery {
-    pub instructions: Vec<InstructionQuery>,
-    pub sat_per_vbyte: u64,
-    pub envelope: Option<u64>,
-}
 
 #[derive(Serialize, Builder, Clone)]
 pub struct InstructionInputs {
@@ -163,42 +149,6 @@ impl ComposeInputs {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct TapLeafScript {
-    #[ts(type = "number")]
-    #[serde(rename = "leafVersion")]
-    pub leaf_version: LeafVersion,
-    #[ts(as = "String")]
-    pub script: ScriptBuf,
-    #[ts(as = "String")]
-    #[serde(rename = "controlBlock")]
-    pub control_block: ScriptBuf,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct ParticipantScripts {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_tap_leaf_script: Option<TapLeafScript>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct ComposeOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    #[ts(as = "String")]
-    pub reveal_transaction: Transaction,
-    pub reveal_transaction_hex: String,
-    pub reveal_psbt_hex: String,
-    pub per_participant: Vec<ParticipantScripts>,
-}
-
 #[derive(Builder)]
 pub struct CommitInputs {
     pub instructions: Vec<InstructionInputs>,
@@ -216,145 +166,71 @@ impl From<ComposeInputs> for CommitInputs {
     }
 }
 
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct CommitOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    pub reveal_inputs: RevealInputs,
-}
-
-#[derive(Serialize, Deserialize, Clone, Builder)]
-pub struct RevealParticipantQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub commit_vout: u32,
-    pub commit_script_data: Vec<u8>,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct RevealQuery {
-    pub commit_tx_hex: String,
-    pub sat_per_vbyte: u64,
-    pub participants: Vec<RevealParticipantQuery>,
-    pub op_return_data: Option<Vec<u8>>,
-    pub envelope: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct TxOutSchema {
-    #[ts(type = "number")]
-    pub value: u64,
-    pub script_pubkey: String,
-}
-
-#[derive(Clone, Serialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct RevealParticipantInputs {
-    #[ts(as = "String")]
-    pub address: Address,
-    #[ts(as = "String")]
-    pub x_only_public_key: XOnlyPublicKey,
-    #[ts(as = "String")]
-    pub commit_outpoint: OutPoint,
-    #[ts(as = "TxOutSchema")]
-    pub commit_prevout: TxOut,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct RevealInputs {
-    #[ts(as = "String")]
-    pub commit_tx: Transaction,
-    #[ts(type = "number")]
-    pub fee_rate: FeeRate,
-    pub participants: Vec<RevealParticipantInputs>,
-    pub op_return_data: Option<Vec<u8>>,
-    pub envelope: u64,
-}
-
-impl RevealInputs {
-    pub async fn from_query(query: RevealQuery, network: bitcoin::Network) -> Result<Self> {
-        if query.sat_per_vbyte == 0 {
-            return Err(anyhow!("Invalid fee rate"));
-        }
-        let fee_rate =
-            FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
-
-        let commit_tx = encode::deserialize_hex::<bitcoin::Transaction>(&query.commit_tx_hex)?;
-
-        if query.participants.is_empty() {
-            return Err(anyhow!("participants cannot be empty"));
-        }
-
-        let mut participants_inputs = Vec::with_capacity(query.participants.len());
-        for p in query.participants.iter() {
-            let address = Address::from_str(&p.address)?.require_network(network)?;
-            match address.address_type() {
-                Some(AddressType::P2tr) => {}
-                _ => return Err(anyhow!("Invalid address type (must be P2TR)")),
-            }
-            let x_only_public_key = XOnlyPublicKey::from_str(&p.x_only_public_key)?;
-            let commit_outpoint = OutPoint {
-                txid: commit_tx.compute_txid(),
-                vout: p.commit_vout,
-            };
-
-            let commit_prevout = commit_tx
-                .output
-                .get(commit_outpoint.vout as usize)
-                .cloned()
-                .ok_or_else(|| anyhow!("commit vout {} out of bounds", commit_outpoint.vout))?;
-
-            // Build TapScriptPair from raw commit_script_data
-            let (script, _, control_block) = build_tap_script_and_script_address(
-                x_only_public_key,
-                p.commit_script_data.clone(),
-            )?;
-
-            participants_inputs.push(RevealParticipantInputs {
-                address,
-                x_only_public_key,
-                commit_outpoint,
-                commit_prevout,
-                commit_tap_leaf_script: TapLeafScript {
-                    leaf_version: LeafVersion::TapScript,
-                    script,
-                    control_block: ScriptBuf::from_bytes(control_block.serialize()),
-                },
-                chained_instruction: p.chained_instruction.clone(),
-            });
-        }
-
-        let envelope = query
-            .envelope
-            .unwrap_or(MIN_ENVELOPE_SATS)
-            .max(MIN_ENVELOPE_SATS);
-
-        Ok(Self {
-            commit_tx,
-            fee_rate,
-            participants: participants_inputs,
-            op_return_data: query.op_return_data,
-            envelope,
-        })
+pub async fn reveal_inputs_from_query(
+    query: RevealQuery,
+    network: bitcoin::Network,
+) -> Result<RevealInputs> {
+    if query.sat_per_vbyte == 0 {
+        return Err(anyhow!("Invalid fee rate"));
     }
-}
+    let fee_rate =
+        FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-#[derive(Builder, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
-pub struct RevealOutputs {
-    #[ts(as = "String")]
-    pub transaction: Transaction,
-    pub transaction_hex: String,
-    pub psbt_hex: String,
-    pub participants: Vec<ParticipantScripts>,
+    let commit_tx = encode::deserialize_hex::<bitcoin::Transaction>(&query.commit_tx_hex)?;
+
+    if query.participants.is_empty() {
+        return Err(anyhow!("participants cannot be empty"));
+    }
+
+    let mut participants_inputs = Vec::with_capacity(query.participants.len());
+    for p in query.participants.iter() {
+        let address = Address::from_str(&p.address)?.require_network(network)?;
+        match address.address_type() {
+            Some(AddressType::P2tr) => {}
+            _ => return Err(anyhow!("Invalid address type (must be P2TR)")),
+        }
+        let x_only_public_key = XOnlyPublicKey::from_str(&p.x_only_public_key)?;
+        let commit_outpoint = OutPoint {
+            txid: commit_tx.compute_txid(),
+            vout: p.commit_vout,
+        };
+
+        let commit_prevout = commit_tx
+            .output
+            .get(commit_outpoint.vout as usize)
+            .cloned()
+            .ok_or_else(|| anyhow!("commit vout {} out of bounds", commit_outpoint.vout))?;
+
+        // Build TapScriptPair from raw commit_script_data
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(x_only_public_key, p.commit_script_data.clone())?;
+
+        participants_inputs.push(RevealParticipantInputs {
+            address,
+            x_only_public_key,
+            commit_outpoint,
+            commit_prevout,
+            commit_tap_leaf_script: TapLeafScript {
+                leaf_version: LeafVersion::TapScript,
+                script,
+                control_block: ScriptBuf::from_bytes(control_block.serialize()),
+            },
+            chained_instruction: p.chained_instruction.clone(),
+        });
+    }
+
+    let envelope = query
+        .envelope
+        .unwrap_or(MIN_ENVELOPE_SATS)
+        .max(MIN_ENVELOPE_SATS);
+
+    Ok(RevealInputs {
+        commit_tx,
+        fee_rate,
+        participants: participants_inputs,
+        op_return_data: query.op_return_data,
+        envelope,
+    })
 }
 
 pub fn compose(params: ComposeInputs) -> Result<ComposeOutputs> {

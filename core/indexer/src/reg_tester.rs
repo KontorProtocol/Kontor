@@ -1,12 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
 use crate::{
-    api::{
-        client::Client as KontorClient,
-        compose::{ComposeOutputs, ComposeQuery, InstructionQuery, RevealOutputs, RevealQuery},
-        handlers::{OpWithResult, ResultRow, TransactionHex, ViewResult},
-        ws_client::WebSocketClient,
-    },
+    api::{client::Client as KontorClient, ws_client::WebSocketClient},
     bitcoin_client::{
         self, Client as BitcoinClient,
         client::RegtestRpc,
@@ -28,7 +23,10 @@ use bitcoin::{
     taproot::TaprootBuilder,
     transaction::Version,
 };
-use indexer_types::Inst;
+use indexer_types::{
+    ComposeOutputs, ComposeQuery, Inst, InstructionQuery, OpWithResult, ResultRow, RevealOutputs,
+    RevealQuery, TransactionHex, ViewResult,
+};
 use tempfile::TempDir;
 use tokio::{
     fs,
