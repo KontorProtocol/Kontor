@@ -12,13 +12,10 @@ use bitcoin::{
     Amount, OutPoint, consensus::encode::serialize as serialize_tx, key::Secp256k1,
     transaction::TxOut,
 };
-use indexer::api::compose::{
-    ComposeInputs, InstructionInputs, RevealInputs, RevealParticipantInputs, compose,
-    compose_reveal,
-};
+use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_reveal};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer_types::{OpReturnData, deserialize, serialize};
+use indexer_types::{OpReturnData, RevealInputs, RevealParticipantInputs, deserialize, serialize};
 
 use testlib::RegTester;
 use tracing::info;

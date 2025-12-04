@@ -1,6 +1,7 @@
 pub mod types;
 
 use anyhow::{Result, bail};
+use indexer_types::{BlockRow, Op, TransactionRow};
 use tokio::{
     select,
     sync::{
@@ -27,10 +28,8 @@ use crate::{
             select_block_at_height, select_block_latest, select_block_with_hash,
             set_block_processed,
         },
-        types::{BlockRow, TransactionRow},
     },
     event::Event,
-    reactor::types::Op,
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
@@ -273,7 +272,7 @@ impl Reactor {
                         self.runtime.set_gas_limit(*gas_limit);
                         let result = self
                             .runtime
-                            .execute(Some(&metadata.signer), contract, expr)
+                            .execute(Some(&metadata.signer), &(contract.into()), expr)
                             .await;
                         if result.is_err() {
                             warn!("Call operation failed: {:?}", result);

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use bitcoin::BlockHash;
 use bon::Builder;
+use indexer_types::{BlockRow, ContractListRow, TransactionRow};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
@@ -41,17 +41,9 @@ impl std::str::FromStr for OrderDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-pub struct BlockRow {
-    pub height: i64,
-    pub hash: BlockHash,
-    #[builder(default = false)]
-    pub relevant: bool,
-}
-
 impl From<&Block> for BlockRow {
     fn from(b: &Block) -> Self {
-        BlockRow {
+        Self {
             height: b.height as i64,
             hash: b.hash,
             relevant: !b.transactions.is_empty(),
@@ -93,15 +85,6 @@ impl ContractStateRow {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-pub struct TransactionRow {
-    #[builder(default = 0)]
-    pub id: i64,
-    pub txid: String,
-    pub height: i64,
-    pub tx_index: i64,
-}
-
 impl HasRowId for TransactionRow {
     fn id(&self) -> i64 {
         self.id
@@ -110,15 +93,6 @@ impl HasRowId for TransactionRow {
     fn id_name() -> String {
         "id".to_string()
     }
-}
-
-#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-pub struct ContractListRow {
-    pub id: i64,
-    pub name: String,
-    pub height: i64,
-    pub tx_index: i64,
-    pub size: i64,
 }
 
 impl From<ContractRow> for ContractListRow {
@@ -147,24 +121,6 @@ impl ContractRow {
     pub fn size(&self) -> u64 {
         self.bytes.len() as u64
     }
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaginationMeta {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<DisplayFromStr>")]
-    pub next_cursor: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_offset: Option<i64>,
-    pub has_more: bool,
-    pub total_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaginatedResponse<T> {
-    pub results: Vec<T>,
-    pub pagination: PaginationMeta,
 }
 
 #[serde_as]

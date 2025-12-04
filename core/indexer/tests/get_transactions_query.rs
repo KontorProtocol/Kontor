@@ -5,13 +5,11 @@ use indexer::{
             get_transactions_paginated, insert_contract, insert_contract_state,
             insert_processed_block, insert_transaction,
         },
-        types::{
-            BlockRow, ContractRow, ContractStateRow, OrderDirection, TransactionQuery,
-            TransactionRow,
-        },
+        types::{ContractRow, ContractStateRow, OrderDirection, TransactionQuery},
     },
     test_utils::new_test_db,
 };
+use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractAddress;
 
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {

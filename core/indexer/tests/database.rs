@@ -15,14 +15,12 @@ use indexer::{
             rollback_to_height, select_block_at_height, select_block_by_height_or_hash,
             select_block_latest,
         },
-        types::{
-            BlockRow, ContractListRow, ContractResultRow, ContractRow, ContractStateRow,
-            OpResultId, TransactionRow,
-        },
+        types::{ContractResultRow, ContractRow, ContractStateRow, OpResultId},
     },
     runtime::ContractAddress,
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
+use indexer_types::{BlockRow, ContractListRow, TransactionRow};
 use libsql::{Connection, params};
 
 #[tokio::test]

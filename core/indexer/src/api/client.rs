@@ -1,20 +1,13 @@
 use anyhow::{Result, anyhow};
+use indexer_types::{
+    ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
+    ResultResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewExpr, ViewResult,
+};
 use reqwest::{Client as HttpClient, ClientBuilder, Response};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-use crate::{
-    api::{
-        compose::{ComposeOutputs, ComposeQuery, RevealOutputs, RevealQuery},
-        error::ErrorResponse,
-        handlers::{
-            ContractResponse, Info, OpWithResult, ResultRow, TransactionHex, ViewExpr, ViewResult,
-        },
-        result::ResultResponse,
-    },
-    config::Config,
-    database::types::OpResultId,
-    runtime::ContractAddress,
-};
+use crate::{config::Config, database::types::OpResultId, runtime::ContractAddress};
 
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -37,7 +30,9 @@ impl Client {
         Self::new(format!("http://localhost:{}/api", config.api_port))
     }
 
-    async fn handle_response<T: Serialize + for<'a> Deserialize<'a>>(res: Response) -> Result<T> {
+    async fn handle_response<T: Serialize + for<'a> Deserialize<'a> + TS>(
+        res: Response,
+    ) -> Result<T> {
         if res.status().is_success() {
             let result: ResultResponse<T> = res.json().await?;
             Ok(result.result)

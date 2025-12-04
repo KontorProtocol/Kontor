@@ -1,19 +1,19 @@
 use bitcoin::BlockHash;
 use futures_util::{Stream, stream};
+use indexer_types::{BlockRow, ContractListRow, PaginationMeta, TransactionRow};
 use libsql::{Connection, Value, de::from_row, named_params, params};
 use serde::de::DeserializeOwned;
 use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        BlockQuery, CheckpointRow, ContractListRow, ContractResultPublicRow, ContractResultRow,
-        ContractRow, HasRowId, OpResultId, OrderDirection, PaginationMeta, ResultQuery,
-        TransactionQuery, TransactionRow,
+        BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
+        HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
     },
     runtime::ContractAddress,
 };
 
-use super::types::{BlockRow, ContractStateRow};
+use super::types::ContractStateRow;
 
 #[derive(ThisError, Debug)]
 pub enum Error {

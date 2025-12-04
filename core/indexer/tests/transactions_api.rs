@@ -10,14 +10,12 @@ use indexer::{
     },
     bitcoin_client::Client,
     config::Config,
-    database::{
-        queries::{insert_processed_block, insert_transaction},
-        types::{BlockRow, PaginatedResponse, TransactionRow},
-    },
+    database::queries::{insert_processed_block, insert_transaction},
     event::EventSubscriber,
     runtime::Runtime,
     test_utils::new_test_db,
 };
+use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
 use libsql::params;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};

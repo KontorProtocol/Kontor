@@ -2,13 +2,13 @@ use anyhow::Result;
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{FeeRate, TapSighashType};
 use bitcoin::{OutPoint, consensus::encode::serialize as serialize_tx, key::Secp256k1};
-use indexer::api::compose::{RevealInputs, RevealParticipantInputs, compose, compose_reveal};
+use indexer::api::compose::{compose, compose_reveal};
 
 use bitcoin::Psbt;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer_types::{OpReturnData, serialize};
+use indexer_types::{OpReturnData, RevealInputs, RevealParticipantInputs, serialize};
 
 use testlib::*;
 use tracing::info;

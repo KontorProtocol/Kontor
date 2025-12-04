@@ -5,10 +5,11 @@ use indexer::{
             get_results_paginated, insert_block, insert_contract, insert_contract_result,
             insert_processed_block,
         },
-        types::{BlockRow, ContractResultRow, ContractRow, ResultQuery},
+        types::{ContractResultRow, ContractRow, ResultQuery},
     },
     test_utils::{new_mock_block_hash, new_test_db},
 };
+use indexer_types::BlockRow;
 use testlib::ContractAddress;
 
 #[tokio::test]

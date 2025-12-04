@@ -1,7 +1,7 @@
-use std::{ops::Deref, pin::Pin};
+use std::pin::Pin;
 
 use futures_util::Stream;
-use serde::{Deserialize, Serialize};
+pub use indexer_types::Signer;
 
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
@@ -34,39 +34,6 @@ pub struct ProcStorage {
 impl HasContractId for ProcStorage {
     fn get_contract_id(&self) -> i64 {
         self.contract_id
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Signer {
-    Core(Box<Signer>),
-    XOnlyPubKey(String),
-    ContractId { id: i64, id_str: String },
-    Nobody,
-}
-
-impl Signer {
-    pub fn new_contract_id(id: i64) -> Self {
-        Self::ContractId {
-            id,
-            id_str: format!("__cid__{}", id),
-        }
-    }
-
-    pub fn is_core(&self) -> bool {
-        matches!(self, Signer::Core(_))
-    }
-}
-
-impl Deref for Signer {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Nobody => "nobody",
-            Self::Core(_) => "core",
-            Self::XOnlyPubKey(s) => s,
-            Self::ContractId { id_str, .. } => id_str,
-        }
     }
 }
 
