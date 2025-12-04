@@ -23,7 +23,8 @@ use indexer_types::{
     CommitOutputs, ComposeOutputs, ComposeQuery, ParticipantScripts, RevealInputs, RevealOutputs,
     RevealParticipantInputs, RevealQuery, TapLeafScript, serialize,
 };
-use rand::{rng, seq::SliceRandom};
+use rand::rngs::StdRng;
+use rand::{SeedableRng, seq::SliceRandom};
 use serde::Serialize;
 use std::{collections::HashSet, str::FromStr};
 
@@ -317,9 +318,11 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             .saturating_add(reveal_fee)
             .saturating_add(chained_envelope);
 
-        // Shuffle UTXOs for privacy
+        // Shuffle UTXOs for privacy (deterministic based on participant's public key)
         let mut utxos: Vec<(OutPoint, TxOut)> = instruction.funding_utxos.clone();
-        utxos.shuffle(&mut rng());
+        let seed: [u8; 32] = instruction.x_only_public_key.serialize();
+        let mut seeded_rng = StdRng::from_seed(seed);
+        utxos.shuffle(&mut seeded_rng);
 
         // Select UTXOs using delta-based fee accounting for commit
         let (selected, participant_commit_fee) = select_utxos_for_commit(
