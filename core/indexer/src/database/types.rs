@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use bitcoin::BlockHash;
 use bon::Builder;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
@@ -41,9 +42,10 @@ impl std::str::FromStr for OrderDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, JsonSchema)]
 pub struct BlockRow {
     pub height: i64,
+    #[schemars(with = "String")]
     pub hash: BlockHash,
     #[builder(default = false)]
     pub relevant: bool,
@@ -93,7 +95,7 @@ impl ContractStateRow {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, JsonSchema)]
 pub struct TransactionRow {
     #[builder(default = 0)]
     pub id: i64,
@@ -112,7 +114,7 @@ impl HasRowId for TransactionRow {
     }
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContractListRow {
     pub id: i64,
     pub name: String,
@@ -150,8 +152,9 @@ impl ContractRow {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PaginationMeta {
+    #[schemars(with = "String")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub next_cursor: Option<i64>,
@@ -161,7 +164,7 @@ pub struct PaginationMeta {
     pub total_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PaginatedResponse<T> {
     pub results: Vec<T>,
     pub pagination: PaginationMeta,

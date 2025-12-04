@@ -6,6 +6,7 @@ use axum::{
 };
 use bitcoin::consensus::encode;
 use libsql::Connection;
+use schemars::JsonSchema;
 
 use crate::{
     block::filter_map,
@@ -37,7 +38,7 @@ use super::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Info {
     pub version: String,
     pub target: String,
@@ -188,7 +189,7 @@ pub struct TransactionHex {
     pub hex: String,
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OpWithResult {
     pub op: Op,
     pub result: Option<ResultRow>,
@@ -236,7 +237,7 @@ pub struct ViewExpr {
     pub expr: String,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type")]
 pub enum ViewResult {
     Ok { value: String },
@@ -274,7 +275,7 @@ pub async fn get_contracts(State(env): State<Env>) -> Result<Vec<ContractListRow
     Ok(queries::get_contracts(&conn).await?.into())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContractResponse {
     pub wit: String,
 }
@@ -300,7 +301,7 @@ pub async fn get_contract(
     Ok(ContractResponse { wit }.into())
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ResultRow {
     pub id: i64,
     pub height: i64,

@@ -1,6 +1,7 @@
 use std::{ops::Deref, pin::Pin};
 
 use futures_util::Stream;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub trait HasContractId: 'static {
@@ -37,7 +38,7 @@ impl HasContractId for ProcStorage {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Signer {
     Core(Box<Signer>),
     XOnlyPubKey(String),
