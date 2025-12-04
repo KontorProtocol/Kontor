@@ -1081,7 +1081,7 @@ impl built_in::crypto::HostWithStore for Runtime {
     ) -> Result<(String, Vec<u8>)> {
         accessor
             .with(|mut access| access.get().clone())
-            ._hash(accessor, input + &salt)
+            ._hash(accessor, input + salt.as_str())
             .await
     }
 }

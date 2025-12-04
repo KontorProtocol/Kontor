@@ -4,8 +4,9 @@ use ts_rs::TS;
 
 use super::error::Error;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ResultResponse<T: Serialize + TS> {
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
+pub struct ResultResponse<T: TS> {
     pub result: T,
 }
 

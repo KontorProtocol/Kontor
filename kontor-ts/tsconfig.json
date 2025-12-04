@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "skipLibCheck": true
+  },
+  "include": ["index.ts"],
+  "exclude": ["node_modules", "ts"]
+}

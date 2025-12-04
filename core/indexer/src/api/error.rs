@@ -2,6 +2,7 @@ use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 use tracing::Span;
+use ts_rs::TS;
 
 #[derive(ThisError, Debug)]
 pub enum HttpError {
@@ -34,7 +35,8 @@ where
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct ErrorResponse {
     pub error: String,
 }

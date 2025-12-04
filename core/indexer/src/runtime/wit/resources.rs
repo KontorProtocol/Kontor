@@ -39,10 +39,15 @@ impl HasContractId for ProcStorage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub enum Signer {
     Core(Box<Signer>),
     XOnlyPubKey(String),
-    ContractId { id: i64, id_str: String },
+    ContractId {
+        #[ts(type = "number")]
+        id: i64,
+        id_str: String,
+    },
     Nobody,
 }
 

@@ -5,24 +5,29 @@ use ts_rs::TS;
 use crate::runtime::{ContractAddress, kontor::built_in::context::OpReturnData, wit::Signer};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct OpMetadata {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
+    #[ts(type = "number")]
     pub input_index: i64,
     pub signer: Signer,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub enum Op {
     Publish {
         metadata: OpMetadata,
+        #[ts(type = "number")]
         gas_limit: u64,
         name: String,
         bytes: Vec<u8>,
     },
     Call {
         metadata: OpMetadata,
+        #[ts(type = "number")]
         gas_limit: u64,
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]

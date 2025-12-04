@@ -2,15 +2,23 @@
   "name": "kontor-ts",
   "version": "0.1.0",
   "type": "module",
-  "main": "./ts/kontor-ts.js",
-  "module": "./ts/kontor-ts.js",
-  "types": "./ts/kontor-ts.d.ts",
-  "exports": "./ts/kontor-ts.js",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": "./index.js",
   "files": [
+    "index.js",
+    "index.d.ts",
     "ts"
   ],
+  "scripts": {
+    "build:ts": "tsc -p .",
+    "build": "./build.sh && npm run build:ts",
+    "test": "vitest"
+  },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.15.3",
-    "vitest": "^4.0.12"
+    "vitest": "^4.0.12",
+    "typescript": "^5.9.3"
   }
 }

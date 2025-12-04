@@ -39,10 +39,12 @@ use super::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct Info {
     pub version: String,
     pub target: String,
     pub available: bool,
+    #[ts(type = "number")]
     pub height: i64,
     pub checkpoint: Option<String>,
 }
@@ -190,6 +192,7 @@ pub struct TransactionHex {
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct OpWithResult {
     pub op: Op,
     pub result: Option<ResultRow>,
@@ -238,6 +241,7 @@ pub struct ViewExpr {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum ViewResult {
     Ok { value: String },
@@ -276,6 +280,7 @@ pub async fn get_contracts(State(env): State<Env>) -> Result<Vec<ContractListRow
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct ContractResponse {
     pub wit: String,
 }
@@ -302,14 +307,22 @@ pub async fn get_contract(
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct ResultRow {
+    #[ts(type = "number")]
     pub id: i64,
+    #[ts(type = "number")]
     pub height: i64,
+    #[ts(type = "number")]
     pub tx_index: i64,
+    #[ts(type = "number")]
     pub input_index: i64,
+    #[ts(type = "number")]
     pub op_index: i64,
+    #[ts(type = "number")]
     pub result_index: i64,
     pub func: String,
+    #[ts(type = "number")]
     pub gas: i64,
     pub value: Option<String>,
     pub contract: String,

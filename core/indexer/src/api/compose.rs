@@ -164,8 +164,9 @@ impl ComposeInputs {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct TapLeafScript {
-    #[ts(as = "u64")]
+    #[ts(type = "number")]
     #[serde(rename = "leafVersion")]
     pub leaf_version: LeafVersion,
     #[ts(as = "String")]
@@ -176,6 +177,7 @@ pub struct TapLeafScript {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct ParticipantScripts {
     pub address: String,
     pub x_only_public_key: String,
@@ -184,6 +186,7 @@ pub struct ParticipantScripts {
 }
 
 #[derive(Debug, Serialize, Deserialize, Builder, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct ComposeOutputs {
     #[ts(as = "String")]
     pub commit_transaction: Transaction,
@@ -214,6 +217,7 @@ impl From<ComposeInputs> for CommitInputs {
 }
 
 #[derive(Builder, Serialize, Clone, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct CommitOutputs {
     #[ts(as = "String")]
     pub commit_transaction: Transaction,
@@ -241,12 +245,15 @@ pub struct RevealQuery {
 }
 
 #[derive(Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct TxOutSchema {
-    value: u64,
-    script_pubkey: String,
+    #[ts(type = "number")]
+    pub value: u64,
+    pub script_pubkey: String,
 }
 
 #[derive(Clone, Serialize, Builder, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct RevealParticipantInputs {
     #[ts(as = "String")]
     pub address: Address,
@@ -261,10 +268,11 @@ pub struct RevealParticipantInputs {
 }
 
 #[derive(Builder, Serialize, Clone, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct RevealInputs {
     #[ts(as = "String")]
     pub commit_tx: Transaction,
-    #[ts(as = "u64")]
+    #[ts(type = "number")]
     pub fee_rate: FeeRate,
     pub participants: Vec<RevealParticipantInputs>,
     pub op_return_data: Option<Vec<u8>>,
@@ -340,6 +348,7 @@ impl RevealInputs {
 }
 
 #[derive(Builder, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/bindings.d.ts")]
 pub struct RevealOutputs {
     #[ts(as = "String")]
     pub transaction: Transaction,
