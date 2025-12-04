@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "dist",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -14,6 +14,6 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["index.ts"],
-  "exclude": ["node_modules", "ts"]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
 }

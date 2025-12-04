@@ -1,25 +1,21 @@
-# Postcard TS
+# Kontor TypeScript
 
-Postcard Kontor `Inst` serialization for TypeScript.
+Types and utilities useful for working the Kontor indexer.
 
-## Test
 
-```
+```bash
+# setup
 npm install
 
-npx vitest run
-```
+# test
+npm run test
 
-## Browser test
+# test using playwright
+npm run test:browser
 
-```
-npx server .
-```
+# regenerate wasm component
+npm run build:rs
 
-Go to http://localhost:3000/test-in-browser
-
-## (Re)Building
-
-```
-./build.sh
+# build kontor-ts
+npm run build
 ```
