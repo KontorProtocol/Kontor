@@ -2,23 +2,27 @@
   "name": "kontor-ts",
   "version": "0.1.0",
   "type": "module",
-  "main": "./index.js",
-  "module": "./index.js",
-  "types": "./index.d.ts",
-  "exports": "./index.js",
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "ts"
-  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
-    "build:ts": "tsc -p .",
-    "build": "./build.sh && npm run build:ts",
-    "test": "vitest"
+    "build:rs": "cd crate && ./build.sh",
+    "build:ts": "tsup",
+    "build": "npm run build:ts",
+    "prepare": "npm run build",
+    "test": "vitest",
+    "test:browser": "vitest --browser"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.15.3",
-    "vitest": "^4.0.12",
-    "typescript": "^5.9.3"
+    "@vitest/browser-playwright": "^4.0.15",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.12"
   }
 }

@@ -4,4 +4,4 @@ wasm-tools component new target/wasm32-unknown-unknown/release/kontor_ts.wasm -o
 
 npx jco transpile target/wasm32-unknown-unknown/release/kontor_ts_component.wasm \
   --name kontor-ts \
-  -o ts
+  -o ../src/component

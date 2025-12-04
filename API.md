@@ -4,7 +4,7 @@
 
 Base URL: `/api`
 
-Request and response types are defined in Typescript [here](kontor-ts/bindings.d.ts).
+Request and response types are defined in Typescript [here](kontor-ts/src/bindings.d.ts).
 
 All responses are wrapped in the `ResultResponse<T>` type. If a response is an error then the `ErrorResponse` type is returned.
 
