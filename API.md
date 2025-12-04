@@ -8,19 +8,19 @@ All responses are wrapped in the `ResultResponse<T>` type. If a response is an e
 
 ## Root
 
-### GET /
+### GET `/`
 **Response**: `Info`
 
 Returns indexer status, current height, version and availability.
 
-### GET /stop
+### GET `/stop`
 **Response**: `Info`
 
 Gracefully shuts down the indexer (cancels the main task). Returns the same info as `/`.
 
 ## Blocks
 
-### GET /blocks
+### GET `/blocks`
 **Query Parameters** (`BlockQuery`):
 - `cursor?: number` – cursor-based pagination
 - `offset?: number` – offset-based pagination (mutually exclusive with cursor)
@@ -30,25 +30,26 @@ Gracefully shuts down the indexer (cancels the main task). Returns the same info
 
 **Response**: `PaginatedResponse<BlockRow>`
 
-### GET /blocks/latest
+### GET `/blocks/latest`
 **Response**: `BlockRow`
 
 Latest indexed block.
 
-### GET /blocks/:height_or_hash
+### GET `/blocks/:height_or_hash`
 **Path Param**: `height_or_hash` – block height (as number string) or block hash (hex)
 
 **Response**: `BlockRow`  
+
 **404** if not found
 
-### GET /blocks/:height/transactions
+### GET `/blocks/:height/transactions`
 **Path Param**: `height` – block height
 
 **Response**: `PaginatedResponse<TransactionRow>`
 
 ## Transactions
 
-### GET /transactions
+### GET `/transactions`
 **Query Parameters** (`TransactionQuery`):
 - same pagination fields as `BlockQuery`
 - `height?: number`
@@ -56,16 +57,17 @@ Latest indexed block.
 
 **Response**: `PaginatedResponse<TransactionRow>`
 
-### GET /transactions/:txid
+### GET `/transactions/:txid`
 **Response**: `TransactionRow`  
+
 **404** if not indexed
 
-### GET /transactions/:txid/inspect
+### GET `/transactions/:txid/inspect`
 Parses the transaction and returns every detected op with its execution result (if any).
 
 **Response**: `OpWithResult[]`
 
-### POST /transactions/inspect
+### POST `/transactions/inspect`
 **Request Body**: `TransactionHex`
 
 Inspects an arbitrary transaction hex (does **not** need to be indexed).
@@ -74,21 +76,21 @@ Inspects an arbitrary transaction hex (does **not** need to be indexed).
 
 ## Compose Helpers
 
-### POST /transactions/compose
+### POST `/transactions/compose`
 **Request Body**: `ComposeQuery`
 
 **Response**: `ComposeOutputs`
 
 Full compose (commit + reveal) in one call.
 
-### POST /transactions/compose/commit
+### POST `/transactions/compose/commit`
 **Request Body**: `ComposeQuery`
 
 **Response**: `CommitOutputs`
 
 Only the commit phase (for 2-step reveals).
 
-### POST /transactions/compose/reveal
+### POST `/transactions/compose/reveal`
 **Request Body**: `RevealQuery`
 
 **Response**: `RevealOutputs`
@@ -97,30 +99,33 @@ Only the reveal phase (when you already have a commit).
 
 ## Contracts
 
-### GET /contracts
+### GET `/contracts`
 **Response**: `ContractListRow[]`
 
 List all deployed contracts.
 
-### GET /contracts/:address
+### GET `/contracts/:address`
 **Path Param**: `address` – contract address (as string)
 
 **Response**: `ContractResponse`
+
 **404** if contract not found  
+
 **503** if indexer runtime is not available
 
-### POST /contracts/:address
+### POST `/contracts/:address`
 **Path Param**: `address` – contract address  
 **Request Body**: `ViewExpr`
 
 Execute a read-only view expression against the contract state.
 
 **Response**: `ViewResult`
+
 **503** if indexer runtime is not available
 
 ## Results (Contract Execution Results)
 
-### GET /results
+### GET `/results`
 **Query Parameters** (`ResultQuery`):
 - same pagination fields as others
 - `height?`: number
@@ -130,6 +135,6 @@ Execute a read-only view expression against the contract state.
 
 **Response**: `PaginatedResponse<ResultRow>`
 
-### GET /results/:id
+### GET `/results/:id`
 **Path Param**: `id` – txid_inputIndex_opIndex (e.g. a94a8f..._0_0)
 **Response**: `ResultRow | null
