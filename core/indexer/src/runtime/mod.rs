@@ -1,5 +1,6 @@
 mod component_cache;
 pub mod counter;
+pub mod file_ledger;
 pub mod fuel;
 pub mod numerics;
 mod stack;
@@ -10,6 +11,7 @@ pub mod wit;
 
 use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
+pub use file_ledger::{SharedFileLedger, new_shared_file_ledger};
 use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
@@ -76,6 +78,7 @@ pub struct Runtime {
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
+    pub file_ledger: SharedFileLedger,
     pub id_generation_counter: Counter,
     pub result_id_counter: Counter,
     pub stack: Stack<i64>,
@@ -106,6 +109,7 @@ impl Runtime {
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
+            file_ledger: new_shared_file_ledger(),
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),
