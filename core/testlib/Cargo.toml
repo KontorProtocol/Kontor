@@ -7,16 +7,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-macros = { path = "../macros" }
 indexer = { path = "../indexer" }
 indexer-types = { path = "../indexer-types" }
 anyhow = { workspace = true }
-libsql = { workspace = true }
 bon = { workspace = true }
 tokio = { workspace = true }
 glob = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
-wasm-wave = { workspace = true }
 serial_test = { workspace = true }
