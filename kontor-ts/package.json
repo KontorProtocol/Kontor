@@ -1,9 +1,21 @@
 {
-  "name": "kontor-ts",
+  "name": "@kontor/kontor-ts",
   "version": "0.1.0",
+  "author": "Unspendable Labs <dev@unspendablelabs.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KontorProtocol/Kontor.git",
+    "directory": "kontor-ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
