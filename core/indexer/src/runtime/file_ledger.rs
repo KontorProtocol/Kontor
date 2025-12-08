@@ -51,18 +51,21 @@ impl FileLedger {
 
     /// Add a file to the ledger and persist to database.
     ///
+    /// Returns the ledger entry id (leaf position) for use with agreement_nodes.
+    ///
     /// The root bytes come from kontor-crypto's prepare_file():
     ///   let (prepared_file, metadata) = prepare_file(data, filename)?;
     ///   let root_bytes: Vec<u8> = metadata.root.to_repr().as_ref().to_vec();
     pub async fn add_file(
         &self,
         conn: &Connection,
+        txid: String,
         file_id: String,
         root: Vec<u8>,
         tree_depth: usize,
         height: i64,
         tx_index: i64,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let root_field = Self::bytes_to_field_element(&root)?;
 
         // Add to inner FileLedger
@@ -75,12 +78,15 @@ impl FileLedger {
 
         // Persist to database
         conn.execute(
-            "INSERT INTO file_ledger_entries (file_id, root, tree_depth, height, tx_index) VALUES (?, ?, ?, ?, ?)",
-            (file_id, root, tree_depth as i64, height, tx_index),
+            "INSERT INTO file_ledger_entries (txid, file_id, root, tree_depth, height, tx_index) VALUES (?, ?, ?, ?, ?, ?)",
+            (txid, file_id, root, tree_depth as i64, height, tx_index),
         )
         .await?;
 
-        Ok(())
+        // Get the inserted row id (ledger entry id / leaf position)
+        let entry_id = conn.last_insert_rowid();
+
+        Ok(entry_id)
     }
 
     /// Access the inner crypto FileLedger (for proof verification via PorSystem)

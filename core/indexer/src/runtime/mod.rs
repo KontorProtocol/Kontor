@@ -1089,13 +1089,25 @@ impl built_in::file_ledger::Host for Runtime {
         let conn = self.get_storage_conn();
         let height = self.storage.height;
         let tx_index = self.storage.tx_index;
+        let txid = self
+            .txid
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
         match self
             .file_ledger
-            .add_file(&conn, file_id, root, tree_depth as usize, height, tx_index)
+            .add_file(
+                &conn,
+                txid,
+                file_id,
+                root,
+                tree_depth as usize,
+                height,
+                tx_index,
+            )
             .await
         {
-            Ok(()) => Ok(Ok(())),
+            Ok(_entry_id) => Ok(Ok(())),
             Err(e) => Ok(Err(e.to_string())),
         }
     }

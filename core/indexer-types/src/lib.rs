@@ -300,6 +300,14 @@ pub enum Op {
         #[ts(type = "number")]
         tree_depth: u32,
     },
+    /// Storage node joins an existing agreement.
+    JoinAgreement {
+        metadata: OpMetadata,
+        /// The txid of the CreateAgreement transaction
+        agreement_txid: String,
+        /// The file_id
+        file_id: String,
+    },
 }
 
 impl Op {
@@ -309,6 +317,7 @@ impl Op {
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
             Op::CreateAgreement { metadata, .. } => metadata,
+            Op::JoinAgreement { metadata, .. } => metadata,
         }
     }
 }
@@ -483,6 +492,13 @@ pub enum Inst {
         /// Merkle tree depth
         #[ts(type = "number")]
         tree_depth: u32,
+    },
+    /// Storage node joins an existing agreement.
+    JoinAgreement {
+        /// The txid of the CreateAgreement transaction
+        agreement_txid: String,
+        /// The file_id (for validation)
+        file_id: String,
     },
 }
 

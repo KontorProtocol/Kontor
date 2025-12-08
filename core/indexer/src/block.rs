@@ -79,6 +79,14 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                 root,
                                 tree_depth,
                             },
+                            Inst::JoinAgreement {
+                                agreement_txid,
+                                file_id,
+                            } => Op::JoinAgreement {
+                                metadata,
+                                agreement_txid,
+                                file_id,
+                            },
                         });
                     }
                 }

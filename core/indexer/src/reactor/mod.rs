@@ -242,6 +242,7 @@ impl Reactor {
                     .build(),
             )
             .await?;
+
             for op in &t.ops {
                 let metadata = op.metadata();
                 let input_index = metadata.input_index;
@@ -302,6 +303,7 @@ impl Reactor {
                         let result = storage_protocol::handle_create_agreement(
                             &conn,
                             &self.runtime.file_ledger,
+                            t.txid.to_string(),
                             file_id.clone(),
                             root.clone(),
                             *tree_depth,
@@ -311,6 +313,23 @@ impl Reactor {
                         .await;
                         if let Err(e) = result {
                             warn!("CreateAgreement operation failed: {:?}", e);
+                        }
+                    }
+                    Op::JoinAgreement {
+                        metadata,
+                        agreement_txid,
+                        file_id,
+                    } => {
+                        let result = storage_protocol::handle_join_agreement(
+                            &conn,
+                            agreement_txid.clone(),
+                            file_id.clone(),
+                            metadata.signer.to_string(),
+                            height as i64,
+                        )
+                        .await;
+                        if let Err(e) = result {
+                            warn!("JoinAgreement operation failed: {:?}", e);
                         }
                     }
                 };
