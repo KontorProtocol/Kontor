@@ -59,3 +59,77 @@ impl<V: WaveType> WaveType for Result<V, ()> {
 pub fn wave_type<T: WaveType>() -> wasm_wave::value::Type {
     T::wave_type()
 }
+
+pub trait FromWaveValue {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self;
+}
+
+impl FromWaveValue for u64 {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_u64(&value)
+    }
+}
+
+impl FromWaveValue for i64 {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_s64(&value)
+    }
+}
+
+impl FromWaveValue for bool {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_bool(&value)
+    }
+}
+
+impl FromWaveValue for String {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_string(&value).into_owned()
+    }
+}
+
+impl<T: FromWaveValue> FromWaveValue for Vec<T> {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_list(&value)
+            .map(|v| T::from_wave_value(v.into_owned()))
+            .collect()
+    }
+}
+
+impl<T: FromWaveValue> FromWaveValue for Option<T> {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_option(&value)
+            .map(|v| T::from_wave_value(v.into_owned()))
+    }
+}
+
+impl<V: FromWaveValue, E: FromWaveValue> FromWaveValue for Result<V, E> {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        match wasm_wave::wasm::WasmValue::unwrap_result(&value) {
+            Ok(v) => Ok(V::from_wave_value(v.unwrap().into_owned())),
+            Err(e) => Err(E::from_wave_value(e.unwrap().into_owned())),
+        }
+    }
+}
+
+impl<E: FromWaveValue> FromWaveValue for Result<(), E> {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        match wasm_wave::wasm::WasmValue::unwrap_result(&value) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(E::from_wave_value(e.unwrap().into_owned())),
+        }
+    }
+}
+
+impl<V: FromWaveValue> FromWaveValue for Result<V, ()> {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        match wasm_wave::wasm::WasmValue::unwrap_result(&value) {
+            Ok(v) => Ok(V::from_wave_value(v.unwrap().into_owned())),
+            Err(_) => Err(()),
+        }
+    }
+}
+
+pub fn from_wave_value<T: FromWaveValue>(value: wasm_wave::value::Value) -> T {
+    T::from_wave_value(value)
+}

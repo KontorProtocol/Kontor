@@ -14,7 +14,7 @@ use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-pub use stdlib::{CheckedArithmetics, WaveType, wave_type};
+pub use stdlib::{CheckedArithmetics, FromWaveValue, WaveType, from_wave_value, wave_type};
 use stdlib::{contract_address, impls};
 pub use storage::Storage;
 use tokio::sync::Mutex;

@@ -1,4 +1,3 @@
-use crate::transformers;
 use heck::ToKebabCase;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -94,33 +93,16 @@ pub fn generate_enum_to_value(data: &DataEnum, name: &Ident) -> Result<TokenStre
     })
 }
 
-pub fn generate_struct_from_value(data: &DataStruct, name: &Ident) -> Result<TokenStream> {
+pub fn generate_struct_from_wave_value(data: &DataStruct, name: &Ident) -> Result<TokenStream> {
     match &data.fields {
         Fields::Named(fields) => {
-            let mut_inits = fields.named.iter().map(|field| {
-                let field_name = field.ident.as_ref().unwrap();
-                quote! { let mut #field_name = None; }
-            });
-            let match_arms = fields.named.iter().map(|field| {
-                let field_name = field.ident.as_ref().unwrap();
-                let field_name_str = field_name.to_string().to_kebab_case();
-                let unwrap_expr = transformers::syn_type_to_unwrap_expr(&field.ty, quote! { val_ })
-                    .unwrap_or_else(|_| panic!("Could not unwrap expr for type: {:?}", &field.ty));
-                quote! { #field_name_str => #field_name = Some(#unwrap_expr), }
-            });
             let constructs = fields.named.iter().map(|field| {
                 let field_name = field.ident.as_ref().unwrap();
-                let field_name_str = field_name.to_string();
-                quote! { #field_name: #field_name.expect(&format!("Missing '{}' field", #field_name_str)), }
+                let field_name_str = field_name.to_string().to_kebab_case();
+                quote! { #field_name: stdlib::from_wave_value(record.remove(#field_name_str).expect(&format!("Missing '{}' field", #field_name_str)).into_owned()), }
             });
             Ok(quote! {
-                #(#mut_inits)*
-                for (key_, val_) in stdlib::wasm_wave::wasm::WasmValue::unwrap_record(&value_) {
-                    match key_.as_ref() {
-                        #(#match_arms)*
-                        key_ => panic!("Unknown field: {key_}"),
-                    }
-                }
+                let mut record = stdlib::wasm_wave::wasm::WasmValue::unwrap_record(&value_).collect::<std::collections::BTreeMap<_, _>>();
                 #name {
                     #(#constructs)*
                 }
@@ -133,7 +115,7 @@ pub fn generate_struct_from_value(data: &DataStruct, name: &Ident) -> Result<Tok
     }
 }
 
-pub fn generate_enum_from_value(data: &DataEnum, name: &Ident) -> Result<TokenStream> {
+pub fn generate_enum_from_wave_value(data: &DataEnum, name: &Ident) -> Result<TokenStream> {
     let arms = data
         .variants
         .iter()
@@ -145,12 +127,8 @@ pub fn generate_enum_from_value(data: &DataEnum, name: &Ident) -> Result<TokenSt
                     key_ if key_.eq(#variant_name) => #name::#variant_ident,
                 }),
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                    let unwrap_expr = transformers::syn_type_to_unwrap_expr(
-                        &fields.unnamed[0].ty,
-                        quote! { val_.unwrap() },
-                    )?;
                     Ok(quote! {
-                        key_ if key_.eq(#variant_name) => #name::#variant_ident(#unwrap_expr),
+                        key_ if key_.eq(#variant_name) => #name::#variant_ident(stdlib::from_wave_value(val_.unwrap().into_owned())),
                     })
                 }
                 _ => Err(Error::new(

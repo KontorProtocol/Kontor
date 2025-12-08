@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail};
 use heck::ToUpperCamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{Ident, PathArguments, Type as SynType, TypePath};
+use syn::Ident;
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
 
 pub fn wit_type_to_unwrap_expr(
@@ -134,37 +134,4 @@ pub fn wit_type_to_rust_type(
         }
         _ => bail!("Unsupported WIT type: {:?}", ty),
     }
-}
-
-pub fn syn_type_to_unwrap_expr(ty: &SynType, value: TokenStream) -> syn::Result<TokenStream> {
-    if let SynType::Path(TypePath { qself: None, path }) = ty
-        && let Some(segment) = &path.segments.last()
-        && segment.arguments == PathArguments::None
-    {
-        let ident = segment.ident.to_string();
-        match ident.as_str() {
-            "u64" => {
-                return Ok(
-                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_u64(&#value.into_owned()) },
-                );
-            }
-            "i64" => {
-                return Ok(
-                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_s64(&#value.into_owned()) },
-                );
-            }
-            "bool" => {
-                return Ok(
-                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_bool(&#value.into_owned()) },
-                );
-            }
-            "String" => {
-                return Ok(
-                    quote! { stdlib::wasm_wave::wasm::WasmValue::unwrap_string(&#value.into_owned()).into_owned() },
-                );
-            }
-            _ => {}
-        }
-    }
-    Ok(quote! { #value.into_owned().into() })
 }

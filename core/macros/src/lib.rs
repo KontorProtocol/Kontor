@@ -218,30 +218,32 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let from_value_body = match &input.data {
-        Data::Struct(data) => wavey::generate_struct_from_value(data, name),
-        Data::Enum(data) => wavey::generate_enum_from_value(data, name),
+    let from_wave_value_body = match &input.data {
+        Data::Struct(data) => wavey::generate_struct_from_wave_value(data, name),
+        Data::Enum(data) => wavey::generate_enum_from_wave_value(data, name),
         _ => Err(Error::new(
             name.span(),
             "Wavey derive is only supported for structs and enums",
         )),
     };
 
-    let from_value_body = match from_value_body {
+    let from_wave_value_body = match from_wave_value_body {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
 
     quote! {
-        // impl #impl_generics #name #ty_generics #where_clause {
-        //     pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-        //         #wave_type_body
-        //     }
-        // }
-
+        #[automatically_derived]
         impl stdlib::WaveType for #name {
             fn wave_type() -> stdlib::wasm_wave::value::Type {
                 #wave_type_body
+            }
+        }
+
+        #[automatically_derived]
+        impl stdlib::FromWaveValue for #name {
+            fn from_wave_value(value_: stdlib::wasm_wave::value::Value) -> Self {
+                #from_wave_value_body
             }
         }
 
@@ -255,7 +257,7 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl #impl_generics From<stdlib::wasm_wave::value::Value> for #name #ty_generics #where_clause {
             fn from(value_: stdlib::wasm_wave::value::Value) -> Self {
-                #from_value_body
+                stdlib::from_wave_value(value_)
             }
         }
     }
