@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{DataEnum, DataStruct, Error, Fields, Ident, Result, spanned::Spanned};
 
-pub fn generate_struct_wave_type(data: &DataStruct) -> Result<TokenStream> {
+pub fn generate_struct_wave_type_impl(data: &DataStruct) -> Result<TokenStream> {
     match &data.fields {
         Fields::Named(fields) => {
             let field_types = fields
@@ -13,8 +13,7 @@ pub fn generate_struct_wave_type(data: &DataStruct) -> Result<TokenStream> {
                 .map(|field| {
                     let field_name_str = field.ident.as_ref().unwrap().to_string().to_kebab_case();
                     let field_ty = &field.ty;
-                    let wave_ty = transformers::syn_type_to_wave_type(field_ty)?;
-                    Ok(quote! { (#field_name_str, #wave_ty) })
+                    Ok(quote! { (#field_name_str, stdlib::wave_type::<#field_ty>()) })
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(quote! {
@@ -28,7 +27,7 @@ pub fn generate_struct_wave_type(data: &DataStruct) -> Result<TokenStream> {
     }
 }
 
-pub fn generate_enum_wave_type(data: &DataEnum) -> Result<TokenStream> {
+pub fn generate_enum_wave_type_impl(data: &DataEnum) -> Result<TokenStream> {
     let variant_types = data
         .variants
         .iter()
@@ -38,8 +37,7 @@ pub fn generate_enum_wave_type(data: &DataEnum) -> Result<TokenStream> {
                 Fields::Unit => Ok(quote! { (#variant_name, None) }),
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let inner_ty = &fields.unnamed[0].ty;
-                    let inner_wave_ty = transformers::syn_type_to_wave_type(inner_ty)?;
-                    Ok(quote! { (#variant_name, Some(#inner_wave_ty)) })
+                    Ok(quote! { (#variant_name, Some(stdlib::wave_type::<#inner_ty>())) })
                 }
                 _ => Err(Error::new(
                     variant.span(),
@@ -63,7 +61,7 @@ pub fn generate_struct_to_value(data: &DataStruct, name: &Ident) -> Result<Token
             });
             Ok(quote! {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
-                    &#name::wave_type(),
+                    &stdlib::wave_type::<#name>(),
                     [#(#field_assigns),*],
                 ).unwrap()
             })
@@ -81,10 +79,10 @@ pub fn generate_enum_to_value(data: &DataEnum, name: &Ident) -> Result<TokenStre
         let variant_name = variant_ident.to_string().to_lowercase();
         match &variant.fields {
             Fields::Unit => Ok(quote! {
-                #name::#variant_ident => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&#name::wave_type(), #variant_name, None)
+                #name::#variant_ident => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&stdlib::wave_type::<#name>(), #variant_name, None)
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => Ok(quote! {
-                #name::#variant_ident(operand) => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&#name::wave_type(), #variant_name, Some(stdlib::wasm_wave::value::Value::from(operand)))
+                #name::#variant_ident(operand) => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&stdlib::wave_type::<#name>(), #variant_name, Some(stdlib::wasm_wave::value::Value::from(operand)))
             }),
             _ => Err(Error::new(variant.span(), "Wavey derive only supports unit or single-field tuple variants for enums")),
         }

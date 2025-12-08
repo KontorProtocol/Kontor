@@ -2,10 +2,10 @@ use stdlib::Wavey;
 enum Error {
     Message(String),
 }
-impl Error {
-    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+impl stdlib::WaveType for Error {
+    fn wave_type() -> stdlib::wasm_wave::value::Type {
         stdlib::wasm_wave::value::Type::variant([
-                ("message", Some(stdlib::wasm_wave::value::Type::STRING)),
+                ("message", Some(stdlib::wave_type::<String>())),
             ])
             .unwrap()
     }
@@ -16,7 +16,7 @@ impl From<Error> for stdlib::wasm_wave::value::Value {
         (match value_ {
             Error::Message(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
-                    &Error::wave_type(),
+                    &stdlib::wave_type::<Error>(),
                     "message",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )

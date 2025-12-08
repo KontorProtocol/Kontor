@@ -1,5 +1,6 @@
 mod dot_path_buf;
 mod storage_interface;
+mod wave_interfaces;
 
 pub use dot_path_buf::*;
 pub use macros::{
@@ -8,6 +9,7 @@ pub use macros::{
 };
 pub use storage_interface::*;
 pub use wasm_wave;
+pub use wave_interfaces::*;
 pub use wit_bindgen;
 
 pub trait CheckedArithmetics<E, Other = Self> {

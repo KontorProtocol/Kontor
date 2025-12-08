@@ -2,11 +2,9 @@ use stdlib::Wavey;
 pub struct Operand {
     pub y: u64,
 }
-impl Operand {
-    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-        stdlib::wasm_wave::value::Type::record([
-                ("y", stdlib::wasm_wave::value::Type::U64),
-            ])
+impl stdlib::WaveType for Operand {
+    fn wave_type() -> stdlib::wasm_wave::value::Type {
+        stdlib::wasm_wave::value::Type::record([("y", stdlib::wave_type::<u64>())])
             .unwrap()
     }
 }
@@ -14,7 +12,7 @@ impl Operand {
 impl From<Operand> for stdlib::wasm_wave::value::Value {
     fn from(value_: Operand) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
-                &Operand::wave_type(),
+                &stdlib::wave_type::<Operand>(),
                 [("y", stdlib::wasm_wave::value::Value::from(value_.y))],
             )
             .unwrap()

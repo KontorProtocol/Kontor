@@ -191,8 +191,8 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let wave_type_body = match &input.data {
-        Data::Struct(data) => wavey::generate_struct_wave_type(data),
-        Data::Enum(data) => wavey::generate_enum_wave_type(data),
+        Data::Struct(data) => wavey::generate_struct_wave_type_impl(data),
+        Data::Enum(data) => wavey::generate_enum_wave_type_impl(data),
         _ => Err(Error::new(
             name.span(),
             "Wavey derive is only supported for structs and enums",
@@ -233,8 +233,14 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
     };
 
     quote! {
-        impl #impl_generics #name #ty_generics #where_clause {
-            pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+        // impl #impl_generics #name #ty_generics #where_clause {
+        //     pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+        //         #wave_type_body
+        //     }
+        // }
+
+        impl stdlib::WaveType for #name {
+            fn wave_type() -> stdlib::wasm_wave::value::Type {
                 #wave_type_body
             }
         }

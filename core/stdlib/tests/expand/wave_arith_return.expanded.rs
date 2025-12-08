@@ -2,11 +2,9 @@ use stdlib::Wavey;
 pub struct ArithReturn {
     pub value: u64,
 }
-impl ArithReturn {
-    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
-        stdlib::wasm_wave::value::Type::record([
-                ("value", stdlib::wasm_wave::value::Type::U64),
-            ])
+impl stdlib::WaveType for ArithReturn {
+    fn wave_type() -> stdlib::wasm_wave::value::Type {
+        stdlib::wasm_wave::value::Type::record([("value", stdlib::wave_type::<u64>())])
             .unwrap()
     }
 }
@@ -14,7 +12,7 @@ impl ArithReturn {
 impl From<ArithReturn> for stdlib::wasm_wave::value::Value {
     fn from(value_: ArithReturn) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
-                &ArithReturn::wave_type(),
+                &stdlib::wave_type::<ArithReturn>(),
                 [("value", stdlib::wasm_wave::value::Value::from(value_.value))],
             )
             .unwrap()

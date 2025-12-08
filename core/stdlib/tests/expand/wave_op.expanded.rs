@@ -5,13 +5,13 @@ pub enum Op {
     Mul(Operand),
     Div(Operand),
 }
-impl Op {
-    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+impl stdlib::WaveType for Op {
+    fn wave_type() -> stdlib::wasm_wave::value::Type {
         stdlib::wasm_wave::value::Type::variant([
                 ("id", None),
-                ("sum", Some(Operand::wave_type())),
-                ("mul", Some(Operand::wave_type())),
-                ("div", Some(Operand::wave_type())),
+                ("sum", Some(stdlib::wave_type::<Operand>())),
+                ("mul", Some(stdlib::wave_type::<Operand>())),
+                ("div", Some(stdlib::wave_type::<Operand>())),
             ])
             .unwrap()
     }
@@ -22,28 +22,28 @@ impl From<Op> for stdlib::wasm_wave::value::Value {
         (match value_ {
             Op::Id => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
-                    &Op::wave_type(),
+                    &stdlib::wave_type::<Op>(),
                     "id",
                     None,
                 )
             }
             Op::Sum(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
-                    &Op::wave_type(),
+                    &stdlib::wave_type::<Op>(),
                     "sum",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )
             }
             Op::Mul(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
-                    &Op::wave_type(),
+                    &stdlib::wave_type::<Op>(),
                     "mul",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )
             }
             Op::Div(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
-                    &Op::wave_type(),
+                    &stdlib::wave_type::<Op>(),
                     "div",
                     Some(stdlib::wasm_wave::value::Value::from(operand)),
                 )

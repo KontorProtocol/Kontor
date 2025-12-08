@@ -4,12 +4,12 @@ pub struct ContractAddress {
     pub height: i64,
     pub tx_index: i64,
 }
-impl ContractAddress {
-    pub fn wave_type() -> stdlib::wasm_wave::value::Type {
+impl stdlib::WaveType for ContractAddress {
+    fn wave_type() -> stdlib::wasm_wave::value::Type {
         stdlib::wasm_wave::value::Type::record([
-                ("name", stdlib::wasm_wave::value::Type::STRING),
-                ("height", stdlib::wasm_wave::value::Type::S64),
-                ("tx-index", stdlib::wasm_wave::value::Type::S64),
+                ("name", stdlib::wave_type::<String>()),
+                ("height", stdlib::wave_type::<i64>()),
+                ("tx-index", stdlib::wave_type::<i64>()),
             ])
             .unwrap()
     }
@@ -18,7 +18,7 @@ impl ContractAddress {
 impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
     fn from(value_: ContractAddress) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
-                &ContractAddress::wave_type(),
+                &stdlib::wave_type::<ContractAddress>(),
                 [
                     ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
                     ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
