@@ -133,3 +133,14 @@ impl<V: FromWaveValue> FromWaveValue for Result<V, ()> {
 pub fn from_wave_value<T: FromWaveValue>(value: wasm_wave::value::Value) -> T {
     T::from_wave_value(value)
 }
+
+pub fn from_wave_expr<T: FromWaveValue + WaveType>(expr: &str) -> T {
+    from_wave_value(
+        wasm_wave::from_str::<wasm_wave::value::Value>(&wave_type::<T>(), expr)
+            .expect("Failed to parse wave expression"),
+    )
+}
+
+pub fn to_wave_expr<T: Into<wasm_wave::value::Value>>(value: T) -> String {
+    wasm_wave::to_string(&value.into()).expect("Failed to format wave expression")
+}

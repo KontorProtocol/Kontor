@@ -47,11 +47,8 @@ pub async fn test_compose_token_attach_and_detach(
             "{}({})",
             "attach",
             [
-                stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(0)).unwrap(),
-                stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(
-                    Decimal::from(2)
-                ))
-                .unwrap()
+                stdlib::to_wave_expr(0),
+                stdlib::to_wave_expr(Decimal::from(2)),
             ]
             .join(", ")
         ),
@@ -208,18 +205,7 @@ pub async fn test_compose_token_attach_and_detach(
         .ok_or(anyhow::anyhow!("Could not find op result"))?;
 
     let attach_result: Result<token::Transfer, testlib::Error> =
-        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(
-            &stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(
-                &stdlib::wasm_wave::value::Type::result(
-                    Some(<token::Transfer>::wave_type()),
-                    Some(<testlib::Error>::wave_type()),
-                ),
-                &attach_result.value.expect("Expected value"),
-            )
-            .unwrap(),
-        )
-        .map(|v| v.unwrap().into_owned().into())
-        .map_err(|e| e.unwrap().into_owned().into());
+        stdlib::from_wave_expr(&attach_result.value.expect("Expected value"));
     let transfer = attach_result?;
 
     let utxo_id = format!("{}:{}", reveal_transaction.compute_txid(), 0);
@@ -249,18 +235,7 @@ pub async fn test_compose_token_attach_and_detach(
         .ok_or(anyhow::anyhow!("Could not find op result"))?;
 
     let detach_result: Result<token::Transfer, testlib::Error> =
-        stdlib::wasm_wave::wasm::WasmValue::unwrap_result(
-            &stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(
-                &stdlib::wasm_wave::value::Type::result(
-                    Some(<token::Transfer>::wave_type()),
-                    Some(<testlib::Error>::wave_type()),
-                ),
-                &detach_result.value.expect("Expected value"),
-            )
-            .unwrap(),
-        )
-        .map(|v| v.unwrap().into_owned().into())
-        .map_err(|e| e.unwrap().into_owned().into());
+        stdlib::from_wave_expr(&detach_result.value.expect("Expected value"));
     let transfer = detach_result?;
 
     assert_eq!(transfer.src, utxo_id);

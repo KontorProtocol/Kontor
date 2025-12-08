@@ -1,7 +1,5 @@
 use std::{fs, panic};
 
-use crate::transformers;
-
 use anyhow::Result;
 use darling::FromMeta;
 use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
@@ -11,6 +9,8 @@ use syn::Ident;
 use wit_parser::{
     Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
 };
+
+use crate::utils;
 
 #[derive(FromMeta)]
 pub struct Config {
@@ -169,13 +169,13 @@ pub fn generate_functions(
         .iter()
         .map(|(name, ty)| {
             let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
-            let param_ty = transformers::wit_type_to_rust_type(resolve, ty, true)?;
+            let param_ty = utils::wit_type_to_rust_type(resolve, ty, true)?;
             Ok(quote! { #param_name: #param_ty })
         })
         .collect::<Result<Vec<_>>>()?;
 
     let (_, ctx_type) = export.params.first().unwrap();
-    let ctx_type_name = transformers::wit_type_to_rust_type(resolve, ctx_type, false)?;
+    let ctx_type_name = utils::wit_type_to_rust_type(resolve, ctx_type, false)?;
     let is_proc_context = ctx_type_name.to_string() == quote! { &context::ProcContext }.to_string();
     let is_core_context = ctx_type_name.to_string() == quote! { &context::CoreContext }.to_string();
 
@@ -213,7 +213,7 @@ pub fn generate_functions(
     };
 
     let mut ret_ty = match &export.result {
-        Some(ty) => transformers::wit_type_to_rust_type(resolve, ty, false)?,
+        Some(ty) => utils::wit_type_to_rust_type(resolve, ty, false)?,
         None => quote! { () },
     };
 
@@ -231,18 +231,20 @@ pub fn generate_functions(
             Ok(match ty {
                 Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
                     let _inner_ty = match resolve.types[*id].kind {
-                        TypeDefKind::Option(inner) => transformers::wit_type_to_rust_type(resolve, &inner, false)?,
+                        TypeDefKind::Option(inner) => {
+                            utils::wit_type_to_rust_type(resolve, &inner, false)?
+                        }
                         _ => unreachable!(),
                     };
                     quote! {
                         match #param_name {
-                            Some(val) => stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(val)).unwrap(),
+                            Some(val) => stdlib::to_wave_expr(val),
                             None => "null".to_string(),
                         }
                     }
                 }
                 _ => quote! {
-                    stdlib::wasm_wave::to_string(&stdlib::wasm_wave::value::Value::from(#param_name)).unwrap()
+                    stdlib::to_wave_expr(#param_name)
                 },
             })
         })
@@ -256,14 +258,9 @@ pub fn generate_functions(
     };
 
     let mut ret_expr = match &export.result {
-        Some(ty) => {
-            let rust_type = transformers::wit_type_to_rust_type(resolve, ty, false)?;
+        Some(_) => {
             quote! {
-                stdlib::from_wave_value(
-                    stdlib::wasm_wave::from_str::<stdlib::wasm_wave::value::Value>(
-                        &stdlib::wave_type::<#rust_type>(), &ret
-                    ).expect("Failed to parse return wave expression")
-                )
+                stdlib::from_wave_expr(&ret)
             }
         }
         None => quote! { () },
@@ -317,7 +314,7 @@ pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> R
         .iter()
         .map(|field| {
             let field_name = Ident::new(&field.name.to_snake_case(), Span::call_site());
-            let field_ty = transformers::wit_type_to_rust_type(resolve, &field.ty, false)?;
+            let field_ty = utils::wit_type_to_rust_type(resolve, &field.ty, false)?;
             Ok(quote! { pub #field_name: #field_ty })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -358,7 +355,7 @@ pub fn print_typedef_variant(
             let variant_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
             match &case.ty {
                 Some(ty) => {
-                    let ty_name = transformers::wit_type_to_rust_type(resolve, ty, false)?;
+                    let ty_name = utils::wit_type_to_rust_type(resolve, ty, false)?;
                     Ok(quote! { #variant_name(#ty_name) })
                 }
                 None => Ok(quote! { #variant_name }),

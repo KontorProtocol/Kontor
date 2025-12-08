@@ -14,7 +14,10 @@ use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-pub use stdlib::{CheckedArithmetics, FromWaveValue, WaveType, from_wave_value, wave_type};
+pub use stdlib::{
+    CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
+    wave_type,
+};
 use stdlib::{contract_address, impls};
 pub use storage::Storage;
 use tokio::sync::Mutex;
@@ -208,9 +211,7 @@ impl Runtime {
             .await
             .expect("Failed to insert contract");
         self.execute(Some(signer), &address, "init()").await?;
-        let value = wasm_wave::to_string(&wasm_wave::value::Value::from(address.clone()))
-            .expect("Failed to convert address to string");
-        Ok(value)
+        Ok(to_wave_expr(address.clone()))
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {

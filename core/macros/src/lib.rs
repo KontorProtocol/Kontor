@@ -14,7 +14,6 @@ mod model;
 mod root;
 mod store;
 mod test;
-mod transformers;
 mod utils;
 mod wavey;
 
