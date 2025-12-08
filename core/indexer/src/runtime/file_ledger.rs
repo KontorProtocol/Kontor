@@ -83,9 +83,54 @@ impl FileLedger {
         Ok(())
     }
 
-    /// Access the inner crypto FileLedger
+    /// Access the inner crypto FileLedger (for proof verification via PorSystem)
     pub fn inner(&self) -> &Arc<Mutex<CryptoFileLedger>> {
         &self.inner
+    }
+
+    /// Rebuild the in-memory ledger from the database.
+    ///
+    /// Call this after a rollback to re-sync the in-memory state with the DB.
+    /// The DB entries are automatically deleted via ON DELETE CASCADE when blocks
+    /// are rolled back, so we just need to reload from the current DB state.
+    pub async fn resync_from_db(&self, conn: &Connection) -> Result<()> {
+        // Clear the in-memory ledger and reload from DB
+        let mut inner = self.inner.lock().await;
+        *inner = CryptoFileLedger::new();
+
+        let mut rows = conn
+            .query(
+                "SELECT file_id, root, tree_depth FROM file_ledger_entries ORDER BY id ASC",
+                (),
+            )
+            .await?;
+
+        while let Some(row) = rows.next().await? {
+            let file_id: String = row.get(0)?;
+            let root_bytes: Vec<u8> = row.get(1)?;
+            let tree_depth: i64 = row.get(2)?;
+
+            let root = Self::bytes_to_field_element(&root_bytes)?;
+
+            inner
+                .add_file(file_id.clone(), root, tree_depth as usize)
+                .map_err(|e| anyhow!("Failed to add file {}: {:?}", file_id, e))?;
+        }
+
+        tracing::info!("Resynced FileLedger from database");
+        Ok(())
+    }
+
+    /// Get the number of files in the ledger (for diagnostics)
+    pub async fn file_count(&self, conn: &Connection) -> Result<i64> {
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM file_ledger_entries", ())
+            .await?;
+        if let Some(row) = rows.next().await? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(0)
+        }
     }
 
     /// Convert bytes to FieldElement using canonical deserialization.
@@ -102,7 +147,7 @@ impl FileLedger {
         arr.copy_from_slice(bytes);
 
         // Use proper canonical deserialization (inverse of to_repr())
-        FieldElement::from_repr(arr.into())
+        FieldElement::from_repr(arr)
             .into_option()
             .ok_or_else(|| anyhow!("Invalid bytes for FieldElement"))
     }

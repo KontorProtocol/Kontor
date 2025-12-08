@@ -28,7 +28,7 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage},
+    runtime::{ComponentCache, FileLedger, Runtime, Storage, storage_protocol},
     test_utils::new_mock_block_hash,
 };
 
@@ -105,7 +105,12 @@ impl Reactor {
             .tx_index(0)
             .conn(writer.connection())
             .build();
-        let mut runtime = Runtime::new(storage, ComponentCache::new()).await?;
+
+        // Rebuild FileLedger from database (for PoR verification)
+        let file_ledger = FileLedger::rebuild_from_db(&writer.connection()).await?;
+
+        let mut runtime =
+            Runtime::new_with_file_ledger(storage, ComponentCache::new(), file_ledger).await?;
         runtime.publish_native_contracts().await?;
         Ok(Self {
             reader,
@@ -124,6 +129,12 @@ impl Reactor {
     async fn rollback(&mut self, height: u64) -> Result<()> {
         rollback_to_height(&self.writer.connection(), height).await?;
         self.last_height = height;
+
+        // Resync FileLedger after rollback (DB entries deleted via CASCADE)
+        self.runtime
+            .file_ledger
+            .resync_from_db(&self.writer.connection())
+            .await?;
 
         let conn = &self.reader.connection().await?;
         if let Some(block) = select_block_at_height(conn, height as i64).await? {
@@ -280,6 +291,26 @@ impl Reactor {
                         let result = self.runtime.issuance(&metadata.signer).await;
                         if result.is_err() {
                             warn!("Issuance operation failed: {:?}", result);
+                        }
+                    }
+                    Op::CreateAgreement {
+                        metadata: _,
+                        file_id,
+                        root,
+                        tree_depth,
+                    } => {
+                        let result = storage_protocol::handle_create_agreement(
+                            &conn,
+                            &self.runtime.file_ledger,
+                            file_id.clone(),
+                            root.clone(),
+                            *tree_depth,
+                            height as i64,
+                            t.index,
+                        )
+                        .await;
+                        if let Err(e) = result {
+                            warn!("CreateAgreement operation failed: {:?}", e);
                         }
                     }
                 };

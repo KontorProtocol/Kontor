@@ -5,6 +5,7 @@ pub mod fuel;
 pub mod numerics;
 mod stack;
 mod storage;
+pub mod storage_protocol;
 pub mod token;
 mod types;
 pub mod wit;
@@ -94,6 +95,14 @@ pub struct Runtime {
 
 impl Runtime {
     pub async fn new(storage: Storage, component_cache: ComponentCache) -> Result<Self> {
+        Self::new_with_file_ledger(storage, component_cache, FileLedger::new()).await
+    }
+
+    pub async fn new_with_file_ledger(
+        storage: Storage,
+        component_cache: ComponentCache,
+        file_ledger: FileLedger,
+    ) -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
@@ -109,7 +118,7 @@ impl Runtime {
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
-            file_ledger: FileLedger::new(),
+            file_ledger,
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),

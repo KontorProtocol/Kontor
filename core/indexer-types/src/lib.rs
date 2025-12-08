@@ -289,6 +289,17 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    /// Create a storage agreement for a file.
+    CreateAgreement {
+        metadata: OpMetadata,
+        /// Unique file identifier (from kontor-crypto FileMetadata.file_id)
+        file_id: String,
+        /// Poseidon Merkle root (32 bytes, from metadata.root.to_repr())
+        root: Vec<u8>,
+        /// Merkle tree depth (from tree_depth_from_metadata)
+        #[ts(type = "number")]
+        tree_depth: u32,
+    },
 }
 
 impl Op {
@@ -297,6 +308,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::CreateAgreement { metadata, .. } => metadata,
         }
     }
 }
@@ -462,6 +474,16 @@ pub enum Inst {
         expr: String,
     },
     Issuance,
+    /// Create a storage agreement for a file.
+    CreateAgreement {
+        /// Unique file identifier (from kontor-crypto FileMetadata.file_id)
+        file_id: String,
+        /// Poseidon Merkle root (32 bytes)
+        root: Vec<u8>,
+        /// Merkle tree depth
+        #[ts(type = "number")]
+        tree_depth: u32,
+    },
 }
 
 pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {

@@ -69,6 +69,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                 expr,
                             },
                             Inst::Issuance => Op::Issuance { metadata },
+                            Inst::CreateAgreement {
+                                file_id,
+                                root,
+                                tree_depth,
+                            } => Op::CreateAgreement {
+                                metadata,
+                                file_id,
+                                root,
+                                tree_depth,
+                            },
                         });
                     }
                 }
