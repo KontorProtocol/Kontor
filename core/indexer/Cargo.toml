@@ -58,6 +58,7 @@ tokio-tungstenite = { version = "=0.28.0", features = ["rustls-tls-webpki-roots"
 tracing-stackdriver = "=0.10.0"
 regex = "=1.12.2"
 kontor-crypto = "=0.1.1"
+ff = "=0.13.1"
 
 [dev-dependencies]
 testlib = { path = "../testlib" }

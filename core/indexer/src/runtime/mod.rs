@@ -11,7 +11,7 @@ pub mod wit;
 
 use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
-pub use file_ledger::{SharedFileLedger, new_shared_file_ledger};
+pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
@@ -78,7 +78,7 @@ pub struct Runtime {
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
-    pub file_ledger: SharedFileLedger,
+    pub file_ledger: FileLedger,
     pub id_generation_counter: Counter,
     pub result_id_counter: Counter,
     pub stack: Stack<i64>,
@@ -109,7 +109,7 @@ impl Runtime {
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
-            file_ledger: new_shared_file_ledger(),
+            file_ledger: FileLedger::new(),
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),
@@ -1069,6 +1069,28 @@ impl HasData for Runtime {
 impl built_in::error::Host for Runtime {}
 
 impl built_in::crypto::Host for Runtime {}
+
+impl built_in::file_ledger::Host for Runtime {
+    async fn register_file(
+        &mut self,
+        file_id: String,
+        root: Vec<u8>,
+        tree_depth: u32,
+    ) -> Result<Result<(), String>> {
+        let conn = self.get_storage_conn();
+        let height = self.storage.height;
+        let tx_index = self.storage.tx_index;
+
+        match self
+            .file_ledger
+            .add_file(&conn, file_id, root, tree_depth as usize, height, tx_index)
+            .await
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(e.to_string())),
+        }
+    }
+}
 
 impl built_in::crypto::HostWithStore for Runtime {
     async fn hash<T>(accessor: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {

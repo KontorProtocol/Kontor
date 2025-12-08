@@ -2579,6 +2579,7 @@ dependencies = [
  "clap",
  "deadpool",
  "fastnum",
+ "ff",
  "futures-util",
  "glob",
  "hex",

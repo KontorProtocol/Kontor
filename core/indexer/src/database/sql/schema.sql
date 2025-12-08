@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS contract_results (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
+-- File ledger for Proof-of-Retrievability verification.
+-- Root is stored as 32 bytes (FieldElement canonical serialization via to_repr()).
+-- These values come from kontor-crypto's prepare_file() -> metadata.root.to_repr()
 CREATE TABLE IF NOT EXISTS file_ledger_entries (
   id INTEGER PRIMARY KEY,
   file_id TEXT NOT NULL UNIQUE,

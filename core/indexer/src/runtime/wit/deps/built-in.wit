@@ -163,10 +163,24 @@ interface numbers {
     log10-decimal: func(a: decimal) -> result<decimal, error>;
 }
 
+interface file-ledger {
+    /// Register a file in the ledger for Proof-of-Retrievability verification.
+    ///
+    /// These values come from kontor-crypto's prepare_file() function:
+    ///   let (prepared_file, metadata) = prepare_file(data, filename)?;
+    ///   - file-id: metadata.file_id
+    ///   - root: metadata.root.to_repr() (32 bytes, canonical serialization)
+    ///   - tree-depth: tree_depth_from_metadata(&metadata)
+    ///
+    /// The root is a Poseidon Merkle root serialized via to_repr().
+    register-file: func(file-id: string, root: list<u8>, tree-depth: u32) -> result<_, string>;
+}
+
 world built-in {
     import context;
     import foreign;
     import crypto;
     import error;
     import numbers;
+    import file-ledger;
 }
