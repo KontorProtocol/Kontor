@@ -107,7 +107,7 @@ impl Reactor {
             .build();
 
         // Rebuild FileLedger from database (for PoR verification)
-        let file_ledger = FileLedger::rebuild_from_db(&writer.connection()).await?;
+        let file_ledger = FileLedger::rebuild_from_db(&storage.clone()).await?;
 
         let mut runtime =
             Runtime::new_with_file_ledger(storage, ComponentCache::new(), file_ledger).await?;
@@ -133,7 +133,7 @@ impl Reactor {
         // Resync FileLedger after rollback (DB entries deleted via CASCADE)
         self.runtime
             .file_ledger
-            .resync_from_db(&self.writer.connection())
+            .resync_from_db(&self.runtime.storage)
             .await?;
 
         let conn = &self.reader.connection().await?;
@@ -300,13 +300,11 @@ impl Reactor {
                         tree_depth,
                     } => {
                         let result = storage_protocol::handle_create_agreement(
-                            &conn,
+                            &self.runtime.storage,
                             &self.runtime.file_ledger,
                             file_id.clone(),
                             root.clone(),
                             *tree_depth,
-                            height as i64,
-                            t.index,
                         )
                         .await;
                         if let Err(e) = result {

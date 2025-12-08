@@ -1,52 +1,90 @@
 use anyhow::{Result, anyhow};
-use ff::PrimeField;
 use kontor_crypto::FileLedger as CryptoFileLedger;
 use kontor_crypto::api::FieldElement;
-use libsql::Connection;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
+
+use crate::{
+    database::{
+        queries::{insert_file_ledger_entry, select_all_file_ledger_entries},
+        types::FileLedgerEntryRow,
+    },
+    runtime::Storage,
+};
+
+pub struct CryptoFileLedgerEntry {
+    pub file_id: String,
+    pub root: FieldElement,
+    pub tree_depth: u32,
+}
 
 /// Wrapper around kontor_crypto::FileLedger
 #[derive(Clone)]
 pub struct FileLedger {
     inner: Arc<Mutex<CryptoFileLedger>>,
+    /// Tracks whether the ledger has been modified since last sync.
+    /// Used to skip unnecessary rebuilds on rollback.
+    dirty: Arc<AtomicBool>,
 }
 
 impl FileLedger {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(CryptoFileLedger::new())),
+            dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Rebuild the ledger from database on startup.
     ///
     /// Loads all file entries and re-adds them to the inner kontor-crypto FileLedger.
-    pub async fn rebuild_from_db(conn: &Connection) -> Result<Self> {
+    pub async fn rebuild_from_db(storage: &Storage) -> Result<Self> {
         let ledger = Self::new();
+        let mut inner = ledger.inner.lock().await;
+        Self::load_entries_into_ledger(&mut inner, storage).await?;
+        tracing::info!("Rebuilt FileLedger from database");
+        drop(inner);
+        Ok(ledger)
+    }
 
-        let mut rows = conn
-            .query(
-                "SELECT file_id, root, tree_depth FROM file_ledger_entries ORDER BY id ASC",
-                (),
-            )
-            .await?;
-
-        while let Some(row) = rows.next().await? {
-            let file_id: String = row.get(0)?;
-            let root_bytes: Vec<u8> = row.get(1)?;
-            let tree_depth: i64 = row.get(2)?;
-
-            let root = Self::bytes_to_field_element(&root_bytes)?;
-
-            let mut inner = ledger.inner.lock().await;
-            inner
-                .add_file(file_id.clone(), root, tree_depth as usize)
-                .map_err(|e| anyhow!("Failed to add file {}: {:?}", file_id, e))?;
+    /// Rebuild the in-memory ledger from the database.
+    ///
+    /// Call this after a rollback to re-sync the in-memory state with the DB.
+    /// The DB entries are automatically deleted via ON DELETE CASCADE when blocks
+    /// are rolled back, so we just need to reload from the current DB state.
+    ///
+    /// Only rebuilds if the ledger has been modified (dirty flag is true).
+    pub async fn resync_from_db(&self, storage: &Storage) -> Result<()> {
+        // Skip rebuild if ledger hasn't been modified
+        if !self.dirty.load(Ordering::SeqCst) {
+            tracing::info!("FileLedger not dirty, skipping resync");
+            return Ok(());
         }
 
-        tracing::info!("Rebuilt FileLedger from database");
-        Ok(ledger)
+        let mut inner = self.inner.lock().await;
+        *inner = CryptoFileLedger::new();
+        Self::load_entries_into_ledger(&mut inner, &storage).await?;
+
+        // Clear dirty flag after successful rebuild
+        self.dirty.store(false, Ordering::SeqCst);
+        tracing::info!("Resynced FileLedger from database");
+        Ok(())
+    }
+
+    /// Load all file ledger entries from DB and add them to the crypto ledger.
+    async fn load_entries_into_ledger(
+        inner: &mut CryptoFileLedger,
+        storage: &Storage,
+    ) -> Result<()> {
+        let rows = select_all_file_ledger_entries(&storage.conn).await?;
+        for row in rows {
+            let entry: CryptoFileLedgerEntry = (&row).try_into()?;
+            inner
+                .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
+                .map_err(|e| anyhow!("Failed to add file {}: {:?}", entry.file_id, e))?;
+        }
+        Ok(())
     }
 
     /// Add a file to the ledger and persist to database.
@@ -56,29 +94,36 @@ impl FileLedger {
     ///   let root_bytes: Vec<u8> = metadata.root.to_repr().as_ref().to_vec();
     pub async fn add_file(
         &self,
-        conn: &Connection,
+        storage: &Storage,
         file_id: String,
         root: Vec<u8>,
         tree_depth: usize,
-        height: i64,
-        tx_index: i64,
     ) -> Result<()> {
-        let root_field = Self::bytes_to_field_element(&root)?;
+        let row = FileLedgerEntryRow::builder()
+            .id(0) // ignored by insert
+            .file_id(file_id)
+            .root(root)
+            .tree_depth(tree_depth as u32)
+            .height(storage.height)
+            .tx_index(storage.tx_index)
+            .build();
+
+        // Convert to get the FieldElement root for the crypto ledger
+        let entry: CryptoFileLedgerEntry = (&row).try_into()?;
 
         // Add to inner FileLedger
         {
             let mut inner = self.inner.lock().await;
             inner
-                .add_file(file_id.clone(), root_field, tree_depth)
+                .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
                 .map_err(|e| anyhow!("Failed to add file to ledger: {:?}", e))?;
         }
 
         // Persist to database
-        conn.execute(
-            "INSERT INTO file_ledger_entries (file_id, root, tree_depth, height, tx_index) VALUES (?, ?, ?, ?, ?)",
-            (file_id, root, tree_depth as i64, height, tx_index),
-        )
-        .await?;
+        insert_file_ledger_entry(&storage.conn, &row).await?;
+
+        // Mark ledger as dirty (needs resync on rollback)
+        self.dirty.store(true, Ordering::SeqCst);
 
         Ok(())
     }
@@ -86,75 +131,5 @@ impl FileLedger {
     /// Access the inner crypto FileLedger (for proof verification via PorSystem)
     pub fn inner(&self) -> &Arc<Mutex<CryptoFileLedger>> {
         &self.inner
-    }
-
-    /// Rebuild the in-memory ledger from the database.
-    ///
-    /// Call this after a rollback to re-sync the in-memory state with the DB.
-    /// The DB entries are automatically deleted via ON DELETE CASCADE when blocks
-    /// are rolled back, so we just need to reload from the current DB state.
-    pub async fn resync_from_db(&self, conn: &Connection) -> Result<()> {
-        // Clear the in-memory ledger and reload from DB
-        let mut inner = self.inner.lock().await;
-        *inner = CryptoFileLedger::new();
-
-        let mut rows = conn
-            .query(
-                "SELECT file_id, root, tree_depth FROM file_ledger_entries ORDER BY id ASC",
-                (),
-            )
-            .await?;
-
-        while let Some(row) = rows.next().await? {
-            let file_id: String = row.get(0)?;
-            let root_bytes: Vec<u8> = row.get(1)?;
-            let tree_depth: i64 = row.get(2)?;
-
-            let root = Self::bytes_to_field_element(&root_bytes)?;
-
-            inner
-                .add_file(file_id.clone(), root, tree_depth as usize)
-                .map_err(|e| anyhow!("Failed to add file {}: {:?}", file_id, e))?;
-        }
-
-        tracing::info!("Resynced FileLedger from database");
-        Ok(())
-    }
-
-    /// Get the number of files in the ledger (for diagnostics)
-    pub async fn file_count(&self, conn: &Connection) -> Result<i64> {
-        let mut rows = conn
-            .query("SELECT COUNT(*) FROM file_ledger_entries", ())
-            .await?;
-        if let Some(row) = rows.next().await? {
-            Ok(row.get(0)?)
-        } else {
-            Ok(0)
-        }
-    }
-
-    /// Convert bytes to FieldElement using canonical deserialization.
-    ///
-    /// This is the inverse of FieldElement::to_repr().
-    fn bytes_to_field_element(bytes: &[u8]) -> Result<FieldElement> {
-        if bytes.len() != 32 {
-            return Err(anyhow!(
-                "Expected 32 bytes for FieldElement, got {}",
-                bytes.len()
-            ));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-
-        // Use proper canonical deserialization (inverse of to_repr())
-        FieldElement::from_repr(arr)
-            .into_option()
-            .ok_or_else(|| anyhow!("Invalid bytes for FieldElement"))
-    }
-}
-
-impl Default for FileLedger {
-    fn default() -> Self {
-        Self::new()
     }
 }

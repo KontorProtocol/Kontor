@@ -1086,13 +1086,11 @@ impl built_in::file_ledger::Host for Runtime {
         root: Vec<u8>,
         tree_depth: u32,
     ) -> Result<Result<(), String>> {
-        let conn = self.get_storage_conn();
-        let height = self.storage.height;
-        let tx_index = self.storage.tx_index;
+
 
         match self
             .file_ledger
-            .add_file(&conn, file_id, root, tree_depth as usize, height, tx_index)
+            .add_file(&self.storage, file_id, root, tree_depth as usize)
             .await
         {
             Ok(()) => Ok(Ok(())),
