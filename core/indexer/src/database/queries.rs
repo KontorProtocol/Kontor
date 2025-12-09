@@ -8,7 +8,7 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        FileLedgerEntryRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -929,4 +929,48 @@ pub async fn get_checkpoint_latest(
         )
         .await?;
     Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn select_all_file_ledger_entries(
+    conn: &Connection,
+) -> Result<Vec<FileLedgerEntryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT id, file_id, root, tree_depth, height, tx_index
+            FROM file_ledger_entries
+            ORDER BY id ASC"#,
+            params![],
+        )
+        .await?;
+
+    let mut entries = Vec::new();
+    while let Some(row) = rows.next().await? {
+        entries.push(from_row(&row)?);
+    }
+    Ok(entries)
+}
+
+pub async fn insert_file_ledger_entry(
+    conn: &Connection,
+    entry: &FileLedgerEntryRow,
+) -> Result<i64, Error> {
+    conn.execute(
+        r#"INSERT INTO 
+        file_ledger_entries 
+        (file_id, 
+        root, 
+        tree_depth, 
+        height, 
+        tx_index) 
+        VALUES (?, ?, ?, ?, ?)"#,
+        params![
+            entry.file_id.clone(),
+            entry.root.clone(),
+            entry.tree_depth,
+            entry.height,
+            entry.tx_index,
+        ],
+    )
+    .await?;
+    Ok(conn.last_insert_rowid())
 }

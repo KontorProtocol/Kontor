@@ -2,6 +2,7 @@ extern crate alloc;
 
 mod component_cache;
 pub mod counter;
+pub mod file_ledger;
 pub mod fuel;
 pub mod numerics;
 mod stack;
@@ -12,6 +13,7 @@ pub mod wit;
 
 use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
+pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,7 @@ pub use types::default_val_for_type;
 pub use wit::Root;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use wit::kontor::*;
 
@@ -81,6 +84,7 @@ pub struct Runtime {
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
+    pub file_ledger: FileLedger,
     pub id_generation_counter: Counter,
     pub result_id_counter: Counter,
     pub stack: Stack<i64>,
@@ -96,6 +100,14 @@ pub struct Runtime {
 
 impl Runtime {
     pub async fn new(storage: Storage, component_cache: ComponentCache) -> Result<Self> {
+        Self::new_with_file_ledger(storage, component_cache, FileLedger::new()).await
+    }
+
+    pub async fn new_with_file_ledger(
+        storage: Storage,
+        component_cache: ComponentCache,
+        file_ledger: FileLedger,
+    ) -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
@@ -111,6 +123,7 @@ impl Runtime {
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
+            file_ledger,
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),
@@ -236,6 +249,7 @@ impl Runtime {
             expr,
             self.storage.input_index
         );
+        // set dirty to false here (as part of prepare call)
         let (
             mut store,
             contract_id,
@@ -492,6 +506,7 @@ impl Runtime {
 
         self.stack.push(contract_id).await?;
         self.storage.savepoint().await?;
+        self.file_ledger.dirty.store(false, Ordering::SeqCst);
 
         Ok((
             store,
@@ -1068,6 +1083,24 @@ impl HasData for Runtime {
 impl built_in::error::Host for Runtime {}
 
 impl built_in::crypto::Host for Runtime {}
+
+impl built_in::file_ledger::Host for Runtime {
+    async fn register_file(
+        &mut self,
+        file_id: String,
+        root: Vec<u8>,
+        tree_depth: i64,
+    ) -> Result<Result<(), String>> {
+        match self
+            .file_ledger
+            .add_file(&self.storage, file_id, root, tree_depth)
+            .await
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(e.to_string())),
+        }
+    }
+}
 
 impl built_in::crypto::HostWithStore for Runtime {
     async fn hash<T>(accessor: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {

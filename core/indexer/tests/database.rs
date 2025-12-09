@@ -10,12 +10,12 @@ use indexer::{
             get_contract_id_from_address, get_contract_result, get_contracts,
             get_latest_contract_state, get_latest_contract_state_value, get_op_result,
             get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_result, insert_contract_state, insert_processed_block,
-            insert_transaction, matching_path, path_prefix_filter_contract_state,
-            rollback_to_height, select_block_at_height, select_block_by_height_or_hash,
-            select_block_latest,
+            insert_contract_result, insert_contract_state, insert_file_ledger_entry,
+            insert_processed_block, insert_transaction, matching_path,
+            path_prefix_filter_contract_state, rollback_to_height, select_all_file_ledger_entries,
+            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
         },
-        types::{ContractResultRow, ContractRow, ContractStateRow, OpResultId},
+        types::{ContractResultRow, ContractRow, ContractStateRow, FileLedgerEntryRow, OpResultId},
     },
     runtime::ContractAddress,
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
@@ -617,6 +617,103 @@ async fn test_contract_result_operations() -> Result<()> {
     let row = get_op_result(&conn, &OpResultId::builder().txid(txid.to_string()).build()).await?;
     assert!(row.is_some());
     assert_eq!(result.id, row.unwrap().id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_file_ledger_entry_operations() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Insert a block first to satisfy foreign key constraints
+    let height = 800000;
+    let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
+    let block = BlockRow::builder().height(height).hash(hash).build();
+    insert_block(&conn, block).await?;
+
+    // Insert a transaction
+    let txid = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    let tx = TransactionRow::builder()
+        .height(height)
+        .txid(txid.to_string())
+        .tx_index(0)
+        .build();
+    insert_transaction(&conn, tx.clone()).await?;
+
+    // Initially, no file ledger entries should exist
+    let entries = select_all_file_ledger_entries(&conn).await?;
+    assert!(entries.is_empty());
+
+    // Insert a file ledger entry
+    let file_id = "file_abc123".to_string();
+    let root = vec![1u8; 32]; // 32 bytes for FieldElement
+    let tree_depth = 10i64;
+
+    let entry1 = FileLedgerEntryRow::builder()
+        .file_id(file_id.clone())
+        .root(root.clone())
+        .tree_depth(tree_depth)
+        .height(height)
+        .tx_index(tx.tx_index)
+        .build();
+
+    let id1 = insert_file_ledger_entry(&conn, &entry1).await?;
+    assert!(id1 > 0, "Insert should return a valid ID");
+
+    // Verify entry was inserted
+    let entries = select_all_file_ledger_entries(&conn).await?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, id1);
+    assert_eq!(entries[0].file_id, file_id);
+    assert_eq!(entries[0].root, root);
+    assert_eq!(entries[0].tree_depth, tree_depth);
+    assert_eq!(entries[0].height, height);
+    assert_eq!(entries[0].tx_index, tx.tx_index);
+
+    // Insert another file ledger entry at a different height
+    let height2 = 800001;
+    let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
+    let block2 = BlockRow::builder().height(height2).hash(hash2).build();
+    insert_block(&conn, block2).await?;
+
+    let txid2 = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    let tx2 = TransactionRow::builder()
+        .height(height2)
+        .txid(txid2.to_string())
+        .tx_index(0)
+        .build();
+    insert_transaction(&conn, tx2.clone()).await?;
+
+    let file_id2 = "file_def456".to_string();
+    let root2 = vec![2u8; 32];
+    let tree_depth2 = 15i64;
+
+    let entry2 = FileLedgerEntryRow::builder()
+        .file_id(file_id2.clone())
+        .root(root2.clone())
+        .tree_depth(tree_depth2)
+        .height(height2)
+        .tx_index(tx2.tx_index)
+        .build();
+
+    let id2 = insert_file_ledger_entry(&conn, &entry2).await?;
+    assert!(id2 > id1, "Second entry should have a higher ID");
+
+    // Verify both entries exist and are ordered by ID
+    let entries = select_all_file_ledger_entries(&conn).await?;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].id, id1);
+    assert_eq!(entries[0].file_id, file_id);
+    assert_eq!(entries[1].id, id2);
+    assert_eq!(entries[1].file_id, file_id2);
+
+    // Test rollback deletes file ledger entries (ON DELETE CASCADE)
+    rollback_to_height(&conn, height as u64).await?;
+
+    let entries = select_all_file_ledger_entries(&conn).await?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, id1);
 
     Ok(())
 }
