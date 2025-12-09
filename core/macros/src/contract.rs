@@ -16,6 +16,12 @@ pub fn generate(config: Config) -> TokenStream {
     quote! {
         extern crate alloc;
 
+        use alloc::{
+            format,
+            string::{String, ToString},
+            vec::Vec,
+        };
+
         wit_bindgen::generate!({
             world: "root",
             path: #path,

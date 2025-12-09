@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "shared-account");
+
+use stdlib::*;
 
 interface!(name = "token", path = "token/wit");
 

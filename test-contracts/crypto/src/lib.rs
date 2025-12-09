@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "crypto");
+
+use stdlib::*;
 
 fn _generate_id(ctx: &ProcContext) -> String {
     ctx.generate_id()

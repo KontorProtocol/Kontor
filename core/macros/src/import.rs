@@ -151,6 +151,12 @@ pub fn import(
         #mod_keyword #module_name {
             extern crate alloc;
 
+            use alloc::{
+                format,
+                string::{String, ToString},
+                vec::Vec,
+            };
+
             #supers
 
             #(#type_streams)*

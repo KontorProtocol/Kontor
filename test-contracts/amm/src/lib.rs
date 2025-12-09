@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "amm");
+
+use stdlib::*;
 
 interface!(name = "token_dyn", path = "token/wit");
 

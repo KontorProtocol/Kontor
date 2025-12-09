@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "token");
+
+use stdlib::*;
 
 const BURNER: &str = "burn";
 

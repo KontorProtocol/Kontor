@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "proxy");
+
+use stdlib::*;
 
 #[derive(Clone, StorageRoot, Default)]
 struct ProxyStorage {

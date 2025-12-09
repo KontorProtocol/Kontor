@@ -4,7 +4,7 @@ import {
   deserializeInst,
   serializeOpReturnData,
   deserializeOpReturnData,
-} from "kontor-ts";
+} from "@kontor/kontor-ts";
 
 test("publish", () => {
   let inst = {

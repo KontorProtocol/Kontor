@@ -1,6 +1,7 @@
-use stdlib::*;
-
+#![no_std]
 contract!(name = "fib");
+
+use stdlib::*;
 
 interface!(name = "arith", path = "arith/wit");
 

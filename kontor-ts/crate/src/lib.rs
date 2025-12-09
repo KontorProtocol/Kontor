@@ -1,3 +1,8 @@
+#![no_std]
+extern crate alloc;
+
+use alloc::{string::String, vec::Vec};
+
 use indexer_types::*;
 
 wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt"});

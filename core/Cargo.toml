@@ -15,9 +15,9 @@ wit-component = "=0.243.0"
 wit-parser = "=0.243.0"
 wasm-wave = { version ="0.243.0", default-features = false }
 
-anyhow = "=1.0.100"
+anyhow = { version = "=1.0.100", default-features = false }
 axum = { version = "=0.8.7", features = ["http2", "ws"] }
-bon = "=3.8.1"
+bon = { version = "=3.8.1", default-features = false, features = ["alloc"] }
 tokio = { version = "=1.48.0", features = ["full"] }
 tower-http = { version = "=0.6.8", features = [
   "fs",
@@ -41,3 +41,4 @@ serde_with = { version = "=3.16.1", default-features = false, features = ["alloc
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 ts-rs = { version = "=11.1.0", features = ["format"] }
 indexmap = { version = "=2.12.1", features = ["serde"] }
+bitcoin = { version = "=0.32.8", features = ["serde", "rand", "rand-std"] }
