@@ -34,7 +34,7 @@ indexmap = { workspace = true }
 
 backon = { version = "=1.6.0", features = ["tokio-sleep"] }
 base64 = "=0.22.1"
-bitcoin = { version = "=0.32.7", features = ["serde", "rand", "rand-std"] }
+bitcoin = { version = "=0.32.8", features = ["serde", "rand", "rand-std"] }
 deadpool = "=0.12.3"
 reqwest = { version = "=0.12.24", default-features = false, features = ["http2", "json", "rustls-tls"] }
 thiserror = "=2.0.17"
@@ -44,7 +44,7 @@ zmq = "=0.10.0"
 scopeguard = "=1.2.0"
 rayon = "=1.11.0"
 clap = { version = "=4.5.53", features = ["derive", "env"] }
-axum-server = "=0.7.3"
+axum-server = "=0.8.0"
 futures-util = "=0.3.31"
 hex = "=0.4.3"
 lru = "=0.16.2"
