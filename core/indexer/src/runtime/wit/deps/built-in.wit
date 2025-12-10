@@ -163,10 +163,15 @@ interface numbers {
     log10-decimal: func(a: decimal) -> result<decimal, error>;
 }
 
+interface file-ledger {
+    register-file: func(file-id: string, root: list<u8>, tree-depth: s64) -> result<_, string>;
+}
+
 world built-in {
     import context;
     import foreign;
     import crypto;
     import error;
     import numbers;
+    import file-ledger;
 }
