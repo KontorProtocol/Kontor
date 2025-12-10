@@ -548,7 +548,7 @@ impl Runtime {
             }
         };
 
-        if result.is_err() || matches!(&result, Ok(expr) if expr.starts_with("err(")) {
+        if result.as_ref().is_ok_and(|val| val.starts_with("err(")) || result.is_err() {
             self.storage
                 .rollback()
                 .await

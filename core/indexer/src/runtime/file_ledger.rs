@@ -69,6 +69,15 @@ impl FileLedger {
         Ok(())
     }
 
+    pub async fn force_resync_from_db(&self, storage: &Storage) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        inner.ledger = CryptoFileLedger::new();
+        Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
+        inner.dirty = false;
+        tracing::info!("Force resynced FileLedger from database");
+        Ok(())
+    }
+
     /// Load all file ledger entries from DB and add them to the crypto ledger.
     async fn load_entries_into_ledger(
         ledger: &mut CryptoFileLedger,

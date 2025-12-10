@@ -131,7 +131,10 @@ impl Reactor {
         self.last_height = height;
 
         // Resync FileLedger after rollback (DB entries deleted via CASCADE)
-        self.runtime.file_ledger = FileLedger::rebuild_from_db(&self.runtime.storage).await?;
+        self.runtime
+            .file_ledger
+            .force_resync_from_db(&self.runtime.storage)
+            .await?;
 
         let conn = &self.reader.connection().await?;
         if let Some(block) = select_block_at_height(conn, height as i64).await? {
