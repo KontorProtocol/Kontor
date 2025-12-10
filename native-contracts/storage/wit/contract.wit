@@ -1,0 +1,74 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{view-context, proc-context};
+  use kontor:built-in/error.{error};
+
+  // ─────────────────────────────────────────────────────────────────
+  // Input Types
+  // ─────────────────────────────────────────────────────────────────
+
+  /// Input metadata for registering a file for storage.
+  /// Comes from kontor-crypto's prepare_file() -> FileMetadata.
+  record file-metadata {
+    /// Unique identifier for the file
+    file-id: string,
+    /// Merkle tree root as hex string (64 chars, from FieldElement::to_repr())
+    root: string,
+    /// Depth of the Poseidon Merkle tree
+    tree-depth: s64,
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Output/Storage Types
+  // ─────────────────────────────────────────────────────────────────
+
+  /// Stored agreement data for a file.
+  record agreement-data {
+    /// Unique agreement identifier (same as file-id)
+    agreement-id: string,
+    /// The file this agreement is for
+    file-id: string,
+    /// Merkle tree root as hex string (64 chars)
+    root: string,
+    /// Depth of the Poseidon Merkle tree
+    tree-depth: s64,
+    /// Address of the user who created the agreement
+    owner: string,
+    /// Block height when the agreement was created
+    created-height: u64,
+    /// Whether the agreement is active (>= min_nodes have joined)
+    active: bool,
+  }
+
+  /// Result of creating a new agreement.
+  record create-agreement-result {
+    /// The ID of the created agreement
+    agreement-id: string,
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Functions
+  // ─────────────────────────────────────────────────────────────────
+
+  /// Initialize the storage protocol contract with default parameters.
+  export init: func(ctx: borrow<proc-context>);
+
+  /// Create a new storage agreement for a file.
+  /// Validates the metadata and registers the file in the FileLedger.
+  /// The agreement starts inactive until min_nodes storage nodes join.
+  export create-agreement: func(
+    ctx: borrow<proc-context>,
+    metadata: file-metadata
+  ) -> result<create-agreement-result, error>;
+
+  /// Get an agreement by its ID.
+  export get-agreement: func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> option<agreement-data>;
+
+  /// Get the total number of agreements.
+  export agreement-count: func(ctx: borrow<view-context>) -> u64;
+}
