@@ -1,4 +1,4 @@
-mod connection;
+pub mod connection;
 pub mod init;
 pub mod native_contracts;
 mod pool;

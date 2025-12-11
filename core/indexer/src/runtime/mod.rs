@@ -5,6 +5,7 @@ pub mod counter;
 pub mod file_ledger;
 pub mod fuel;
 pub mod numerics;
+pub mod pool;
 mod stack;
 mod storage;
 pub mod token;
@@ -55,7 +56,6 @@ use crate::database::native_contracts::TOKEN;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, Transaction};
 use crate::{
-    database::Reader,
     runtime::{
         counter::Counter,
         fuel::{Fuel, FuelGauge},
@@ -98,15 +98,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub async fn new(storage: Storage, component_cache: ComponentCache) -> Result<Self> {
-        Self::new_with_file_ledger(storage, component_cache, FileLedger::new()).await
-    }
-
-    pub async fn new_with_file_ledger(
-        storage: Storage,
-        component_cache: ComponentCache,
-        file_ledger: FileLedger,
-    ) -> Result<Self> {
+    pub fn new_engine() -> Result<Engine> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
@@ -115,8 +107,19 @@ impl Runtime {
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
-        let engine = Engine::new(&config)?;
+        Engine::new(&config)
+    }
 
+    pub async fn new(storage: Storage, component_cache: ComponentCache) -> Result<Self> {
+        Self::new_with_engine(Self::new_engine()?, storage, component_cache).await
+    }
+
+    pub async fn new_with_engine(
+        engine: Engine,
+        storage: Storage,
+        component_cache: ComponentCache,
+    ) -> Result<Self> {
+        let file_ledger = FileLedger::rebuild_from_db(&storage).await?;
         Ok(Self {
             engine,
             table: Arc::new(Mutex::new(ResourceTable::new())),
@@ -137,12 +140,15 @@ impl Runtime {
         })
     }
 
-    pub async fn new_read_only(reader: &Reader) -> Result<Self> {
-        Runtime::new(
-            Storage::builder()
-                .conn(reader.connection().await?.clone())
-                .build(),
-            ComponentCache::new(),
+    pub async fn new_read_only(
+        conn: Connection,
+        engine: Engine,
+        component_cache: ComponentCache,
+    ) -> Result<Self> {
+        Runtime::new_with_engine(
+            engine,
+            Storage::builder().conn(conn).build(),
+            component_cache,
         )
         .await
     }

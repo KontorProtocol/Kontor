@@ -12,13 +12,13 @@ use indexer::{
     config::Config,
     database::queries::{insert_processed_block, insert_transaction},
     event::EventSubscriber,
-    runtime::Runtime,
+    runtime,
     test_utils::new_test_db,
 };
 use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
 use libsql::params;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +37,7 @@ struct TransactionResponse {
 }
 
 async fn create_test_app() -> Result<Router> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
 
     let conn = writer.connection();
 
@@ -104,7 +104,7 @@ async fn create_test_app() -> Result<Router> {
         cancel_token: CancellationToken::new(),
         available: Arc::new(RwLock::new(true)),
         event_subscriber: EventSubscriber::new(),
-        runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
+        runtime_pool: runtime::pool::new(db_dir.path().to_path_buf(), db_name).await?,
         reader,
     };
 

@@ -62,7 +62,7 @@ impl managed::Manager for Manager {
 pub async fn new_pool(data_dir: &Path, filename: &str) -> anyhow::Result<Pool<Manager>> {
     let manager = Manager::new(data_dir.to_path_buf(), filename.to_string());
     Pool::builder(manager)
-        .max_size(10)
+        .max_size(std::thread::available_parallelism()?.into())
         .build()
         .context("Failed to build database pool")
 }

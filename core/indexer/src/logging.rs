@@ -3,7 +3,7 @@ use std::sync::Once;
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tracing::{Level, level_filters::LevelFilter};
-use tracing_subscriber::{Registry, filter, layer::SubscriberExt};
+use tracing_subscriber::{EnvFilter, Registry, filter, layer::SubscriberExt};
 
 use crate::config::Config;
 
@@ -25,14 +25,17 @@ pub fn setup() {
             Format::JSON => {
                 let layer = tracing_stackdriver::layer();
                 let filter = filter::Targets::new()
-                    .with_default(LevelFilter::OFF)
+                    .with_default(LevelFilter::INFO)
                     .with_target("kontor", Level::INFO)
                     .with_target("indexer", Level::INFO);
                 let subscriber = Registry::default().with(layer).with(filter);
                 let _ = tracing::subscriber::set_global_default(subscriber);
             }
             Format::Plain => {
-                let _ = tracing_subscriber::fmt::try_init();
+                let filter = EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env_lossy();
+                let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
             }
         }
     });

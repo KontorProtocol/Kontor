@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, RwLock};
+use deadpool::managed::Pool;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    bitcoin_client::Client, config::Config, database, event::EventSubscriber, runtime::Runtime,
-};
+use crate::{bitcoin_client::Client, config::Config, database, event::EventSubscriber, runtime};
 
 #[derive(Clone)]
 pub struct Env {
@@ -15,5 +14,5 @@ pub struct Env {
     pub reader: database::Reader,
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
-    pub runtime: Arc<Mutex<Runtime>>,
+    pub runtime_pool: Pool<runtime::pool::Manager>,
 }

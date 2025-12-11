@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use axum::{Router, routing::get};
@@ -18,14 +18,14 @@ use indexer::{
         types::{ContractRow, ContractStateRow},
     },
     event::EventSubscriber,
-    runtime::Runtime,
+    runtime,
     test_utils::new_test_db,
 };
 use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
 use libsql::params;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,7 +33,12 @@ struct TransactionListResponseWrapper {
     result: PaginatedResponse<TransactionRow>,
 }
 
-async fn create_test_app(reader: Reader, writer: Writer) -> Result<Router> {
+async fn create_test_app(
+    reader: Reader,
+    writer: Writer,
+    db_dir: PathBuf,
+    db_name: String,
+) -> Result<Router> {
     let conn = writer.connection();
     // Insert blocks for heights 800000-800005
     for height in 800000..=800005 {
@@ -158,7 +163,7 @@ async fn create_test_app(reader: Reader, writer: Writer) -> Result<Router> {
         cancel_token: CancellationToken::new(),
         available: Arc::new(RwLock::new(true)),
         event_subscriber: EventSubscriber::new(),
-        runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
+        runtime_pool: runtime::pool::new(db_dir, db_name).await?,
         reader,
     };
 
@@ -256,8 +261,8 @@ async fn collect_all_transactions_with_offset(
 
 #[tokio::test]
 async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test with different page sizes
@@ -329,8 +334,8 @@ async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test pagination for height 800000 (5 transactions)
@@ -394,8 +399,8 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test pagination for height 800002 (7 transactions)
@@ -439,8 +444,8 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
 
 #[tokio::test]
 async fn test_cursor_pagination_edge_cases() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test with limit=1 to ensure every transaction is returned exactly once
@@ -483,8 +488,8 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test that cursor pagination works correctly when page size equals total count
@@ -520,8 +525,8 @@ async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_consistency_across_different_limits() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Collect all transactions with different page sizes
@@ -569,8 +574,8 @@ async fn test_cursor_consistency_across_different_limits() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     // Test that total_count decreases as we paginate (showing remaining items)
@@ -628,8 +633,8 @@ async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_contract_address() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     let url = "/api/transactions?limit=1&contract=token_800000_1";
@@ -683,8 +688,8 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 
 #[tokio::test]
 async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-    let app = create_test_app(reader, writer).await?;
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
     let server = TestServer::new(app)?;
 
     let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";

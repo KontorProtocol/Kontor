@@ -297,7 +297,7 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
     }
 }
 
-pub async fn new_test_db() -> Result<(Reader, Writer, TempDir)> {
+pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     let temp_dir = TempDir::new()?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -307,7 +307,7 @@ pub async fn new_test_db() -> Result<(Reader, Writer, TempDir)> {
     let data_dir = temp_dir.path();
     let writer = Writer::new(data_dir, &db_name).await?;
     let reader = Reader::new(data_dir, &db_name).await?; // Assuming Reader::new exists
-    Ok((reader, writer, temp_dir))
+    Ok((reader, writer, (temp_dir, db_name)))
 }
 
 pub fn new_mock_block_hash(i: u32) -> BlockHash {

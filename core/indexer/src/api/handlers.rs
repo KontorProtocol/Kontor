@@ -220,9 +220,9 @@ pub async fn post_contract(
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
     let result = env
-        .runtime
-        .lock()
-        .await
+        .runtime_pool
+        .get()
+        .await?
         .execute(None, &contract_address, &expr)
         .await;
     Ok(match result {
@@ -249,7 +249,7 @@ pub async fn get_contract(
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let runtime = env.runtime.lock().await;
+    let runtime = env.runtime_pool.get().await?;
     let contract_id = runtime
         .storage
         .contract_id(&contract_address)

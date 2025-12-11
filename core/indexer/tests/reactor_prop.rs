@@ -45,7 +45,7 @@ struct Step {
 struct Database {
     reader: database::Reader,
     writer: database::Writer,
-    _temp_dir: TempDir,
+    _temp_dir: (TempDir, String),
 }
 
 struct DatabaseFactory {
@@ -83,7 +83,7 @@ async fn new_db_wrapper() -> Database {
     }
 }
 
-async fn new_db() -> Result<(database::Reader, database::Writer, TempDir)> {
+async fn new_db() -> Result<(database::Reader, database::Writer, (TempDir, String))> {
     // unable to parse Config object with clap due to conflict with proptest flags.
     let (reader, writer, _temp_dir) = new_test_db().await?;
     Ok((reader, writer, _temp_dir))

@@ -6,10 +6,9 @@ use anyhow::Result;
 use clap::Parser;
 use indexer::database::queries::delete_unprocessed_blocks;
 use indexer::event::EventSubscriber;
-use indexer::runtime::Runtime;
-use indexer::{api, block, built_info, reactor};
+use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -60,7 +59,7 @@ async fn main() -> Result<()> {
             reader: reader.clone(),
             event_subscriber: event_subscriber.clone(),
             bitcoin: bitcoin.clone(),
-            runtime: Arc::new(Mutex::new(Runtime::new_read_only(&reader).await?)),
+            runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string()).await?,
         })
         .await?,
     );

@@ -28,7 +28,7 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{ComponentCache, FileLedger, Runtime, Storage},
+    runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
 
@@ -106,11 +106,7 @@ impl Reactor {
             .conn(writer.connection())
             .build();
 
-        // Rebuild FileLedger from database (for PoR verification)
-        let file_ledger = FileLedger::rebuild_from_db(&storage.clone()).await?;
-
-        let mut runtime =
-            Runtime::new_with_file_ledger(storage, ComponentCache::new(), file_ledger).await?;
+        let mut runtime = Runtime::new(storage, ComponentCache::new()).await?;
         runtime.publish_native_contracts().await?;
         Ok(Self {
             reader,
