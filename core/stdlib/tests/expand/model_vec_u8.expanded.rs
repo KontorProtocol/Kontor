@@ -1,0 +1,70 @@
+use stdlib::Model;
+struct VecU8 {
+    pub bytes: Vec<u8>,
+}
+pub struct VecU8Model {
+    pub base_path: stdlib::DotPathBuf,
+    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+}
+impl VecU8Model {
+    pub fn new(
+        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+        base_path: stdlib::DotPathBuf,
+    ) -> Self {
+        Self {
+            base_path: base_path.clone(),
+            ctx,
+        }
+    }
+    pub fn bytes(&self) -> Vec<u8> {
+        self.ctx.__get(self.base_path.push("bytes")).unwrap()
+    }
+    pub fn load(&self) -> VecU8 {
+        VecU8 { bytes: self.bytes() }
+    }
+}
+pub struct VecU8WriteModel {
+    pub base_path: stdlib::DotPathBuf,
+    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    model: VecU8Model,
+}
+impl VecU8WriteModel {
+    pub fn new(
+        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+        base_path: stdlib::DotPathBuf,
+    ) -> Self {
+        let view_storage = ctx.view_storage();
+        Self {
+            base_path: base_path.clone(),
+            ctx,
+            model: VecU8Model::new(alloc::rc::Rc::new(view_storage), base_path.clone()),
+        }
+    }
+    pub fn bytes(&self) -> Vec<u8> {
+        self.ctx.__get(self.base_path.push("bytes")).unwrap()
+    }
+    pub fn set_bytes(&self, value: Vec<u8>) {
+        self.ctx.__set(self.base_path.push("bytes"), value);
+    }
+    pub fn update_bytes(&self, f: impl Fn(Vec<u8>) -> Vec<u8>) {
+        let path = self.base_path.push("bytes");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
+    pub fn try_update_bytes(
+        &self,
+        f: impl Fn(Vec<u8>) -> Result<Vec<u8>, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push("bytes");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+        Ok(())
+    }
+    pub fn load(&self) -> VecU8 {
+        VecU8 { bytes: self.bytes() }
+    }
+}
+impl core::ops::Deref for VecU8WriteModel {
+    type Target = VecU8Model;
+    fn deref(&self) -> &Self::Target {
+        &self.model
+    }
+}

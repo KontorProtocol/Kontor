@@ -73,6 +73,10 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_bool(path)
             }
 
+            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>> {
+                self.get_list_u8(path)
+            }
+
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a {
                 make_keys_iterator(self.get_keys(path))
             }
@@ -108,6 +112,10 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_bool(path)
             }
 
+            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>> {
+                self.get_list_u8(path)
+            }
+
             fn __get_keys<'a, T: ToString + FromString + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a{
                 make_keys_iterator(self.get_keys(path))
             }
@@ -138,6 +146,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __set_bool(self: &alloc::rc::Rc<Self>, path: &str, value: bool) {
                 self.set_bool(path, value)
+            }
+
+            fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &str, value: Vec<u8>) {
+                self.set_list_u8(path, &value)
             }
 
             fn __set_void(self: &alloc::rc::Rc<Self>, path: &str) {
@@ -174,6 +186,12 @@ pub fn generate(config: Config) -> TokenStream {
         impl Retrieve<context::ViewStorage> for bool {
             fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
                 ctx.__get_bool(&path)
+            }
+        }
+
+        impl Retrieve<context::ViewStorage> for Vec<u8> {
+            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_list_u8(&path)
             }
         }
 
@@ -228,6 +246,12 @@ pub fn generate(config: Config) -> TokenStream {
         impl Retrieve<context::ProcStorage> for bool {
             fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
                 ctx.__get_bool(&path)
+            }
+        }
+
+        impl Retrieve<context::ProcStorage> for Vec<u8> {
+            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
+                ctx.__get_list_u8(&path)
             }
         }
 
@@ -288,6 +312,12 @@ pub fn generate(config: Config) -> TokenStream {
         impl Store<context::ProcStorage> for bool {
             fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: bool) {
                 ctx.__set_bool(&path, value);
+            }
+        }
+
+        impl Store<context::ProcStorage> for Vec<u8> {
+            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: Vec<u8>) {
+                ctx.__set_list_u8(&path, value);
             }
         }
 

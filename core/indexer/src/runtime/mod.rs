@@ -1213,6 +1213,17 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
+    async fn get_list_u8<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewStorage>,
+        path: String,
+    ) -> Result<Option<Vec<u8>>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
     async fn get_keys<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
@@ -1341,6 +1352,17 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
+    async fn get_list_u8<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<Option<Vec<u8>>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_primitive(accessor, self_, path)
+            .await
+    }
+
     async fn get_keys<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
@@ -1416,6 +1438,18 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
         self_: Resource<ProcStorage>,
         path: String,
         value: bool,
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._set_primitive(accessor, self_, path, value)
+            .await
+    }
+
+    async fn set_list_u8<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+        value: Vec<u8>,
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())

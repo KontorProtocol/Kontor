@@ -29,6 +29,7 @@ interface context {
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
         get-bool: func(path: string) -> option<bool>;
+        get-list-u8: func(path: string) -> option<list<u8>>;
         get-keys: func(path: string) -> keys;
         exists: func(path: string) -> bool;
         extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
@@ -39,6 +40,7 @@ interface context {
         get-u64: func(path: string) -> option<u64>;
         get-s64: func(path: string) -> option<s64>;
         get-bool: func(path: string) -> option<bool>;
+        get-list-u8: func(path: string) -> option<list<u8>>;
         get-keys: func(path: string) -> keys;
         exists: func(path: string) -> bool;
         extend-path-with-match: func(path: string, variants: list<string>) -> option<string>;
@@ -47,6 +49,7 @@ interface context {
         set-u64: func(path: string, value: u64);
         set-s64: func(path: string, value: s64);
         set-bool: func(path: string, value: bool);
+        set-list-u8: func(path: string, value: list<u8>);
         set-void: func(path: string);
         delete-matching-paths: func(base-path: string, variants: list<string>) -> u64;
         view-storage: func() -> view-storage;

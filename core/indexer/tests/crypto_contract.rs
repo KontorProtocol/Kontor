@@ -18,6 +18,15 @@ async fn run_test_crypto_contract(runtime: &mut Runtime) -> Result<(Signer, Cont
         "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2"
     );
 
+    let expected_result = vec![
+        44, 38, 180, 107, 104, 255, 198, 143, 249, 155, 69, 60, 29, 48, 65, 52, 19, 66, 45, 112,
+        100, 131, 191, 160, 249, 138, 94, 136, 98, 102, 231, 174,
+    ];
+    let result = crypto::set_hash(runtime, &crypto, &alice, "foo").await?;
+    assert_eq!(result, expected_result);
+    let result = crypto::get_hash(runtime, &crypto).await?;
+    assert_eq!(result, Some(expected_result));
+
     Ok((alice, crypto))
 }
 

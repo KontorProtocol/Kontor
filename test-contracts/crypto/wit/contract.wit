@@ -11,4 +11,8 @@ world root {
   export hash-with-salt: func(ctx: borrow<view-context>, input: string, salt: string) -> string;
 
   export generate-id: func(ctx: borrow<proc-context>) -> string;
+
+  export set-hash: func(ctx: borrow<proc-context>, input: string) -> list<u8>;
+
+  export get-hash: func(ctx: borrow<view-context>) -> option<list<u8>>;
 }
