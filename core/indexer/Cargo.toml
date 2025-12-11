@@ -47,7 +47,6 @@ clap = { version = "=4.5.53", features = ["derive", "env"] }
 axum-server = "=0.8.0"
 futures-util = "=0.3.31"
 hex = "=0.4.3"
-lru = "=0.16.2"
 rand = "=0.9.2"
 brotli = "=8.0.2"
 sha2 = "=0.10.9"
@@ -59,6 +58,7 @@ tracing-stackdriver = "=0.10.0"
 regex = "=1.12.2"
 kontor-crypto = "=0.1.1"
 ff = "=0.13.1"
+moka = { version = "0.12.11", features = ["future"] }
 
 [dev-dependencies]
 testlib = { path = "../testlib" }

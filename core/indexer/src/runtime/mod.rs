@@ -321,12 +321,14 @@ impl Runtime {
     }
 
     pub async fn load_component(&self, contract_id: i64) -> Result<Component> {
-        Ok(match self.component_cache.get(&contract_id) {
+        Ok(match self.component_cache.get(&contract_id).await {
             Some(component) => component,
             None => {
                 let component_bytes = self.storage.component_bytes(contract_id).await?;
                 let component = Component::from_binary(&self.engine, &component_bytes)?;
-                self.component_cache.put(contract_id, component.clone());
+                self.component_cache
+                    .put(contract_id, component.clone())
+                    .await;
                 component
             }
         })
