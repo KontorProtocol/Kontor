@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use deadpool::managed::{self, Pool, RecycleResult};
 use thiserror::Error;
-use wasmtime::Engine;
+use wasmtime::{Engine, component::Linker};
 
 use crate::{
     database::connection::new_connection,
@@ -22,15 +22,19 @@ pub struct Manager {
     data_dir: PathBuf,
     filename: String,
     engine: Engine,
+    linker: Linker<Runtime>,
     component_cache: ComponentCache,
 }
 
 impl Manager {
     pub fn new(data_dir: PathBuf, filename: String) -> anyhow::Result<Self> {
+        let engine = Runtime::new_engine()?;
+        let linker = Runtime::new_linker(&engine)?;
         Ok(Self {
             data_dir,
             filename,
-            engine: Runtime::new_engine()?,
+            engine,
+            linker,
             component_cache: ComponentCache::new(),
         })
     }
@@ -42,11 +46,12 @@ impl managed::Manager for Manager {
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         Runtime::new_read_only(
+            self.engine.clone(),
+            self.linker.clone(),
+            self.component_cache.clone(),
             new_connection(&self.data_dir, &self.filename)
                 .await
                 .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?,
-            self.engine.clone(),
-            self.component_cache.clone(),
         )
         .await
         .map_err(|e| RuntimeError::CreationFailed(e.to_string()))

@@ -106,7 +106,7 @@ impl Reactor {
             .conn(writer.connection())
             .build();
 
-        let mut runtime = Runtime::new(storage, ComponentCache::new()).await?;
+        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         runtime.publish_native_contracts().await?;
         Ok(Self {
             reader,

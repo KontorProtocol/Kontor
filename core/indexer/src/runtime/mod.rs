@@ -80,6 +80,7 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
+    pub linker: Linker<Self>,
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
@@ -110,18 +111,28 @@ impl Runtime {
         Engine::new(&config)
     }
 
-    pub async fn new(storage: Storage, component_cache: ComponentCache) -> Result<Self> {
-        Self::new_with_engine(Self::new_engine()?, storage, component_cache).await
+    pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
+        let mut linker = Linker::new(engine);
+        Root::add_to_linker::<_, Self>(&mut linker, |s| s)?;
+        Ok(linker)
     }
 
-    pub async fn new_with_engine(
+    pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
+        let engine = Self::new_engine()?;
+        let linker = Self::new_linker(&engine)?;
+        Self::new_with(engine, linker, component_cache, storage).await
+    }
+
+    pub async fn new_with(
         engine: Engine,
-        storage: Storage,
+        linker: Linker<Self>,
         component_cache: ComponentCache,
+        storage: Storage,
     ) -> Result<Self> {
         let file_ledger = FileLedger::rebuild_from_db(&storage).await?;
         Ok(Self {
             engine,
+            linker,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
@@ -141,14 +152,16 @@ impl Runtime {
     }
 
     pub async fn new_read_only(
-        conn: Connection,
         engine: Engine,
+        linker: Linker<Self>,
         component_cache: ComponentCache,
+        conn: Connection,
     ) -> Result<Self> {
-        Runtime::new_with_engine(
+        Runtime::new_with(
             engine,
-            Storage::builder().conn(conn).build(),
+            linker,
             component_cache,
+            Storage::builder().conn(conn).build(),
         )
         .await
     }
@@ -319,12 +332,6 @@ impl Runtime {
         })
     }
 
-    pub fn make_linker(&self) -> Result<Linker<Runtime>> {
-        let mut linker = Linker::new(&self.engine);
-        Root::add_to_linker::<_, Runtime>(&mut linker, |s| s)?;
-        Ok(linker)
-    }
-
     pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
         let mut s = Store::new(&self.engine, self.clone());
         s.set_fuel(fuel)?;
@@ -355,10 +362,12 @@ impl Runtime {
             .await?
             .ok_or(anyhow!("Contract not found: {}", contract_address))?;
         let component = self.load_component(contract_id).await?;
-        let linker = self.make_linker()?;
         let mut fuel_limit = fuel.unwrap_or(self.fuel_limit_for_non_procs());
         let mut store = self.make_store(fuel_limit)?;
-        let instance = linker.instantiate_async(&mut store, &component).await?;
+        let instance = self
+            .linker
+            .instantiate_async(&mut store, &component)
+            .await?;
         let fallback_name = "fallback";
         let fallback_expr = format!(
             "{}({})",

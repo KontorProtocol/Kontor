@@ -184,7 +184,7 @@ impl RuntimeLocal {
         .await?;
         let storage = Storage::builder().height(0).tx_index(0).conn(conn).build();
         let component_cache = ComponentCache::new();
-        let mut runtime = IndexerRuntime::new(storage, component_cache).await?;
+        let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
         runtime.publish_native_contracts().await?;
         runtime
             .set_context(1, 1, 0, 0, new_mock_transaction(0).txid, None, None)
