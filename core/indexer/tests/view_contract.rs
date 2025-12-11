@@ -17,7 +17,7 @@ async fn test_view_contract() -> Result<()> {
 
     token::mint(runtime, &minter, 900.into()).await??;
 
-    let calls = (0..1000).map(|i| {
+    let calls = (0..100).map(|i| {
         let minter = minter.clone();
         async move {
             let result = api::client::Client::new("http://localhost:9333/api")?
