@@ -11,7 +11,7 @@ world root {
 
   record file-metadata {
     file-id: string,
-    root: string,
+    root: list<u8>,
     tree-depth: s64,
   }
 
@@ -22,9 +22,8 @@ world root {
   record agreement-data {
     agreement-id: string,
     file-id: string,
-    root: string,
+    root: list<u8>,
     tree-depth: s64,
-    owner: string,
     created-height: u64,
     active: bool,
   }

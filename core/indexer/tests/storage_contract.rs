@@ -18,12 +18,11 @@ fn native_storage_address() -> ContractAddress {
 /// This generates a real Merkle tree root from the given data.
 fn prepare_test_file(file_id: &str, data: &[u8]) -> storage::FileMetadata {
     let (_prepared, crypto_meta) = prepare_file(data, file_id).expect("prepare_file failed");
-    let root_bytes = crypto_meta.root.to_repr();
-    let root_hex = hex::encode(root_bytes);
+    let root_bytes = crypto_meta.root.to_repr().to_vec();
     let depth = crypto_meta.depth() as i64;
     storage::FileMetadata {
         file_id: crypto_meta.file_id,
-        root: root_hex,
+        root: root_bytes,
         tree_depth: depth,
     }
 }
@@ -111,19 +110,10 @@ async fn run_test_invalid_inputs(runtime: &mut Runtime) -> Result<()> {
     let result = storage::create_agreement(runtime, &storage_addr, &owner, metadata).await?;
     assert!(result.is_err(), "empty file_id should fail");
 
-    // Invalid root (not hex)
-    let metadata = storage::FileMetadata {
-        file_id: "file-invalid-root".to_string(),
-        root: "not-hex-data".to_string(),
-        tree_depth: 10,
-    };
-    let result = storage::create_agreement(runtime, &storage_addr, &owner, metadata).await?;
-    assert!(result.is_err(), "invalid hex root should fail");
-
     // Invalid root (wrong length - too short)
     let metadata = storage::FileMetadata {
         file_id: "file-short-root".to_string(),
-        root: "0123456789abcdef".to_string(), // only 16 chars = 8 bytes
+        root: vec![0u8; 8], // only 8 bytes, need 32
         tree_depth: 10,
     };
     let result = storage::create_agreement(runtime, &storage_addr, &owner, metadata).await?;

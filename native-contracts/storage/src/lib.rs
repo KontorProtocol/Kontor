@@ -20,10 +20,9 @@ const DEFAULT_CHALLENGE_DEADLINE_BLOCKS: u64 = 2016;
 #[derive(Clone, Default, Storage)]
 struct Agreement {
     pub file_id: String,
-    /// Merkle tree root as hex string (64 chars)
-    pub root: String,
+    /// Merkle tree root (32 bytes)
+    pub root: Vec<u8>,
     pub tree_depth: i64,
-    pub owner: String,
     pub created_height: u64,
     pub active: bool,
 }
@@ -46,23 +45,20 @@ fn to_agreement_data(agreement_id: String, model: &AgreementModel) -> AgreementD
         file_id: model.file_id(),
         root: model.root(),
         tree_depth: model.tree_depth(),
-        owner: model.owner(),
         created_height: model.created_height(),
         active: model.active(),
     }
 }
 
-/// Decode hex string to bytes and validate it's exactly 32 bytes.
-fn decode_root(root: &str) -> Result<Vec<u8>, Error> {
-    let bytes =
-        hex::decode(root).map_err(|_| Error::Message("root must be valid hex".to_string()))?;
-    if bytes.len() != 32 {
+/// Validate root is exactly 32 bytes (FieldElement size).
+fn validate_root(root: &[u8]) -> Result<(), Error> {
+    if root.len() != 32 {
         return Err(Error::Message(format!(
             "root must be 32 bytes, got {}",
-            bytes.len()
+            root.len()
         )));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -88,7 +84,7 @@ impl Guest for Storage {
         if metadata.file_id.is_empty() {
             return Err(Error::Message("file_id cannot be empty".to_string()));
         }
-        let root_bytes = decode_root(&metadata.root)?;
+        validate_root(&metadata.root)?;
         if metadata.tree_depth <= 0 {
             return Err(Error::Message("tree_depth must be positive".to_string()));
         }
@@ -105,7 +101,7 @@ impl Guest for Storage {
         }
 
         // Register with the FileLedger host function
-        file_ledger::register_file(&metadata.file_id, &root_bytes, metadata.tree_depth)
+        file_ledger::register_file(&metadata.file_id, &metadata.root, metadata.tree_depth)
             .map_err(|e| Error::Message(format!("failed to register file: {}", e)))?;
 
         // Create the agreement (starts inactive until nodes join)
@@ -113,7 +109,6 @@ impl Guest for Storage {
             file_id: metadata.file_id,
             root: metadata.root,
             tree_depth: metadata.tree_depth,
-            owner: ctx.signer().to_string(),
             created_height: 0, // TODO: Get actual block height when available
             active: false,
         };

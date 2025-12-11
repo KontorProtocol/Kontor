@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 stdlib = { workspace = true }
-hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [lib]
 crate-type = ["cdylib"]
