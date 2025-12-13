@@ -1,0 +1,52 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{view-context, proc-context};
+  use kontor:built-in/error.{error};
+
+  // ─────────────────────────────────────────────────────────────────
+  // Input Types
+  // ─────────────────────────────────────────────────────────────────
+
+  record file-metadata {
+    file-id: string,
+    root: list<u8>,
+    tree-depth: s64,
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Output/Storage Types
+  // ─────────────────────────────────────────────────────────────────
+
+  record agreement-data {
+    agreement-id: string,
+    file-id: string,
+    root: list<u8>,
+    tree-depth: s64,
+    created-height: u64,
+    active: bool,
+  }
+
+  record create-agreement-result {
+    agreement-id: string,
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Functions
+  // ─────────────────────────────────────────────────────────────────
+
+  export init: func(ctx: borrow<proc-context>);
+
+  export create-agreement: func(
+    ctx: borrow<proc-context>,
+    metadata: file-metadata
+  ) -> result<create-agreement-result, error>;
+
+  export get-agreement: func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> option<agreement-data>;
+
+  export agreement-count: func(ctx: borrow<view-context>) -> u64;
+}

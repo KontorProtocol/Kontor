@@ -53,6 +53,7 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
             segment.as_deref(),
             Some("u64" | "i64" | "String" | "bool" | "ContractAddress" | "Integer" | "Decimal")
         ) || full == "Vec<u8>"
+            || full == "Vec::<u8>"
     } else {
         false
     }
