@@ -2,7 +2,6 @@ pub mod types;
 
 use anyhow::{Result, bail};
 use indexer_types::{Block, BlockRow, Event, Op, TransactionRow};
-use libsql::Connection;
 use tokio::{
     select,
     sync::{
@@ -28,7 +27,6 @@ use crate::{
             select_block_at_height, select_block_latest, select_block_with_hash,
             set_block_processed,
         },
-        types::ContractResultRow,
     },
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
@@ -48,34 +46,28 @@ struct Reactor {
     option_last_hash: Option<BlockHash>,
 }
 
-pub async fn block_handler(
-    runtime: &mut Runtime,
-    conn: &Connection,
-    block: &Block,
-    simulate: bool,
-) -> Result<Option<ContractResultRow>> {
-    if !simulate {
-        insert_block(conn, block.into()).await?;
+pub async fn block_handler(runtime: &mut Runtime, block: &Block, simulate: bool) -> Result<()> {
+    if simulate {
+        runtime.storage.savepoint().await?;
     }
 
+    insert_block(&runtime.storage.conn, block.into()).await?;
+
     for t in &block.transactions {
-        if !simulate {
-            insert_transaction(
-                conn,
-                TransactionRow::builder()
-                    .height(block.height as i64)
-                    .tx_index(t.index)
-                    .txid(t.txid.to_string())
-                    .build(),
-            )
-            .await?;
-        }
+        insert_transaction(
+            &runtime.storage.conn,
+            TransactionRow::builder()
+                .height(block.height as i64)
+                .tx_index(t.index)
+                .txid(t.txid.to_string())
+                .build(),
+        )
+        .await?;
         for op in &t.ops {
             let metadata = op.metadata();
             let input_index = metadata.input_index;
             let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
             info!("Op return data: {:#?}", op_return_data);
-            runtime.set_simulate(simulate);
             runtime
                 .set_context(
                     block.height as i64,
@@ -125,11 +117,13 @@ pub async fn block_handler(
         }
     }
 
-    if !simulate {
-        set_block_processed(conn, block.height as i64).await?;
+    set_block_processed(&runtime.storage.conn, block.height as i64).await?;
+
+    if simulate {
+        runtime.storage.rollback().await?;
     }
 
-    Ok(runtime.take_last_simulated_result())
+    Ok(())
 }
 
 impl Reactor {
@@ -311,8 +305,7 @@ impl Reactor {
 
         info!("# Block Kontor Transactions: {}", block.transactions.len());
 
-        let conn = self.writer.connection();
-        block_handler(&mut self.runtime, &conn, &block, false).await?;
+        block_handler(&mut self.runtime, &block, false).await?;
 
         if !block.transactions.is_empty()
             && let Some(tx) = &self.event_tx
