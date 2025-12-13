@@ -96,6 +96,15 @@ Request Body: `TransactionHex`
 Response: `OpWithResult[]`
 
 
+#### POST `/transactions/simulate`
+
+Simulates the execution of a transaction's operations. Useful for testing transaction before broadcasting.
+
+Request Body: `TransactionHex`
+
+Response: `OpWithResult[]`
+
+
 ### Compose Helpers
 
 #### POST `/transactions/compose`
