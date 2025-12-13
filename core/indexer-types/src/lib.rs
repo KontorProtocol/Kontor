@@ -374,7 +374,7 @@ pub struct PaginatedResponse<T> {
     pub pagination: PaginationMeta,
 }
 
-#[derive(Debug, Deserialize, Serialize, TS)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Info {
     pub version: String,

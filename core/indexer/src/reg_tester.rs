@@ -24,8 +24,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Inst, InstructionQuery, OpWithResult, ResultRow, RevealOutputs,
-    RevealQuery, TransactionHex, ViewResult,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, OpWithResult, ResultRow,
+    RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -217,11 +217,11 @@ impl RegTesterInner {
         Ok(result)
     }
 
-    pub async fn instruction(
+    pub async fn compose_instruction(
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<InstructionResult> {
+    ) -> Result<(ComposeOutputs, String, String)> {
         let instructions = InstructionQuery::builder()
             .address(ident.address.to_string())
             .x_only_public_key(ident.x_only_public_key().to_string())
@@ -263,6 +263,16 @@ impl RegTesterInner {
 
         self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
+        Ok((compose_res, commit_tx_hex, reveal_tx_hex))
+    }
+
+    pub async fn instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<InstructionResult> {
+        let (compose_res, commit_tx_hex, reveal_tx_hex) =
+            self.compose_instruction(ident, inst).await?;
         let commit_txid = self
             .bitcoin_client
             .send_raw_transaction(&commit_tx_hex)
@@ -630,6 +640,19 @@ impl RegTester {
     pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
         self.inner.lock().await.mempool_info().await
     }
+
+    pub async fn compose_instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        self.inner
+            .lock()
+            .await
+            .compose_instruction(ident, inst)
+            .await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -668,5 +691,9 @@ impl RegTester {
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
         self.inner.lock().await.checkpoint().await
+    }
+
+    pub async fn info(&mut self) -> Result<Info> {
+        self.inner.lock().await.kontor_client.index().await
     }
 }

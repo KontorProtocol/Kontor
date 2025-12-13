@@ -92,6 +92,17 @@ impl Client {
         .await
     }
 
+    pub async fn transaction_simulate(&self, tx_hex: TransactionHex) -> Result<Vec<OpWithResult>> {
+        Self::handle_response(
+            self.client
+                .post(format!("{}/transactions/simulate", &self.url))
+                .json(&tx_hex)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn transaction_inspect(&self, txid: &bitcoin::Txid) -> Result<Vec<OpWithResult>> {
         Self::handle_response(
             self.client
