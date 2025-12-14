@@ -3,9 +3,9 @@ use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
-use indexer::bitcoin_client::client::RegtestRpc;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
+use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
     ComposeQuery, Inst, InstructionQuery, RevealParticipantQuery, RevealQuery, serialize,
 };
@@ -38,30 +38,14 @@ pub async fn test_compose_token_attach_and_detach(
 
     let attach_inst = Inst::Call {
         gas_limit: 50_000,
-        contract: indexer_types::ContractAddress {
-            name: "token".to_string(),
-            height: 0,
-            tx_index: 0,
-        },
-        expr: format!(
-            "{}({})",
-            "attach",
-            [
-                stdlib::to_wave_expr(0),
-                stdlib::to_wave_expr(Decimal::from(2)),
-            ]
-            .join(", ")
-        ),
+        contract: runtime::token::address().into(),
+        expr: token::wave::attach_call_expr(0, Decimal::from(2)),
     };
 
     let detach_inst = Inst::Call {
         gas_limit: 50_000,
-        contract: indexer_types::ContractAddress {
-            name: "token".to_string(),
-            height: 0,
-            tx_index: 0,
-        },
-        expr: "detach()".to_string(),
+        contract: runtime::token::address().into(),
+        expr: token::wave::detach_call_expr(),
     };
 
     let query = ComposeQuery::builder()
@@ -204,9 +188,8 @@ pub async fn test_compose_token_attach_and_detach(
         .await?
         .ok_or(anyhow::anyhow!("Could not find op result"))?;
 
-    let attach_result: Result<token::Transfer, testlib::Error> =
-        stdlib::from_wave_expr(&attach_result.value.expect("Expected value"));
-    let transfer = attach_result?;
+    let transfer =
+        token::wave::attach_parse_return_expr(&attach_result.value.expect("Expected value"))?;
 
     let utxo_id = format!("{}:{}", reveal_transaction.compute_txid(), 0);
 
@@ -234,9 +217,8 @@ pub async fn test_compose_token_attach_and_detach(
         .await?
         .ok_or(anyhow::anyhow!("Could not find op result"))?;
 
-    let detach_result: Result<token::Transfer, testlib::Error> =
-        stdlib::from_wave_expr(&detach_result.value.expect("Expected value"));
-    let transfer = detach_result?;
+    let transfer =
+        token::wave::detach_parse_return_expr(&detach_result.value.expect("Expected value"))?;
 
     assert_eq!(transfer.src, utxo_id);
     assert_eq!(transfer.dst, buyer_identity.x_only_public_key().to_string());

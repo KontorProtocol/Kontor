@@ -4,7 +4,7 @@ use anyhow::Result;
 use darling::FromMeta;
 use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::Ident;
 use wit_parser::{
     Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
@@ -115,11 +115,17 @@ pub fn import(
     }
 
     let mut func_streams = Vec::new();
-    for export in exports {
+    for export in exports.iter() {
         func_streams.push(
             generate_functions(&resolve, test, export, contract_id)
                 .expect("Function didn't generate"),
         )
+    }
+
+    let mut wave_func_streams = Vec::new();
+    for export in exports.iter() {
+        wave_func_streams
+            .push(generate_wave_functions(&resolve, export).expect("Wave function didn't generate"))
     }
 
     let supers = if test {
@@ -141,14 +147,20 @@ pub fn import(
         }
     };
 
-    let mod_keyword = if public {
+    let mod_keywords = if public {
+        quote! { pub mod }
+    } else {
+        quote! { mod }
+    };
+
+    let wave_mod_keywords = if test {
         quote! { pub mod }
     } else {
         quote! { mod }
     };
 
     quote! {
-        #mod_keyword #module_name {
+        #mod_keywords #module_name {
             extern crate alloc;
 
             use alloc::{
@@ -156,6 +168,12 @@ pub fn import(
                 string::{String, ToString},
                 vec::Vec,
             };
+
+            #wave_mod_keywords wave {
+                use super::*;
+
+                #(#wave_func_streams)*
+            }
 
             #supers
 
@@ -165,14 +183,8 @@ pub fn import(
     }
 }
 
-pub fn generate_functions(
-    resolve: &Resolve,
-    test: bool,
-    export: &Function,
-    contract_id: Option<(&str, u64, u64)>,
-) -> Result<TokenStream> {
-    let fn_name = Ident::new(&export.name.to_snake_case(), Span::call_site());
-    let mut params = export
+fn make_params(resolve: &Resolve, export: &Function) -> Result<Vec<TokenStream>> {
+    export
         .params
         .iter()
         .map(|(name, ty)| {
@@ -180,7 +192,114 @@ pub fn generate_functions(
             let param_ty = utils::wit_type_to_rust_type(resolve, ty, true)?;
             Ok(quote! { #param_name: #param_ty })
         })
+        .collect::<Result<Vec<_>>>()
+}
+
+fn make_call_expr(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
+    let fn_name = Ident::new(&export.name.to_snake_case(), Span::call_site());
+    let expr_parts = export
+        .params
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(_i, (name, ty))| {
+            let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
+            Ok(match ty {
+                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
+                    let _inner_ty = match resolve.types[*id].kind {
+                        TypeDefKind::Option(inner) => {
+                            utils::wit_type_to_rust_type(resolve, &inner, false)?
+                        }
+                        _ => unreachable!(),
+                    };
+                    quote! {
+                        match #param_name {
+                            Some(val) => stdlib::to_wave_expr(val),
+                            None => "null".to_string(),
+                        }
+                    }
+                }
+                _ => quote! {
+                    stdlib::to_wave_expr(#param_name)
+                },
+            })
+        })
         .collect::<Result<Vec<_>>>()?;
+
+    let fn_name_kebab = fn_name.to_string().to_kebab_case();
+    Ok(if expr_parts.is_empty() {
+        quote! { alloc::format!("{}()", #fn_name_kebab) }
+    } else {
+        quote! { alloc::format!("{}({})", #fn_name_kebab, [#(#expr_parts),*].join(", ")) }
+    })
+}
+
+fn make_return_type(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
+    Ok(match &export.result {
+        Some(ty) => utils::wit_type_to_rust_type(resolve, ty, false)?,
+        None => quote! { () },
+    })
+}
+
+fn make_return_expr(export: &Function) -> Result<TokenStream> {
+    Ok(match &export.result {
+        Some(_) => {
+            quote! {
+                stdlib::from_wave_expr(s)
+            }
+        }
+        None => quote! {},
+    })
+}
+
+fn make_fn_ident(export: &Function) -> Ident {
+    Ident::new(&export.name.to_snake_case(), Span::call_site())
+}
+
+fn make_fn_name_call_expr(export: &Function) -> Ident {
+    format_ident!("{}_call_expr", make_fn_ident(export))
+}
+
+fn make_fn_name_parse_return_expr(export: &Function) -> Ident {
+    format_ident!("{}_parse_return_expr", make_fn_ident(export))
+}
+
+pub fn generate_wave_functions(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
+    let mut params = make_params(resolve, export)?;
+    params.remove(0); // remove context parameter
+    let fn_name_call_expr = make_fn_name_call_expr(export);
+    let call_expr_body = make_call_expr(resolve, export)?;
+    let fn_name_parse_return_expr = make_fn_name_parse_return_expr(export);
+    let ret_ty = make_return_type(resolve, export)?;
+    let parse_return_expr_body = make_return_expr(export)?;
+    Ok(quote! {
+        pub fn #fn_name_call_expr(#(#params),*) -> String {
+            #call_expr_body
+        }
+
+        pub fn #fn_name_parse_return_expr(s: &str) -> #ret_ty {
+            #parse_return_expr_body
+        }
+    })
+}
+
+pub fn generate_functions(
+    resolve: &Resolve,
+    test: bool,
+    export: &Function,
+    contract_id: Option<(&str, u64, u64)>,
+) -> Result<TokenStream> {
+    let fn_name = make_fn_ident(export);
+    let mut params = make_params(resolve, export)?;
+    let call_expr_param_names = export
+        .params
+        .iter()
+        .skip(1)
+        .map(|(name, _)| {
+            let name = Ident::new(&name.to_snake_case(), Span::call_site());
+            quote! { #name }
+        })
+        .collect::<Vec<_>>();
 
     let (_, ctx_type) = export.params.first().unwrap();
     let ctx_type_name = utils::wit_type_to_rust_type(resolve, ctx_type, false)?;
@@ -220,59 +339,20 @@ pub fn generate_functions(
         quote! { contract_address_ }
     };
 
-    let mut ret_ty = match &export.result {
-        Some(ty) => utils::wit_type_to_rust_type(resolve, ty, false)?,
-        None => quote! { () },
-    };
+    let mut ret_ty = make_return_type(resolve, export)?;
 
     if test {
         ret_ty = quote! { Result<#ret_ty, AnyhowError> }
     }
 
-    let expr_parts = export
-        .params
-        .iter()
-        .enumerate()
-        .skip(1)
-        .map(|(_i, (name, ty))| {
-            let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
-            Ok(match ty {
-                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
-                    let _inner_ty = match resolve.types[*id].kind {
-                        TypeDefKind::Option(inner) => {
-                            utils::wit_type_to_rust_type(resolve, &inner, false)?
-                        }
-                        _ => unreachable!(),
-                    };
-                    quote! {
-                        match #param_name {
-                            Some(val) => stdlib::to_wave_expr(val),
-                            None => "null".to_string(),
-                        }
-                    }
-                }
-                _ => quote! {
-                    stdlib::to_wave_expr(#param_name)
-                },
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let fn_name_call_expr = make_fn_name_call_expr(export);
 
-    let fn_name_kebab = fn_name.to_string().to_kebab_case();
-    let expr = if expr_parts.is_empty() {
-        quote! { alloc::format!("{}()", #fn_name_kebab) }
-    } else {
-        quote! { alloc::format!("{}({})", #fn_name_kebab, [#(#expr_parts),*].join(", ")) }
+    let fn_name_parse_return_expr = make_fn_name_parse_return_expr(export);
+
+    let mut ret_expr = quote! {
+        wave::#fn_name_parse_return_expr(&s)
     };
 
-    let mut ret_expr = match &export.result {
-        Some(_) => {
-            quote! {
-                stdlib::from_wave_expr(&ret)
-            }
-        }
-        None => quote! { () },
-    };
     if test {
         ret_expr = quote! { Ok(#ret_expr) };
     }
@@ -302,10 +382,9 @@ pub fn generate_functions(
     };
 
     Ok(quote! {
-        #[allow(clippy::unused_unit)]
         #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
-            let expr = #expr;
-            let ret = #execute(
+            let expr = wave::#fn_name_call_expr(#(#call_expr_param_names),*);
+            let s = #execute(
                 #ctx_signer,
                 #contract_arg,
                 expr.as_str(),
