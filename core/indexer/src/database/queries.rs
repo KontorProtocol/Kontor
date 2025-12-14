@@ -8,7 +8,7 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileLedgerEntryRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -931,13 +931,11 @@ pub async fn get_checkpoint_latest(
     Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-pub async fn select_all_file_ledger_entries(
-    conn: &Connection,
-) -> Result<Vec<FileLedgerEntryRow>, Error> {
+pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetadataRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT id, file_id, root, tree_depth, height
-            FROM file_ledger_entries
+            r#"SELECT id, file_id, root, padded_len, original_size, filename, height
+            FROM file_metadata
             ORDER BY id ASC"#,
             params![],
         )
@@ -950,22 +948,26 @@ pub async fn select_all_file_ledger_entries(
     Ok(entries)
 }
 
-pub async fn insert_file_ledger_entry(
+pub async fn insert_file_metadata(
     conn: &Connection,
-    entry: &FileLedgerEntryRow,
+    entry: &FileMetadataRow,
 ) -> Result<i64, Error> {
     conn.execute(
         r#"INSERT INTO 
-        file_ledger_entries 
+        file_metadata 
         (file_id, 
         root, 
-        tree_depth, 
+        padded_len,
+        original_size,
+        filename,
         height) 
-        VALUES (?, ?, ?, ?)"#,
+        VALUES (?, ?, ?, ?, ?, ?)"#,
         params![
             entry.file_id.clone(),
             entry.root.clone(),
-            entry.tree_depth,
+            entry.padded_len,
+            entry.original_size,
+            entry.filename.clone(),
             entry.height,
         ],
     )

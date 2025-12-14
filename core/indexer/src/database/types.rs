@@ -1,14 +1,13 @@
 use std::fmt::Display;
 
-use anyhow::{Result, anyhow};
 use bon::Builder;
-use ff::PrimeField;
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
 use kontor_crypto::FieldElement;
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
-use crate::runtime::{ContractAddress, file_ledger::CryptoFileLedgerEntry};
+use crate::runtime::ContractAddress;
+use kontor_crypto::api::FileMetadata;
 
 pub trait HasRowId {
     fn id(&self) -> i64;
@@ -271,45 +270,43 @@ impl std::str::FromStr for OpResultId {
     }
 }
 
+/// Database row for file metadata, matching kontor-crypto's FileMetadata structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
-pub struct FileLedgerEntryRow {
+pub struct FileMetadataRow {
     #[builder(default = 0)]
     pub id: i64,
     pub file_id: String,
-    pub root: Vec<u8>,
-    pub tree_depth: i64,
+    pub root: [u8; 32],
+    pub padded_len: i64,
+    pub original_size: i64,
+    pub filename: String,
     pub height: i64,
 }
 
-impl FileLedgerEntryRow {
-    /// Convert bytes to FieldElement using canonical deserialization.
-    ///
-    /// This is the inverse of FieldElement::to_repr().
-    fn bytes_to_field_element(bytes: &[u8]) -> Result<FieldElement> {
-        if bytes.len() != 32 {
-            return Err(anyhow!(
-                "Expected 32 bytes for FieldElement, got {}",
-                bytes.len()
-            ));
+impl FileMetadataRow {
+    pub fn from_metadata(metadata: &FileMetadata, height: i64) -> Self {
+        Self {
+            id: 0,
+            file_id: metadata.file_id.clone(),
+            root: metadata.root.to_bytes(),
+            padded_len: metadata.padded_len as i64,
+            original_size: metadata.original_size as i64,
+            filename: metadata.filename.clone(),
+            height,
         }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-
-        // Use proper canonical deserialization (inverse of to_repr())
-        FieldElement::from_repr(arr)
-            .into_option()
-            .ok_or_else(|| anyhow!("Invalid bytes for FieldElement"))
     }
-}
 
-impl TryFrom<&FileLedgerEntryRow> for CryptoFileLedgerEntry {
-    type Error = anyhow::Error;
+    pub fn to_metadata(&self) -> anyhow::Result<FileMetadata> {
+        let root = FieldElement::from_bytes(&self.root)
+            .into_option()
+            .ok_or_else(|| anyhow::anyhow!("Invalid field element bytes for root"))?;
 
-    fn try_from(entry: &FileLedgerEntryRow) -> Result<Self> {
-        Ok(CryptoFileLedgerEntry {
-            file_id: entry.file_id.clone(),
-            root: FileLedgerEntryRow::bytes_to_field_element(&entry.root)?,
-            tree_depth: entry.tree_depth,
+        Ok(FileMetadata {
+            file_id: self.file_id.clone(),
+            root,
+            padded_len: self.padded_len as usize,
+            original_size: self.original_size as usize,
+            filename: self.filename.clone(),
         })
     }
 }
