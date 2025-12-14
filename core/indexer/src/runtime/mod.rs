@@ -42,6 +42,7 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
+use kontor_crypto::{FieldElement, api::FileMetadata};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -1113,13 +1114,29 @@ impl built_in::file_ledger::Host for Runtime {
         &mut self,
         file_id: String,
         root: Vec<u8>,
-        tree_depth: i64,
+        padded_len: u64,
+        original_size: u64,
+        filename: String,
     ) -> Result<Result<(), String>> {
-        match self
-            .file_ledger
-            .add_file(&self.storage, file_id, root, tree_depth)
-            .await
-        {
+        // Convert root bytes to FieldElement
+        let root_bytes: [u8; 32] = match root.try_into() {
+            Ok(arr) => arr,
+            Err(_) => return Ok(Err("root must be exactly 32 bytes".to_string())),
+        };
+        let root_field = match FieldElement::from_bytes(&root_bytes).into_option() {
+            Some(f) => f,
+            None => return Ok(Err("invalid field element bytes for root".to_string())),
+        };
+
+        let metadata = FileMetadata {
+            file_id,
+            root: root_field,
+            padded_len: padded_len as usize,
+            original_size: original_size as usize,
+            filename,
+        };
+
+        match self.file_ledger.add_file(&self.storage, &metadata).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(e.to_string())),
         }

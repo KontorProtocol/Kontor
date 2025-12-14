@@ -1,16 +1,11 @@
 use anyhow::{Result, anyhow};
 use kontor_crypto::FileLedger as CryptoFileLedger;
-use kontor_crypto::api::FieldElement;
+use kontor_crypto::api::FileMetadata;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::{database::types::FileLedgerEntryRow, runtime::Storage};
-
-pub struct CryptoFileLedgerEntry {
-    pub file_id: String,
-    pub root: FieldElement,
-    pub tree_depth: i64,
-}
+use crate::database::types::FileMetadataRow;
+use crate::runtime::Storage;
 
 /// Inner state protected by a single mutex
 struct FileLedgerInner {
@@ -78,19 +73,19 @@ impl FileLedger {
         Ok(())
     }
 
-    /// Load all file ledger entries from DB and add them to the crypto ledger.
+    /// Load all file metadata entries from DB and add them to the crypto ledger.
     async fn load_entries_into_ledger(
         ledger: &mut CryptoFileLedger,
         storage: &Storage,
     ) -> Result<()> {
-        let rows = storage.all_file_ledger_entries().await?;
-        for row in rows {
-            let entry: CryptoFileLedgerEntry = (&row).try_into()?;
-            // TODO: update once kontor-crypto exposes adding leaves and building the tree once
-            ledger
-                .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
-                .map_err(|e| anyhow!("Failed to add file {}: {:?}", entry.file_id, e))?;
-        }
+        let rows = storage.all_file_metadata().await?;
+        let metadata: Vec<FileMetadata> = rows
+            .iter()
+            .map(|row| row.to_metadata())
+            .collect::<Result<Vec<FileMetadata>>>()?;
+        ledger
+            .add_files(&metadata)
+            .map_err(|e| anyhow!("Failed to add files to ledger: {:?}", e))?;
         Ok(())
     }
 
@@ -98,33 +93,18 @@ impl FileLedger {
     ///
     /// Holds the lock for the entire operation to ensure the in-memory ledger
     /// and database stay in sync even with concurrent calls.
-    pub async fn add_file(
-        &self,
-        storage: &Storage,
-        file_id: String,
-        root: Vec<u8>,
-        tree_depth: i64,
-    ) -> Result<()> {
+    pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadata) -> Result<()> {
         let mut inner = self.inner.lock().await;
-
-        let row: FileLedgerEntryRow = FileLedgerEntryRow::builder()
-            .file_id(file_id)
-            .root(root)
-            .tree_depth(tree_depth)
-            .height(storage.height)
-            .build();
-
-        // Convert to get the FieldElement root for the crypto ledger
-        let entry: CryptoFileLedgerEntry = (&row).try_into()?;
 
         // Add to inner FileLedger
         inner
             .ledger
-            .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
+            .add_file(metadata)
             .map_err(|e| anyhow!("Failed to add file to ledger: {:?}", e))?;
 
-        // Persist to database
-        storage.insert_file_ledger_entry(row).await?;
+        // Convert to database row and persist
+        let row = FileMetadataRow::from_metadata(metadata, storage.height);
+        storage.insert_file_metadata(row).await?;
 
         // Mark ledger as dirty (needs resync on rollback)
         inner.dirty = true;
