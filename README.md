@@ -121,4 +121,4 @@ docker run -d -p 9333:9333 -v kontor-data:/data kontor-indexer \
   --api-port 9333
 ```
 
-Available networks: `bitcoin`, `testnet`, `testnet4`, `signet`, `regtest`
+Available networks: `bitcoin`, `testnet`, `testnet4`, `signet`, `regtest` 
