@@ -298,7 +298,7 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let kontor_client = kontor_client.clone();
                 async move {
                     let mut reg_tester = RegTester::new(identity, bitcoin_client, kontor_client).await?;
-                    let mut runtime = &mut Runtime::new_regtest(RuntimeConfig::builder().contracts_dir(#contracts_dir).build(), reg_tester.clone()).await?;
+                    let mut runtime = &mut Runtime::new_regtest(RuntimeConfig::builder().contracts_dir(&contracts_dir).build(), reg_tester.clone()).await?;
                     #fn_block
                 }
             })
@@ -308,7 +308,7 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     } else {
         quote! {
-            let mut runtime = &mut Runtime::new_local(RuntimeConfig::builder().contracts_dir(#contracts_dir).build()).await?;
+            let mut runtime = &mut Runtime::new_local(RuntimeConfig::builder().contracts_dir(&contracts_dir).build()).await?;
             #fn_block
         }
     };
@@ -334,6 +334,9 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
         #serial
         #(#attrs)*
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
+            let file_path = absolute_file!();
+            let abs_path = file_path.parent().unwrap();
+            let contracts_dir = abs_path.join(#contracts_dir).to_string_lossy().to_string();
             #logging
             #body
         }

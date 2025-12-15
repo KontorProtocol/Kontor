@@ -1,4 +1,4 @@
-use std::{fs, panic};
+use std::{fs, panic, path::Path};
 
 use anyhow::Result;
 use darling::FromMeta;
@@ -20,7 +20,6 @@ pub struct Config {
     tx_index: u64,
     path: String,
     public: Option<bool>,
-    internal: Option<bool>,
 }
 
 pub fn generate(config: Config, test: bool) -> TokenStream {
@@ -31,7 +30,6 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
     let tx_index = config.tx_index;
     let path = config.path;
     let public = config.public.unwrap_or_default();
-    let internal = config.internal.unwrap_or_default();
 
     import(
         path,
@@ -40,26 +38,28 @@ pub fn generate(config: Config, test: bool) -> TokenStream {
         Some((&name, height, tx_index)),
         test,
         public,
-        internal,
     )
 }
 
 pub fn import(
-    mut path: String,
+    path: String,
     module_name: Ident,
     world_name: String,
     contract_id: Option<(&str, u64, u64)>,
     test: bool,
     public: bool,
-    internal: bool,
 ) -> TokenStream {
-    if internal {
-        let mod_dir = env!("CARGO_MANIFEST_DIR");
-        path = [mod_dir, &path].join("/");
-    }
-    assert!(fs::metadata(&path).is_ok());
+    let abs_path = Path::new(&proc_macro::Span::call_site().file())
+        .parent()
+        .expect("Failed to get parent directory")
+        .canonicalize()
+        .expect("Failed to canonicalize path")
+        .join(&path)
+        .to_string_lossy()
+        .to_string();
+    assert!(fs::metadata(&abs_path).is_ok());
     let mut resolve = Resolve::new();
-    resolve.push_dir(&path).unwrap();
+    resolve.push_dir(&abs_path).unwrap();
 
     let (_world_id, world) = resolve
         .worlds

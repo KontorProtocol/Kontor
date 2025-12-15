@@ -1,7 +1,7 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../test-contracts/token/wit");
+interface!(name = "token", path = "../../../test-contracts/token/wit");
 
 async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     info!("test_token_contract");
@@ -101,17 +101,17 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_token_contract() -> Result<()> {
     run_test_token_contract(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_token_contract_large_numbers() -> Result<()> {
     run_test_token_contract_large_numbers(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
 async fn test_token_contract_regtest() -> Result<()> {
     logging::setup();
     run_test_token_contract(runtime).await?;

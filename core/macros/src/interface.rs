@@ -14,15 +14,7 @@ pub struct Config {
 pub fn generate(config: Config, test: bool) -> TokenStream {
     let name = config.name;
     let module_name = Ident::from_string(&name.clone().to_snake_case()).unwrap();
-    let path = config.path.unwrap_or("contract/wit".to_string());
+    let path = config.path.unwrap_or("../../contract/wit".to_string());
 
-    import::import(
-        path,
-        module_name,
-        "root".to_string(),
-        None,
-        test,
-        false,
-        false,
-    )
+    import::import(path, module_name, "root".to_string(), None, test, false)
 }

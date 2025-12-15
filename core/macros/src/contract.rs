@@ -2,6 +2,7 @@ use darling::FromMeta;
 use heck::ToPascalCase;
 use proc_macro2::TokenStream;
 use quote::quote;
+use std::path::Path;
 use syn::Ident;
 
 #[derive(FromMeta)]
@@ -11,8 +12,16 @@ pub struct Config {
 }
 
 pub fn generate(config: Config) -> TokenStream {
-    let path = config.path.unwrap_or("wit".to_string());
     let name = Ident::from_string(&config.name.to_pascal_case()).unwrap();
+    let abs_path = Path::new(&proc_macro::Span::call_site().file())
+        .parent()
+        .expect("Failed to get parent directory")
+        .canonicalize()
+        .expect("Failed to canonicalize path");
+    let path = abs_path
+        .join(config.path.unwrap_or("../wit".to_string()))
+        .to_string_lossy()
+        .to_string();
     quote! {
         extern crate alloc;
 

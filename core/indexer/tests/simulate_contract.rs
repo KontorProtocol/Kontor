@@ -1,9 +1,9 @@
 use indexer_types::{Inst, TransactionHex};
 use testlib::*;
 
-interface!(name = "crypto", path = "../test-contracts/crypto/wit");
+interface!(name = "crypto", path = "../../../test-contracts/crypto/wit");
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
 async fn test_crypto_contract_regtest() -> Result<()> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;

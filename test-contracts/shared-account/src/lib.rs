@@ -3,7 +3,7 @@ contract!(name = "shared-account");
 
 use stdlib::*;
 
-interface!(name = "token", path = "token/wit");
+interface!(name = "token", path = "../../token/wit");
 
 #[derive(Clone, Default, Storage)]
 struct Account {

@@ -8,10 +8,10 @@ import!(
     name = "token",
     height = 0,
     tx_index = 0,
-    path = "../native-contracts/token/wit",
+    path = "../../../native-contracts/token/wit",
 );
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest", logging)]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest", logging)]
 async fn test_view_contract() -> Result<()> {
     let minter = runtime.identity().await?;
 

@@ -23,6 +23,16 @@ pub use tokio;
 use tokio::{fs::File, io::AsyncReadExt, task};
 pub use tracing;
 
+#[macro_export]
+macro_rules! absolute_file {
+    () => {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(file!())
+    };
+}
+
 pub struct ContractReader {
     dir: String,
     contracts: HashMap<String, PathBuf>,
@@ -66,10 +76,7 @@ impl ContractReader {
     }
 
     async fn find_contracts(dir: &str) -> Result<Paths> {
-        let pattern = format!(
-            "../../{}/**/target/wasm32-unknown-unknown/release/*.wasm.br",
-            dir
-        );
+        let pattern = format!("{}/**/target/wasm32-unknown-unknown/release/*.wasm.br", dir);
         Ok(
             task::spawn_blocking(move || glob::glob(&pattern).expect("Invalid glob pattern"))
                 .await?,

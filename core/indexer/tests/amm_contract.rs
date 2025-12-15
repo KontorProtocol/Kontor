@@ -1,12 +1,11 @@
 use testlib::*;
-use tracing::info;
 
-interface!(name = "amm", path = "../test-contracts/amm/wit",);
+interface!(name = "amm", path = "../../../test-contracts/amm/wit");
 
-interface!(name = "token", path = "../test-contracts/token/wit");
+interface!(name = "token", path = "../../../test-contracts/token/wit");
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_swaps");
+    tracing::info!("test_amm_swaps");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -103,7 +102,7 @@ async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn run_test_amm_swap_fee(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_swap_fee");
+    tracing::info!("test_amm_swap_fee");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let amm = runtime.publish(&admin, "amm").await?;
@@ -184,7 +183,7 @@ async fn run_test_amm_swap_fee(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn run_test_amm_swap_low_slippage(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_swap_low_slippage");
+    tracing::info!("test_amm_swap_low_slippage");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let amm = runtime.publish(&admin, "amm").await?;
@@ -268,7 +267,7 @@ async fn run_test_amm_swap_low_slippage(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_deposit_withdraw");
+    tracing::info!("test_amm_deposit_withdraw");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
@@ -378,7 +377,7 @@ async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_limits");
+    tracing::info!("test_amm_limits");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -496,7 +495,7 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
-    info!("test_amm_pools");
+    tracing::info!("test_amm_pools");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
@@ -644,37 +643,37 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_amm_pools() -> Result<()> {
     run_test_amm_pools(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
 async fn test_amm_contract_regtest() -> Result<()> {
     logging::setup();
     run_test_amm_swaps(runtime).await?;

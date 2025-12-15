@@ -3,7 +3,7 @@ contract!(name = "fib");
 
 use stdlib::*;
 
-interface!(name = "arith", path = "arith/wit");
+interface!(name = "arith", path = "../../arith/wit");
 
 #[derive(Clone, Default, Storage)]
 struct FibValue {

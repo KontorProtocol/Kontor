@@ -3,7 +3,7 @@ contract!(name = "pool");
 
 use stdlib::*;
 
-interface!(name = "token_dyn", path = "token/wit");
+interface!(name = "token_dyn", path = "../../token/wit");
 
 #[derive(Clone, StorageRoot)]
 struct PoolStorage {

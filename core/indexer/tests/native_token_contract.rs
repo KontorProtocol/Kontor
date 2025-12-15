@@ -4,7 +4,7 @@ import!(
     name = "token",
     height = 0,
     tx_index = 0,
-    path = "../native-contracts/token/wit",
+    path = "../../../native-contracts/token/wit",
 );
 
 async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
@@ -56,12 +56,12 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_native_token_contract() -> Result<()> {
     run_test_native_token_contract(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
 async fn test_native_token_contract_regtest() -> Result<()> {
     run_test_native_token_contract(runtime).await
 }

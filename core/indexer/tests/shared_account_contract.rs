@@ -1,10 +1,10 @@
 use testlib::*;
 
-interface!(name = "token", path = "../test-contracts/token/wit",);
+interface!(name = "token", path = "../../../test-contracts/token/wit",);
 
 interface!(
     name = "shared-account",
-    path = "../test-contracts/shared-account/wit",
+    path = "../../../test-contracts/shared-account/wit",
 );
 
 async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
@@ -113,12 +113,12 @@ async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "test-contracts")]
+#[testlib::test(contracts_dir = "../../../test-contracts")]
 async fn test_shared_account_contract() -> Result<()> {
     run_test_shared_account_contract(runtime).await
 }
 
-#[testlib::test(contracts_dir = "test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
 async fn test_shared_account_contract_regtest() -> Result<()> {
     run_test_shared_account_contract(runtime).await
 }
