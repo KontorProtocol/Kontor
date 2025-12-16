@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use kontor_crypto::FileLedger as CryptoFileLedger;
-use kontor_crypto::api::FileMetadata;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -79,12 +78,8 @@ impl FileLedger {
         storage: &Storage,
     ) -> Result<()> {
         let rows = storage.all_file_metadata().await?;
-        let metadata: Vec<FileMetadata> = rows
-            .iter()
-            .map(|row| row.to_metadata())
-            .collect::<Result<Vec<FileMetadata>>>()?;
         ledger
-            .add_files(&metadata)
+            .add_files(&rows)
             .map_err(|e| anyhow!("Failed to add files to ledger: {:?}", e))?;
         Ok(())
     }
@@ -93,7 +88,7 @@ impl FileLedger {
     ///
     /// Holds the lock for the entire operation to ensure the in-memory ledger
     /// and database stay in sync even with concurrent calls.
-    pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadata) -> Result<()> {
+    pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadataRow) -> Result<()> {
         let mut inner = self.inner.lock().await;
 
         // Add to inner FileLedger
@@ -103,8 +98,7 @@ impl FileLedger {
             .map_err(|e| anyhow!("Failed to add file to ledger: {:?}", e))?;
 
         // Convert to database row and persist
-        let row = FileMetadataRow::from_metadata(metadata, storage.height);
-        storage.insert_file_metadata(row).await?;
+        storage.insert_file_metadata(metadata.clone()).await?;
 
         // Mark ledger as dirty (needs resync on rollback)
         inner.dirty = true;

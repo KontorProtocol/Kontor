@@ -648,16 +648,12 @@ async fn test_file_metadata_operations() -> Result<()> {
     // Insert a file metadata entry
     let file_id = "file_abc123".to_string();
     let root = [1u8; 32]; // 32 bytes for FieldElement
-    let padded_len = 1024usize;
-    let original_size = 1000usize;
-    let filename = "test_file.dat".to_string();
+    let depth = 10i64;
 
     let entry1 = FileMetadataRow::builder()
         .file_id(file_id.clone())
         .root(root)
-        .padded_len(padded_len)
-        .original_size(original_size)
-        .filename(filename.clone())
+        .depth(depth)
         .height(height)
         .build();
 
@@ -670,9 +666,7 @@ async fn test_file_metadata_operations() -> Result<()> {
     assert_eq!(entries[0].id, id1);
     assert_eq!(entries[0].file_id, file_id);
     assert_eq!(entries[0].root, root);
-    assert_eq!(entries[0].padded_len, padded_len);
-    assert_eq!(entries[0].original_size, original_size);
-    assert_eq!(entries[0].filename, filename);
+    assert_eq!(entries[0].depth, depth);
     assert_eq!(entries[0].height, height);
 
     // Insert another file metadata entry at a different height
@@ -691,16 +685,12 @@ async fn test_file_metadata_operations() -> Result<()> {
 
     let file_id2 = "file_def456".to_string();
     let root2 = [2u8; 32];
-    let padded_len2 = 2048usize;
-    let original_size2 = 2000usize;
-    let filename2 = "test_file2.dat".to_string();
+    let depth2 = 12i64;
 
     let entry2 = FileMetadataRow::builder()
         .file_id(file_id2.clone())
         .root(root2)
-        .padded_len(padded_len2)
-        .original_size(original_size2)
-        .filename(filename2.clone())
+        .depth(depth2)
         .height(height2)
         .build();
 

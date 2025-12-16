@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use bon::Builder;
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
-use kontor_crypto::FieldElement;
+use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
@@ -277,9 +277,7 @@ pub struct FileMetadataRow {
     pub id: i64,
     pub file_id: String,
     pub root: [u8; 32],
-    pub padded_len: usize,
-    pub original_size: usize,
-    pub filename: String,
+    pub depth: i64,
     pub height: i64,
 }
 
@@ -288,24 +286,24 @@ impl FileMetadataRow {
         Self::builder()
             .file_id(metadata.file_id.clone())
             .root(metadata.root.to_bytes())
-            .padded_len(metadata.padded_len)
-            .original_size(metadata.original_size)
-            .filename(metadata.filename.clone())
+            .depth(metadata.depth() as i64)
             .height(height)
             .build()
     }
+}
 
-    pub fn to_metadata(&self) -> anyhow::Result<FileMetadata> {
-        let root = FieldElement::from_bytes(&self.root)
+impl FileDescriptor for FileMetadataRow {
+    fn file_id(&self) -> &str {
+        &self.file_id
+    }
+
+    fn root(&self) -> FieldElement {
+        FieldElement::from_bytes(&self.root)
             .into_option()
-            .ok_or_else(|| anyhow::anyhow!("Invalid field element bytes for root"))?;
+            .expect("Invalid field element bytes for root")
+    }
 
-        Ok(FileMetadata {
-            file_id: self.file_id.clone(),
-            root,
-            padded_len: self.padded_len,
-            original_size: self.original_size,
-            filename: self.filename.clone(),
-        })
+    fn depth(&self) -> usize {
+        self.depth as usize
     }
 }

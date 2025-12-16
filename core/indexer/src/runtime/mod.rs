@@ -42,7 +42,6 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
-use kontor_crypto::{FieldElement, api::FileMetadata};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -54,6 +53,7 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::TOKEN;
+use crate::database::types::FileMetadataRow;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, Transaction};
 use crate::{
@@ -1114,31 +1114,20 @@ impl built_in::file_ledger::Host for Runtime {
         &mut self,
         file_id: String,
         root: Vec<u8>,
-        padded_len: u64,
-        original_size: u64,
-        filename: String,
+        depth: u64,
     ) -> Result<Result<(), String>> {
         // Convert root bytes to FieldElement
         let root_bytes: [u8; 32] = match root.try_into() {
             Ok(arr) => arr,
             Err(_) => return Ok(Err("root must be exactly 32 bytes".to_string())),
         };
-        let root_field = match FieldElement::from_bytes(&root_bytes).into_option() {
-            Some(f) => f,
-            None => return Ok(Err("invalid field element bytes for root".to_string())),
-        };
 
-        let metadata = FileMetadata {
-            file_id,
-            root: root_field,
-            padded_len: padded_len
-                .try_into()
-                .map_err(|e| anyhow!("Failed to convert padded_len to usize: {}", e))?,
-            original_size: original_size
-                .try_into()
-                .map_err(|e| anyhow!("Failed to convert original_size to usize: {}", e))?,
-            filename,
-        };
+        let metadata = FileMetadataRow::builder()
+            .file_id(file_id)
+            .root(root_bytes)
+            .depth(depth as i64)
+            .height(self.storage.height)
+            .build();
 
         match self.file_ledger.add_file(&self.storage, &metadata).await {
             Ok(()) => Ok(Ok(())),

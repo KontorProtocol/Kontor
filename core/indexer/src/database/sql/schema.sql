@@ -69,20 +69,11 @@ CREATE TABLE IF NOT EXISTS contract_results (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
--- Migration: Drop legacy table (renamed to file_metadata)
-DROP TABLE IF EXISTS file_ledger_entries;
-DROP INDEX IF EXISTS idx_file_ledger_file_id;
-
--- File metadata for Proof-of-Retrievability verification.
--- Stores FileMetadata from kontor-crypto for each registered file.
--- Root is stored as 32 bytes (FieldElement canonical serialization via to_bytes()).
 CREATE TABLE IF NOT EXISTS file_metadata (
   id INTEGER PRIMARY KEY,
   file_id TEXT NOT NULL UNIQUE,
   root BLOB NOT NULL,
-  padded_len INTEGER NOT NULL,
-  original_size INTEGER NOT NULL,
-  filename TEXT NOT NULL,
+  depth INTEGER NOT NULL,
   height INTEGER NOT NULL,
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
