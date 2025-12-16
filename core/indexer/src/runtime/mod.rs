@@ -52,7 +52,7 @@ use wasmtime::{
     },
 };
 
-use crate::database::native_contracts::TOKEN;
+use crate::database::native_contracts::{STORAGE, TOKEN};
 use crate::database::types::FileMetadataRow;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, Transaction};
@@ -220,6 +220,8 @@ impl Runtime {
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
+            .await?;
+        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "storage", STORAGE)
             .await?;
         Ok(())
     }
