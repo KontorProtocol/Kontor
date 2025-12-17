@@ -39,6 +39,8 @@ pub enum Fuel {
     CryptoHash(u64),
     CryptoGenerateId,
     AddFile,
+    GetFileId,
+    FromRawFileDescriptor,
     NumbersU64ToInteger,
     NumbersS64ToInteger,
     NumbersStringToInteger(u64),
@@ -91,6 +93,8 @@ impl Fuel {
             Self::CryptoHash(input_len) => 500 + 10 * input_len,
             Self::CryptoGenerateId => 500,
             Self::AddFile => 500,
+            Self::GetFileId => 100,
+            Self::FromRawFileDescriptor => 500,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
             | Self::NumbersIntegerToDecimal

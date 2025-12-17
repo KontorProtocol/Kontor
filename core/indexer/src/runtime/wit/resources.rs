@@ -3,6 +3,8 @@ use std::pin::Pin;
 use futures_util::Stream;
 pub use indexer_types::Signer;
 
+use crate::database::types::FileMetadataRow;
+
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
@@ -75,3 +77,7 @@ impl HasContractId for CoreContext {
 }
 
 pub struct Transaction {}
+
+pub struct FileDescriptor {
+    pub file_metadata_row: FileMetadataRow
+}

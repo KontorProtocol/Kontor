@@ -138,7 +138,7 @@ pub fn string_to_integer(s: &str) -> Result<Integer, Error> {
     let i = match s.parse::<BigInt>() {
         Ok(i) => i,
         Err(e) => {
-            return Err(Error::SyntaxError(e.to_string()));
+            return Err(Error::Syntax(e.to_string()));
         }
     };
     if i > max_int || i < -max_int {
@@ -259,7 +259,7 @@ pub fn string_to_decimal(s: &str) -> Result<Decimal, Error> {
     let dec = match s.parse::<D256>() {
         Ok(d) => d,
         Err(e) => {
-            return Err(Error::SyntaxError(e.to_string()));
+            return Err(Error::Syntax(e.to_string()));
         }
     };
     let res = dec.with_ctx(CTX).quantize(MIN_DECIMAL);

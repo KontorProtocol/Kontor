@@ -35,6 +35,7 @@ use wit::kontor::*;
 
 pub use wit::kontor;
 pub use wit::kontor::built_in::error::Error;
+pub use wit::kontor::built_in::file_ledger::RawFileDescriptor;
 pub use wit::kontor::built_in::foreign::ContractAddress;
 pub use wit::kontor::built_in::numbers::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
@@ -55,7 +56,7 @@ use wasmtime::{
 use crate::database::native_contracts::TOKEN;
 use crate::database::types::FileMetadataRow;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
-use crate::runtime::wit::{CoreContext, Transaction};
+use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::{
     runtime::{
         counter::Counter,
@@ -76,6 +77,21 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     let result = hasher.finalize();
     result.into()
+}
+
+impl RawFileDescriptor {
+    fn to_file_metadata_row(raw: RawFileDescriptor, height: i64) -> Result<FileMetadataRow, Error> {
+        let root = raw
+            .root
+            .try_into()
+            .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        Ok(FileMetadataRow::builder()
+            .file_id(raw.file_id)
+            .root(root)
+            .depth(raw.depth as i64)
+            .height(height)
+            .build())
+    }
 }
 
 #[derive(Clone)]
@@ -734,23 +750,47 @@ impl Runtime {
     async fn _add_file<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        file_id: String,
-        root: Vec<u8>,
-        depth: u64,
+        file_descriptor: Resource<FileDescriptor>,
     ) -> Result<()> {
         Fuel::AddFile.consume(accessor, self.gauge.as_ref()).await?;
-        let root: [u8; 32] = root
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow::anyhow!("expected 32 bytes for root, got {}", v.len()))?;
-        let file_metadata = FileMetadataRow::builder()
-            .file_id(file_id)
-            .root(root)
-            .depth(depth as i64)
-            .height(self.storage.height)
-            .build();
+        let table = self.table.lock().await;
+        let file_metadata_row = table.get(&file_descriptor)?.file_metadata_row.clone();
         self.file_ledger
-            .add_file(&self.storage, &file_metadata)
+            .add_file(&self.storage, &file_metadata_row)
             .await
+    }
+
+    async fn _file_id<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        rep: Resource<FileDescriptor>,
+    ) -> Result<String> {
+        Fuel::GetFileId
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let table = self.table.lock().await;
+        let file_id = table.get(&rep)?.file_metadata_row.file_id.clone();
+
+        Ok(file_id)
+    }
+
+    async fn _from_raw<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        raw: RawFileDescriptor,
+    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
+        Fuel::FromRawFileDescriptor
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        let mut table = self.table.lock().await;
+
+        Ok(
+            match RawFileDescriptor::to_file_metadata_row(raw, self.storage.height) {
+                Ok(file_metadata_row) => Ok(table.push(FileDescriptor { file_metadata_row })?),
+                Err(error) => Err(error),
+            },
+        )
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -1131,16 +1171,45 @@ impl built_in::error::Host for Runtime {}
 
 impl built_in::file_ledger::Host for Runtime {}
 
+impl built_in::file_ledger::HostFileDescriptor for Runtime {}
+
 impl built_in::file_ledger::HostWithStore for Runtime {
-    async fn register_file<T>(
+    async fn add_file<T>(
         accessor: &Accessor<T, Self>,
-        file_id: String,
-        root: Vec<u8>,
-        depth: u64,
+        file_descriptor: Resource<FileDescriptor>,
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
-            ._add_file(accessor, file_id, root, depth)
+            ._add_file(accessor, file_descriptor)
+            .await
+    }
+}
+
+impl built_in::file_ledger::HostFileDescriptorWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FileDescriptor>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn file_id<T>(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<FileDescriptor>,
+    ) -> Result<String> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._file_id(accessor, rep)
+            .await
+    }
+
+    async fn from_raw<T>(
+        accessor: &Accessor<T, Self>,
+        raw: built_in::file_ledger::RawFileDescriptor,
+    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._from_raw(accessor, raw)
             .await
     }
 }

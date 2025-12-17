@@ -25,6 +25,8 @@ pub fn generate(config: Config) -> TokenStream {
                     (kontor::built_in::error::Error::Message(msg1), kontor::built_in::error::Error::Message(msg2)) => msg1 == msg2,
                     (kontor::built_in::error::Error::Overflow(msg1), kontor::built_in::error::Error::Overflow(msg2)) => msg1 == msg2,
                     (kontor::built_in::error::Error::DivByZero(msg1), kontor::built_in::error::Error::DivByZero(msg2)) => msg1 == msg2,
+                    (kontor::built_in::error::Error::Syntax(msg1), kontor::built_in::error::Error::Syntax(msg2)) => msg1 == msg2,
+                    (kontor::built_in::error::Error::Validation(msg1), kontor::built_in::error::Error::Validation(msg2)) => msg1 == msg2,
                     _ => false,
                 }
             }

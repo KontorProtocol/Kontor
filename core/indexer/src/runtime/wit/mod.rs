@@ -1,8 +1,8 @@
 mod resources;
 
 pub use resources::{
-    CoreContext, FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, Transaction,
-    ViewContext, ViewStorage,
+    CoreContext, FallContext, FileDescriptor, HasContractId, Keys, ProcContext, ProcStorage,
+    Signer, Transaction, ViewContext, ViewStorage,
 };
 
 wasmtime::component::bindgen!({
@@ -17,6 +17,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.proc-storage": ProcStorage,
         "kontor:built-in/context.keys": Keys,
         "kontor:built-in/context.transaction": Transaction,
+        "kontor:built-in/file-ledger.file-descriptor": FileDescriptor,
     },
     additional_derives: [stdlib::Wavey],
     imports: {
