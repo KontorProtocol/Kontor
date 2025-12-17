@@ -1,6 +1,7 @@
 use stdlib::Model;
 struct VecU8 {
     pub bytes: Vec<u8>,
+    pub bytes_other: Vec<u8>,
 }
 pub struct VecU8Model {
     pub base_path: stdlib::DotPathBuf,
@@ -19,8 +20,14 @@ impl VecU8Model {
     pub fn bytes(&self) -> Vec<u8> {
         self.ctx.__get(self.base_path.push("bytes")).unwrap()
     }
+    pub fn bytes_other(&self) -> Vec<u8> {
+        self.ctx.__get(self.base_path.push("bytes_other")).unwrap()
+    }
     pub fn load(&self) -> VecU8 {
-        VecU8 { bytes: self.bytes() }
+        VecU8 {
+            bytes: self.bytes(),
+            bytes_other: self.bytes_other(),
+        }
     }
 }
 pub struct VecU8WriteModel {
@@ -43,6 +50,9 @@ impl VecU8WriteModel {
     pub fn bytes(&self) -> Vec<u8> {
         self.ctx.__get(self.base_path.push("bytes")).unwrap()
     }
+    pub fn bytes_other(&self) -> Vec<u8> {
+        self.ctx.__get(self.base_path.push("bytes_other")).unwrap()
+    }
     pub fn set_bytes(&self, value: Vec<u8>) {
         self.ctx.__set(self.base_path.push("bytes"), value);
     }
@@ -58,8 +68,26 @@ impl VecU8WriteModel {
         self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
         Ok(())
     }
+    pub fn set_bytes_other(&self, value: Vec<u8>) {
+        self.ctx.__set(self.base_path.push("bytes_other"), value);
+    }
+    pub fn update_bytes_other(&self, f: impl Fn(Vec<u8>) -> Vec<u8>) {
+        let path = self.base_path.push("bytes_other");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+    }
+    pub fn try_update_bytes_other(
+        &self,
+        f: impl Fn(Vec<u8>) -> Result<Vec<u8>, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push("bytes_other");
+        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+        Ok(())
+    }
     pub fn load(&self) -> VecU8 {
-        VecU8 { bytes: self.bytes() }
+        VecU8 {
+            bytes: self.bytes(),
+            bytes_other: self.bytes_other(),
+        }
     }
 }
 impl core::ops::Deref for VecU8WriteModel {

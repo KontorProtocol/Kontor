@@ -167,7 +167,7 @@ interface numbers {
 }
 
 interface file-ledger {
-    register-file: func(file-id: string, root: list<u8>, depth: u64) -> result<_, string>;
+    register-file: func(file-id: string, root: list<u8>, depth: u64);
 }
 
 world built-in {

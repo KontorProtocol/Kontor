@@ -24,6 +24,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/crypto": async | store | trappable,
         "kontor:built-in/foreign": async | store | trappable,
         "kontor:built-in/numbers": async | store | trappable,
+        "kontor:built-in/file-ledger": async | store | trappable,
         default: async | trappable,
     }
 });

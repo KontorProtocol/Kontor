@@ -15,7 +15,7 @@ import!(
     name = "token",
     height = 0,
     tx_index = 0,
-    path = "../../../native-contracts/token/wit",
+    path = "../../native-contracts/token/wit",
 );
 
 pub async fn test_compose_token_attach_and_detach(
@@ -229,7 +229,7 @@ pub async fn test_compose_token_attach_and_detach(
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_native_token_attach_contract_regtest() -> Result<()> {
     test_compose_token_attach_and_detach(runtime, &mut reg_tester).await
 }

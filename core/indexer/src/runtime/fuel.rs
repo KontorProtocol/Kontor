@@ -38,6 +38,7 @@ pub enum Fuel {
     CoreProcContext,
     CryptoHash(u64),
     CryptoGenerateId,
+    AddFile,
     NumbersU64ToInteger,
     NumbersS64ToInteger,
     NumbersStringToInteger(u64),
@@ -89,6 +90,7 @@ impl Fuel {
             | Self::CoreProcContext => 100,
             Self::CryptoHash(input_len) => 500 + 10 * input_len,
             Self::CryptoGenerateId => 500,
+            Self::AddFile => 500,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
             | Self::NumbersIntegerToDecimal

@@ -731,6 +731,28 @@ impl Runtime {
         result
     }
 
+    async fn _add_file<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        file_id: String,
+        root: Vec<u8>,
+        depth: u64,
+    ) -> Result<()> {
+        Fuel::AddFile.consume(accessor, self.gauge.as_ref()).await?;
+        let root: [u8; 32] = root
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow::anyhow!("expected 32 bytes for root, got {}", v.len()))?;
+        let file_metadata = FileMetadataRow::builder()
+            .file_id(file_id)
+            .root(root)
+            .depth(depth as i64)
+            .height(self.storage.height)
+            .build();
+        self.file_ledger
+            .add_file(&self.storage, &file_metadata)
+            .await
+    }
+
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -1107,34 +1129,23 @@ impl HasData for Runtime {
 
 impl built_in::error::Host for Runtime {}
 
-impl built_in::crypto::Host for Runtime {}
+impl built_in::file_ledger::Host for Runtime {}
 
-impl built_in::file_ledger::Host for Runtime {
-    async fn register_file(
-        &mut self,
+impl built_in::file_ledger::HostWithStore for Runtime {
+    async fn register_file<T>(
+        accessor: &Accessor<T, Self>,
         file_id: String,
         root: Vec<u8>,
         depth: u64,
-    ) -> Result<Result<(), String>> {
-        // Convert root bytes to FieldElement
-        let root_bytes: [u8; 32] = match root.try_into() {
-            Ok(arr) => arr,
-            Err(_) => return Ok(Err("root must be exactly 32 bytes".to_string())),
-        };
-
-        let metadata = FileMetadataRow::builder()
-            .file_id(file_id)
-            .root(root_bytes)
-            .depth(depth as i64)
-            .height(self.storage.height)
-            .build();
-
-        match self.file_ledger.add_file(&self.storage, &metadata).await {
-            Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(e.to_string())),
-        }
+    ) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._add_file(accessor, file_id, root, depth)
+            .await
     }
 }
+
+impl built_in::crypto::Host for Runtime {}
 
 impl built_in::crypto::HostWithStore for Runtime {
     async fn hash<T>(accessor: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {

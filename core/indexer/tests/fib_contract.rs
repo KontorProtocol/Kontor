@@ -1,10 +1,10 @@
 use testlib::*;
 
-interface!(name = "arith", path = "../../../test-contracts/arith/wit",);
+interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 
-interface!(name = "fib", path = "../../../test-contracts/fib/wit",);
+interface!(name = "fib", path = "../../test-contracts/fib/wit",);
 
-interface!(name = "proxy", path = "../../../test-contracts/proxy/wit",);
+interface!(name = "proxy", path = "../../test-contracts/proxy/wit",);
 
 async fn run_test_fib_contract(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
@@ -64,12 +64,12 @@ async fn run_test_fib_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_fib_contract() -> Result<()> {
     run_test_fib_contract(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_fib_contract_regtest() -> Result<()> {
     run_test_fib_contract(runtime).await
 }

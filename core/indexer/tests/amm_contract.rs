@@ -1,8 +1,8 @@
 use testlib::*;
 
-interface!(name = "amm", path = "../../../test-contracts/amm/wit");
+interface!(name = "amm", path = "../../test-contracts/amm/wit");
 
-interface!(name = "token", path = "../../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/token/wit");
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     tracing::info!("test_amm_swaps");
@@ -643,37 +643,37 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_pools() -> Result<()> {
     run_test_amm_pools(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_amm_contract_regtest() -> Result<()> {
     logging::setup();
     run_test_amm_swaps(runtime).await?;

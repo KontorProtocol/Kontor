@@ -422,7 +422,7 @@ async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_compose_regtest() -> Result<()> {
     test_commit_reveal_chained_reveal(&mut reg_tester.clone()).await?;
     test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(&mut reg_tester.clone()).await?;

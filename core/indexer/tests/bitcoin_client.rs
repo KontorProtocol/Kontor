@@ -1,6 +1,6 @@
 use testlib::*;
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_bitcoin_client() -> Result<()> {
     let client = reg_tester.bitcoin_client().await;
     let info = client.get_blockchain_info().await?;
