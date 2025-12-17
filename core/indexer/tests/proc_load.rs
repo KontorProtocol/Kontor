@@ -8,11 +8,11 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/token/wit");
 
 /// Simple load test: process many blocks with many contract calls
 /// Each contract call creates a transaction and mines a block automatically in regtest
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest", logging)]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest", logging)]
 #[ignore = "Load tests run in CI"]
 async fn test_token_contract_load() -> Result<()> {
     let num_operations = 500; // Total contract calls to execute

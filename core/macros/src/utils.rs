@@ -42,7 +42,7 @@ pub fn is_result_type(ty: &syn::Type) -> bool {
 pub fn is_primitive_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last().map(|s| s.ident.to_string());
-        let full = type_path
+        let generic_segment = type_path
             .path
             .segments
             .last()
@@ -52,7 +52,7 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
         matches!(
             segment.as_deref(),
             Some("u64" | "i64" | "String" | "bool" | "ContractAddress" | "Integer" | "Decimal")
-        ) || full == "Vec<u8>"
+        ) || ["Vec<u8>", "Vec::<u8>"].contains(&generic_segment.as_str())
     } else {
         false
     }

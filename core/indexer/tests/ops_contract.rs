@@ -4,7 +4,7 @@ use indexer::reg_tester::InstructionResult;
 use indexer_types::{Inst, Op, OpMetadata};
 use testlib::*;
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_get_ops_from_api_regtest() -> Result<()> {
     let name = "token";
     let bytes = runtime.contract_reader.read(name).await?.unwrap();

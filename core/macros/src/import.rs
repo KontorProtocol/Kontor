@@ -1,4 +1,4 @@
-use std::{fs, panic, path::Path};
+use std::{panic, path::Path};
 
 use anyhow::Result;
 use darling::FromMeta;
@@ -49,17 +49,17 @@ pub fn import(
     test: bool,
     public: bool,
 ) -> TokenStream {
-    let abs_path = Path::new(&proc_macro::Span::call_site().file())
-        .parent()
-        .expect("Failed to get parent directory")
+    let abs_path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .canonicalize()
         .expect("Failed to canonicalize path")
-        .join(&path)
-        .to_string_lossy()
-        .to_string();
-    assert!(fs::metadata(&abs_path).is_ok());
+        .join(&path);
+    if !abs_path.exists() {
+        panic!("Path does not exist: {}", abs_path.display());
+    }
     let mut resolve = Resolve::new();
-    resolve.push_dir(&abs_path).unwrap();
+    resolve
+        .push_dir(abs_path.to_string_lossy().to_string())
+        .unwrap();
 
     let (_world_id, world) = resolve
         .worlds

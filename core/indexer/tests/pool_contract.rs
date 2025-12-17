@@ -1,9 +1,9 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../../../test-contracts/token/wit",);
+interface!(name = "token", path = "../../test-contracts/token/wit",);
 
-interface!(name = "pool", path = "../../../test-contracts/pool/wit",);
+interface!(name = "pool", path = "../../test-contracts/pool/wit",);
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     info!("test_amm_swaps");
@@ -539,37 +539,37 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_shares_token_interface() -> Result<()> {
     run_test_amm_shares_token_interface(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_pool_contract_regtest() -> Result<()> {
     logging::setup();
     run_test_amm_swaps(runtime).await?;

@@ -13,15 +13,14 @@ pub struct Config {
 
 pub fn generate(config: Config) -> TokenStream {
     let name = Ident::from_string(&config.name.to_pascal_case()).unwrap();
-    let abs_path = Path::new(&proc_macro::Span::call_site().file())
-        .parent()
-        .expect("Failed to get parent directory")
+    let abs_path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .canonicalize()
-        .expect("Failed to canonicalize path");
-    let path = abs_path
-        .join(config.path.unwrap_or("../wit".to_string()))
-        .to_string_lossy()
-        .to_string();
+        .expect("Failed to canonicalize manifest directory")
+        .join(config.path.unwrap_or("wit".to_string()));
+    if !abs_path.exists() {
+        panic!("Path does not exist: {}", abs_path.display());
+    }
+    let path = abs_path.to_string_lossy().to_string();
     quote! {
         extern crate alloc;
 

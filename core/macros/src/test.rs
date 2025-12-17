@@ -18,7 +18,14 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
     let fn_inputs = &func.sig.inputs;
     let fn_vis = &func.vis;
     let fn_block = &func.block;
-    let contracts_dir = config.contracts_dir.unwrap_or("../../".to_string());
+    let abs_path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .canonicalize()
+        .expect("Failed to canonicalize path");
+    let contracts_dir = config.contracts_dir.unwrap_or("../".to_string());
+    let path = abs_path.join(&contracts_dir);
+    if !path.exists() {
+        panic!("Contracts directory does not exist: {}", path.display());
+    }
     let mode = config.mode.unwrap_or("local".to_string());
 
     let body = if mode == "regtest" {
@@ -73,8 +80,7 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
         #serial
         #(#attrs)*
         #fn_vis async fn #fn_name #fn_generics(#fn_inputs) -> Result<()> {
-            let file_path = absolute_file!();
-            let abs_path = file_path.parent().unwrap();
+            let abs_path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).canonicalize().unwrap();
             let contracts_dir = abs_path.join(#contracts_dir).to_string_lossy().to_string();
             #logging
             #body
