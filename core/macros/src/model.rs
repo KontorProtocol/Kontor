@@ -39,16 +39,16 @@ pub fn generate_struct(
                     let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
 
                     let (get_return, get_body) = if utils::is_primitive_type(&v_ty) {
-                        (quote! { Option<#v_ty> }, quote! { self.ctx.__get(base_path) })
+                        (quote! { Option<#v_ty> }, quote! { stdlib::ReadStorage::__get(&self.ctx, base_path) })
                     } else {
                         let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
-                        (quote! { Option<#v_model_ty> }, quote! { self.ctx.__exists(&base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)) })
+                        (quote! { Option<#v_model_ty> }, quote! { stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)) })
                     };
 
                     let setter = if write {
                         quote! {
                             pub fn set(&self, key: #k_ty, value: #v_ty) {
-                                self.ctx.__set(self.base_path.push(key.to_string()), value)
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
                             }
                         }
                     } else {
@@ -80,7 +80,7 @@ pub fn generate_struct(
                             where                                       // <--- Add this section
                                 <T as FromStr>::Err: Debug,
                             {
-                                self.ctx.__get_keys(&self.base_path)
+                                stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
                         }
                     });
@@ -97,10 +97,10 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if self.ctx.__extend_path_with_match(&base_path, &["none"]).is_some() {
+                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &["none"]).is_some() {
                                     None
                                 } else {
-                                    self.ctx.__get(base_path.push("some"))
+                                    stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
                                 }
                             }
                         })
@@ -110,7 +110,7 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if self.ctx.__extend_path_with_match(&base_path, &["none"]).is_some() {
+                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &["none"]).is_some() {
                                     None
                                 } else {
                                     Some(#inner_model_ty::new(self.ctx.clone(), base_path.push("some"))#load)
@@ -121,7 +121,7 @@ pub fn generate_struct(
                 } else if utils::is_primitive_type(field_ty) {
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_ty {
-                            self.ctx.__get(self.base_path.push(#field_name_str)).unwrap()
+                            stdlib::ReadStorage::__get(&self.ctx, self.base_path.push(#field_name_str)).unwrap()
                         }
                     })
                 } else {
@@ -146,7 +146,7 @@ pub fn generate_struct(
                             Ident::new(&format!("set_{}", field_name), field_name.span());
                         let setter = quote! {
                             pub fn #set_field_name(&self, value: #field_ty) {
-                                self.ctx.__set(self.base_path.push(#field_name_str), value);
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(#field_name_str), value);
                             }
                         };
                         if utils::is_map_type(field_ty) {
@@ -159,12 +159,12 @@ pub fn generate_struct(
 
                                 pub fn #update_field_name(&self, f: impl Fn(#field_ty) -> #field_ty) {
                                     let path = self.base_path.push(#field_name_str);
-                                    self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+                                    stdlib::WriteStorage::__set(&self.ctx, path.clone(), f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()));
                                 }
 
                                 pub fn #try_update_field_name(&self, f: impl Fn(#field_ty) -> Result<#field_ty, crate::error::Error>) -> Result<(), crate::error::Error> {
                                     let path = self.base_path.push(#field_name_str);
-                                    self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+                                    stdlib::WriteStorage::__set(&self.ctx, path.clone(), f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?);
                                     Ok(())
                                 }
                             })
@@ -354,7 +354,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
                 let inner_ty = &fields.unnamed[0].ty;
                 if utils::is_primitive_type(inner_ty) {
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(ctx.__get(base_path.push(#variant_name)).unwrap())
+                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
                     })
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
@@ -396,7 +396,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
         impl #model_name {
             pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
-                ctx.__extend_path_with_match(&base_path, &[#(#variant_names),*])
+                stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_names),*])
                     .map(|path| match path {
                         #(#new_arms,)*
                         _ => {

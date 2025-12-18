@@ -16,7 +16,11 @@ impl OpModel {
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
         base_path: stdlib::DotPathBuf,
     ) -> Self {
-        ctx.__extend_path_with_match(&base_path, &["id", "sum", "mul", "div"])
+        stdlib::ReadStorage::__extend_path_with_match(
+                &ctx,
+                &base_path,
+                &["id", "sum", "mul", "div"],
+            )
             .map(|path| match path {
                 p if p.starts_with(base_path.push("id").as_ref()) => OpModel::Id,
                 p if p.starts_with(base_path.push("sum").as_ref()) => {
@@ -56,7 +60,11 @@ impl OpWriteModel {
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
         base_path: stdlib::DotPathBuf,
     ) -> Self {
-        ctx.__extend_path_with_match(&base_path, &["id", "sum", "mul", "div"])
+        stdlib::ReadStorage::__extend_path_with_match(
+                &ctx,
+                &base_path,
+                &["id", "sum", "mul", "div"],
+            )
             .map(|path| match path {
                 p if p.starts_with(base_path.push("id").as_ref()) => OpWriteModel::Id,
                 p if p.starts_with(base_path.push("sum").as_ref()) => {

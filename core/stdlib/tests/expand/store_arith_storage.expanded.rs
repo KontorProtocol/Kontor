@@ -8,6 +8,6 @@ impl stdlib::Store<crate::context::ProcStorage> for ArithStorage {
         base_path: stdlib::DotPathBuf,
         value: ArithStorage,
     ) {
-        ctx.__set(base_path.push("last_op"), value.last_op);
+        stdlib::WriteStorage::__set(ctx, base_path.push("last_op"), value.last_op);
     }
 }

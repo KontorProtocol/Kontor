@@ -45,7 +45,7 @@ impl ::core::clone::Clone for TokenStorageLedgerModel {
 impl TokenStorageLedgerModel {
     pub fn get(&self, key: impl ToString) -> Option<u64> {
         let base_path = self.base_path.push(key.to_string());
-        self.ctx.__get(base_path)
+        stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
@@ -56,7 +56,7 @@ impl TokenStorageLedgerModel {
     where
         <T as FromStr>::Err: Debug,
     {
-        self.ctx.__get_keys(&self.base_path)
+        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
 pub struct TokenStorageWriteModel {
@@ -114,10 +114,14 @@ impl ::core::clone::Clone for TokenStorageLedgerWriteModel {
 impl TokenStorageLedgerWriteModel {
     pub fn get(&self, key: impl ToString) -> Option<u64> {
         let base_path = self.base_path.push(key.to_string());
-        self.ctx.__get(base_path)
+        stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
     pub fn set(&self, key: String, value: u64) {
-        self.ctx.__set(self.base_path.push(key.to_string()), value)
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            self.base_path.push(key.to_string()),
+            value,
+        )
     }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
@@ -128,6 +132,6 @@ impl TokenStorageLedgerWriteModel {
     where
         <T as FromStr>::Err: Debug,
     {
-        self.ctx.__get_keys(&self.base_path)
+        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

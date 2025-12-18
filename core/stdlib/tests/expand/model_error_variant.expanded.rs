@@ -10,10 +10,13 @@ impl ErrorModel {
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
         base_path: stdlib::DotPathBuf,
     ) -> Self {
-        ctx.__extend_path_with_match(&base_path, &["message"])
+        stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
             .map(|path| match path {
                 p if p.starts_with(base_path.push("message").as_ref()) => {
-                    ErrorModel::Message(ctx.__get(base_path.push("message")).unwrap())
+                    ErrorModel::Message(
+                        stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
+                            .unwrap(),
+                    )
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
@@ -37,11 +40,12 @@ impl ErrorWriteModel {
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
         base_path: stdlib::DotPathBuf,
     ) -> Self {
-        ctx.__extend_path_with_match(&base_path, &["message"])
+        stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
             .map(|path| match path {
                 p if p.starts_with(base_path.push("message").as_ref()) => {
                     ErrorWriteModel::Message(
-                        ctx.__get(base_path.push("message")).unwrap(),
+                        stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
+                            .unwrap(),
                     )
                 }
                 _ => {

@@ -17,7 +17,7 @@ impl FibValueModel {
         }
     }
     pub fn value(&self) -> u64 {
-        self.ctx.__get(self.base_path.push("value")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("value")).unwrap()
     }
     pub fn load(&self) -> FibValue {
         FibValue { value: self.value() }
@@ -44,21 +44,29 @@ impl FibValueWriteModel {
         }
     }
     pub fn value(&self) -> u64 {
-        self.ctx.__get(self.base_path.push("value")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("value")).unwrap()
     }
     pub fn set_value(&self, value: u64) {
-        self.ctx.__set(self.base_path.push("value"), value);
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("value"), value);
     }
     pub fn update_value(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("value");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
+        );
     }
     pub fn try_update_value(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("value");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
+        );
         Ok(())
     }
     pub fn load(&self) -> FibValue {
@@ -117,8 +125,7 @@ impl ::core::clone::Clone for FibStorageCacheModel {
 impl FibStorageCacheModel {
     pub fn get(&self, key: impl ToString) -> Option<FibValueModel> {
         let base_path = self.base_path.push(key.to_string());
-        self.ctx
-            .__exists(&base_path)
+        stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueModel::new(self.ctx.clone(), base_path))
     }
     pub fn load(&self) -> Map<u64, FibValue> {
@@ -130,7 +137,7 @@ impl FibStorageCacheModel {
     where
         <T as FromStr>::Err: Debug,
     {
-        self.ctx.__get_keys(&self.base_path)
+        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
 pub struct FibStorageWriteModel {
@@ -188,12 +195,15 @@ impl ::core::clone::Clone for FibStorageCacheWriteModel {
 impl FibStorageCacheWriteModel {
     pub fn get(&self, key: impl ToString) -> Option<FibValueWriteModel> {
         let base_path = self.base_path.push(key.to_string());
-        self.ctx
-            .__exists(&base_path)
+        stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueWriteModel::new(self.ctx.clone(), base_path))
     }
     pub fn set(&self, key: u64, value: FibValue) {
-        self.ctx.__set(self.base_path.push(key.to_string()), value)
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            self.base_path.push(key.to_string()),
+            value,
+        )
     }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
@@ -204,6 +214,6 @@ impl FibStorageCacheWriteModel {
     where
         <T as FromStr>::Err: Debug,
     {
-        self.ctx.__get_keys(&self.base_path)
+        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

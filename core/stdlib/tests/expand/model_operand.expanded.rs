@@ -17,7 +17,7 @@ impl OperandModel {
         }
     }
     pub fn y(&self) -> u64 {
-        self.ctx.__get(self.base_path.push("y")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("y")).unwrap()
     }
     pub fn load(&self) -> Operand {
         Operand { y: self.y() }
@@ -41,21 +41,29 @@ impl OperandWriteModel {
         }
     }
     pub fn y(&self) -> u64 {
-        self.ctx.__get(self.base_path.push("y")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("y")).unwrap()
     }
     pub fn set_y(&self, value: u64) {
-        self.ctx.__set(self.base_path.push("y"), value);
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("y"), value);
     }
     pub fn update_y(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("y");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
+        );
     }
     pub fn try_update_y(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("y");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
+        );
         Ok(())
     }
     pub fn load(&self) -> Operand {

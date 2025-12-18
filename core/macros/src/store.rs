@@ -19,7 +19,7 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
                     ));
                 } else {
                     field_sets.push(quote! {
-                        ctx.__set(base_path.push(#field_name_str), value.#field_name);
+                        stdlib::WriteStorage::__set(ctx, base_path.push(#field_name_str), value.#field_name);
                     })
                 }
             }
@@ -42,7 +42,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
         match &variant.fields {
             Fields::Unit => {
                 Ok(quote! {
-                    #type_name::#variant_ident => ctx.__set(base_path.push(#variant_name), ()),
+                    #type_name::#variant_ident => stdlib::WriteStorage::__set(ctx, base_path.push(#variant_name), ()),
                 })
             }
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -51,7 +51,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
                     Err(Error::new(variant_ident.span(), "Store derive does not support Result type in Enums"))
                 } else {
                     Ok(quote! {
-                        #type_name::#variant_ident(inner) => ctx.__set(base_path.push(#variant_name), inner),
+                        #type_name::#variant_ident(inner) => stdlib::WriteStorage::__set(ctx, base_path.push(#variant_name), inner),
                     })
                 }
             }
@@ -63,7 +63,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
     }).collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        ctx.__delete_matching_paths(&base_path, &[#(#variant_names),*]);
+        stdlib::WriteStorage::__delete_matching_paths(ctx, &base_path, &[#(#variant_names),*]);
         match value {
             #(#arms)*
         }

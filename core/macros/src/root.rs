@@ -11,7 +11,7 @@ pub fn generate_root_struct(data_struct: &DataStruct, type_name: &Ident) -> Resu
             Ok(quote! {
                 impl #type_name {
                     pub fn init(self, ctx: &crate::ProcContext) {
-                        alloc::rc::Rc::new(ctx.storage()).__set(stdlib::DotPathBuf::new(), self)
+                        stdlib::WriteStorage::__set(&alloc::rc::Rc::new(ctx.storage()),stdlib::DotPathBuf::new(), self)
                     }
                 }
 

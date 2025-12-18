@@ -45,39 +45,16 @@ pub fn generate(config: Config) -> TokenStream {
         use kontor::built_in::foreign::{ContractAddressModel, ContractAddressWriteModel, get_contract_address};
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
-        fn make_keys_iterator<T>(keys: context::Keys) -> impl Iterator<Item = T>
-        where
-            T: FromStr,
-            <T as FromStr>::Err: Debug,
-        {
-            struct KeysIterator<T>
-            where
-                T: FromStr,
-                <T as FromStr>::Err: Debug,
-            {
-                keys: context::Keys,
-                _phantom: core::marker::PhantomData<T>,
-            }
+        type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
 
-            impl<T> Iterator for KeysIterator<T>
-            where
-                T: FromStr,
-                <T as FromStr>::Err: Debug,
-            {
-                type Item = T;
-                fn next(&mut self) -> Option<Self::Item> {
-                    self.keys.next().map(|s| T::from_str(&s).unwrap())
-                }
-            }
-
-            KeysIterator {
-                keys,
-                _phantom: core::marker::PhantomData,
+        impl stdlib::HasNext for context::Keys {
+            fn next(&self) -> Option<String> {
+                self.next()
             }
         }
 
         #[automatically_derived]
-        impl context::ViewStorage {
+        impl stdlib::ReadStorage for context::ViewStorage {
             fn __get_str(self: &alloc::rc::Rc<Self>, path: &str) -> Option<String> {
                 self.get_str(path)
             }
@@ -99,10 +76,10 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
-            where                                       // <--- Add this section
+            where
                 <T as FromStr>::Err: Debug,
             {
-                make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
@@ -119,7 +96,7 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         #[automatically_derived]
-        impl context::ProcStorage {
+        impl stdlib::ReadStorage for context::ProcStorage {
             fn __get_str(self: &alloc::rc::Rc<Self>, path: &str) -> Option<String> {
                 self.get_str(path)
             }
@@ -141,10 +118,10 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
-            where                                       // <--- Add this section
+            where
                 <T as FromStr>::Err: Debug,
             {
-                make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
@@ -158,7 +135,10 @@ pub fn generate(config: Config) -> TokenStream {
             fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf) -> Option<T> {
                 T::__get(self, path)
             }
+        }
 
+        #[automatically_derived]
+        impl stdlib::WriteStorage for context::ProcStorage {
             fn __set_str(self: &alloc::rc::Rc<Self>, path: &str, value: &str) {
                 self.set_str(path, value)
             }
@@ -192,204 +172,39 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
-        impl Retrieve<context::ViewStorage> for u64 {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_u64(&path)
+        impl Retrieve<crate::context::ViewStorage> for foreign::ContractAddress {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| foreign::ContractAddressModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<context::ViewStorage> for i64 {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_s64(&path)
+        impl Retrieve<crate::context::ProcStorage> for foreign::ContractAddress {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| foreign::ContractAddressWriteModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<context::ViewStorage> for String {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_str(&path)
+        impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<context::ViewStorage> for bool {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_bool(&path)
+        impl Retrieve<crate::context::ProcStorage> for numbers::Integer {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerWriteModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<context::ViewStorage> for Vec<u8> {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_list_u8(&path)
+        impl Retrieve<crate::context::ViewStorage> for numbers::Decimal {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<context::ViewStorage> for foreign::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(foreign::ContractAddressModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Retrieve<context::ViewStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(numbers::IntegerModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Retrieve<context::ViewStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(numbers::DecimalModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for u64 {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_u64(&path)
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for i64 {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_s64(&path)
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for String {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_str(&path)
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for bool {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_bool(&path)
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for Vec<u8> {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf) -> Option<Self> {
-                ctx.__get_list_u8(&path)
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for foreign::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(foreign::ContractAddressWriteModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(numbers::IntegerWriteModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Retrieve<context::ProcStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
-                if ctx.__exists(&path) {
-                    Some(numbers::DecimalWriteModel::new(ctx.clone(), path).load())
-                } else {
-                    None
-                }
-            }
-        }
-
-        impl Store<context::ProcStorage> for u64 {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: u64) {
-                ctx.__set_u64(&path, value);
-            }
-        }
-
-        impl Store<context::ProcStorage> for i64 {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: i64) {
-                ctx.__set_s64(&path, value);
-            }
-        }
-
-        impl Store<context::ProcStorage> for &str {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: &str) {
-                ctx.__set_str(&path, value);
-            }
-        }
-
-        impl Store<context::ProcStorage> for String {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: String) {
-                ctx.__set_str(&path, &value);
-            }
-        }
-
-        impl Store<context::ProcStorage> for bool {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: bool) {
-                ctx.__set_bool(&path, value);
-            }
-        }
-
-        impl Store<context::ProcStorage> for Vec<u8> {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: Vec<u8>) {
-                ctx.__set_list_u8(&path, value);
-            }
-        }
-
-        impl<T: Store<context::ProcStorage>> Store<context::ProcStorage> for Option<T> {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, value: Self) {
-                ctx.__delete_matching_paths(&path, &["none", "some"]);
-                match value {
-                    Some(inner) => ctx.__set(path.push("some"), inner),
-                    None => ctx.__set(path.push("none"), ()),
-                }
-            }
-        }
-
-        impl Store<context::ProcStorage> for () {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, path: DotPathBuf, _: ()) {
-                ctx.__set_void(&path);
-            }
-        }
-
-        #[derive(Clone)]
-        pub struct Map<K: ToString + FromStr + Clone, V: Store<context::ProcStorage>> {
-            pub entries: Vec<(K, V)>,
-        }
-
-        impl<K: ToString + FromStr + Clone, V: Store<context::ProcStorage>> Map<K, V> {
-            pub fn new(entries: &[(K, V)]) -> Self {
-                Map {
-                    entries: entries.to_vec(),
-                }
-            }
-        }
-
-        impl<K: ToString + FromStr + Clone, V: Store<context::ProcStorage>> Default for Map<K, V> {
-            fn default() -> Self {
-                Self {
-                    entries: Default::default(),
-                }
-            }
-        }
-
-        impl<K: ToString + FromStr + Clone, V: Store<context::ProcStorage>> Store<context::ProcStorage> for Map<K, V> {
-            fn __set(ctx: &alloc::rc::Rc<context::ProcStorage>, base_path: DotPathBuf, value: Map<K, V>) {
-                for (k, v) in value.entries.into_iter() {
-                    ctx.__set(base_path.push(k.to_string()), v)
-                }
+        impl Retrieve<crate::context::ProcStorage> for numbers::Decimal {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalWriteModel::new(ctx.clone(), path).load())
             }
         }
 

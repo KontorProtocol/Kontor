@@ -17,7 +17,8 @@ impl ProxyStorageModel {
         }
     }
     pub fn contract_address(&self) -> ContractAddress {
-        self.ctx.__get(self.base_path.push("contract_address")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("contract_address"))
+            .unwrap()
     }
     pub fn load(&self) -> ProxyStorage {
         ProxyStorage {
@@ -46,24 +47,37 @@ impl ProxyStorageWriteModel {
         }
     }
     pub fn contract_address(&self) -> ContractAddress {
-        self.ctx.__get(self.base_path.push("contract_address")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("contract_address"))
+            .unwrap()
     }
     pub fn set_contract_address(&self, value: ContractAddress) {
-        self.ctx.__set(self.base_path.push("contract_address"), value);
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            self.base_path.push("contract_address"),
+            value,
+        );
     }
     pub fn update_contract_address(
         &self,
         f: impl Fn(ContractAddress) -> ContractAddress,
     ) {
         let path = self.base_path.push("contract_address");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap()));
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
+        );
     }
     pub fn try_update_contract_address(
         &self,
         f: impl Fn(ContractAddress) -> Result<ContractAddress, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("contract_address");
-        self.ctx.__set(path.clone(), f(self.ctx.__get(path).unwrap())?);
+        stdlib::WriteStorage::__set(
+            &self.ctx,
+            path.clone(),
+            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
+        );
         Ok(())
     }
     pub fn load(&self) -> ProxyStorage {

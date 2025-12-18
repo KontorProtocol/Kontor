@@ -8,6 +8,6 @@ impl stdlib::Store<crate::context::ProcStorage> for Operand {
         base_path: stdlib::DotPathBuf,
         value: Operand,
     ) {
-        ctx.__set(base_path.push("y"), value.y);
+        stdlib::WriteStorage::__set(ctx, base_path.push("y"), value.y);
     }
 }

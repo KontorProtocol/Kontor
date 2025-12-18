@@ -10,10 +10,18 @@ impl stdlib::Store<crate::context::ProcStorage> for Error {
         base_path: stdlib::DotPathBuf,
         value: Error,
     ) {
-        ctx.__delete_matching_paths(&base_path, &["message", "overflow"]);
+        stdlib::WriteStorage::__delete_matching_paths(
+            ctx,
+            &base_path,
+            &["message", "overflow"],
+        );
         match value {
-            Error::Message(inner) => ctx.__set(base_path.push("message"), inner),
-            Error::Overflow => ctx.__set(base_path.push("overflow"), ()),
+            Error::Message(inner) => {
+                stdlib::WriteStorage::__set(ctx, base_path.push("message"), inner)
+            }
+            Error::Overflow => {
+                stdlib::WriteStorage::__set(ctx, base_path.push("overflow"), ())
+            }
         }
     }
 }
