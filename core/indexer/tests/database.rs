@@ -10,12 +10,12 @@ use indexer::{
             get_contract_id_from_address, get_contract_result, get_contracts,
             get_latest_contract_state, get_latest_contract_state_value, get_op_result,
             get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_result, insert_contract_state, insert_file_ledger_entry,
+            insert_contract_result, insert_contract_state, insert_file_metadata,
             insert_processed_block, insert_transaction, matching_path,
-            path_prefix_filter_contract_state, rollback_to_height, select_all_file_ledger_entries,
+            path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
             select_block_at_height, select_block_by_height_or_hash, select_block_latest,
         },
-        types::{ContractResultRow, ContractRow, ContractStateRow, FileLedgerEntryRow, OpResultId},
+        types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId},
     },
     runtime::ContractAddress,
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
@@ -622,7 +622,7 @@ async fn test_contract_result_operations() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_file_ledger_entry_operations() -> Result<()> {
+async fn test_file_metadata_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -641,35 +641,35 @@ async fn test_file_ledger_entry_operations() -> Result<()> {
         .build();
     insert_transaction(&conn, tx.clone()).await?;
 
-    // Initially, no file ledger entries should exist
-    let entries = select_all_file_ledger_entries(&conn).await?;
+    // Initially, no file metadata entries should exist
+    let entries = select_all_file_metadata(&conn).await?;
     assert!(entries.is_empty());
 
-    // Insert a file ledger entry
+    // Insert a file metadata entry
     let file_id = "file_abc123".to_string();
-    let root = vec![1u8; 32]; // 32 bytes for FieldElement
-    let tree_depth = 10i64;
+    let root = [1u8; 32]; // 32 bytes for FieldElement
+    let depth = 10i64;
 
-    let entry1 = FileLedgerEntryRow::builder()
+    let entry1 = FileMetadataRow::builder()
         .file_id(file_id.clone())
-        .root(root.clone())
-        .tree_depth(tree_depth)
+        .root(root)
+        .depth(depth)
         .height(height)
         .build();
 
-    let id1 = insert_file_ledger_entry(&conn, &entry1).await?;
+    let id1 = insert_file_metadata(&conn, &entry1).await?;
     assert!(id1 > 0, "Insert should return a valid ID");
 
     // Verify entry was inserted
-    let entries = select_all_file_ledger_entries(&conn).await?;
+    let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, id1);
     assert_eq!(entries[0].file_id, file_id);
     assert_eq!(entries[0].root, root);
-    assert_eq!(entries[0].tree_depth, tree_depth);
+    assert_eq!(entries[0].depth, depth);
     assert_eq!(entries[0].height, height);
 
-    // Insert another file ledger entry at a different height
+    // Insert another file metadata entry at a different height
     let height2 = 800001;
     let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
     let block2 = BlockRow::builder().height(height2).hash(hash2).build();
@@ -684,31 +684,31 @@ async fn test_file_ledger_entry_operations() -> Result<()> {
     insert_transaction(&conn, tx2.clone()).await?;
 
     let file_id2 = "file_def456".to_string();
-    let root2 = vec![2u8; 32];
-    let tree_depth2 = 15i64;
+    let root2 = [2u8; 32];
+    let depth2 = 12i64;
 
-    let entry2 = FileLedgerEntryRow::builder()
+    let entry2 = FileMetadataRow::builder()
         .file_id(file_id2.clone())
-        .root(root2.clone())
-        .tree_depth(tree_depth2)
+        .root(root2)
+        .depth(depth2)
         .height(height2)
         .build();
 
-    let id2 = insert_file_ledger_entry(&conn, &entry2).await?;
+    let id2 = insert_file_metadata(&conn, &entry2).await?;
     assert!(id2 > id1, "Second entry should have a higher ID");
 
     // Verify both entries exist and are ordered by ID
-    let entries = select_all_file_ledger_entries(&conn).await?;
+    let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].id, id1);
     assert_eq!(entries[0].file_id, file_id);
     assert_eq!(entries[1].id, id2);
     assert_eq!(entries[1].file_id, file_id2);
 
-    // Test rollback deletes file ledger entries (ON DELETE CASCADE)
+    // Test rollback deletes file metadata entries (ON DELETE CASCADE)
     rollback_to_height(&conn, height as u64).await?;
 
-    let entries = select_all_file_ledger_entries(&conn).await?;
+    let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, id1);
 
