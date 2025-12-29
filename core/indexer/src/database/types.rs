@@ -1,8 +1,9 @@
 use std::fmt::Display;
 
 use bon::Builder;
+use ff::PrimeField;
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
-use kontor_crypto::{FieldElement, FileDescriptor, utils::bytes31_to_field_le};
+use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
@@ -287,7 +288,9 @@ impl FileDescriptor for FileMetadataRow {
     }
 
     fn root(&self) -> FieldElement {
-        bytes31_to_field_le(&self.root)
+        FieldElement::from_repr(self.root.into())
+            .into_option()
+            .expect("Invalid field element bytes for root")
     }
 
     fn depth(&self) -> usize {
