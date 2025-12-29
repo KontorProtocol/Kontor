@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
   root BLOB NOT NULL,
   depth INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  historical_root BLOB,
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 

@@ -934,7 +934,13 @@ pub async fn get_checkpoint_latest(
 pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetadataRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT id, file_id, root, depth, height
+            r#"SELECT 
+            id, 
+            file_id, 
+            root,
+            depth, 
+            height, 
+            historical_root
             FROM file_metadata
             ORDER BY id ASC"#,
             params![],
@@ -952,15 +958,28 @@ pub async fn insert_file_metadata(
     conn: &Connection,
     entry: &FileMetadataRow,
 ) -> Result<i64, Error> {
+    // Convert Option<[u8; 32]> to Value (Null or Blob)
+    let historical_root_value: Value = match &entry.historical_root {
+        Some(root) => Value::Blob(root.to_vec()),
+        None => Value::Null,
+    };
+
     conn.execute(
         r#"INSERT INTO 
         file_metadata 
         (file_id, 
         root, 
         depth,
-        height) 
-        VALUES (?, ?, ?, ?)"#,
-        params![entry.file_id.clone(), entry.root, entry.depth, entry.height,],
+        height,
+        historical_root) 
+        VALUES (?, ?, ?, ?, ?)"#,
+        params![
+            entry.file_id.clone(),
+            entry.root,
+            entry.depth,
+            entry.height,
+            historical_root_value,
+        ],
     )
     .await?;
     Ok(conn.last_insert_rowid())

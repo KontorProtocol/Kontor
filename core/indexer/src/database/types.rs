@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use bon::Builder;
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
-use kontor_crypto::{FieldElement, FileDescriptor};
+use kontor_crypto::{FieldElement, FileDescriptor, utils::bytes31_to_field_le};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
@@ -278,6 +278,7 @@ pub struct FileMetadataRow {
     pub root: [u8; 32],
     pub depth: i64,
     pub height: i64,
+    pub historical_root: Option<[u8; 32]>,
 }
 
 impl FileDescriptor for FileMetadataRow {
@@ -286,9 +287,7 @@ impl FileDescriptor for FileMetadataRow {
     }
 
     fn root(&self) -> FieldElement {
-        FieldElement::from_bytes(&self.root)
-            .into_option()
-            .expect("Invalid field element bytes for root")
+        bytes31_to_field_le(&self.root)
     }
 
     fn depth(&self) -> usize {
