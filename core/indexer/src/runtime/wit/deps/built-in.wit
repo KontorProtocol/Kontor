@@ -104,7 +104,8 @@ interface error {
         message(string),
         overflow(string),
         div-by-zero(string),
-        syntax-error(string),
+        syntax(string),
+        validation(string),
     }
 }
 
@@ -167,7 +168,20 @@ interface numbers {
 }
 
 interface file-ledger {
-    register-file: func(file-id: string, root: list<u8>, tree-depth: s64);
+    use error.{error};
+
+    record raw-file-descriptor {
+        file-id: string,
+        root: list<u8>,
+        depth: u64
+    }
+
+    resource file-descriptor {
+        file-id: func() -> string;
+        from-raw: static func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+    }
+
+    add-file: func(file-descriptor: borrow<file-descriptor>);
 }
 
 world built-in {

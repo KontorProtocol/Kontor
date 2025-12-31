@@ -93,6 +93,7 @@ pub fn import(
                 "proc-storage",
                 "core-context",
                 "signer",
+                "file-descriptor",
                 "error",
                 "keys",
                 "integer",

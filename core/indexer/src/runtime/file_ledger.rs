@@ -1,16 +1,10 @@
 use anyhow::{Result, anyhow};
 use kontor_crypto::FileLedger as CryptoFileLedger;
-use kontor_crypto::api::FieldElement;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::{database::types::FileLedgerEntryRow, runtime::Storage};
-
-pub struct CryptoFileLedgerEntry {
-    pub file_id: String,
-    pub root: FieldElement,
-    pub tree_depth: i64,
-}
+use crate::database::types::FileMetadataRow;
+use crate::runtime::Storage;
 
 /// Inner state protected by a single mutex
 struct FileLedgerInner {
@@ -78,19 +72,25 @@ impl FileLedger {
         Ok(())
     }
 
-    /// Load all file ledger entries from DB and add them to the crypto ledger.
+    /// Load all file metadata entries from DB and add them to the crypto ledger.
+    /// Also restores the historical roots from the stored values.
     async fn load_entries_into_ledger(
         ledger: &mut CryptoFileLedger,
         storage: &Storage,
     ) -> Result<()> {
-        let rows = storage.all_file_ledger_entries().await?;
-        for row in rows {
-            let entry: CryptoFileLedgerEntry = (&row).try_into()?;
-            // TODO: update once kontor-crypto exposes adding leaves and building the tree once
-            ledger
-                .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
-                .map_err(|e| anyhow!("Failed to add file {}: {:?}", entry.file_id, e))?;
-        }
+        let rows = storage.all_file_metadata().await?;
+
+        // Add all files to rebuild the tree (this will generate incorrect historical roots)
+        ledger
+            .add_files(&rows)
+            .map_err(|e| anyhow!("Failed to add files to ledger: {:?}", e))?;
+
+        // Collect the stored historical roots in order and restore them
+        let historical_roots: Vec<[u8; 32]> =
+            rows.iter().filter_map(|row| row.historical_root).collect();
+
+        ledger.set_historical_roots(historical_roots);
+
         Ok(())
     }
 
@@ -98,33 +98,41 @@ impl FileLedger {
     ///
     /// Holds the lock for the entire operation to ensure the in-memory ledger
     /// and database stay in sync even with concurrent calls.
-    pub async fn add_file(
-        &self,
-        storage: &Storage,
-        file_id: String,
-        root: Vec<u8>,
-        tree_depth: i64,
-    ) -> Result<()> {
+    ///
+    /// The historical root (the pre-modification ledger root) is captured and stored
+    /// in the database for later reconstruction during rebuilds.
+    pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadataRow) -> Result<()> {
         let mut inner = self.inner.lock().await;
 
-        let row: FileLedgerEntryRow = FileLedgerEntryRow::builder()
-            .file_id(file_id)
-            .root(root)
-            .tree_depth(tree_depth)
-            .height(storage.height)
-            .build();
+        // Capture the number of historical roots before adding
+        let historical_roots_count_before = inner.ledger.historical_roots.len();
 
-        // Convert to get the FieldElement root for the crypto ledger
-        let entry: CryptoFileLedgerEntry = (&row).try_into()?;
-
-        // Add to inner FileLedger
+        // Add to inner FileLedger (this may push a historical root)
         inner
             .ledger
-            .add_file(entry.file_id.clone(), entry.root, entry.tree_depth as usize)
+            .add_file(metadata)
             .map_err(|e| anyhow!("Failed to add file to ledger: {:?}", e))?;
 
+        // Check if a new historical root was pushed
+        let historical_root = if inner.ledger.historical_roots.len() > historical_roots_count_before
+        {
+            // The last element is the newly pushed historical root
+            inner.ledger.historical_roots.last().copied()
+        } else {
+            // No historical root was pushed (ledger was empty before)
+            None
+        };
+
+        // Create metadata with the historical root for persistence
+        let metadata_with_historical = FileMetadataRow {
+            historical_root,
+            ..metadata.clone()
+        };
+
         // Persist to database
-        storage.insert_file_ledger_entry(row).await?;
+        storage
+            .insert_file_metadata(metadata_with_historical)
+            .await?;
 
         // Mark ledger as dirty (needs resync on rollback)
         inner.dirty = true;

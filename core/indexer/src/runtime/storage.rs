@@ -12,10 +12,10 @@ use crate::{
             delete_contract_state, delete_matching_paths, exists_contract_state,
             get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
             get_latest_contract_state_value, insert_contract, insert_contract_result,
-            insert_contract_state, insert_file_ledger_entry, matching_path,
-            path_prefix_filter_contract_state, select_all_file_ledger_entries,
+            insert_contract_state, insert_file_metadata, matching_path,
+            path_prefix_filter_contract_state, select_all_file_metadata,
         },
-        types::{ContractResultRow, ContractRow, ContractStateRow, FileLedgerEntryRow},
+        types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
 };
@@ -228,11 +228,11 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn all_file_ledger_entries(&self) -> Result<Vec<FileLedgerEntryRow>> {
-        Ok(select_all_file_ledger_entries(&self.conn).await?)
+    pub async fn all_file_metadata(&self) -> Result<Vec<FileMetadataRow>> {
+        Ok(select_all_file_metadata(&self.conn).await?)
     }
 
-    pub async fn insert_file_ledger_entry(&self, entry: FileLedgerEntryRow) -> Result<i64> {
-        Ok(insert_file_ledger_entry(&self.conn, &entry).await?)
+    pub async fn insert_file_metadata(&self, entry: FileMetadataRow) -> Result<i64> {
+        Ok(insert_file_metadata(&self.conn, &entry).await?)
     }
 }

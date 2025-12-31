@@ -8,7 +8,7 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileLedgerEntryRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -931,13 +931,17 @@ pub async fn get_checkpoint_latest(
     Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-pub async fn select_all_file_ledger_entries(
-    conn: &Connection,
-) -> Result<Vec<FileLedgerEntryRow>, Error> {
+pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetadataRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT id, file_id, root, tree_depth, height
-            FROM file_ledger_entries
+            r#"SELECT 
+            id, 
+            file_id, 
+            root,
+            depth, 
+            height, 
+            historical_root
+            FROM file_metadata
             ORDER BY id ASC"#,
             params![],
         )
@@ -950,23 +954,31 @@ pub async fn select_all_file_ledger_entries(
     Ok(entries)
 }
 
-pub async fn insert_file_ledger_entry(
+pub async fn insert_file_metadata(
     conn: &Connection,
-    entry: &FileLedgerEntryRow,
+    entry: &FileMetadataRow,
 ) -> Result<i64, Error> {
+    // Convert Option<[u8; 32]> to Value (Null or Blob)
+    let historical_root_value: Value = match &entry.historical_root {
+        Some(root) => Value::Blob(root.to_vec()),
+        None => Value::Null,
+    };
+
     conn.execute(
         r#"INSERT INTO 
-        file_ledger_entries 
+        file_metadata 
         (file_id, 
         root, 
-        tree_depth, 
-        height) 
-        VALUES (?, ?, ?, ?)"#,
+        depth,
+        height,
+        historical_root) 
+        VALUES (?, ?, ?, ?, ?)"#,
         params![
             entry.file_id.clone(),
-            entry.root.clone(),
-            entry.tree_depth,
+            entry.root,
+            entry.depth,
             entry.height,
+            historical_root_value,
         ],
     )
     .await?;
