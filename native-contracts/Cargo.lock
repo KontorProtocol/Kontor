@@ -61,6 +61,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "filestorage"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -288,13 +295,6 @@ dependencies = [
  "macros",
  "wasm-wave",
  "wit-bindgen",
-]
-
-[[package]]
-name = "storage_agreement"
-version = "0.1.0"
-dependencies = [
- "stdlib",
 ]
 
 [[package]]

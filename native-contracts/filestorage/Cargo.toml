@@ -1,5 +1,5 @@
 [package]
-name = "storage_agreement"
+name = "filestorage"
 version = "0.1.0"
 edition = "2024"
 

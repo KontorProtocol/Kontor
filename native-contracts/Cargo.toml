@@ -1,5 +1,5 @@
 [workspace]
-members = ["token", "storage-agreement"]
+members = ["token", "filestorage"]
 resolver = "2"
 
 [profile.release]

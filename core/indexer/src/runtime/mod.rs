@@ -3,12 +3,12 @@ extern crate alloc;
 mod component_cache;
 pub mod counter;
 pub mod file_ledger;
+pub mod filestorage;
 pub mod fuel;
 pub mod numerics;
 pub mod pool;
 mod stack;
 mod storage;
-pub mod storage_agreement;
 pub mod token;
 mod types;
 pub mod wit;
@@ -54,7 +54,7 @@ use wasmtime::{
     },
 };
 
-use crate::database::native_contracts::{STORAGE_AGREEMENT, TOKEN};
+use crate::database::native_contracts::{FILESTORAGE, TOKEN};
 use crate::database::types::FileMetadataRow;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
@@ -240,8 +240,8 @@ impl Runtime {
             .await?;
         self.publish(
             &Signer::Core(Box::new(Signer::Nobody)),
-            "storage_agreement",
-            STORAGE_AGREEMENT,
+            "filestorage",
+            FILESTORAGE,
         )
         .await?;
         Ok(())
