@@ -1,5 +1,5 @@
 #![no_std]
-contract!(name = "storage_agreement");
+contract!(name = "filestorage");
 
 use stdlib::*;
 
@@ -26,7 +26,7 @@ struct Agreement {
 }
 
 #[derive(Clone, Default, StorageRoot)]
-struct StorageProtocolState {
+struct ProtocolState {
     pub min_nodes: u64,
     pub challenge_deadline_blocks: u64,
     pub agreements: Map<String, Agreement>,
@@ -51,9 +51,9 @@ fn to_agreement_data(agreement_id: String, model: &AgreementModel) -> AgreementD
 // Contract Implementation
 // ─────────────────────────────────────────────────────────────────
 
-impl Guest for StorageAgreement {
+impl Guest for Filestorage {
     fn init(ctx: &ProcContext) {
-        StorageProtocolState {
+        ProtocolState {
             min_nodes: DEFAULT_MIN_NODES,
             challenge_deadline_blocks: DEFAULT_CHALLENGE_DEADLINE_BLOCKS,
             agreements: Map::default(),
