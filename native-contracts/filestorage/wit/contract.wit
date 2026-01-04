@@ -22,12 +22,24 @@ world root {
     agreement-id: string,
   }
 
+  record join-agreement-result {
+    agreement-id: string,
+    node-id: string,
+    activated: bool,
+  }
+
+  record leave-agreement-result {
+    agreement-id: string,
+    node-id: string,
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // Functions
   // ─────────────────────────────────────────────────────────────────
 
   export init: func(ctx: borrow<proc-context>);
 
+  // Agreement management
   export create-agreement: func(
     ctx: borrow<proc-context>,
     descriptor: raw-file-descriptor
@@ -39,4 +51,32 @@ world root {
   ) -> option<agreement-data>;
 
   export agreement-count: func(ctx: borrow<view-context>) -> u64;
+
+  // Node participation
+  export join-agreement: func(
+    ctx: borrow<proc-context>,
+    agreement-id: string,
+    node-id: string
+  ) -> result<join-agreement-result, error>;
+
+  export leave-agreement: func(
+    ctx: borrow<proc-context>,
+    agreement-id: string,
+    node-id: string
+  ) -> result<leave-agreement-result, error>;
+
+  // Node queries
+  export get-agreement-nodes: func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> option<list<string>>;
+
+  export is-node-in-agreement: func(
+    ctx: borrow<view-context>,
+    agreement-id: string,
+    node-id: string
+  ) -> bool;
+
+  // Protocol parameters
+  export get-min-nodes: func(ctx: borrow<view-context>) -> u64;
 }
