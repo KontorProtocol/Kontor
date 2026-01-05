@@ -1197,12 +1197,13 @@ impl Runtime {
         }
 
         // TODO: Implement actual proof verification using kontor-crypto
-        // 1. Get the file root from the agreement (need to read from contract state)
-        // 2. Call kontor_crypto::verify_proof(file_root, chunk_index, proof)
-        // 3. Return result
-        let _chunk_index = challenge.chunk_index;
+        // 1. Get the file metadata from the agreement (need to read from contract state)
+        // 2. Reconstruct the kontor_crypto::Challenge from stored data
+        // 3. Call PorSystem::verify(proof, &[challenge])
+        // 4. Return result
         let _agreement_id = challenge.agreement_id.clone();
-        todo!("Implement proof verification with kontor-crypto");
+        let _file_id = challenge.file_id.clone();
+        todo!("Implement proof verification with kontor-crypto PorSystem::verify");
 
         // When implemented, on success:
         // update_challenge_status(&self.storage.conn, &challenge_id, ChallengeStatus::Proven).await?;

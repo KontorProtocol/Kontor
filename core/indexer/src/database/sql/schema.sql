@@ -86,8 +86,8 @@ CREATE TABLE IF NOT EXISTS challenges (
   id INTEGER PRIMARY KEY,
   challenge_id TEXT NOT NULL UNIQUE,
   agreement_id TEXT NOT NULL,
+  file_id TEXT NOT NULL,
   node_id TEXT NOT NULL,
-  chunk_index INTEGER NOT NULL,
   issued_height INTEGER NOT NULL,
   deadline_height INTEGER NOT NULL,
   status INTEGER NOT NULL DEFAULT 0, -- 0=pending, 1=proven, 2=expired
@@ -98,3 +98,4 @@ CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges (status);
 CREATE INDEX IF NOT EXISTS idx_challenges_deadline ON challenges (deadline_height, status);
 CREATE INDEX IF NOT EXISTS idx_challenges_node ON challenges (node_id, status);
 CREATE INDEX IF NOT EXISTS idx_challenges_agreement ON challenges (agreement_id);
+CREATE INDEX IF NOT EXISTS idx_challenges_file ON challenges (file_id, status);

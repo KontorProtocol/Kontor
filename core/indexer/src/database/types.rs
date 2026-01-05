@@ -332,8 +332,8 @@ pub struct ChallengeRow {
     pub id: i64,
     pub challenge_id: String,
     pub agreement_id: String,
+    pub file_id: String,
     pub node_id: String,
-    pub chunk_index: i64,
     pub issued_height: i64,
     pub deadline_height: i64,
     #[builder(default)]

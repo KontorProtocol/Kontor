@@ -88,12 +88,18 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
     // TODO: Challenge generation would happen here, before processing transactions
-    // This requires reading active agreements from contract state
+    // This requires:
+    // 1. Reading active agreements from filestorage contract state
+    // 2. Getting files with existing active challenges from challenges table
+    //
+    // let active_agreements = get_active_agreements_from_contract(&runtime).await?;
+    // let active_file_ids = get_files_with_active_challenges(&runtime.storage.conn).await?;
     // challenges::generate_challenges(
     //     &runtime.storage.conn,
     //     block.height as i64,
     //     &block.hash.to_byte_array(),
     //     &active_agreements,
+    //     &active_file_ids,
     //     &challenges::ChallengeConfig::default(),
     // ).await?;
 

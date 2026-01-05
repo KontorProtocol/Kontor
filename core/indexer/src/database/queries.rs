@@ -995,8 +995,8 @@ pub async fn insert_challenge(conn: &Connection, row: &ChallengeRow) -> Result<i
         r#"INSERT INTO challenges (
             challenge_id,
             agreement_id,
+            file_id,
             node_id,
-            chunk_index,
             issued_height,
             deadline_height,
             status
@@ -1004,8 +1004,8 @@ pub async fn insert_challenge(conn: &Connection, row: &ChallengeRow) -> Result<i
         params![
             row.challenge_id.clone(),
             row.agreement_id.clone(),
+            row.file_id.clone(),
             row.node_id.clone(),
-            row.chunk_index,
             row.issued_height,
             row.deadline_height,
             i64::from(row.status),
@@ -1025,8 +1025,8 @@ pub async fn get_challenge_by_id(
                 id, 
                 challenge_id, 
                 agreement_id, 
+                file_id,
                 node_id, 
-                chunk_index,
                 issued_height, 
                 deadline_height, 
                 status
@@ -1042,8 +1042,8 @@ pub async fn get_challenge_by_id(
                 id: row.get(0)?,
                 challenge_id: row.get(1)?,
                 agreement_id: row.get(2)?,
-                node_id: row.get(3)?,
-                chunk_index: row.get(4)?,
+                file_id: row.get(3)?,
+                node_id: row.get(4)?,
                 issued_height: row.get(5)?,
                 deadline_height: row.get(6)?,
                 status: ChallengeStatus::from(status_val),
@@ -1076,8 +1076,8 @@ pub async fn get_pending_challenges_by_deadline(
                 id, 
                 challenge_id, 
                 agreement_id, 
+                file_id,
                 node_id, 
-                chunk_index,
                 issued_height, 
                 deadline_height, 
                 status
@@ -1095,8 +1095,8 @@ pub async fn get_pending_challenges_by_deadline(
             id: row.get(0)?,
             challenge_id: row.get(1)?,
             agreement_id: row.get(2)?,
-            node_id: row.get(3)?,
-            chunk_index: row.get(4)?,
+            file_id: row.get(3)?,
+            node_id: row.get(4)?,
             issued_height: row.get(5)?,
             deadline_height: row.get(6)?,
             status: ChallengeStatus::from(status_val),
@@ -1115,8 +1115,8 @@ pub async fn get_pending_challenges_for_node(
                 id, 
                 challenge_id, 
                 agreement_id, 
+                file_id,
                 node_id, 
-                chunk_index,
                 issued_height, 
                 deadline_height, 
                 status
@@ -1134,14 +1134,32 @@ pub async fn get_pending_challenges_for_node(
             id: row.get(0)?,
             challenge_id: row.get(1)?,
             agreement_id: row.get(2)?,
-            node_id: row.get(3)?,
-            chunk_index: row.get(4)?,
+            file_id: row.get(3)?,
+            node_id: row.get(4)?,
             issued_height: row.get(5)?,
             deadline_height: row.get(6)?,
             status: ChallengeStatus::from(status_val),
         });
     }
     Ok(results)
+}
+
+/// Get file IDs that have active (pending) challenges
+pub async fn get_files_with_active_challenges(
+    conn: &Connection,
+) -> Result<std::collections::HashSet<String>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT file_id FROM challenges WHERE status = 0",
+            params![],
+        )
+        .await?;
+
+    let mut file_ids = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        file_ids.insert(row.get(0)?);
+    }
+    Ok(file_ids)
 }
 
 pub async fn expire_challenges_at_height(
