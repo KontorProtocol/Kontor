@@ -17,12 +17,17 @@ const DEFAULT_CHALLENGE_DEADLINE_BLOCKS: u64 = 2016;
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
+/// A storage agreement for a file
+/// nodes: Map<node_id, is_active> - true means active, false means left
 #[derive(Clone, Default, Storage)]
 struct Agreement {
+    pub agreement_id: String,
     pub file_id: String,
     pub root: Vec<u8>,
     pub depth: u64,
     pub active: bool,
+    pub nodes: Map<String, bool>,
+    pub node_count: u64,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -31,20 +36,6 @@ struct ProtocolState {
     pub challenge_deadline_blocks: u64,
     pub agreements: Map<String, Agreement>,
     pub agreement_count: u64,
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Helper Functions
-// ─────────────────────────────────────────────────────────────────
-
-fn to_agreement_data(agreement_id: String, model: &AgreementModel) -> AgreementData {
-    AgreementData {
-        agreement_id,
-        file_id: model.file_id(),
-        root: model.root(),
-        depth: model.depth(),
-        active: model.active(),
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -91,10 +82,13 @@ impl Guest for Filestorage {
 
         // Create the agreement (starts inactive until nodes join)
         let agreement = Agreement {
+            agreement_id: agreement_id.clone(),
             file_id: descriptor.file_id,
             root: descriptor.root,
             depth: descriptor.depth,
             active: false,
+            nodes: Map::default(),
+            node_count: 0,
         };
 
         // Store the agreement
@@ -110,10 +104,120 @@ impl Guest for Filestorage {
         ctx.model()
             .agreements()
             .get(&agreement_id)
-            .map(|a| to_agreement_data(agreement_id, &a))
+            .map(|a| AgreementData {
+                agreement_id: a.agreement_id(),
+                file_id: a.file_id(),
+                root: a.root(),
+                depth: a.depth(),
+                active: a.active(),
+            })
     }
 
     fn agreement_count(ctx: &ViewContext) -> u64 {
         ctx.model().agreement_count()
+    }
+
+    fn join_agreement(
+        ctx: &ProcContext,
+        agreement_id: String,
+        node_id: String,
+    ) -> Result<JoinAgreementResult, Error> {
+        let model = ctx.model();
+
+        // Validate agreement exists
+        let agreement = model
+            .agreements()
+            .get(&agreement_id)
+            .ok_or(Error::Message(format!(
+                "agreement not found: {}",
+                agreement_id
+            )))?;
+
+        // Check if node is already active in agreement
+        if agreement.nodes().get(&node_id).unwrap_or(false) {
+            return Err(Error::Message(format!(
+                "node {} already in agreement {}",
+                node_id, agreement_id
+            )));
+        }
+
+        // Add node to agreement (or reactivate if previously left)
+        agreement.nodes().set(node_id.clone(), true);
+
+        // Increment node count
+        agreement.update_node_count(|c| c + 1);
+        let node_count = agreement.node_count();
+
+        // Check if we should activate (only if not already active)
+        let min_nodes = model.min_nodes();
+        let activated = !agreement.active() && node_count >= min_nodes;
+
+        if activated {
+            agreement.set_active(true);
+        }
+
+        Ok(JoinAgreementResult {
+            agreement_id,
+            node_id,
+            activated,
+        })
+    }
+
+    fn leave_agreement(
+        ctx: &ProcContext,
+        agreement_id: String,
+        node_id: String,
+    ) -> Result<LeaveAgreementResult, Error> {
+        let model = ctx.model();
+
+        // Validate agreement exists
+        let agreement = model
+            .agreements()
+            .get(&agreement_id)
+            .ok_or(Error::Message(format!(
+                "agreement not found: {}",
+                agreement_id
+            )))?;
+
+        // Validate node is active in agreement
+        if !agreement.nodes().get(&node_id).unwrap_or(false) {
+            return Err(Error::Message(format!(
+                "node {} not in agreement {}",
+                node_id, agreement_id
+            )));
+        }
+
+        // Mark node as inactive (don't delete, just set to false)
+        agreement.nodes().set(node_id.clone(), false);
+
+        // Decrement node count
+        agreement.update_node_count(|c| c.saturating_sub(1));
+
+        Ok(LeaveAgreementResult {
+            agreement_id,
+            node_id,
+        })
+    }
+
+    fn get_agreement_nodes(ctx: &ViewContext, agreement_id: String) -> Option<Vec<String>> {
+        ctx.model().agreements().get(&agreement_id).map(|a| {
+            // Collect only active nodes (value = true)
+            a.nodes()
+                .keys()
+                .filter(|k: &String| a.nodes().get(k).unwrap_or(false))
+                .collect()
+        })
+    }
+
+    fn is_node_in_agreement(ctx: &ViewContext, agreement_id: String, node_id: String) -> bool {
+        ctx.model()
+            .agreements()
+            .get(&agreement_id)
+            .map(|a| a.nodes().get(&node_id).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    fn get_min_nodes(ctx: &ViewContext) -> u64 {
+        ctx.model().min_nodes()
     }
 }
