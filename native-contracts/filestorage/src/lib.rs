@@ -27,6 +27,7 @@ struct Agreement {
     pub depth: u64,
     pub active: bool,
     pub nodes: Map<String, bool>,
+    pub node_count: u64,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -87,6 +88,7 @@ impl Guest for Filestorage {
             depth: descriptor.depth,
             active: false,
             nodes: Map::default(),
+            node_count: 0,
         };
 
         // Store the agreement
@@ -142,16 +144,13 @@ impl Guest for Filestorage {
         // Add node to agreement (or reactivate if previously left)
         agreement.nodes().set(node_id.clone(), true);
 
-        // Count active nodes
-        let active_node_count = agreement
-            .nodes()
-            .keys()
-            .filter(|k: &String| agreement.nodes().get(k).unwrap_or(false))
-            .count() as u64;
+        // Increment node count
+        agreement.update_node_count(|c| c + 1);
+        let node_count = agreement.node_count();
 
         // Check if we should activate (only if not already active)
         let min_nodes = model.min_nodes();
-        let activated = !agreement.active() && active_node_count >= min_nodes;
+        let activated = !agreement.active() && node_count >= min_nodes;
 
         if activated {
             agreement.set_active(true);
@@ -190,6 +189,9 @@ impl Guest for Filestorage {
 
         // Mark node as inactive (don't delete, just set to false)
         agreement.nodes().set(node_id.clone(), false);
+
+        // Decrement node count
+        agreement.update_node_count(|c| c.saturating_sub(1));
 
         Ok(LeaveAgreementResult {
             agreement_id,

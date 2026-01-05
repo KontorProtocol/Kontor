@@ -285,6 +285,75 @@ async fn filestorage_is_node_in_agreement(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+async fn filestorage_is_node_in_nonexistent_agreement(runtime: &mut Runtime) -> Result<()> {
+    // Checking a nonexistent agreement should return false, not error
+    let is_in = filestorage::is_node_in_agreement(runtime, "nonexistent", "node_1").await?;
+    assert!(!is_in);
+
+    Ok(())
+}
+
+async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let descriptor = make_descriptor("rejoin_test".to_string(), vec![9u8; 32], 4);
+
+    // Create agreement and join
+    let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+
+    // Verify node is in
+    let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
+    assert!(is_in);
+
+    // Leave
+    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+
+    // Verify node is out
+    let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
+    assert!(!is_in);
+
+    // Rejoin - should succeed
+    let result =
+        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    assert_eq!(result.node_id, "node_1");
+
+    // Verify node is back in
+    let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
+    assert!(is_in);
+
+    let nodes = filestorage::get_agreement_nodes(runtime, &created.agreement_id).await?;
+    assert_eq!(nodes.expect("should exist").len(), 1);
+
+    Ok(())
+}
+
+async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let descriptor = make_descriptor("no_reactivate_test".to_string(), vec![10u8; 32], 4);
+
+    // Create and activate agreement
+    let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    let result3 =
+        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    assert!(result3.activated); // Third node activates
+
+    // Fourth join should NOT report activated (already active)
+    let result4 =
+        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_4").await??;
+    assert!(!result4.activated); // Already active, so activated=false
+
+    // Agreement should still be active
+    let agreement = filestorage::get_agreement(runtime, &created.agreement_id).await?;
+    assert!(agreement.expect("exists").active);
+
+    let nodes = filestorage::get_agreement_nodes(runtime, &created.agreement_id).await?;
+    assert_eq!(nodes.expect("should exist").len(), 4);
+
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Test Registration
 // ─────────────────────────────────────────────────────────────────
@@ -359,6 +428,21 @@ async fn test_filestorage_is_node_in_agreement() -> Result<()> {
     filestorage_is_node_in_agreement(runtime).await
 }
 
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_filestorage_is_node_in_nonexistent_agreement() -> Result<()> {
+    filestorage_is_node_in_nonexistent_agreement(runtime).await
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_filestorage_rejoin_after_leave() -> Result<()> {
+    filestorage_rejoin_after_leave(runtime).await
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_filestorage_join_after_activation_not_reactivated() -> Result<()> {
+    filestorage_join_after_activation_not_reactivated(runtime).await
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Regtest Tests
 // ─────────────────────────────────────────────────────────────────
@@ -416,4 +500,14 @@ async fn test_filestorage_leave_does_not_deactivate_regtest() -> Result<()> {
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_filestorage_is_node_in_agreement_regtest() -> Result<()> {
     filestorage_is_node_in_agreement(runtime).await
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn test_filestorage_rejoin_after_leave_regtest() -> Result<()> {
+    filestorage_rejoin_after_leave(runtime).await
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn test_filestorage_join_after_activation_not_reactivated_regtest() -> Result<()> {
+    filestorage_join_after_activation_not_reactivated(runtime).await
 }
