@@ -303,18 +303,20 @@ impl FileDescriptor for FileMetadataRow {
 #[repr(i64)]
 pub enum ChallengeStatus {
     #[default]
-    Pending = 0,
+    Active = 0,
     Proven = 1,
     Expired = 2,
+    Failed = 3,
 }
 
 impl From<i64> for ChallengeStatus {
     fn from(value: i64) -> Self {
         match value {
-            0 => ChallengeStatus::Pending,
+            0 => ChallengeStatus::Active,
             1 => ChallengeStatus::Proven,
             2 => ChallengeStatus::Expired,
-            _ => ChallengeStatus::Pending,
+            3 => ChallengeStatus::Failed,
+            _ => ChallengeStatus::Active,
         }
     }
 }

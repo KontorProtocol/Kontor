@@ -10,11 +10,17 @@ world root {
   // Output/Storage Types
   // ─────────────────────────────────────────────────────────────────
 
-  record agreement-data {
-    agreement-id: string,
+  record file-metadata-data {
     file-id: string,
     root: list<u8>,
-    depth: u64,
+    padded-len: u64,
+    original-size: u64,
+    filename: string,
+  }
+
+  record agreement-data {
+    agreement-id: string,
+    file-metadata: file-metadata-data,
     active: bool,
   }
 
@@ -56,6 +62,10 @@ world root {
   ) -> option<agreement-data>;
 
   export agreement-count: func(ctx: borrow<view-context>) -> u64;
+
+  export get-all-active-agreements: func(
+    ctx: borrow<view-context>
+  ) -> list<agreement-data>;
 
   // Node participation
   export join-agreement: func(

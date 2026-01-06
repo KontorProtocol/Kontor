@@ -7,9 +7,9 @@ use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        BlockQuery, ChallengeQuery, ChallengeRow, ChallengeStatus, CheckpointRow,
-        ContractResultPublicRow, ContractResultRow, ContractRow, FileMetadataRow, HasRowId,
-        OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        BlockQuery, ChallengeRow, ChallengeStatus, CheckpointRow, ContractResultPublicRow,
+        ContractResultRow, ContractRow, FileMetadataRow, HasRowId, OpResultId, OrderDirection,
+        ResultQuery, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -1066,7 +1066,7 @@ pub async fn update_challenge_status(
         .await?)
 }
 
-pub async fn get_pending_challenges_by_deadline(
+pub async fn get_active_challenges_by_deadline(
     conn: &Connection,
     deadline_height: i64,
 ) -> Result<Vec<ChallengeRow>, Error> {
@@ -1105,7 +1105,7 @@ pub async fn get_pending_challenges_by_deadline(
     Ok(results)
 }
 
-pub async fn get_pending_challenges_for_node(
+pub async fn get_active_challenges_for_node(
     conn: &Connection,
     node_id: &str,
 ) -> Result<Vec<ChallengeRow>, Error> {
@@ -1144,7 +1144,7 @@ pub async fn get_pending_challenges_for_node(
     Ok(results)
 }
 
-/// Get file IDs that have active (pending) challenges
+/// Get file IDs that have active challenges
 pub async fn get_files_with_active_challenges(
     conn: &Connection,
 ) -> Result<std::collections::HashSet<String>, Error> {

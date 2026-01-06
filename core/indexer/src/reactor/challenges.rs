@@ -5,10 +5,15 @@
 //! - HKDF-based seed derivation for reproducible randomness
 //! - Integration with kontor-crypto's Challenge type
 //! - Expiration processing for unanswered challenges
+//! - Reading active agreements from filestorage contract state
+
+use std::collections::HashSet;
 
 use anyhow::Result;
 use ff::FromUniformBytes;
+use futures_util::StreamExt;
 use hkdf::Hkdf;
+use indexer_types::deserialize;
 use kontor_crypto::{Challenge as CryptoChallenge, FieldElement, FileMetadata};
 use libsql::Connection;
 use rand::{Rng, SeedableRng};
@@ -16,10 +21,12 @@ use rand_chacha::ChaCha8Rng;
 use sha2::Sha256;
 use tracing::info;
 
-use crate::database::{
-    queries::{expire_challenges_at_height, insert_challenge},
-    types::{ChallengeRow, ChallengeStatus},
+use crate::database::queries::{
+    expire_challenges_at_height, get_contract_id_from_address, get_latest_contract_state_value,
+    insert_challenge, path_prefix_filter_contract_state,
 };
+use crate::database::types::{ChallengeRow, ChallengeStatus};
+use crate::runtime::filestorage;
 
 /// Configuration for challenge generation
 pub struct ChallengeConfig {
@@ -52,23 +59,165 @@ pub struct ActiveAgreement {
     pub nodes: Vec<String>,
 }
 
-/// Derive a deterministic 32-byte seed via HKDF (extract + expand).
+/// Get active agreements from the filestorage contract state for challenge generation.
+///
+/// Reads the contract state directly from the database to build the list of
+/// active file agreements with their metadata and participating nodes.
+pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreement>> {
+    // Get filestorage contract ID
+    let contract_id = match get_contract_id_from_address(conn, &filestorage::address()).await? {
+        Some(id) => id,
+        None => return Ok(vec![]), // Contract not deployed yet
+    };
+
+    // Get all agreement IDs by querying paths under "agreements/"
+    let mut agreement_ids: HashSet<String> = HashSet::new();
+    let path_stream =
+        path_prefix_filter_contract_state(conn, contract_id, "agreements/".to_string()).await?;
+    tokio::pin!(path_stream);
+
+    while let Some(path_result) = path_stream.next().await {
+        let path = path_result?;
+        // Path format: "agreements/{agreement_id}/field_name" or "agreements/{agreement_id}/nodes/{node_id}"
+        // Extract the agreement_id (second segment)
+        let segments: Vec<&str> = path.split('/').collect();
+        if segments.len() >= 2 {
+            agreement_ids.insert(segments[1].to_string());
+        }
+    }
+
+    let mut active_agreements = Vec::new();
+    const MAX_FUEL: u64 = u64::MAX;
+
+    for agreement_id in agreement_ids {
+        // Check if agreement is active
+        let active_path = format!("agreements/{}/active", agreement_id);
+        let active =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &active_path).await?
+            {
+                Some(bytes) => deserialize::<bool>(&bytes).unwrap_or(false),
+                None => false,
+            };
+
+        if !active {
+            continue;
+        }
+
+        // Get file_metadata fields (nested under file_metadata/)
+        let fm_prefix = format!("agreements/{}/file_metadata", agreement_id);
+
+        // Get file_id
+        let file_id_path = format!("{}/file_id", fm_prefix);
+        let file_id =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &file_id_path)
+                .await?
+            {
+                Some(bytes) => deserialize::<String>(&bytes).unwrap_or_default(),
+                None => continue,
+            };
+
+        // Get root (stored as Vec<u8>)
+        let root_path = format!("{}/root", fm_prefix);
+        let root_bytes =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &root_path).await? {
+                Some(bytes) => deserialize::<Vec<u8>>(&bytes).unwrap_or_default(),
+                None => continue,
+            };
+
+        // Get padded_len
+        let padded_len_path = format!("{}/padded_len", fm_prefix);
+        let padded_len =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &padded_len_path)
+                .await?
+            {
+                Some(bytes) => deserialize::<u64>(&bytes).unwrap_or(0) as usize,
+                None => continue,
+            };
+
+        // Get original_size
+        let original_size_path = format!("{}/original_size", fm_prefix);
+        let original_size =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &original_size_path)
+                .await?
+            {
+                Some(bytes) => deserialize::<u64>(&bytes).unwrap_or(0) as usize,
+                None => 0,
+            };
+
+        // Get filename
+        let filename_path = format!("{}/filename", fm_prefix);
+        let filename =
+            match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &filename_path)
+                .await?
+            {
+                Some(bytes) => deserialize::<String>(&bytes).unwrap_or_default(),
+                None => String::new(),
+            };
+
+        // Get active nodes by querying paths under "agreements/{id}/nodes/"
+        let mut nodes: Vec<String> = Vec::new();
+        let nodes_prefix = format!("agreements/{}/nodes/", agreement_id);
+        let nodes_stream =
+            path_prefix_filter_contract_state(conn, contract_id, nodes_prefix.clone()).await?;
+        tokio::pin!(nodes_stream);
+
+        while let Some(node_path_result) = nodes_stream.next().await {
+            let node_path = node_path_result?;
+            // Path format: "agreements/{agreement_id}/nodes/{node_id}"
+            let node_id = node_path
+                .strip_prefix(&nodes_prefix)
+                .unwrap_or(&node_path)
+                .to_string();
+
+            // Check if node is active (value is true)
+            if let Some(bytes) =
+                get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &node_path).await?
+                && deserialize::<bool>(&bytes).unwrap_or(false)
+            {
+                nodes.push(node_id);
+            }
+        }
+
+        // Skip agreements with no active nodes
+        if nodes.is_empty() {
+            continue;
+        }
+
+        // Build FileMetadata from stored data
+        // Note: We need to convert root bytes to FieldElement
+        let root = if root_bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&root_bytes);
+            ff::PrimeField::from_repr(arr.into())
+                .into_option()
+                .unwrap_or_default()
+        } else {
+            continue; // Invalid root
+        };
+
+        let file_metadata = FileMetadata {
+            root,
+            file_id: file_id.clone(),
+            padded_len,
+            original_size,
+            filename,
+        };
+
+        active_agreements.push(ActiveAgreement {
+            agreement_id,
+            file_metadata,
+            nodes,
+        });
+    }
+
+    Ok(active_agreements)
+}
+
+/// Derive a deterministic 64-byte seed via HKDF (extract + expand).
 ///
 /// - Extract: PRK = HMAC-SHA256(salt=domain_separator, IKM=master_seed)
 /// - Expand:  HKDF-Expand with SHA256 and info="kontor/hkdf/" + domain
-fn derive_seed_32(master_seed: &[u8], domain_separator: &str) -> [u8; 32] {
-    let salt = domain_separator.as_bytes();
-    let info = format!("kontor/hkdf/{}", domain_separator);
-
-    let hk = Hkdf::<Sha256>::new(Some(salt), master_seed);
-    let mut okm = [0u8; 32];
-    hk.expand(info.as_bytes(), &mut okm)
-        .expect("32 bytes is a valid length for HKDF-SHA256");
-    okm
-}
-
-/// Derive a deterministic 64-byte seed for hash-to-field conversion.
-fn derive_seed_64(master_seed: &[u8], domain_separator: &str) -> [u8; 64] {
+fn derive_seed(master_seed: &[u8], domain_separator: &str) -> [u8; 64] {
     let salt = domain_separator.as_bytes();
     let info = format!("kontor/hkdf/{}", domain_separator);
 
@@ -84,14 +233,13 @@ fn seed_to_field_element(seed: &[u8; 64]) -> FieldElement {
     FieldElement::from_uniform_bytes(seed)
 }
 
-/// Create a seeded RNG from a 32-byte seed
-fn seeded_rng(seed: &[u8; 32]) -> ChaCha8Rng {
-    ChaCha8Rng::from_seed(*seed)
+/// Create a seeded RNG from a 64-byte seed (uses first 32 bytes)
+fn seeded_rng(seed: &[u8; 64]) -> ChaCha8Rng {
+    ChaCha8Rng::from_seed(seed[..32].try_into().unwrap())
 }
 
 /// Generate challenges for a block.
 ///
-/// This implements the challenge generation algorithm from the protocol:
 /// - θ(t) = (C_target * |F(t)|) / B files are challenged per block
 /// - Each file has probability p_f = C_target / B of being challenged
 /// - If a file is challenged, one node is randomly selected from N_f
@@ -128,7 +276,7 @@ pub async fn generate_challenges(
     let mut num_challenges = expected_challenges as usize;
 
     // Derive seed for agreement selection
-    let agreement_seed = derive_seed_32(block_hash, "agreement_selection");
+    let agreement_seed = derive_seed(block_hash, "agreement_selection");
     let mut agreement_rng = seeded_rng(&agreement_seed);
 
     // Stochastic component: with probability (expected - floor), add one more
@@ -152,8 +300,8 @@ pub async fn generate_challenges(
     }
     let selected_indices = &indices[..num_challenges];
 
-    // Derive batch seed for challenge data (64 bytes for hash-to-field)
-    let batch_seed = derive_seed_64(block_hash, "batch_seed");
+    // Derive batch seed for challenge data
+    let batch_seed = derive_seed(block_hash, "batch_seed");
     let batch_seed_field = seed_to_field_element(&batch_seed);
 
     info!(
@@ -175,7 +323,7 @@ pub async fn generate_challenges(
             hex::encode(block_hash),
             agreement.file_metadata.file_id
         );
-        let node_seed = derive_seed_32(node_seed_input.as_bytes(), "node_selection");
+        let node_seed = derive_seed(node_seed_input.as_bytes(), "node_selection");
         let mut node_rng = seeded_rng(&node_seed);
 
         // Select a random node
@@ -202,7 +350,7 @@ pub async fn generate_challenges(
             .node_id(selected_node.clone())
             .issued_height(block_height)
             .deadline_height(block_height + config.deadline_blocks)
-            .status(ChallengeStatus::Pending)
+            .status(ChallengeStatus::Active)
             .build();
 
         insert_challenge(conn, &challenge).await?;

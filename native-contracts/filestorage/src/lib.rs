@@ -17,14 +17,21 @@ const DEFAULT_CHALLENGE_DEADLINE_BLOCKS: u64 = 2016;
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Default, Storage)]
+struct FileMetadata {
+    pub file_id: String,
+    pub root: Vec<u8>,
+    pub padded_len: u64,
+    pub original_size: u64,
+    pub filename: String,
+}
+
 /// A storage agreement for a file
 /// nodes: Map<node_id, is_active> - true means active, false means left
 #[derive(Clone, Default, Storage)]
 struct Agreement {
     pub agreement_id: String,
-    pub file_id: String,
-    pub root: Vec<u8>,
-    pub depth: u64,
+    pub file_metadata: FileMetadata,
     pub active: bool,
     pub nodes: Map<String, bool>,
     pub node_count: u64,
@@ -61,8 +68,10 @@ impl Guest for Filestorage {
         if descriptor.file_id.is_empty() {
             return Err(Error::Message("file_id cannot be empty".to_string()));
         }
-        if descriptor.depth == 0 {
-            return Err(Error::Message("depth must be positive".to_string()));
+        if descriptor.padded_len == 0 || !descriptor.padded_len.is_power_of_two() {
+            return Err(Error::Message(
+                "padded_len must be a positive power of 2".to_string(),
+            ));
         }
 
         let model = ctx.model();
@@ -80,12 +89,18 @@ impl Guest for Filestorage {
         let fd = file_ledger::FileDescriptor::from_raw(&descriptor)?;
         file_ledger::add_file(&fd);
 
+        let file_metadata = FileMetadata {
+            file_id: descriptor.file_id,
+            root: descriptor.root,
+            padded_len: descriptor.padded_len,
+            original_size: descriptor.original_size,
+            filename: descriptor.filename,
+        };
+
         // Create the agreement (starts inactive until nodes join)
         let agreement = Agreement {
             agreement_id: agreement_id.clone(),
-            file_id: descriptor.file_id,
-            root: descriptor.root,
-            depth: descriptor.depth,
+            file_metadata,
             active: false,
             nodes: Map::default(),
             node_count: 0,
@@ -101,20 +116,52 @@ impl Guest for Filestorage {
     }
 
     fn get_agreement(ctx: &ViewContext, agreement_id: String) -> Option<AgreementData> {
-        ctx.model()
-            .agreements()
-            .get(&agreement_id)
-            .map(|a| AgreementData {
+        ctx.model().agreements().get(&agreement_id).map(|a| {
+            let fm = a.file_metadata();
+            AgreementData {
                 agreement_id: a.agreement_id(),
-                file_id: a.file_id(),
-                root: a.root(),
-                depth: a.depth(),
+                file_metadata: FileMetadataData {
+                    file_id: fm.file_id(),
+                    root: fm.root(),
+                    padded_len: fm.padded_len(),
+                    original_size: fm.original_size(),
+                    filename: fm.filename(),
+                },
                 active: a.active(),
-            })
+            }
+        })
     }
 
     fn agreement_count(ctx: &ViewContext) -> u64 {
         ctx.model().agreement_count()
+    }
+
+    fn get_all_active_agreements(ctx: &ViewContext) -> Vec<AgreementData> {
+        let model = ctx.model();
+        model
+            .agreements()
+            .keys()
+            .filter_map(|agreement_id| {
+                let agreement = model.agreements().get(&agreement_id)?;
+                if !agreement.active() {
+                    return None;
+                }
+
+                let fm = agreement.file_metadata();
+
+                Some(AgreementData {
+                    agreement_id,
+                    file_metadata: FileMetadataData {
+                        file_id: fm.file_id(),
+                        root: fm.root(),
+                        padded_len: fm.padded_len(),
+                        original_size: fm.original_size(),
+                        filename: fm.filename(),
+                    },
+                    active: agreement.active(),
+                })
+            })
+            .collect()
     }
 
     fn join_agreement(

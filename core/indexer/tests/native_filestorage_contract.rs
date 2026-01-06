@@ -7,18 +7,32 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
-fn make_descriptor(file_id: String, root: Vec<u8>, depth: u64) -> RawFileDescriptor {
+fn make_descriptor(
+    file_id: String,
+    root: Vec<u8>,
+    padded_len: u64,
+    original_size: u64,
+    filename: String,
+) -> RawFileDescriptor {
     RawFileDescriptor {
         file_id,
         root,
-        depth,
+        padded_len,
+        original_size,
+        filename,
     }
 }
 
 async fn prepare_real_descriptor() -> Result<RawFileDescriptor> {
     let root: Vec<u8> = [0u8; 32].to_vec();
-    let depth: u64 = 4;
-    Ok(make_descriptor("test_file".to_string(), root, depth))
+    let padded_len: u64 = 16; // 2^4
+    Ok(make_descriptor(
+        "test_file".to_string(),
+        root,
+        padded_len,
+        100,
+        "test_file.txt".to_string(),
+    ))
 }
 
 async fn filestorage_create_and_get(runtime: &mut Runtime) -> Result<()> {
@@ -32,9 +46,11 @@ async fn filestorage_create_and_get(runtime: &mut Runtime) -> Result<()> {
     let got = got.expect("agreement should exist");
 
     assert_eq!(got.agreement_id, created.agreement_id);
-    assert_eq!(got.file_id, descriptor.file_id);
-    assert_eq!(got.root, descriptor.root);
-    assert_eq!(got.depth, descriptor.depth);
+    assert_eq!(got.file_metadata.file_id, descriptor.file_id);
+    assert_eq!(got.file_metadata.root, descriptor.root);
+    assert_eq!(got.file_metadata.padded_len, descriptor.padded_len);
+    assert_eq!(got.file_metadata.original_size, descriptor.original_size);
+    assert_eq!(got.file_metadata.filename, descriptor.filename);
     assert!(!got.active);
 
     // Check nodes via separate function
@@ -52,7 +68,13 @@ async fn filestorage_count_increments(runtime: &mut Runtime) -> Result<()> {
     let c1 = filestorage::agreement_count(runtime).await?;
     assert_eq!(c1, c0 + 1);
 
-    let d2 = make_descriptor("another_file".to_string(), vec![7u8; 32], 8);
+    let d2 = make_descriptor(
+        "another_file".to_string(),
+        vec![7u8; 32],
+        256,
+        200,
+        "another.txt".to_string(),
+    );
     filestorage::create_agreement(runtime, &signer, d2).await??;
     let c2 = filestorage::agreement_count(runtime).await?;
     assert_eq!(c2, c1 + 1);
@@ -62,7 +84,13 @@ async fn filestorage_count_increments(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_duplicate_fails(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("dup_file".to_string(), vec![1u8; 32], 8);
+    let descriptor = make_descriptor(
+        "dup_file".to_string(),
+        vec![1u8; 32],
+        256,
+        200,
+        "dup.txt".to_string(),
+    );
 
     filestorage::create_agreement(runtime, &signer, descriptor.clone()).await??;
     let err = filestorage::create_agreement(runtime, &signer, descriptor).await?;
@@ -72,19 +100,44 @@ async fn filestorage_duplicate_fails(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_invalid_root_fails(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("bad_root".to_string(), vec![1u8; 31], 8);
+    let descriptor = make_descriptor(
+        "bad_root".to_string(),
+        vec![1u8; 31],
+        256,
+        200,
+        "bad.txt".to_string(),
+    );
 
     let err = filestorage::create_agreement(runtime, &signer, descriptor).await?;
     assert!(matches!(err, Err(Error::Validation(_))));
     Ok(())
 }
 
-async fn filestorage_zero_depth_fails(runtime: &mut Runtime) -> Result<()> {
+async fn filestorage_invalid_padded_len_fails(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("zero_depth".to_string(), vec![1u8; 32], 0);
 
+    // padded_len = 0 should fail
+    let descriptor = make_descriptor(
+        "zero_padded".to_string(),
+        vec![1u8; 32],
+        0,
+        0,
+        "zero.txt".to_string(),
+    );
     let err = filestorage::create_agreement(runtime, &signer, descriptor).await?;
     assert!(matches!(err, Err(Error::Message(_))));
+
+    // padded_len not a power of 2 should fail
+    let descriptor = make_descriptor(
+        "bad_padded".to_string(),
+        vec![1u8; 32],
+        15,
+        10,
+        "bad.txt".to_string(),
+    );
+    let err = filestorage::create_agreement(runtime, &signer, descriptor).await?;
+    assert!(matches!(err, Err(Error::Message(_))));
+
     Ok(())
 }
 
@@ -94,7 +147,13 @@ async fn filestorage_zero_depth_fails(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_join_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("join_test".to_string(), vec![2u8; 32], 4);
+    let descriptor = make_descriptor(
+        "join_test".to_string(),
+        vec![2u8; 32],
+        16,
+        10,
+        "join.txt".to_string(),
+    );
 
     // Create agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -121,7 +180,13 @@ async fn filestorage_join_agreement(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_join_activates_at_min_nodes(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("activate_test".to_string(), vec![3u8; 32], 4);
+    let descriptor = make_descriptor(
+        "activate_test".to_string(),
+        vec![3u8; 32],
+        16,
+        10,
+        "activate.txt".to_string(),
+    );
 
     // Create agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -156,7 +221,13 @@ async fn filestorage_join_activates_at_min_nodes(runtime: &mut Runtime) -> Resul
 
 async fn filestorage_double_join_fails(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("double_join_test".to_string(), vec![4u8; 32], 4);
+    let descriptor = make_descriptor(
+        "double_join_test".to_string(),
+        vec![4u8; 32],
+        16,
+        10,
+        "double.txt".to_string(),
+    );
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -181,7 +252,13 @@ async fn filestorage_join_nonexistent_agreement_fails(runtime: &mut Runtime) -> 
 
 async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("leave_test".to_string(), vec![5u8; 32], 4);
+    let descriptor = make_descriptor(
+        "leave_test".to_string(),
+        vec![5u8; 32],
+        16,
+        10,
+        "leave.txt".to_string(),
+    );
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -206,7 +283,13 @@ async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_leave_nonmember_fails(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("leave_nonmember_test".to_string(), vec![6u8; 32], 4);
+    let descriptor = make_descriptor(
+        "leave_nonmember_test".to_string(),
+        vec![6u8; 32],
+        16,
+        10,
+        "leave_nonmember.txt".to_string(),
+    );
 
     // Create agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -230,7 +313,13 @@ async fn filestorage_leave_nonexistent_agreement_fails(runtime: &mut Runtime) ->
 
 async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("no_deactivate_test".to_string(), vec![7u8; 32], 4);
+    let descriptor = make_descriptor(
+        "no_deactivate_test".to_string(),
+        vec![7u8; 32],
+        16,
+        10,
+        "no_deactivate.txt".to_string(),
+    );
 
     // Create agreement and activate it
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -259,7 +348,13 @@ async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<
 
 async fn filestorage_is_node_in_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("is_node_test".to_string(), vec![8u8; 32], 4);
+    let descriptor = make_descriptor(
+        "is_node_test".to_string(),
+        vec![8u8; 32],
+        16,
+        10,
+        "is_node.txt".to_string(),
+    );
 
     // Create agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -295,7 +390,13 @@ async fn filestorage_is_node_in_nonexistent_agreement(runtime: &mut Runtime) -> 
 
 async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("rejoin_test".to_string(), vec![9u8; 32], 4);
+    let descriptor = make_descriptor(
+        "rejoin_test".to_string(),
+        vec![9u8; 32],
+        16,
+        10,
+        "rejoin.txt".to_string(),
+    );
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -329,7 +430,13 @@ async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
 
 async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let descriptor = make_descriptor("no_reactivate_test".to_string(), vec![10u8; 32], 4);
+    let descriptor = make_descriptor(
+        "no_reactivate_test".to_string(),
+        vec![10u8; 32],
+        16,
+        10,
+        "no_reactivate.txt".to_string(),
+    );
 
     // Create and activate agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
@@ -379,8 +486,8 @@ async fn test_filestorage_invalid_root_fails() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_filestorage_zero_depth_fails() -> Result<()> {
-    filestorage_zero_depth_fails(runtime).await
+async fn test_filestorage_invalid_padded_len_fails() -> Result<()> {
+    filestorage_invalid_padded_len_fails(runtime).await
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
@@ -468,8 +575,8 @@ async fn test_filestorage_invalid_root_fails_regtest() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_filestorage_zero_depth_fails_regtest() -> Result<()> {
-    filestorage_zero_depth_fails(runtime).await
+async fn test_filestorage_invalid_padded_len_fails_regtest() -> Result<()> {
+    filestorage_invalid_padded_len_fails(runtime).await
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]

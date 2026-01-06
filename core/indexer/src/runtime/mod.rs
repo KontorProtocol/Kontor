@@ -86,10 +86,16 @@ impl RawFileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        // Compute depth from padded_len (matches kontor_crypto::FileMetadata::depth())
+        let depth = if raw.padded_len == 0 {
+            0
+        } else {
+            raw.padded_len.trailing_zeros() as i64
+        };
         Ok(FileMetadataRow::builder()
             .file_id(raw.file_id)
             .root(root)
-            .depth(raw.depth as i64)
+            .depth(depth)
             .height(height)
             .build())
     }
@@ -1174,7 +1180,7 @@ impl Runtime {
         challenge_id: String,
         _proof: Vec<u8>,
     ) -> Result<Result<built_in::challenges::VerifyProofResult, Error>> {
-        use crate::database::queries::{get_challenge_by_id, update_challenge_status};
+        use crate::database::queries::get_challenge_by_id;
         use crate::database::types::ChallengeStatus;
 
         // Look up the challenge
@@ -1189,7 +1195,7 @@ impl Runtime {
         };
 
         // Check if challenge is still pending
-        if challenge.status != ChallengeStatus::Pending {
+        if challenge.status != ChallengeStatus::Active {
             return Ok(Ok(built_in::challenges::VerifyProofResult {
                 verified: false,
                 error_message: Some("Challenge is not pending".to_string()),

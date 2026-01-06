@@ -173,7 +173,9 @@ interface file-ledger {
     record raw-file-descriptor {
         file-id: string,
         root: list<u8>,
-        depth: u64
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
     }
 
     resource file-descriptor {
@@ -192,12 +194,6 @@ interface challenges {
         error-message: option<string>,
     }
 
-    /// Verify a proof for a challenge.
-    /// This host function:
-    /// 1. Looks up the challenge in the DB
-    /// 2. Gets the file root from the agreement
-    /// 3. Verifies the proof using kontor-crypto
-    /// 4. If valid, marks the challenge as proven
     verify-challenge-proof: func(
         challenge-id: string,
         proof: list<u8>

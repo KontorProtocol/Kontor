@@ -15,6 +15,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -26,9 +27,9 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_block_with_hash,
-            set_block_processed,
+            get_files_with_active_challenges, insert_block, insert_processed_block,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
+            select_block_with_hash, set_block_processed,
         },
     },
     runtime::{ComponentCache, Runtime, Storage},
@@ -87,21 +88,21 @@ pub async fn simulate_handler(
 pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
-    // TODO: Challenge generation would happen here, before processing transactions
-    // This requires:
-    // 1. Reading active agreements from filestorage contract state
-    // 2. Getting files with existing active challenges from challenges table
-    //
-    // let active_agreements = get_active_agreements_from_contract(&runtime).await?;
-    // let active_file_ids = get_files_with_active_challenges(&runtime.storage.conn).await?;
-    // challenges::generate_challenges(
-    //     &runtime.storage.conn,
-    //     block.height as i64,
-    //     &block.hash.to_byte_array(),
-    //     &active_agreements,
-    //     &active_file_ids,
-    //     &challenges::ChallengeConfig::default(),
-    // ).await?;
+    // Challenge generation: select files to audit and create challenges
+    let active_agreements = challenges::get_active_agreements(&runtime.storage.conn).await?;
+    let active_file_ids = get_files_with_active_challenges(&runtime.storage.conn).await?;
+
+    if !active_agreements.is_empty() {
+        challenges::generate_challenges(
+            &runtime.storage.conn,
+            block.height as i64,
+            block.hash.as_byte_array(),
+            &active_agreements,
+            &active_file_ids,
+            &challenges::ChallengeConfig::default(),
+        )
+        .await?;
+    }
 
     for t in &block.transactions {
         insert_transaction(
