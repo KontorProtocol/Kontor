@@ -146,4 +146,16 @@ impl FileLedger {
         let mut inner = self.inner.lock().await;
         inner.dirty = false;
     }
+
+    /// Execute a function with access to the inner CryptoFileLedger.
+    ///
+    /// This is used for operations that need direct access to the ledger,
+    /// such as proof verification via PorSystem.
+    pub async fn with_ledger<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&CryptoFileLedger) -> R,
+    {
+        let inner = self.inner.lock().await;
+        f(&inner.ledger)
+    }
 }

@@ -86,10 +86,16 @@ impl RawFileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        // Compute depth from padded_len (matches kontor_crypto::FileMetadata::depth())
+        let depth = if raw.padded_len == 0 {
+            0
+        } else {
+            raw.padded_len.trailing_zeros() as i64
+        };
         Ok(FileMetadataRow::builder()
             .file_id(raw.file_id)
             .root(root)
-            .depth(raw.depth as i64)
+            .depth(depth)
             .height(height)
             .build())
     }
@@ -1168,6 +1174,18 @@ impl Runtime {
         self.table.lock().await.delete(rep)?;
         Ok(())
     }
+
+    async fn _verify_challenge_proof(
+        &self,
+        _proof_bytes: Vec<u8>,
+    ) -> Result<Result<built_in::challenges::VerifyProofResult, Error>> {
+        // TODO: Implement proof verification
+        // 1. Deserialize the proof
+        // 2. Read challenge data from contract state
+        // 3. Reconstruct kontor-crypto Challenge objects
+        // 4. Call PorSystem::verify()
+        todo!("Proof verification not yet implemented")
+    }
 }
 
 impl HasData for Runtime {
@@ -2158,5 +2176,19 @@ impl built_in::numbers::HostWithStore for Runtime {
             )
             .await?;
         Ok(numerics::log10_decimal(a))
+    }
+}
+
+impl built_in::challenges::Host for Runtime {}
+
+impl built_in::challenges::HostWithStore for Runtime {
+    async fn verify_challenge_proof<T>(
+        accessor: &Accessor<T, Self>,
+        proof: Vec<u8>,
+    ) -> Result<Result<built_in::challenges::VerifyProofResult, Error>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._verify_challenge_proof(proof)
+            .await
     }
 }

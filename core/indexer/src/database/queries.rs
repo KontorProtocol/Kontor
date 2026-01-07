@@ -27,6 +27,8 @@ pub enum Error {
     OutOfFuel,
     #[error("Contract not found: {0}")]
     ContractNotFound(String),
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
 }
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {

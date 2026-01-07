@@ -173,7 +173,9 @@ interface file-ledger {
     record raw-file-descriptor {
         file-id: string,
         root: list<u8>,
-        depth: u64
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
     }
 
     resource file-descriptor {
@@ -184,6 +186,19 @@ interface file-ledger {
     add-file: func(file-descriptor: borrow<file-descriptor>);
 }
 
+interface challenges {
+    use error.{error};
+
+    record verify-proof-result {
+        verified: bool,
+        error-message: option<string>,
+    }
+
+    verify-challenge-proof: func(
+        proof: list<u8>
+    ) -> result<verify-proof-result, error>;
+}
+
 world built-in {
     import context;
     import foreign;
@@ -191,4 +206,5 @@ world built-in {
     import error;
     import numbers;
     import file-ledger;
+    import challenges;
 }

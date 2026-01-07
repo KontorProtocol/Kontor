@@ -26,6 +26,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/foreign": async | store | trappable,
         "kontor:built-in/numbers": async | store | trappable,
         "kontor:built-in/file-ledger": async | store | trappable,
+        "kontor:built-in/challenges": async | store | trappable,
         default: async | trappable,
     }
 });

@@ -10,11 +10,17 @@ world root {
   // Output/Storage Types
   // ─────────────────────────────────────────────────────────────────
 
-  record agreement-data {
-    agreement-id: string,
+  record file-metadata-data {
     file-id: string,
     root: list<u8>,
-    depth: u64,
+    padded-len: u64,
+    original-size: u64,
+    filename: string,
+  }
+
+  record agreement-data {
+    agreement-id: string,
+    file-metadata: file-metadata-data,
     active: bool,
   }
 
@@ -31,6 +37,30 @@ world root {
   record leave-agreement-result {
     agreement-id: string,
     node-id: string,
+  }
+
+  record submit-proof-result {
+    verified: bool,
+  }
+
+  // Challenge types
+  enum challenge-status {
+    active,
+    proven,
+    expired,
+    bad-proof,
+  }
+
+  record challenge-data {
+    challenge-id: string,
+    agreement-id: string,
+    file-id: string,
+    node-id: string,
+    issued-height: u64,
+    deadline-height: u64,
+    seed: list<u8>,
+    num-challenges: u64,
+    status: challenge-status,
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -51,6 +81,10 @@ world root {
   ) -> option<agreement-data>;
 
   export agreement-count: func(ctx: borrow<view-context>) -> u64;
+
+  export get-all-active-agreements: func(
+    ctx: borrow<view-context>
+  ) -> list<agreement-data>;
 
   // Node participation
   export join-agreement: func(
@@ -77,6 +111,45 @@ world root {
     node-id: string
   ) -> bool;
 
+  export submit-proof: func(
+    ctx: borrow<proc-context>,
+    challenge-ids: list<string>,
+    proof: list<u8>
+  ) -> result<submit-proof-result, error>;
+
   // Protocol parameters
   export get-min-nodes: func(ctx: borrow<view-context>) -> u64;
+
+  // ─────────────────────────────────────────────────────────────────
+  // Challenge Management
+  // ─────────────────────────────────────────────────────────────────
+
+  export create-challenge: func(
+    ctx: borrow<proc-context>,
+    challenge-id: string,
+    agreement-id: string,
+    node-id: string,
+    issued-height: u64,
+    seed: list<u8>,
+    num-challenges: u64
+  ) -> result<challenge-data, error>;
+
+  export get-challenge: func(
+    ctx: borrow<view-context>,
+    challenge-id: string
+  ) -> option<challenge-data>;
+
+  export get-active-challenges: func(
+    ctx: borrow<view-context>
+  ) -> list<challenge-data>;
+
+  export get-challenges-for-node: func(
+    ctx: borrow<view-context>,
+    node-id: string
+  ) -> list<challenge-data>;
+
+  export expire-challenges: func(
+    ctx: borrow<proc-context>,
+    current-height: u64
+  );
 }

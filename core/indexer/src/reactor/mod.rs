@@ -86,6 +86,10 @@ pub async fn simulate_handler(
 pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
+    // TODO: Challenge generation will be done via contract calls once reactor-to-contract
+    // infrastructure is in place. For now, challenges are managed entirely within
+    // the filestorage contract.
+
     for t in &block.transactions {
         insert_transaction(
             &runtime.storage.conn,
@@ -151,6 +155,10 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     }
 
     set_block_processed(&runtime.storage.conn, block.height as i64).await?;
+
+    // TODO: Challenge expiration will be done via contract calls once reactor-to-contract
+    // infrastructure is in place. For now, challenges are managed entirely within
+    // the filestorage contract via the expire_challenges function.
 
     Ok(())
 }
