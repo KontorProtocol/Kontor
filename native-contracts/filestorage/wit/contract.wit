@@ -40,7 +40,6 @@ world root {
   }
 
   record submit-proof-result {
-    challenge-id: string,
     verified: bool,
   }
 
@@ -94,7 +93,6 @@ world root {
 
   export submit-proof: func(
     ctx: borrow<proc-context>,
-    challenge-id: string,
     proof: list<u8>
   ) -> result<submit-proof-result, error>;
 

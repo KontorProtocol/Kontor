@@ -1177,43 +1177,264 @@ impl Runtime {
 
     async fn _verify_challenge_proof(
         &self,
-        challenge_id: String,
-        _proof: Vec<u8>,
+        proof_bytes: Vec<u8>,
     ) -> Result<Result<built_in::challenges::VerifyProofResult, Error>> {
-        use crate::database::queries::get_challenge_by_id;
-        use crate::database::types::ChallengeStatus;
+        use crate::database::queries::{
+            get_challenge_by_id, get_contract_id_from_address, get_latest_contract_state_value,
+            update_challenge_status,
+        };
+        use crate::database::types::{ChallengeStatus, bytes_to_field_element};
+        use kontor_crypto::{
+            Challenge as CryptoChallenge, FileMetadata, Proof as CryptoProof, api::PorSystem,
+        };
 
-        // Look up the challenge
-        let challenge = match get_challenge_by_id(&self.storage.conn, &challenge_id).await? {
-            Some(c) => c,
-            None => {
+        // 1. Deserialize the proof
+        let proof = match CryptoProof::from_bytes(&proof_bytes) {
+            Ok(p) => p,
+            Err(e) => {
                 return Ok(Ok(built_in::challenges::VerifyProofResult {
                     verified: false,
-                    error_message: Some(format!("Challenge not found: {}", challenge_id)),
+                    error_message: Some(format!("Failed to deserialize proof: {:?}", e)),
                 }));
             }
         };
 
-        // Check if challenge is still pending
-        if challenge.status != ChallengeStatus::Active {
-            return Ok(Ok(built_in::challenges::VerifyProofResult {
-                verified: false,
-                error_message: Some("Challenge is not pending".to_string()),
-            }));
+        // 2. Get all challenge IDs from the proof and look them up
+        let mut crypto_challenges = Vec::new();
+        let mut challenge_rows = Vec::new();
+
+        for proof_challenge_id in &proof.challenge_ids {
+            let challenge_id_hex = hex::encode(proof_challenge_id.0);
+
+            let challenge_row = match get_challenge_by_id(&self.storage.conn, &challenge_id_hex)
+                .await?
+            {
+                Some(c) => c,
+                None => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some(format!("Challenge not found: {}", challenge_id_hex)),
+                    }));
+                }
+            };
+
+            // Check if challenge is still active
+            if challenge_row.status != ChallengeStatus::Active {
+                return Ok(Ok(built_in::challenges::VerifyProofResult {
+                    verified: false,
+                    error_message: Some(format!(
+                        "Challenge {} is not active (status: {:?})",
+                        challenge_id_hex, challenge_row.status
+                    )),
+                }));
+            }
+
+            challenge_rows.push(challenge_row);
         }
 
-        // TODO: Implement actual proof verification using kontor-crypto
-        // 1. Get the file metadata from the agreement (need to read from contract state)
-        // 2. Reconstruct the kontor_crypto::Challenge from stored data
-        // 3. Call PorSystem::verify(proof, &[challenge])
-        // 4. Return result
-        let _agreement_id = challenge.agreement_id.clone();
-        let _file_id = challenge.file_id.clone();
-        todo!("Implement proof verification with kontor-crypto PorSystem::verify");
+        // 3. For each challenge, get FileMetadata from contract state and reconstruct Challenge
+        let contract_id = match get_contract_id_from_address(
+            &self.storage.conn,
+            &filestorage::address(),
+        )
+        .await?
+        {
+            Some(id) => id,
+            None => {
+                return Ok(Ok(built_in::challenges::VerifyProofResult {
+                    verified: false,
+                    error_message: Some("Filestorage contract not found".to_string()),
+                }));
+            }
+        };
 
-        // When implemented, on success:
-        // update_challenge_status(&self.storage.conn, &challenge_id, ChallengeStatus::Proven).await?;
-        // Ok(Ok(built_in::challenges::VerifyProofResult { verified: true, error_message: None }))
+        const MAX_FUEL: u64 = u64::MAX;
+
+        for challenge_row in &challenge_rows {
+            let fm_prefix = format!("agreements.{}.file_metadata", challenge_row.agreement_id);
+
+            // Get file_id
+            let file_id_path = format!("{}.file_id", fm_prefix);
+            let file_id = match get_latest_contract_state_value(
+                &self.storage.conn,
+                MAX_FUEL,
+                contract_id,
+                &file_id_path,
+            )
+            .await?
+            {
+                Some(bytes) => deserialize::<String>(&bytes).unwrap_or_default(),
+                None => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some(format!(
+                            "File metadata not found for agreement {}",
+                            challenge_row.agreement_id
+                        )),
+                    }));
+                }
+            };
+
+            // Get root
+            let root_path = format!("{}.root", fm_prefix);
+            let root_bytes = match get_latest_contract_state_value(
+                &self.storage.conn,
+                MAX_FUEL,
+                contract_id,
+                &root_path,
+            )
+            .await?
+            {
+                Some(bytes) => deserialize::<Vec<u8>>(&bytes).unwrap_or_default(),
+                None => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some("Root not found".to_string()),
+                    }));
+                }
+            };
+
+            // Get padded_len
+            let padded_len_path = format!("{}.padded_len", fm_prefix);
+            let padded_len = match get_latest_contract_state_value(
+                &self.storage.conn,
+                MAX_FUEL,
+                contract_id,
+                &padded_len_path,
+            )
+            .await?
+            {
+                Some(bytes) => deserialize::<u64>(&bytes).unwrap_or(0) as usize,
+                None => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some("padded_len not found".to_string()),
+                    }));
+                }
+            };
+
+            // Get original_size
+            let original_size_path = format!("{}.original_size", fm_prefix);
+            let original_size = match get_latest_contract_state_value(
+                &self.storage.conn,
+                MAX_FUEL,
+                contract_id,
+                &original_size_path,
+            )
+            .await?
+            {
+                Some(bytes) => deserialize::<u64>(&bytes).unwrap_or(0) as usize,
+                None => 0,
+            };
+
+            // Get filename
+            let filename_path = format!("{}.filename", fm_prefix);
+            let filename = match get_latest_contract_state_value(
+                &self.storage.conn,
+                MAX_FUEL,
+                contract_id,
+                &filename_path,
+            )
+            .await?
+            {
+                Some(bytes) => deserialize::<String>(&bytes).unwrap_or_default(),
+                None => String::new(),
+            };
+
+            // Convert root bytes to FieldElement
+            let root = match root_bytes.try_into() {
+                Ok(arr) => match bytes_to_field_element(&arr) {
+                    Some(fe) => fe,
+                    None => {
+                        return Ok(Ok(built_in::challenges::VerifyProofResult {
+                            verified: false,
+                            error_message: Some("Invalid root field element".to_string()),
+                        }));
+                    }
+                },
+                Err(_) => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some("Invalid root length".to_string()),
+                    }));
+                }
+            };
+
+            // Convert seed to FieldElement
+            let seed = match bytes_to_field_element(&challenge_row.seed) {
+                Some(fe) => fe,
+                None => {
+                    return Ok(Ok(built_in::challenges::VerifyProofResult {
+                        verified: false,
+                        error_message: Some("Invalid seed field element".to_string()),
+                    }));
+                }
+            };
+
+            let file_metadata = FileMetadata {
+                root,
+                file_id,
+                padded_len,
+                original_size,
+                filename,
+            };
+
+            let crypto_challenge = CryptoChallenge::new(
+                file_metadata,
+                challenge_row.issued_height as u64,
+                challenge_row.num_challenges as usize,
+                seed,
+                challenge_row.node_id.clone(),
+            );
+
+            crypto_challenges.push(crypto_challenge);
+        }
+
+        // 4. Verify the proof using PorSystem
+        let is_valid = self
+            .file_ledger
+            .with_ledger(|ledger| {
+                let system = PorSystem::new(ledger);
+                system.verify(&proof, &crypto_challenges)
+            })
+            .await;
+
+        match is_valid {
+            Ok(true) => {
+                // Update all challenges to Proven status
+                for challenge_row in &challenge_rows {
+                    update_challenge_status(
+                        &self.storage.conn,
+                        &challenge_row.challenge_id,
+                        ChallengeStatus::Proven,
+                    )
+                    .await?;
+                }
+                Ok(Ok(built_in::challenges::VerifyProofResult {
+                    verified: true,
+                    error_message: None,
+                }))
+            }
+            Ok(false) => {
+                // Mark challenges as Failed
+                for challenge_row in &challenge_rows {
+                    update_challenge_status(
+                        &self.storage.conn,
+                        &challenge_row.challenge_id,
+                        ChallengeStatus::Failed,
+                    )
+                    .await?;
+                }
+                Ok(Ok(built_in::challenges::VerifyProofResult {
+                    verified: false,
+                    error_message: Some("Proof verification failed".to_string()),
+                }))
+            }
+            Err(e) => Ok(Ok(built_in::challenges::VerifyProofResult {
+                verified: false,
+                error_message: Some(format!("Verification error: {:?}", e)),
+            })),
+        }
     }
 }
 
@@ -2213,12 +2434,11 @@ impl built_in::challenges::Host for Runtime {}
 impl built_in::challenges::HostWithStore for Runtime {
     async fn verify_challenge_proof<T>(
         accessor: &Accessor<T, Self>,
-        challenge_id: String,
         proof: Vec<u8>,
     ) -> Result<Result<built_in::challenges::VerifyProofResult, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._verify_challenge_proof(challenge_id, proof)
+            ._verify_challenge_proof(proof)
             .await
     }
 }

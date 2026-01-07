@@ -268,25 +268,14 @@ impl Guest for Filestorage {
         ctx.model().min_nodes()
     }
 
-    fn submit_proof(
-        _ctx: &ProcContext,
-        challenge_id: String,
-        proof: Vec<u8>,
-    ) -> Result<SubmitProofResult, Error> {
-        // Call the host function to verify the proof
-        // The host function handles:
-        // 1. Looking up the challenge
-        // 2. Getting the file root
-        // 3. Verifying with kontor-crypto
-        // 4. Updating challenge status if valid
-        let result = challenges::verify_challenge_proof(&challenge_id, &proof)?;
+    fn submit_proof(_ctx: &ProcContext, proof: Vec<u8>) -> Result<SubmitProofResult, Error> {
+        let result = challenges::verify_challenge_proof(&proof)?;
 
         if let Some(error_msg) = result.error_message {
             return Err(Error::Message(error_msg));
         }
 
         Ok(SubmitProofResult {
-            challenge_id,
             verified: result.verified,
         })
     }

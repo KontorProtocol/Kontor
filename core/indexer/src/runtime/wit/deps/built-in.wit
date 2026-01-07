@@ -195,7 +195,6 @@ interface challenges {
     }
 
     verify-challenge-proof: func(
-        challenge-id: string,
         proof: list<u8>
     ) -> result<verify-proof-result, error>;
 }

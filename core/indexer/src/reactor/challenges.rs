@@ -25,7 +25,9 @@ use crate::database::queries::{
     expire_challenges_at_height, get_contract_id_from_address, get_latest_contract_state_value,
     insert_challenge, path_prefix_filter_contract_state,
 };
-use crate::database::types::{ChallengeRow, ChallengeStatus};
+use crate::database::types::{
+    ChallengeRow, ChallengeStatus, bytes_to_field_element, field_element_to_bytes,
+};
 use crate::runtime::filestorage;
 
 /// Configuration for challenge generation
@@ -70,20 +72,14 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
         None => return Ok(vec![]), // Contract not deployed yet
     };
 
-    // Get all agreement IDs by querying paths under "agreements/"
     let mut agreement_ids: HashSet<String> = HashSet::new();
     let path_stream =
-        path_prefix_filter_contract_state(conn, contract_id, "agreements/".to_string()).await?;
+        path_prefix_filter_contract_state(conn, contract_id, "agreements".to_string()).await?;
     tokio::pin!(path_stream);
 
     while let Some(path_result) = path_stream.next().await {
-        let path = path_result?;
-        // Path format: "agreements/{agreement_id}/field_name" or "agreements/{agreement_id}/nodes/{node_id}"
-        // Extract the agreement_id (second segment)
-        let segments: Vec<&str> = path.split('/').collect();
-        if segments.len() >= 2 {
-            agreement_ids.insert(segments[1].to_string());
-        }
+        let agreement_id = path_result?;
+        agreement_ids.insert(agreement_id);
     }
 
     let mut active_agreements = Vec::new();
@@ -91,7 +87,7 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
 
     for agreement_id in agreement_ids {
         // Check if agreement is active
-        let active_path = format!("agreements/{}/active", agreement_id);
+        let active_path = format!("agreements.{}.active", agreement_id);
         let active =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &active_path).await?
             {
@@ -103,11 +99,11 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
             continue;
         }
 
-        // Get file_metadata fields (nested under file_metadata/)
-        let fm_prefix = format!("agreements/{}/file_metadata", agreement_id);
+        // Get file_metadata fields (nested under file_metadata)
+        let fm_prefix = format!("agreements.{}.file_metadata", agreement_id);
 
         // Get file_id
-        let file_id_path = format!("{}/file_id", fm_prefix);
+        let file_id_path = format!("{}.file_id", fm_prefix);
         let file_id =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &file_id_path)
                 .await?
@@ -117,7 +113,7 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
             };
 
         // Get root (stored as Vec<u8>)
-        let root_path = format!("{}/root", fm_prefix);
+        let root_path = format!("{}.root", fm_prefix);
         let root_bytes =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &root_path).await? {
                 Some(bytes) => deserialize::<Vec<u8>>(&bytes).unwrap_or_default(),
@@ -125,7 +121,7 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
             };
 
         // Get padded_len
-        let padded_len_path = format!("{}/padded_len", fm_prefix);
+        let padded_len_path = format!("{}.padded_len", fm_prefix);
         let padded_len =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &padded_len_path)
                 .await?
@@ -135,7 +131,7 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
             };
 
         // Get original_size
-        let original_size_path = format!("{}/original_size", fm_prefix);
+        let original_size_path = format!("{}.original_size", fm_prefix);
         let original_size =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &original_size_path)
                 .await?
@@ -145,7 +141,7 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
             };
 
         // Get filename
-        let filename_path = format!("{}/filename", fm_prefix);
+        let filename_path = format!("{}.filename", fm_prefix);
         let filename =
             match get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &filename_path)
                 .await?
@@ -154,24 +150,22 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
                 None => String::new(),
             };
 
-        // Get active nodes by querying paths under "agreements/{id}/nodes/"
+        // Get active nodes by querying paths under "agreements.{id}.nodes"
+        // path_prefix_filter_contract_state returns just the node IDs
         let mut nodes: Vec<String> = Vec::new();
-        let nodes_prefix = format!("agreements/{}/nodes/", agreement_id);
+        let nodes_prefix = format!("agreements.{}.nodes", agreement_id);
         let nodes_stream =
             path_prefix_filter_contract_state(conn, contract_id, nodes_prefix.clone()).await?;
         tokio::pin!(nodes_stream);
 
         while let Some(node_path_result) = nodes_stream.next().await {
-            let node_path = node_path_result?;
-            // Path format: "agreements/{agreement_id}/nodes/{node_id}"
-            let node_id = node_path
-                .strip_prefix(&nodes_prefix)
-                .unwrap_or(&node_path)
-                .to_string();
+            let node_id = node_path_result?;
 
             // Check if node is active (value is true)
+            let node_value_path = format!("{}.{}", nodes_prefix, node_id);
             if let Some(bytes) =
-                get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &node_path).await?
+                get_latest_contract_state_value(conn, MAX_FUEL, contract_id, &node_value_path)
+                    .await?
                 && deserialize::<bool>(&bytes).unwrap_or(false)
             {
                 nodes.push(node_id);
@@ -184,15 +178,12 @@ pub async fn get_active_agreements(conn: &Connection) -> Result<Vec<ActiveAgreem
         }
 
         // Build FileMetadata from stored data
-        // Note: We need to convert root bytes to FieldElement
-        let root = if root_bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&root_bytes);
-            ff::PrimeField::from_repr(arr.into())
-                .into_option()
-                .unwrap_or_default()
-        } else {
-            continue; // Invalid root
+        let root = match root_bytes.try_into() {
+            Ok(arr) => match bytes_to_field_element(&arr) {
+                Some(fe) => fe,
+                None => continue, // Invalid field element
+            },
+            Err(_) => continue, // Invalid root length (not 32 bytes)
         };
 
         let file_metadata = FileMetadata {
@@ -343,6 +334,9 @@ pub async fn generate_challenges(
         let challenge_id = crypto_challenge.id();
         let challenge_id_hex = hex::encode(challenge_id.0);
 
+        // Serialize seed for storage
+        let seed_bytes = field_element_to_bytes(&batch_seed_field);
+
         let challenge = ChallengeRow::builder()
             .challenge_id(challenge_id_hex)
             .agreement_id(agreement.agreement_id.clone())
@@ -350,6 +344,8 @@ pub async fn generate_challenges(
             .node_id(selected_node.clone())
             .issued_height(block_height)
             .deadline_height(block_height + config.deadline_blocks)
+            .seed(seed_bytes)
+            .num_challenges(config.num_challenges as i64)
             .status(ChallengeStatus::Active)
             .build();
 

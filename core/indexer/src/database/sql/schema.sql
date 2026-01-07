@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS challenges (
   node_id TEXT NOT NULL,
   issued_height INTEGER NOT NULL,
   deadline_height INTEGER NOT NULL,
+  seed BLOB NOT NULL,          
+  num_challenges INTEGER NOT NULL,
   status INTEGER NOT NULL DEFAULT 0, -- 0=active, 1=proven, 2=expired, 3=failed
   FOREIGN KEY (issued_height) REFERENCES blocks (height) ON DELETE CASCADE
 );

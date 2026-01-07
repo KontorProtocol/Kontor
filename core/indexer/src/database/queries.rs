@@ -28,6 +28,8 @@ pub enum Error {
     OutOfFuel,
     #[error("Contract not found: {0}")]
     ContractNotFound(String),
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
 }
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -999,8 +1001,10 @@ pub async fn insert_challenge(conn: &Connection, row: &ChallengeRow) -> Result<i
             node_id,
             issued_height,
             deadline_height,
+            seed,
+            num_challenges,
             status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         params![
             row.challenge_id.clone(),
             row.agreement_id.clone(),
@@ -1008,6 +1012,8 @@ pub async fn insert_challenge(conn: &Connection, row: &ChallengeRow) -> Result<i
             row.node_id.clone(),
             row.issued_height,
             row.deadline_height,
+            row.seed.to_vec(),
+            row.num_challenges,
             i64::from(row.status),
         ],
     )
@@ -1028,7 +1034,9 @@ pub async fn get_challenge_by_id(
                 file_id,
                 node_id, 
                 issued_height, 
-                deadline_height, 
+                deadline_height,
+                seed,
+                num_challenges,
                 status
             FROM challenges WHERE challenge_id = ?"#,
             params![challenge_id],
@@ -1037,7 +1045,11 @@ pub async fn get_challenge_by_id(
 
     match rows.next().await? {
         Some(row) => {
-            let status_val: i64 = row.get(7)?;
+            let seed_bytes: Vec<u8> = row.get(7)?;
+            let seed: [u8; 32] = seed_bytes
+                .try_into()
+                .map_err(|_| Error::InvalidData("Invalid seed length".into()))?;
+            let status_val: i64 = row.get(9)?;
             Ok(Some(ChallengeRow {
                 id: row.get(0)?,
                 challenge_id: row.get(1)?,
@@ -1046,6 +1058,8 @@ pub async fn get_challenge_by_id(
                 node_id: row.get(4)?,
                 issued_height: row.get(5)?,
                 deadline_height: row.get(6)?,
+                seed,
+                num_challenges: row.get(8)?,
                 status: ChallengeStatus::from(status_val),
             }))
         }
@@ -1079,7 +1093,9 @@ pub async fn get_active_challenges_by_deadline(
                 file_id,
                 node_id, 
                 issued_height, 
-                deadline_height, 
+                deadline_height,
+                seed,
+                num_challenges,
                 status
             FROM challenges 
             WHERE status = 0 AND deadline_height <= ?
@@ -1090,7 +1106,11 @@ pub async fn get_active_challenges_by_deadline(
 
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
-        let status_val: i64 = row.get(7)?;
+        let seed_bytes: Vec<u8> = row.get(7)?;
+        let seed: [u8; 32] = seed_bytes
+            .try_into()
+            .map_err(|_| Error::InvalidData("Invalid seed length".into()))?;
+        let status_val: i64 = row.get(9)?;
         results.push(ChallengeRow {
             id: row.get(0)?,
             challenge_id: row.get(1)?,
@@ -1099,6 +1119,8 @@ pub async fn get_active_challenges_by_deadline(
             node_id: row.get(4)?,
             issued_height: row.get(5)?,
             deadline_height: row.get(6)?,
+            seed,
+            num_challenges: row.get(8)?,
             status: ChallengeStatus::from(status_val),
         });
     }
@@ -1118,7 +1140,9 @@ pub async fn get_active_challenges_for_node(
                 file_id,
                 node_id, 
                 issued_height, 
-                deadline_height, 
+                deadline_height,
+                seed,
+                num_challenges,
                 status
             FROM challenges 
             WHERE node_id = ? AND status = 0
@@ -1129,7 +1153,11 @@ pub async fn get_active_challenges_for_node(
 
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
-        let status_val: i64 = row.get(7)?;
+        let seed_bytes: Vec<u8> = row.get(7)?;
+        let seed: [u8; 32] = seed_bytes
+            .try_into()
+            .map_err(|_| Error::InvalidData("Invalid seed length".into()))?;
+        let status_val: i64 = row.get(9)?;
         results.push(ChallengeRow {
             id: row.get(0)?,
             challenge_id: row.get(1)?,
@@ -1138,6 +1166,8 @@ pub async fn get_active_challenges_for_node(
             node_id: row.get(4)?,
             issued_height: row.get(5)?,
             deadline_height: row.get(6)?,
+            seed,
+            num_challenges: row.get(8)?,
             status: ChallengeStatus::from(status_val),
         });
     }
