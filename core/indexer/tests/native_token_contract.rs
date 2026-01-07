@@ -39,7 +39,7 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     );
 
     let result = token::balance(runtime, &minter).await?;
-    let minter_tokens_spent_as_gas = Decimal::from("0.0000005");
+    let minter_tokens_spent_as_gas = Decimal::from("0.000000498");
     assert_eq!(
         result.map(|d| d.to_string()),
         Some(Decimal::from(958) - minter_tokens_spent_as_gas).map(|d| d.to_string())
