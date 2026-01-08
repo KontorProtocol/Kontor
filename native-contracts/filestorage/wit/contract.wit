@@ -48,18 +48,18 @@ world root {
     active,
     proven,
     expired,
-    bad-proof,
+    failed,
   }
 
   record challenge-data {
     challenge-id: string,
     agreement-id: string,
-    file-id: string,
-    node-id: string,
-    issued-height: u64,
-    deadline-height: u64,
-    seed: list<u8>,
+    file-metadata: file-metadata-data,
+    block-height: u64,
     num-challenges: u64,
+    seed: list<u8>,
+    prover-id: string,
+    deadline-height: u64,
     status: challenge-status,
   }
 
@@ -119,20 +119,13 @@ world root {
 
   // Protocol parameters
   export get-min-nodes: func(ctx: borrow<view-context>) -> u64;
+  export get-c-target: func(ctx: borrow<view-context>) -> u64;
+  export get-blocks-per-year: func(ctx: borrow<view-context>) -> u64;
+  export get-s-chal: func(ctx: borrow<view-context>) -> u64;
 
   // ─────────────────────────────────────────────────────────────────
   // Challenge Management
   // ─────────────────────────────────────────────────────────────────
-
-  export create-challenge: func(
-    ctx: borrow<proc-context>,
-    challenge-id: string,
-    agreement-id: string,
-    node-id: string,
-    issued-height: u64,
-    seed: list<u8>,
-    num-challenges: u64
-  ) -> result<challenge-data, error>;
 
   export get-challenge: func(
     ctx: borrow<view-context>,
@@ -152,4 +145,12 @@ world root {
     ctx: borrow<proc-context>,
     current-height: u64
   );
+
+  // Challenge generation - called by reactor each block
+  export generate-challenges-for-block: func(
+    ctx: borrow<proc-context>,
+    block-height: u64,
+    prev-block-hash: list<u8>
+  ) -> list<challenge-data>;
+
 }

@@ -426,7 +426,7 @@ pub fn print_typedef_enum(name: &str, enum_: &Enum) -> Result<TokenStream> {
     });
 
     Ok(quote! {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, stdlib::Wavey)]
         pub enum #enum_name {
             #(#variants),*
         }

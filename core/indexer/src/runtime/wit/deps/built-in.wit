@@ -97,6 +97,12 @@ interface foreign {
 interface crypto {
     hash: func(input: string) -> tuple<string, list<u8>>;
     hash-with-salt: func(input: string, salt: string) -> tuple<string, list<u8>>;
+
+    hkdf-derive: func(
+        ikm: list<u8>,
+        salt: list<u8>,
+        info: list<u8>
+    ) -> list<u8>;
 }
 
 interface error {
@@ -188,11 +194,21 @@ interface file-ledger {
 
 interface challenges {
     use error.{error};
+    use file-ledger.{raw-file-descriptor};
 
     record verify-proof-result {
         verified: bool,
         error-message: option<string>,
     }
+
+    /// Compute a deterministic challenge ID using kontor-crypto (returns hex-encoded string)
+    compute-challenge-id: func(
+        file-descriptor: raw-file-descriptor,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: string
+    ) -> result<string, error>;
 
     verify-challenge-proof: func(
         proof: list<u8>

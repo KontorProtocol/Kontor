@@ -17,6 +17,7 @@ use bitcoin::{Txid, hashes::Hash};
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
+use hkdf::Hkdf;
 use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -922,6 +923,31 @@ impl Runtime {
         Ok((s, bs.to_vec()))
     }
 
+    async fn _hkdf_derive<T>(
+        &self,
+        accessor: &Accessor<T, Runtime>,
+        ikm: Vec<u8>,
+        salt: Vec<u8>,
+        info: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        // Charge gas based on input size
+        Fuel::CryptoHash((ikm.len() + salt.len() + info.len()) as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        // Use HKDF-SHA256 to derive a 32-byte key
+        let salt_ref = if salt.is_empty() {
+            None
+        } else {
+            Some(salt.as_slice())
+        };
+        let hk = Hkdf::<Sha256>::new(salt_ref, &ikm);
+        let mut okm = [0u8; 32];
+        hk.expand(&info, &mut okm)
+            .map_err(|e| anyhow::anyhow!("HKDF expand error: {}", e))?;
+        Ok(okm.to_vec())
+    }
+
     async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
         Fuel::CryptoGenerateId
             .consume(accessor, self.gauge.as_ref())
@@ -1257,6 +1283,18 @@ impl built_in::crypto::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._hash(accessor, input + salt.as_str())
+            .await
+    }
+
+    async fn hkdf_derive<T>(
+        accessor: &Accessor<T, Self>,
+        ikm: Vec<u8>,
+        salt: Vec<u8>,
+        info: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._hkdf_derive(accessor, ikm, salt, info)
             .await
     }
 }
@@ -2182,6 +2220,75 @@ impl built_in::numbers::HostWithStore for Runtime {
 impl built_in::challenges::Host for Runtime {}
 
 impl built_in::challenges::HostWithStore for Runtime {
+    async fn compute_challenge_id<T>(
+        _accessor: &Accessor<T, Self>,
+        file_descriptor: built_in::file_ledger::RawFileDescriptor,
+        block_height: u64,
+        num_challenges: u64,
+        seed: Vec<u8>,
+        prover_id: String,
+    ) -> Result<Result<String, Error>> {
+        use crate::database::types::bytes_to_field_element;
+        use kontor_crypto::api::Challenge;
+        use kontor_crypto::api::FileMetadata as CryptoFileMetadata;
+
+        // Convert raw file descriptor to kontor_crypto::FileMetadata
+        let root_bytes: [u8; 32] = match file_descriptor.root.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Ok(Err(Error::Validation(
+                    "Invalid root length, expected 32 bytes".to_string(),
+                )));
+            }
+        };
+        let root = match bytes_to_field_element(&root_bytes) {
+            Some(r) => r,
+            None => {
+                return Ok(Err(Error::Validation(
+                    "Invalid root field element".to_string(),
+                )));
+            }
+        };
+
+        let file_metadata = CryptoFileMetadata {
+            file_id: file_descriptor.file_id,
+            root,
+            padded_len: file_descriptor.padded_len as usize,
+            original_size: file_descriptor.original_size as usize,
+            filename: file_descriptor.filename,
+        };
+
+        // Convert seed bytes to FieldElement
+        let seed_bytes: [u8; 32] = match seed.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Ok(Err(Error::Validation(
+                    "Invalid seed length, expected 32 bytes".to_string(),
+                )));
+            }
+        };
+        let seed_field = match bytes_to_field_element(&seed_bytes) {
+            Some(s) => s,
+            None => {
+                return Ok(Err(Error::Validation(
+                    "Invalid seed field element".to_string(),
+                )));
+            }
+        };
+
+        // Create challenge and compute ID
+        let challenge = Challenge::new(
+            file_metadata,
+            block_height,
+            num_challenges as usize,
+            seed_field,
+            prover_id,
+        );
+
+        // TODO: Replace with challenge.id().to_string() once Display is implemented in kontor-crypto
+        Ok(Ok(hex::encode(challenge.id().0)))
+    }
+
     async fn verify_challenge_proof<T>(
         accessor: &Accessor<T, Self>,
         proof: Vec<u8>,
