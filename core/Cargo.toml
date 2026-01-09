@@ -1,5 +1,5 @@
 [workspace]
-members = ["indexer", "indexer-types", "macros", "stdlib", "testlib"]
+members = ["indexer", "indexer-types", "macros", "stdlib", "testlib", "wit-validator"]
 resolver = "2"
 
 [workspace.lints.clippy]

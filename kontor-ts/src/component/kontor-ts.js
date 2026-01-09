@@ -729,6 +729,7 @@ let exports0;
 let memory0;
 let realloc0;
 let postReturn0;
+let postReturn1;
 let exports0SerializeInst;
 
 function serializeInst(arg0) {
@@ -863,6 +864,80 @@ function deserializeOpReturnData(arg0) {
   return retCopy;
   
 }
+let exports0ValidateWit;
+
+function validateWit(arg0) {
+  var ptr0 = utf8Encode(arg0, realloc0, memory0);
+  var len0 = utf8EncodedLen;
+  _debugLog('[iface="validate-wit", function="validate-wit"][Instruction::CallWasm] enter', {
+    funcName: 'validate-wit',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0ValidateWit');
+  const ret = exports0ValidateWit(ptr0, len0);
+  endCurrentTask(0);
+  let variant5;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      variant5= {
+        tag: 'ok',
+      };
+      break;
+    }
+    case 1: {
+      var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+      var len1 = dataView(memory0).getUint32(ret + 8, true);
+      var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+      variant5= {
+        tag: 'parse-error',
+        val: result1
+      };
+      break;
+    }
+    case 2: {
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var base4 = dataView(memory0).getUint32(ret + 4, true);
+      var result4 = [];
+      for (let i = 0; i < len4; i++) {
+        const base = base4 + i * 16;
+        var ptr2 = dataView(memory0).getUint32(base + 0, true);
+        var len2 = dataView(memory0).getUint32(base + 4, true);
+        var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+        var ptr3 = dataView(memory0).getUint32(base + 8, true);
+        var len3 = dataView(memory0).getUint32(base + 12, true);
+        var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+        result4.push({
+          message: result2,
+          location: result3,
+        });
+      }
+      variant5= {
+        tag: 'validation-errors',
+        val: result4
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for ValidationResult');
+    }
+  }
+  _debugLog('[iface="validate-wit", function="validate-wit"][Instruction::Return]', {
+    funcName: 'validate-wit',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant5;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn1(ret);
+  cstate.mayLeave = true;
+  return retCopy;
+  
+}
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
@@ -871,10 +946,12 @@ const $init = (() => {
     memory0 = exports0.memory;
     realloc0 = exports0.cabi_realloc;
     postReturn0 = exports0['cabi_post_deserialize-inst'];
+    postReturn1 = exports0['cabi_post_validate-wit'];
     exports0SerializeInst = exports0['serialize-inst'];
     exports0DeserializeInst = exports0['deserialize-inst'];
     exports0SerializeOpReturnData = exports0['serialize-op-return-data'];
     exports0DeserializeOpReturnData = exports0['deserialize-op-return-data'];
+    exports0ValidateWit = exports0['validate-wit'];
   })();
   let promise, resolve, reject;
   function runNext (value) {
@@ -901,4 +978,4 @@ const $init = (() => {
 
 await $init;
 
-export { deserializeInst, deserializeOpReturnData, serializeInst, serializeOpReturnData,  }
+export { deserializeInst, deserializeOpReturnData, serializeInst, serializeOpReturnData, validateWit,  }

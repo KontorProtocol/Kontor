@@ -1,0 +1,13 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    record node {
+        value: string,
+        next: option<node>,
+    }
+
+    export get-node: async func(ctx: borrow<view-context>) -> node;
+}

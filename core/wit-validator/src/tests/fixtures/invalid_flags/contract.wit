@@ -1,0 +1,14 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    flags permissions {
+        read,
+        write,
+        execute,
+    }
+
+    export get-perms: async func(ctx: borrow<view-context>) -> permissions;
+}

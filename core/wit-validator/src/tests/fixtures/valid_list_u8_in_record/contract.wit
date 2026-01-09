@@ -1,0 +1,13 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    record my-data {
+        bytes: list<u8>,
+        name: string,
+    }
+
+    export get-data: async func(ctx: borrow<view-context>) -> my-data;
+}

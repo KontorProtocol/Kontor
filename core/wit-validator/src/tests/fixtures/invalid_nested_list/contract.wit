@@ -1,0 +1,8 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    export bad-func: async func(ctx: borrow<view-context>) -> list<list<string>>;
+}

@@ -58,6 +58,9 @@ jobs:
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
+      - name: Check wit-validator compiles to wasm32-unknown-unknown
+        run: cargo check -p wit-validator --target wasm32-unknown-unknown
+        working-directory: ./core
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Audit (test-contracts)

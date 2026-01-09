@@ -1,0 +1,10 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    record empty {}
+
+    export get-empty: async func(ctx: borrow<view-context>) -> empty;
+}

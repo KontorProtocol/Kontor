@@ -1,0 +1,9 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+
+    resource my-context {}
+
+    export bad-func: async func(ctx: borrow<my-context>) -> string;
+}

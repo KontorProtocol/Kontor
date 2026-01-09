@@ -6,4 +6,17 @@ world root {
 
   export serialize-op-return-data: func(json-str: string) -> list<u8>;
   export deserialize-op-return-data: func(bytes: list<u8>) -> string;
+
+  record validation-error {
+    message: string,
+    location: string,
+  }
+
+  variant validation-result {
+    ok,
+    parse-error(string),
+    validation-errors(list<validation-error>),
+  }
+
+  export validate-wit: func(wit-content: string) -> validation-result;
 }

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 indexer-types = { path = "../../core/indexer-types" }
+wit-validator = { path = "../../core/wit-validator" }
 
 [lib]
 crate-type = ["cdylib"]

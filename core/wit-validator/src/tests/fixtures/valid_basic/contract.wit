@@ -1,0 +1,10 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/error.{error};
+
+    export get-value: async func(ctx: borrow<view-context>) -> string;
+    export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
+}

@@ -4,6 +4,7 @@ import {
   deserializeInst,
   serializeOpReturnData,
   deserializeOpReturnData,
+  validateWit,
 } from "@kontor/kontor-ts";
 
 test("publish", () => {
@@ -50,4 +51,63 @@ test("op_return_data", () => {
   const bs = serializeOpReturnData(str);
   let result = deserializeOpReturnData(bs);
   expect(inst).toStrictEqual(JSON.parse(result));
+});
+
+test("validateWit valid contract", () => {
+  const wit = `
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/error.{error};
+
+    export get-value: async func(ctx: borrow<view-context>) -> string;
+    export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
+}
+`;
+  const result = validateWit(wit);
+  expect(result.tag).toBe("ok");
+});
+
+test("validateWit invalid - missing context", () => {
+  const wit = `
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+
+    export bad-func: async func(val: string) -> string;
+}
+`;
+  const result = validateWit(wit);
+  expect(result.tag).toBe("validation-errors");
+  if (result.tag === "validation-errors") {
+    expect(result.val.length).toBeGreaterThan(0);
+    expect(result.val.some((e) => e.message.includes("context"))).toBe(true);
+  }
+});
+
+test("validateWit invalid - sync export", () => {
+  const wit = `
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context};
+
+    export bad-func: func(ctx: borrow<view-context>) -> string;
+}
+`;
+  const result = validateWit(wit);
+  expect(result.tag).toBe("validation-errors");
+  if (result.tag === "validation-errors") {
+    expect(result.val.some((e) => e.message.includes("async"))).toBe(true);
+  }
+});
+
+test("validateWit parse error", () => {
+  const wit = `this is not valid wit`;
+  const result = validateWit(wit);
+  expect(result.tag).toBe("parse-error");
 });

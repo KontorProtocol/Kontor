@@ -1,0 +1,9 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context};
+    use kontor:built-in/error.{error};
+
+    export bad-func: async func(ctx: borrow<proc-context>, r: result<string, error>) -> string;
+}

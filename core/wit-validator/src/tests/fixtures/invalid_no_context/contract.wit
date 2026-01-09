@@ -1,0 +1,7 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+
+    export bad-func: async func(val: string) -> string;
+}
