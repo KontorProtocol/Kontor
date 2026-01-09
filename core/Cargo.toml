@@ -9,7 +9,7 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wasmtime = { version = "=40.0.0", features = ["wave", "component-model-async"] }
+wasmtime = { version = "=40.0.1", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.50.0"
 wit-component = "=0.244.0"
 wit-parser = "=0.244.0"
@@ -17,7 +17,7 @@ wasm-wave = { version ="0.244.0", default-features = false }
 
 anyhow = { version = "=1.0.100", default-features = false }
 axum = { version = "=0.8.8", features = ["http2", "ws"] }
-bon = { version = "=3.8.1", default-features = false, features = ["alloc"] }
+bon = { version = "=3.8.2", default-features = false, features = ["alloc"] }
 tokio = { version = "=1.49.0", features = ["full"] }
 tower-http = { version = "=0.6.8", features = [
   "fs",
