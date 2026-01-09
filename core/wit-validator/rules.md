@@ -5,30 +5,51 @@ This document describes the validation rules that Kontor enforces on WIT (WebAss
 ## 1. Function Signature Rules
 
 - Functions **must** start with `export` (standard WIT allows functions in interfaces without `export`)
+- Functions **must** be `async` (standard WIT allows sync functions)
 - First parameter **must** be `ctx: borrow<proc-context|view-context|core-context|fall-context>` (standard WIT allows any parameters)
 - Context types `proc-context`, `view-context`, `core-context`, `fall-context` are required Kontor resources (these don't exist in standard WIT)
 
 ### Valid Function Signature Format
 
 ```wit
-export <name>: func(ctx: borrow<proc-context|view-context|core-context|fall-context>, ...params) -> <return>;
+export <name>: async func(ctx: borrow<proc-context|view-context|core-context|fall-context>, ...params) -> <return>;
 ```
+
+### Special Functions: `init` and `fallback`
+
+The `init` and `fallback` functions have fixed signatures:
+
+```wit
+// init - called once when contract is deployed (REQUIRED)
+export init: async func(ctx: borrow<proc-context>);
+
+// fallback - called when no matching function is found (optional)
+export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
+```
+
+- `init` is **required** - every contract must export it
+- `init` must have exactly one parameter (`borrow<proc-context>`) and no return type
+- `fallback` is optional
+- `fallback` must have exactly two parameters (`borrow<fall-context>`, `string`) and return `string`
 
 ### Examples
 
 ```wit
 // Valid
-export transfer: func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
-export balance: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
+export transfer: async func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
+export balance: async func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 
 // Invalid - missing export
-transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
+transfer: async func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
 
 // Invalid - missing context parameter
-export transfer: func(dst: string, amt: decimal) -> result<transfer, error>;
+export transfer: async func(dst: string, amt: decimal) -> result<transfer, error>;
 
 // Invalid - wrong context type
-export transfer: func(ctx: borrow<my-context>, dst: string) -> result<transfer, error>;
+export transfer: async func(ctx: borrow<my-context>, dst: string) -> result<transfer, error>;
+
+// Invalid - not async
+export transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
 ```
 
 ---

@@ -18,8 +18,33 @@ pub fn validate_all(resolve: &Resolve) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     errors.extend(validate_function_signatures(resolve));
+    errors.extend(validate_required_exports(resolve));
     errors.extend(validate_type_definitions(resolve));
     errors.extend(validate_cycles(resolve));
+
+    errors
+}
+
+fn validate_required_exports(resolve: &Resolve) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    for (_world_id, world) in resolve.worlds.iter() {
+        // Skip the built-in world
+        if world.name == "built-in" {
+            continue;
+        }
+
+        let has_init = world.exports.iter().any(|(key, item)| {
+            matches!((key, item), (WorldKey::Name(name), WorldItem::Function(_)) if name == "init")
+        });
+
+        if !has_init {
+            errors.push(ValidationError::new(
+                "contract must export an init function",
+                Location::type_def(&world.name),
+            ));
+        }
+    }
 
     errors
 }
@@ -30,7 +55,13 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
     for (_world_id, world) in resolve.worlds.iter() {
         for (key, item) in world.exports.iter() {
             if let (WorldKey::Name(name), WorldItem::Function(func)) = (key, item) {
+                // Special handling for init and fallback
                 if name == "init" {
+                    errors.extend(validate_init_function(resolve, func));
+                    continue;
+                }
+                if name == "fallback" {
+                    errors.extend(validate_fallback_function(resolve, func));
                     continue;
                 }
 
@@ -92,6 +123,111 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                     ));
                 }
             }
+        }
+    }
+
+    errors
+}
+
+/// Validate the `init` function signature.
+/// Must be: `async func(ctx: borrow<proc-context>)`
+fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let name = "init";
+
+    if !func.kind.is_async() {
+        errors.push(ValidationError::new(
+            "init must be async",
+            Location::function(name),
+        ));
+    }
+
+    if func.params.len() != 1 {
+        errors.push(ValidationError::new(
+            "init must have exactly one parameter: ctx: borrow<proc-context>",
+            Location::function(name),
+        ));
+    } else {
+        let (param_name, param_type) = &func.params[0];
+        match get_borrowed_type_name(resolve, param_type) {
+            Some(context_name) if context_name == "proc-context" => {}
+            _ => {
+                errors.push(ValidationError::new(
+                    "init parameter must be borrow<proc-context>",
+                    Location::parameter(name, param_name),
+                ));
+            }
+        }
+    }
+
+    if func.result.is_some() {
+        errors.push(ValidationError::new(
+            "init must not have a return type",
+            Location::return_type(name),
+        ));
+    }
+
+    errors
+}
+
+/// Validate the `fallback` function signature.
+/// Must be: `async func(ctx: borrow<fall-context>, expr: string) -> string`
+fn validate_fallback_function(
+    resolve: &Resolve,
+    func: &wit_parser::Function,
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let name = "fallback";
+
+    if !func.kind.is_async() {
+        errors.push(ValidationError::new(
+            "fallback must be async",
+            Location::function(name),
+        ));
+    }
+
+    if func.params.len() != 2 {
+        errors.push(ValidationError::new(
+            "fallback must have exactly two parameters: ctx: borrow<fall-context>, expr: string",
+            Location::function(name),
+        ));
+    } else {
+        // Check first param: ctx: borrow<fall-context>
+        let (param_name, param_type) = &func.params[0];
+        match get_borrowed_type_name(resolve, param_type) {
+            Some(context_name) if context_name == "fall-context" => {}
+            _ => {
+                errors.push(ValidationError::new(
+                    "fallback first parameter must be borrow<fall-context>",
+                    Location::parameter(name, param_name),
+                ));
+            }
+        }
+
+        // Check second param: expr: string
+        let (param_name, param_type) = &func.params[1];
+        if !matches!(param_type, Type::String) {
+            errors.push(ValidationError::new(
+                "fallback second parameter must be string",
+                Location::parameter(name, param_name),
+            ));
+        }
+    }
+
+    // Check return type: string
+    match &func.result {
+        Some(Type::String) => {}
+        Some(_) => {
+            errors.push(ValidationError::new(
+                "fallback must return string",
+                Location::return_type(name),
+            ));
+        }
+        None => {
+            errors.push(ValidationError::new(
+                "fallback must return string",
+                Location::return_type(name),
+            ));
         }
     }
 

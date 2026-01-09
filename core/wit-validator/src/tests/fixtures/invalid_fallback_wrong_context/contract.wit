@@ -1,0 +1,8 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context};
+
+    export fallback: async func(ctx: borrow<proc-context>, expr: string) -> string;
+}

@@ -98,6 +98,18 @@ mod tests {
     const INVALID_CYCLE: &str = include_str!("tests/fixtures/invalid_cycle/contract.wit");
     const INVALID_SYNC_EXPORT: &str =
         include_str!("tests/fixtures/invalid_sync_export/contract.wit");
+    const VALID_INIT_FALLBACK: &str =
+        include_str!("tests/fixtures/valid_init_fallback/contract.wit");
+    const INVALID_INIT_WRONG_CONTEXT: &str =
+        include_str!("tests/fixtures/invalid_init_wrong_context/contract.wit");
+    const INVALID_INIT_HAS_RETURN: &str =
+        include_str!("tests/fixtures/invalid_init_has_return/contract.wit");
+    const INVALID_FALLBACK_WRONG_CONTEXT: &str =
+        include_str!("tests/fixtures/invalid_fallback_wrong_context/contract.wit");
+    const INVALID_FALLBACK_WRONG_RETURN: &str =
+        include_str!("tests/fixtures/invalid_fallback_wrong_return/contract.wit");
+    const INVALID_MISSING_INIT: &str =
+        include_str!("tests/fixtures/invalid_missing_init/contract.wit");
 
     #[test]
     fn test_empty_resolve_is_valid() {
@@ -265,6 +277,89 @@ mod tests {
         assert!(
             result.errors.iter().any(|e| e.message.contains("async")),
             "Expected error about async, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_valid_init_fallback() {
+        let result = validate_fixture(VALID_INIT_FALLBACK);
+        assert!(
+            result.is_valid(),
+            "Expected valid init/fallback, got errors: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_init_wrong_context() {
+        let result = validate_fixture(INVALID_INIT_WRONG_CONTEXT);
+        assert!(
+            result.has_errors(),
+            "Expected error for init with wrong context"
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("proc-context")),
+            "Expected error about proc-context, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_init_has_return() {
+        let result = validate_fixture(INVALID_INIT_HAS_RETURN);
+        assert!(
+            result.has_errors(),
+            "Expected error for init with return type"
+        );
+        assert!(
+            result.errors.iter().any(|e| e.message.contains("return")),
+            "Expected error about return type, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_fallback_wrong_context() {
+        let result = validate_fixture(INVALID_FALLBACK_WRONG_CONTEXT);
+        assert!(
+            result.has_errors(),
+            "Expected error for fallback with wrong context"
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("fall-context")),
+            "Expected error about fall-context, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_fallback_wrong_return() {
+        let result = validate_fixture(INVALID_FALLBACK_WRONG_RETURN);
+        assert!(
+            result.has_errors(),
+            "Expected error for fallback with wrong return"
+        );
+        assert!(
+            result.errors.iter().any(|e| e.message.contains("string")),
+            "Expected error about string return, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_missing_init() {
+        let result = validate_fixture(INVALID_MISSING_INIT);
+        assert!(result.has_errors(), "Expected error for missing init");
+        assert!(
+            result.errors.iter().any(|e| e.message.contains("init")),
+            "Expected error about missing init, got: {}",
             result
         );
     }
