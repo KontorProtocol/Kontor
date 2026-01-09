@@ -136,11 +136,6 @@ world root {
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 
-  export get-challenges-for-node: func(
-    ctx: borrow<view-context>,
-    node-id: string
-  ) -> list<challenge-data>;
-
   export expire-challenges: func(
     ctx: borrow<proc-context>,
     current-height: u64

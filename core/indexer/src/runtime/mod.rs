@@ -2222,7 +2222,11 @@ impl built_in::challenges::Host for Runtime {}
 impl built_in::challenges::HostWithStore for Runtime {
     async fn compute_challenge_id<T>(
         _accessor: &Accessor<T, Self>,
-        file_descriptor: built_in::file_ledger::RawFileDescriptor,
+        file_id: String,
+        root: Vec<u8>,
+        padded_len: u64,
+        original_size: u64,
+        filename: String,
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
@@ -2232,8 +2236,8 @@ impl built_in::challenges::HostWithStore for Runtime {
         use kontor_crypto::api::Challenge;
         use kontor_crypto::api::FileMetadata as CryptoFileMetadata;
 
-        // Convert raw file descriptor to kontor_crypto::FileMetadata
-        let root_bytes: [u8; 32] = match file_descriptor.root.try_into() {
+        // Convert inputs to kontor_crypto::FileMetadata
+        let root_bytes: [u8; 32] = match root.try_into() {
             Ok(bytes) => bytes,
             Err(_) => {
                 return Ok(Err(Error::Validation(
@@ -2251,11 +2255,11 @@ impl built_in::challenges::HostWithStore for Runtime {
         };
 
         let file_metadata = CryptoFileMetadata {
-            file_id: file_descriptor.file_id,
+            file_id,
             root,
-            padded_len: file_descriptor.padded_len as usize,
-            original_size: file_descriptor.original_size as usize,
-            filename: file_descriptor.filename,
+            padded_len: padded_len as usize,
+            original_size: original_size as usize,
+            filename,
         };
 
         // Convert seed bytes to FieldElement

@@ -378,38 +378,6 @@ impl Guest for Filestorage {
             .collect()
     }
 
-    fn get_challenges_for_node(ctx: &ViewContext, node_id: String) -> Vec<ChallengeData> {
-        let model = ctx.model();
-        model
-            .challenges()
-            .keys()
-            .filter_map(|challenge_id: String| {
-                let c = model.challenges().get(&challenge_id)?;
-                if c.prover_id() != node_id || c.status().load() != ChallengeStatusStorage::Active {
-                    return None;
-                }
-                let fm = c.file_metadata();
-                Some(ChallengeData {
-                    challenge_id: c.challenge_id(),
-                    agreement_id: c.agreement_id(),
-                    file_metadata: FileMetadataData {
-                        file_id: fm.file_id(),
-                        root: fm.root(),
-                        padded_len: fm.padded_len(),
-                        original_size: fm.original_size(),
-                        filename: fm.filename(),
-                    },
-                    block_height: c.block_height(),
-                    num_challenges: c.num_challenges(),
-                    seed: c.seed(),
-                    prover_id: c.prover_id(),
-                    deadline_height: c.deadline_height(),
-                    status: c.status().load().into(),
-                })
-            })
-            .collect()
-    }
-
     fn expire_challenges(ctx: &ProcContext, current_height: u64) {
         let model = ctx.model();
 
@@ -550,15 +518,12 @@ impl Guest for Filestorage {
             let prover_id = active_nodes[node_index].clone();
 
             // Compute challenge ID via host function
-            let raw_descriptor = RawFileDescriptor {
-                file_id: file_id.clone(),
-                root: fm.root(),
-                padded_len: fm.padded_len(),
-                original_size: fm.original_size(),
-                filename: fm.filename(),
-            };
             let challenge_id = match challenges::compute_challenge_id(
-                &raw_descriptor,
+                &file_id,
+                &fm.root(),
+                fm.padded_len(),
+                fm.original_size(),
+                &fm.filename(),
                 block_height,
                 s_chal,
                 &seed,
@@ -568,20 +533,17 @@ impl Guest for Filestorage {
                 Err(_) => continue,
             };
 
-            // Create file metadata for storage
-            let file_metadata = FileMetadata {
-                file_id: file_id.clone(),
-                root: fm.root(),
-                padded_len: fm.padded_len(),
-                original_size: fm.original_size(),
-                filename: fm.filename(),
-            };
-
             // Create and store challenge
             let challenge = Challenge {
                 challenge_id: challenge_id.clone(),
                 agreement_id: agreement_id.clone(),
-                file_metadata,
+                file_metadata: FileMetadata {
+                    file_id: file_id.clone(),
+                    root: fm.root(),
+                    padded_len: fm.padded_len(),
+                    original_size: fm.original_size(),
+                    filename: fm.filename(),
+                },
                 block_height,
                 num_challenges: s_chal,
                 seed: seed.clone(),

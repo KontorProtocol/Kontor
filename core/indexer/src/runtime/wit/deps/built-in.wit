@@ -194,7 +194,6 @@ interface file-ledger {
 
 interface challenges {
     use error.{error};
-    use file-ledger.{raw-file-descriptor};
 
     record verify-proof-result {
         verified: bool,
@@ -203,7 +202,11 @@ interface challenges {
 
     /// Compute a deterministic challenge ID using kontor-crypto (returns hex-encoded string)
     compute-challenge-id: func(
-        file-descriptor: raw-file-descriptor,
+        file-id: string,
+        root: list<u8>,
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
         block-height: u64,
         num-challenges: u64,
         seed: list<u8>,
