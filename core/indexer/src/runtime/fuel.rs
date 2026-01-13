@@ -46,6 +46,7 @@ pub enum Fuel {
     GetFileDescriptorOriginalSize,
     GetFileDescriptorFilename,
     FromRawFileDescriptor,
+    ComputeChallengeId,
     NumbersU64ToInteger,
     NumbersS64ToInteger,
     NumbersStringToInteger(u64),
@@ -105,6 +106,7 @@ impl Fuel {
             | Self::GetFileDescriptorOriginalSize
             | Self::GetFileDescriptorFilename => 50,
             Self::FromRawFileDescriptor => 500,
+            Self::ComputeChallengeId => 500,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
             | Self::NumbersIntegerToDecimal

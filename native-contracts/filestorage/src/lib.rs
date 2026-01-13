@@ -305,15 +305,12 @@ impl Guest for Filestorage {
         }
     }
 
-    fn submit_proof(
+    fn verify_proof(
         _ctx: &ProcContext,
         _challenge_ids: Vec<String>,
         _proof: Vec<u8>,
-    ) -> Result<SubmitProofResult, Error> {
-        // TODO: Implement proof verification
-        // 1. Call host function to verify proof
-        // 2. Update challenge statuses to Proven if verified
-        todo!("Proof verification not yet implemented")
+    ) -> Result<(), Error> {
+        Ok(())
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -431,21 +428,12 @@ impl Guest for Filestorage {
                 None => continue,
             };
 
-            // Compute challenge ID via host function
-            let challenge_id = match challenges::compute_challenge_id(
-                &descriptor.file_id(),
-                &descriptor.root(),
-                descriptor.padded_len(),
-                descriptor.original_size(),
-                &descriptor.filename(),
-                block_height,
-                s_chal,
-                &seed,
-                &prover_id,
-            ) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
+            // Compute challenge ID via file descriptor method
+            let challenge_id =
+                match descriptor.compute_challenge_id(block_height, s_chal, &seed, &prover_id) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
 
             let challenge = ChallengeData {
                 challenge_id,

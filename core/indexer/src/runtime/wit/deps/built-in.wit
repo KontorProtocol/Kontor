@@ -186,11 +186,13 @@ interface file-ledger {
 
     resource file-descriptor {
         file-id: async func() -> string;
-        root: async func() -> list<u8>;
-        padded-len: async func() -> u64;
-        original-size: async func() -> u64;
-        filename: async func() -> string;
         from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+        compute-challenge-id: async func(
+            block-height: u64,
+            num-challenges: u64,
+            seed: list<u8>,
+            prover-id: string
+        ) -> result<string, error>;
     }
 
     add-file: async func(file-descriptor: borrow<file-descriptor>);
@@ -202,27 +204,18 @@ interface file-ledger {
 interface challenges {
     use error.{error};
 
-    record verify-proof-result {
-        verified: bool,
-        error-message: option<string>,
-    }
-
-    /// Compute a deterministic challenge ID using kontor-crypto (returns hex-encoded string)
-    compute-challenge-id: async func(
+    record challenge-input {
         file-id: string,
-        root: list<u8>,
-        padded-len: u64,
-        original-size: u64,
-        filename: string,
         block-height: u64,
         num-challenges: u64,
         seed: list<u8>,
-        prover-id: string
-    ) -> result<string, error>;
+        prover-id: string,
+    }
 
     verify-challenge-proof: async func(
+        challenges: list<challenge-input>,
         proof: list<u8>
-    ) -> result<verify-proof-result, error>;
+    ) -> result<_, error>;
 }
 
 world built-in {
