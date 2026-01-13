@@ -41,6 +41,110 @@ async fn prepare_real_descriptor() -> Result<RawFileDescriptor> {
     ))
 }
 
+async fn filestorage_defaults(runtime: &mut Runtime) -> Result<()> {
+    // Protocol params should match defaults in the contract.
+    assert_eq!(filestorage::get_min_nodes(runtime).await?, 3);
+    assert_eq!(filestorage::get_c_target(runtime).await?, 12);
+    assert_eq!(filestorage::get_blocks_per_year(runtime).await?, 52560);
+    assert_eq!(filestorage::get_s_chal(runtime).await?, 100);
+
+    // With no generated challenges, this should be empty.
+    let active = filestorage::get_active_challenges(runtime).await?;
+    assert!(active.is_empty());
+
+    // Unknown IDs should be safe.
+    assert!(
+        filestorage::get_agreement(runtime, "nonexistent")
+            .await?
+            .is_none()
+    );
+    assert!(
+        filestorage::get_challenge(runtime, "nonexistent")
+            .await?
+            .is_none()
+    );
+    assert!(
+        filestorage::get_agreement_nodes(runtime, "nonexistent")
+            .await?
+            .is_empty()
+    );
+    assert!(!filestorage::is_node_in_agreement(runtime, "nonexistent", "node_1").await?);
+
+    Ok(())
+}
+
+async fn filestorage_empty_file_id_fails(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let descriptor = make_descriptor(
+        "".to_string(),
+        vec![0u8; 32],
+        16,
+        10,
+        "empty.txt".to_string(),
+    );
+    let err = filestorage::create_agreement(runtime, &signer, descriptor).await?;
+    assert!(matches!(err, Err(Error::Message(_))));
+    Ok(())
+}
+
+async fn filestorage_get_all_active_agreements(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+
+    // Create inactive agreement
+    let a1 = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "all_active_1".to_string(),
+            vec![11u8; 32],
+            16,
+            10,
+            "all_active_1.txt".to_string(),
+        ),
+    )
+    .await??;
+    let active = filestorage::get_all_active_agreements(runtime).await?;
+    assert!(!active.iter().any(|a| a.agreement_id == a1.agreement_id));
+
+    // Activate it by reaching min_nodes
+    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_1").await??;
+    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_2").await??;
+    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_3").await??;
+    let active = filestorage::get_all_active_agreements(runtime).await?;
+    assert!(
+        active
+            .iter()
+            .any(|a| a.agreement_id == a1.agreement_id && a.active)
+    );
+
+    // A second agreement that stays inactive should not be returned.
+    let a2 = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "all_active_2".to_string(),
+            vec![12u8; 32],
+            16,
+            10,
+            "all_active_2.txt".to_string(),
+        ),
+    )
+    .await??;
+    let active = filestorage::get_all_active_agreements(runtime).await?;
+    assert!(!active.iter().any(|a| a.agreement_id == a2.agreement_id));
+
+    Ok(())
+}
+
+async fn filestorage_expire_challenges_noop(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    filestorage::expire_challenges(runtime, &signer, 0).await?;
+    filestorage::expire_challenges(runtime, &signer, 1_000_000).await?;
+    let active = filestorage::get_active_challenges(runtime).await?;
+    assert!(active.is_empty());
+    Ok(())
+}
+
 async fn filestorage_create_and_get(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
     let descriptor = prepare_real_descriptor().await?;
@@ -473,12 +577,47 @@ async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Test Registration
-// ─────────────────────────────────────────────────────────────────
+async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+
+    // Create an active agreement (use small root value - large ones exceed field modulus)
+    let descriptor = make_descriptor(
+        "challenge_smoke_test".to_string(),
+        vec![1u8; 32],
+        16,
+        100,
+        "smoke.txt".to_string(),
+    );
+    let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
+
+    // Activate it
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_0").await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+
+    let block_hash = vec![1u8; 32];
+    let challenges =
+        filestorage::generate_challenges_for_block(runtime, &signer, 1000, block_hash).await?;
+
+    // Verify the return type is correct (list of challenges, possibly empty)
+    assert!(challenges.len() <= 1, "Should have 0 or 1 challenges");
+
+    // Verify get_active_challenges works
+    let active = filestorage::get_active_challenges(runtime).await?;
+    assert_eq!(active.len(), challenges.len());
+
+    // Verify expire_challenges works
+    filestorage::expire_challenges(runtime, &signer, 10000).await?;
+
+    Ok(())
+}
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_filestorage_create_and_get() -> Result<()> {
+    filestorage_defaults(runtime).await?;
+    filestorage_empty_file_id_fails(runtime).await?;
+    filestorage_get_all_active_agreements(runtime).await?;
+    filestorage_expire_challenges_noop(runtime).await?;
     filestorage_create_and_get(runtime).await?;
     filestorage_count_increments(runtime).await?;
     filestorage_duplicate_fails(runtime).await?;
@@ -496,11 +635,16 @@ async fn test_filestorage_create_and_get() -> Result<()> {
     filestorage_is_node_in_nonexistent_agreement(runtime).await?;
     filestorage_rejoin_after_leave(runtime).await?;
     filestorage_join_after_activation_not_reactivated(runtime).await?;
+    challenge_gen_smoke_test(runtime).await?;
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_filestorage_create_and_get_regtest() -> Result<()> {
+    filestorage_defaults(runtime).await?;
+    filestorage_empty_file_id_fails(runtime).await?;
+    filestorage_get_all_active_agreements(runtime).await?;
+    filestorage_expire_challenges_noop(runtime).await?;
     filestorage_create_and_get(runtime).await?;
     filestorage_count_increments(runtime).await?;
     filestorage_duplicate_fails(runtime).await?;
@@ -518,5 +662,6 @@ async fn test_filestorage_create_and_get_regtest() -> Result<()> {
     filestorage_is_node_in_nonexistent_agreement(runtime).await?;
     filestorage_rejoin_after_leave(runtime).await?;
     filestorage_join_after_activation_not_reactivated(runtime).await?;
+    challenge_gen_smoke_test(runtime).await?;
     Ok(())
 }

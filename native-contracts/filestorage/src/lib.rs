@@ -355,26 +355,18 @@ impl Guest for Filestorage {
             return new_challenges;
         }
 
-        // Calculate expected number of challenges: θ(t) = (C_target * |F|) / B
-        let c_target = model.c_target();
-        let blocks_per_year = model.blocks_per_year();
-        let expected_challenges_scaled = c_target * total_files;
-        let num_challenges_base = expected_challenges_scaled / blocks_per_year;
-
         // Derive deterministic seed from block hash for agreement selection
         let agreement_seed = derive_seed(&prev_block_hash, b"agreement_selection");
         let mut rng_counter: u64 = 0;
 
+        // Calculate expected number of challenges: θ(t) = (C_target * |F|) / B
+        let c_target = model.c_target();
+        let blocks_per_year = model.blocks_per_year();
+
         // Stochastic component: add one more challenge with probability (expected - base)
-        let remainder = expected_challenges_scaled % blocks_per_year;
-        let threshold = (remainder * 1000) / blocks_per_year;
         let roll = seeded_u64(&agreement_seed, &mut rng_counter, b"roll");
-        let roll = roll % 1000;
-        let num_to_challenge = if roll < threshold {
-            num_challenges_base + 1
-        } else {
-            num_challenges_base
-        };
+        let num_to_challenge =
+            compute_num_to_challenge(c_target, total_files, blocks_per_year, roll);
 
         if num_to_challenge == 0 {
             return new_challenges;
@@ -492,8 +484,39 @@ impl Guest for Filestorage {
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────
 
+/// Compute the number of agreements to challenge for this block using:
+///   θ(t) = (C_target * |F|) / B
+///
+/// We compute `base = floor((C_target * |F|)/B)` and then add 1 with probability equal to
+/// the fractional remainder, using `roll_mod_1000` (0..999) as the deterministic RNG roll.
+pub fn compute_num_to_challenge(
+    c_target: u64,
+    total_files: u64,
+    blocks_per_year: u64,
+    roll: u64,
+) -> u64 {
+    if total_files == 0 || blocks_per_year == 0 {
+        return 0;
+    }
+
+    let expected_challenges_scaled = c_target * total_files;
+    let num_challenges_base = expected_challenges_scaled / blocks_per_year;
+
+    let remainder = expected_challenges_scaled % blocks_per_year;
+    // Match simulation behavior: add one more with probability remainder / blocks_per_year.
+    // We do this deterministically by drawing a roll in [0, blocks_per_year) and checking roll < remainder.
+    let roll = roll % blocks_per_year;
+    let num = if roll < remainder {
+        num_challenges_base + 1
+    } else {
+        num_challenges_base
+    };
+
+    core::cmp::min(num, total_files)
+}
+
 /// Derive a 32-byte seed using HKDF-SHA256 via host function
-fn derive_seed(ikm: &[u8], info: &[u8]) -> [u8; 32] {
+pub fn derive_seed(ikm: &[u8], info: &[u8]) -> [u8; 32] {
     // Use HKDF host function
     // info is used as the "info" parameter (application-specific context)
     // We use "kontor/hkdf/" prefix for domain separation
@@ -509,7 +532,7 @@ fn derive_seed(ikm: &[u8], info: &[u8]) -> [u8; 32] {
 
 /// Deterministically derive a u64 from a 32-byte seed using HKDF-SHA256 via host function.
 /// `counter` is used as the HKDF salt to produce a stable stream of outputs.
-fn seeded_u64(seed: &[u8; 32], counter: &mut u64, info: &[u8]) -> u64 {
+pub fn seeded_u64(seed: &[u8; 32], counter: &mut u64, info: &[u8]) -> u64 {
     let full_info = [b"kontor/rng/".as_slice(), info].concat();
     let salt = counter.to_le_bytes();
     let bs = crypto::hkdf_derive(seed, &salt, &full_info);
@@ -517,4 +540,60 @@ fn seeded_u64(seed: &[u8; 32], counter: &mut u64, info: &[u8]) -> u64 {
     b8.copy_from_slice(&bs[..8]);
     *counter = counter.wrapping_add(1);
     u64::from_le_bytes(b8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_num_to_challenge;
+
+    #[test]
+    fn theta_total_files_zero() {
+        assert_eq!(compute_num_to_challenge(12, 0, 52560, 0), 0);
+    }
+
+    #[test]
+    fn theta_blocks_per_year_zero() {
+        assert_eq!(compute_num_to_challenge(12, 10, 0, 0), 0);
+    }
+
+    #[test]
+    fn theta_threshold_zero_always_zero_with_defaults_for_small_f() {
+        // With defaults, total_files=4 => expected_scaled=48,
+        // base=0, remainder=48 => +1 with probability 48/52560.
+        assert_eq!(compute_num_to_challenge(12, 4, 52560, 0), 1); // roll < remainder
+        assert_eq!(compute_num_to_challenge(12, 4, 52560, 47), 1);
+        assert_eq!(compute_num_to_challenge(12, 4, 52560, 48), 0); // roll >= remainder
+        assert_eq!(compute_num_to_challenge(12, 4, 52560, 52559), 0);
+    }
+
+    #[test]
+    fn theta_threshold_positive_branches() {
+        // total_files=100 => expected_scaled=1200
+        // base=0, remainder=1200
+        assert_eq!(compute_num_to_challenge(12, 100, 52560, 0), 1);
+        assert_eq!(compute_num_to_challenge(12, 100, 52560, 1199), 1);
+        assert_eq!(compute_num_to_challenge(12, 100, 52560, 1200), 0);
+        assert_eq!(compute_num_to_challenge(12, 100, 52560, 52559), 0);
+    }
+
+    #[test]
+    fn theta_base_and_remainder_cases_with_small_blocks_per_year() {
+        // Use a small blocks_per_year to exercise base>0 without requiring huge |F|.
+        // expected_scaled = 3*10=30, base=3, remainder=0 => always 3
+        for roll in [0u64, 999] {
+            assert_eq!(compute_num_to_challenge(3, 10, 10, roll), 3);
+        }
+
+        // expected_scaled = 3*12=36, base=3, remainder=6 => +1 when roll%10 < 6
+        assert_eq!(compute_num_to_challenge(3, 12, 10, 0), 4);
+        assert_eq!(compute_num_to_challenge(3, 12, 10, 5), 4);
+        assert_eq!(compute_num_to_challenge(3, 12, 10, 6), 3);
+        assert_eq!(compute_num_to_challenge(3, 12, 10, 9), 3);
+    }
+
+    #[test]
+    fn theta_caps_to_total_files() {
+        // expected_scaled = 12*10=120, base=12, remainder=0 => 12 but cap to total_files=10
+        assert_eq!(compute_num_to_challenge(12, 10, 10, 0), 10);
+    }
 }
