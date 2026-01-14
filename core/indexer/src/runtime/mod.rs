@@ -797,6 +797,13 @@ impl Runtime {
         }
     }
 
+    /// Get a FileDescriptor directly by file_id (no Resource wrapper).
+    /// Used internally when we just need the FileDescriptor without tracking it as a resource.
+    async fn get_file_descriptor_direct(&self, file_id: &str) -> Result<Option<FileDescriptor>> {
+        let row = self.storage.file_metadata_by_file_id(file_id).await?;
+        Ok(row.map(FileDescriptor::from_row))
+    }
+
     async fn _from_raw<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -834,6 +841,62 @@ impl Runtime {
         let file_descriptor = table.get(&rep)?;
 
         Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
+    }
+
+    /// Verify a proof against a list of challenges.
+    /// Looks up file descriptors by file_id and builds Challenge objects for verification.
+    /// Returns:
+    /// - Ok(Valid) if the proof is cryptographically valid
+    /// - Ok(Invalid) if SNARK verification failed
+    /// - Ok(InvalidInput) if proof format or challenge inputs are malformed
+    /// - Err(...) for critical failures like InvalidLedgerRoot
+    async fn _verify_challenge_proof(
+        &self,
+        challenge_inputs: Vec<built_in::challenges::ChallengeInput>,
+        proof_bytes: Vec<u8>,
+    ) -> Result<built_in::challenges::VerifyResult> {
+        use built_in::challenges::VerifyResult;
+        use kontor_crypto::KontorPoRError;
+
+        // Deserialize the proof using kontor-crypto's format
+        let proof = kontor_crypto::api::Proof::from_bytes(&proof_bytes)
+            .map_err(|e| anyhow!("Failed to deserialize proof: {:?}", e))?;
+
+        // Build Challenge objects from the inputs
+        let mut challenges = Vec::with_capacity(challenge_inputs.len());
+        for input in challenge_inputs {
+            // Look up file descriptor by file_id
+            let file_descriptor = self
+                .get_file_descriptor_direct(&input.file_id)
+                .await?
+                .ok_or_else(|| anyhow!("File not found: {}", input.file_id))?;
+
+            let challenge = file_descriptor
+                .build_challenge(
+                    input.block_height,
+                    input.num_challenges,
+                    &input.seed,
+                    input.prover_id,
+                )
+                .map_err(|e| anyhow!("Failed to build challenge: {:?}", e))?;
+
+            challenges.push(challenge);
+        }
+
+        // Get the file ledger for verification
+        let file_ledger_guard = self.file_ledger.crypto_ledger().await;
+
+        // Create PorSystem and verify the proof
+        let por_system = kontor_crypto::PorSystem::new(&file_ledger_guard);
+        match por_system.verify(&proof, &challenges) {
+            Ok(true) => Ok(VerifyResult::Verified),
+            Ok(false) => Ok(VerifyResult::Rejected),
+            Err(KontorPoRError::InvalidInput(_)) => Ok(VerifyResult::InvalidInput),
+            Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => {
+                Err(anyhow!("Invalid ledger root {}: {}", proof_root, reason))
+            }
+            Err(_) => Ok(VerifyResult::Rejected), // Other errors (Snark, etc.) = rejected proof
+        }
     }
 
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -1228,14 +1291,6 @@ impl Runtime {
     async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {
         self.table.lock().await.delete(rep)?;
         Ok(())
-    }
-
-    async fn _verify_challenge_proof(
-        &self,
-        _challenge_inputs: Vec<built_in::challenges::ChallengeInput>,
-        _proof_bytes: Vec<u8>,
-    ) -> Result<Result<(), Error>> {
-        todo!()
     }
 }
 
@@ -2273,10 +2328,23 @@ impl built_in::challenges::HostWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         challenges: Vec<built_in::challenges::ChallengeInput>,
         proof: Vec<u8>,
-    ) -> Result<Result<(), Error>> {
-        accessor
+    ) -> Result<Result<built_in::challenges::VerifyResult, Error>> {
+        Fuel::VerifyChallengeProof(challenges.len())
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        let result = accessor
             .with(|mut access| access.get().clone())
             ._verify_challenge_proof(challenges, proof)
-            .await
+            .await;
+        // Convert anyhow::Error to WIT Error for the inner result
+        match result {
+            Ok(verify_result) => Ok(Ok(verify_result)),
+            Err(e) => Ok(Err(Error::Validation(e.to_string()))),
+        }
     }
 }

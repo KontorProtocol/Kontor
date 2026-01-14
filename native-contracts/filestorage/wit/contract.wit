@@ -43,6 +43,7 @@ world root {
     proven,
     expired,
     failed,
+    invalid-proof,
   }
 
   record challenge-data {

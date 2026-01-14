@@ -212,10 +212,16 @@ interface challenges {
         prover-id: string,
     }
 
+    enum verify-result {
+        verified,
+        rejected,
+        invalid-input,
+    }
+
     verify-challenge-proof: async func(
         challenges: list<challenge-input>,
         proof: list<u8>
-    ) -> result<_, error>;
+    ) -> result<verify-result, error>;
 }
 
 world built-in {

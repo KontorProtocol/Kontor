@@ -47,6 +47,7 @@ pub enum Fuel {
     GetFileDescriptorFilename,
     FromRawFileDescriptor,
     ComputeChallengeId,
+    VerifyChallengeProof(usize), // number of challenges
     NumbersU64ToInteger,
     NumbersS64ToInteger,
     NumbersStringToInteger(u64),
@@ -107,6 +108,7 @@ impl Fuel {
             | Self::GetFileDescriptorFilename => 50,
             Self::FromRawFileDescriptor => 500,
             Self::ComputeChallengeId => 500,
+            Self::VerifyChallengeProof(num_challenges) => 1000 + 100 * *num_challenges as u64,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
             | Self::NumbersIntegerToDecimal

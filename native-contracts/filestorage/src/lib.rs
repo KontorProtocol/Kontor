@@ -306,10 +306,61 @@ impl Guest for Filestorage {
     }
 
     fn verify_proof(
-        _ctx: &ProcContext,
-        _challenge_ids: Vec<String>,
-        _proof: Vec<u8>,
+        ctx: &ProcContext,
+        challenge_ids: Vec<String>,
+        proof: Vec<u8>,
     ) -> Result<(), Error> {
+        let model = ctx.model();
+
+        // Build challenge inputs for verification
+        let mut challenge_inputs = Vec::new();
+
+        for challenge_id in &challenge_ids {
+            let challenge = model
+                .challenges()
+                .get(challenge_id)
+                .ok_or_else(|| Error::Message(format!("challenge not found: {}", challenge_id)))?;
+
+            let status = challenge.status().load();
+            if status != ChallengeStatus::Active {
+                return Err(Error::Message(format!(
+                    "challenge {} is not active (status: {:?})",
+                    challenge_id, status
+                )));
+            }
+
+            // Get the agreement to find the file_id
+            let agreement_id = challenge.agreement_id();
+            let agreement = model
+                .agreements()
+                .get(&agreement_id)
+                .ok_or_else(|| Error::Message(format!("agreement not found: {}", agreement_id)))?;
+
+            challenge_inputs.push(challenges::ChallengeInput {
+                file_id: agreement.file_id(),
+                block_height: challenge.block_height(),
+                num_challenges: challenge.num_challenges(),
+                seed: challenge.seed(),
+                prover_id: challenge.prover_id(),
+            });
+        }
+
+        // Call host function to cryptographically verify the proof
+        let verify_result = challenges::verify_challenge_proof(&challenge_inputs, &proof)?;
+
+        // Update challenge statuses based on verification result
+        let new_status = match verify_result {
+            challenges::VerifyResult::Verified => ChallengeStatus::Proven,
+            challenges::VerifyResult::Rejected => ChallengeStatus::Failed,
+            challenges::VerifyResult::InvalidInput => ChallengeStatus::InvalidProof,
+        };
+
+        for challenge_id in &challenge_ids {
+            if let Some(challenge) = model.challenges().get(challenge_id) {
+                challenge.set_status(new_status);
+            }
+        }
+
         Ok(())
     }
 

@@ -1,12 +1,12 @@
 use anyhow::{Result, anyhow};
 use kontor_crypto::FileLedger as CryptoFileLedger;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 use crate::database::types::FileMetadataRow;
 use crate::runtime::Storage;
 
-/// Inner state protected by a single mutex
+/// Inner state protected by a RwLock for explicit read/write separation
 struct FileLedgerInner {
     ledger: CryptoFileLedger,
     /// Tracks whether the ledger has been modified since last sync.
@@ -17,13 +17,27 @@ struct FileLedgerInner {
 /// Wrapper around kontor_crypto::FileLedger
 #[derive(Clone)]
 pub struct FileLedger {
-    inner: Arc<Mutex<FileLedgerInner>>,
+    inner: Arc<RwLock<FileLedgerInner>>,
+}
+
+/// Read-only guard for the crypto ledger.
+/// This type guarantees immutable access only.
+pub struct CryptoLedgerReadGuard<'a> {
+    guard: tokio::sync::RwLockReadGuard<'a, FileLedgerInner>,
+}
+
+impl std::ops::Deref for CryptoLedgerReadGuard<'_> {
+    type Target = CryptoFileLedger;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard.ledger
+    }
 }
 
 impl FileLedger {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(FileLedgerInner {
+            inner: Arc::new(RwLock::new(FileLedgerInner {
                 ledger: CryptoFileLedger::new(),
                 dirty: false,
             })),
@@ -34,7 +48,7 @@ impl FileLedger {
     pub async fn rebuild_from_db(storage: &Storage) -> Result<Self> {
         let file_ledger = Self::new();
         {
-            let mut inner = file_ledger.inner.lock().await;
+            let mut inner = file_ledger.inner.write().await;
             Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
         }
         tracing::info!("Rebuilt FileLedger from database");
@@ -46,7 +60,7 @@ impl FileLedger {
     /// Call this after a rollback to re-sync the in-memory state with the DB.
     /// Only rebuilds if the ledger has been modified (dirty flag is true).
     pub async fn resync_from_db(&self, storage: &Storage) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
 
         // Skip rebuild if ledger hasn't been modified
         if !inner.dirty {
@@ -64,7 +78,7 @@ impl FileLedger {
     }
 
     pub async fn force_resync_from_db(&self, storage: &Storage) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
         inner.ledger = CryptoFileLedger::new();
         Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
         inner.dirty = false;
@@ -102,7 +116,7 @@ impl FileLedger {
     /// The historical root (the pre-modification ledger root) is captured and stored
     /// in the database for later reconstruction during rebuilds.
     pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadataRow) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
 
         // Capture the number of historical roots before adding
         let historical_roots_count_before = inner.ledger.historical_roots.len();
@@ -143,7 +157,15 @@ impl FileLedger {
     /// Clear the dirty flag. Call this before starting a new operation
     /// that should be atomic with respect to rollback.
     pub async fn clear_dirty(&self) {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
         inner.dirty = false;
+    }
+
+    /// Get read-only access to the underlying crypto ledger for verification.
+    /// Returns a guard that provides immutable access only - mutation is impossible.
+    pub async fn crypto_ledger(&self) -> CryptoLedgerReadGuard<'_> {
+        CryptoLedgerReadGuard {
+            guard: self.inner.read().await,
+        }
     }
 }
