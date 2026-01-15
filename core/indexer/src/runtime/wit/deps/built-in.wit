@@ -178,6 +178,8 @@ interface file-ledger {
 
     record raw-file-descriptor {
         file-id: string,
+        object-id: string,
+        nonce: list<u8>,
         root: list<u8>,
         padded-len: u64,
         original-size: u64,
@@ -219,7 +221,7 @@ interface challenges {
     }
 
     /// Returns comma-separated hex-encoded challenge IDs
-    extract-proof-challenge-ids: func(
+    extract-proof-challenge-ids: async func(
         proof: list<u8>
     ) -> result<string, error>;
 

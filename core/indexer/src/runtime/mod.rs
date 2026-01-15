@@ -83,6 +83,8 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
 impl PartialEq for RawFileDescriptor {
     fn eq(&self, other: &Self) -> bool {
         self.file_id == other.file_id
+            && self.object_id == other.object_id
+            && self.nonce == other.nonce
             && self.root == other.root
             && self.padded_len == other.padded_len
             && self.original_size == other.original_size

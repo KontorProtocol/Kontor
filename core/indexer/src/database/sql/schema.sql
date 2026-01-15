@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS contract_results (
 CREATE TABLE IF NOT EXISTS file_metadata (
   id INTEGER PRIMARY KEY,
   file_id TEXT NOT NULL UNIQUE,
+  object_id TEXT NOT NULL,
+  nonce BLOB NOT NULL,
   root BLOB NOT NULL,
   padded_len INTEGER NOT NULL,
   original_size INTEGER NOT NULL,

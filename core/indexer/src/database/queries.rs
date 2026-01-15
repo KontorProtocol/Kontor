@@ -939,6 +939,8 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
             r#"SELECT 
             id, 
             file_id, 
+            object_id,
+            nonce,
             root,
             padded_len,
             original_size,
@@ -967,6 +969,8 @@ pub async fn select_file_metadata_by_file_id(
             r#"SELECT 
             id, 
             file_id, 
+            object_id,
+            nonce,
             root,
             padded_len,
             original_size,
@@ -997,15 +1001,19 @@ pub async fn insert_file_metadata(
         r#"INSERT INTO 
         file_metadata 
         (file_id, 
+        object_id,
+        nonce,
         root, 
         padded_len,
         original_size,
         filename,
         height,
         historical_root) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         params![
             entry.file_id.clone(),
+            entry.object_id.clone(),
+            entry.nonce,
             entry.root,
             entry.padded_len,
             entry.original_size,

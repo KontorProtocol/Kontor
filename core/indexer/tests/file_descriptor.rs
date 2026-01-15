@@ -8,8 +8,14 @@ fn create_fake_file_metadata(file_id: &str, filename: &str, height: i64) -> File
     let mut root = [0u8; 32];
     root[0] = 1; // Non-zero but small value
 
+    // Create a simple nonce
+    let mut nonce = [0u8; 32];
+    nonce[0] = 2;
+
     FileMetadataRow::builder()
         .file_id(file_id.to_string())
+        .object_id(format!("object_{}", file_id))
+        .nonce(nonce)
         .root(root)
         .padded_len(1024)
         .original_size(512)

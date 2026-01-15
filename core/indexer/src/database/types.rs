@@ -293,6 +293,8 @@ pub struct FileMetadataRow {
     #[builder(default = 0)]
     pub id: i64,
     pub file_id: String,
+    pub object_id: String,
+    pub nonce: [u8; 32],
     pub root: [u8; 32],
     pub padded_len: u64,
     pub original_size: u64,

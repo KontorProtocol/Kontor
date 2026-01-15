@@ -2819,9 +2819,9 @@ dependencies = [
 
 [[package]]
 name = "kontor-crypto"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fc0266153ec5230b1a8061d844644dc5eceb608adfedf720181e24d697b79ec"
+checksum = "263f2ab9a9928e54cf2a9fecfad26a848d350490addc1b8acadeb0bdce8fb4f1"
 dependencies = [
  "bincode",
  "clap",
