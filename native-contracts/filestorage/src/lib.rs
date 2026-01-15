@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "filestorage");
 
+use alloc::collections::BTreeSet;
 use stdlib::*;
 
 // ─────────────────────────────────────────────────────────────────
@@ -398,7 +399,7 @@ impl Guest for Filestorage {
             })
             .collect();
 
-        let total_files = eligible_agreement_ids.len() as u64;
+        let total_files = eligible_agreement_ids.len();
         if total_files == 0 {
             return new_challenges;
         }
@@ -412,7 +413,12 @@ impl Guest for Filestorage {
         let blocks_per_year = model.blocks_per_year();
 
         // Stochastic component: add one more challenge with probability (expected - base)
-        let roll = seeded_u64(&agreement_seed, &mut rng_counter, b"roll");
+        let roll = uniform_index(
+            &agreement_seed,
+            &mut rng_counter,
+            b"roll",
+            blocks_per_year as usize,
+        ) as u64;
         let num_to_challenge =
             compute_num_to_challenge(c_target, total_files, blocks_per_year, roll);
 
@@ -423,17 +429,20 @@ impl Guest for Filestorage {
         // Don't try to challenge more agreements than exist
         let num_to_challenge = core::cmp::min(num_to_challenge, total_files);
 
-        // Randomly select agreements using Fisher-Yates partial shuffle
-        let mut shuffled_agreement_ids = eligible_agreement_ids;
-        for i in 0..num_to_challenge as usize {
-            let rand_val = seeded_u64(&agreement_seed, &mut rng_counter, b"shuffle");
-            let j = i + (rand_val as usize % (shuffled_agreement_ids.len() - i));
-            shuffled_agreement_ids.swap(i, j);
+        // Select random unique agreement indices (rejection sampling avoids modulo bias)
+        let mut selected_indices = BTreeSet::new();
+        let eligible_len = eligible_agreement_ids.len();
+        if num_to_challenge == eligible_len {
+            for i in 0..eligible_len {
+                selected_indices.insert(i);
+            }
+        } else {
+            while selected_indices.len() < num_to_challenge {
+                let index =
+                    uniform_index(&agreement_seed, &mut rng_counter, b"select", eligible_len);
+                selected_indices.insert(index);
+            }
         }
-        let selected_agreement_ids: Vec<String> = shuffled_agreement_ids
-            .into_iter()
-            .take(num_to_challenge as usize)
-            .collect();
 
         // Derive batch seed for all challenges in this block
         let batch_seed = derive_seed(&prev_block_hash, b"batch_seed");
@@ -443,7 +452,8 @@ impl Guest for Filestorage {
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
         // Create challenges for selected agreements
-        for agreement_id in selected_agreement_ids.iter() {
+        for index in selected_indices {
+            let agreement_id = &eligible_agreement_ids[index];
             let agreement = match model.agreements().get(agreement_id) {
                 Some(a) => a,
                 None => continue,
@@ -470,8 +480,8 @@ impl Guest for Filestorage {
             let node_seed_input = [prev_block_hash.as_slice(), b":", file_id.as_bytes()].concat();
             let node_seed = derive_seed(&node_seed_input, b"node_selection");
             let mut node_counter: u64 = 0;
-            let node_u64 = seeded_u64(&node_seed, &mut node_counter, b"node");
-            let node_index = node_u64 as usize % active_nodes.len();
+            let node_index =
+                uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
             let prover_id = active_nodes[node_index].clone();
 
             let descriptor = match file_ledger::get_file_descriptor(&file_id) {
@@ -530,15 +540,16 @@ impl Guest for Filestorage {
 /// the fractional remainder, using `roll_mod_1000` (0..999) as the deterministic RNG roll.
 pub fn compute_num_to_challenge(
     c_target: u64,
-    total_files: u64,
+    total_files: usize,
     blocks_per_year: u64,
     roll: u64,
-) -> u64 {
+) -> usize {
     if total_files == 0 || blocks_per_year == 0 {
         return 0;
     }
 
-    let expected_challenges_scaled = c_target * total_files;
+    let total_files_u64 = total_files as u64;
+    let expected_challenges_scaled = c_target * total_files_u64;
     let num_challenges_base = expected_challenges_scaled / blocks_per_year;
 
     let remainder = expected_challenges_scaled % blocks_per_year;
@@ -551,7 +562,7 @@ pub fn compute_num_to_challenge(
         num_challenges_base
     };
 
-    core::cmp::min(num, total_files)
+    core::cmp::min(num, total_files_u64) as usize
 }
 
 /// Derive a 32-byte seed using HKDF-SHA256 via host function
@@ -581,9 +592,37 @@ pub fn seeded_u64(seed: &[u8; 32], counter: &mut u64, info: &[u8]) -> u64 {
     u64::from_le_bytes(b8)
 }
 
+/// Generate unbiased random index in range [0, n) using rejection sampling
+pub fn uniform_index(seed: &[u8; 32], counter: &mut u64, info: &[u8], n: usize) -> usize {
+    uniform_index_from_u64(n, &mut || seeded_u64(seed, counter, info))
+}
+
+/// Generate unbiased random index in range [0, n) using rejection sampling.
+///
+/// This is a pure helper that can be unit-tested without host functions.
+pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> usize {
+    if n == 0 {
+        return 0;
+    }
+
+    let n_u64 = n as u64;
+
+    // Find the largest multiple of n that fits in u64.
+    // This is the threshold below which all values are unbiased.
+    let limit = u64::MAX - (u64::MAX % n_u64);
+
+    loop {
+        let rand_val = next_u64();
+        if rand_val < limit {
+            return (rand_val % n_u64) as usize;
+        }
+        // Otherwise reject and generate a new value
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compute_num_to_challenge;
+    use super::{compute_num_to_challenge, uniform_index_from_u64};
 
     #[test]
     fn theta_total_files_zero() {
@@ -634,5 +673,40 @@ mod tests {
     fn theta_caps_to_total_files() {
         // expected_scaled = 12*10=120, base=12, remainder=0 => 12 but cap to total_files=10
         assert_eq!(compute_num_to_challenge(12, 10, 10, 0), 10);
+    }
+
+    #[test]
+    fn uniform_index_n_zero_returns_zero() {
+        let mut next = || 123u64;
+        assert_eq!(uniform_index_from_u64(0, &mut next), 0);
+    }
+
+    #[test]
+    fn uniform_index_returns_in_range() {
+        let mut next = || 123u64;
+        let idx = uniform_index_from_u64(10, &mut next);
+        assert!(idx < 10);
+    }
+
+    #[test]
+    fn uniform_index_rejects_values_at_or_above_limit() {
+        // For n=10: any value >= limit should be rejected.
+        let n = 10usize;
+        let n_u64 = n as u64;
+        let limit = u64::MAX - (u64::MAX % n_u64);
+
+        // First draw is rejected, second draw should be accepted.
+        let mut calls = 0u64;
+        let mut next = || {
+            calls += 1;
+            if calls == 1 {
+                limit // rejected (rand_val < limit must hold)
+            } else {
+                7 // accepted => 7 % 10 = 7
+            }
+        };
+
+        assert_eq!(uniform_index_from_u64(n, &mut next), 7);
+        assert_eq!(calls, 2);
     }
 }
