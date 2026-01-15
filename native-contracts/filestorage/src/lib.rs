@@ -305,38 +305,38 @@ impl Guest for Filestorage {
         }
     }
 
-    fn verify_proof(
-        ctx: &ProcContext,
-        challenge_ids: Vec<String>,
-        proof: Vec<u8>,
-    ) -> Result<(), Error> {
+    fn verify_proof(ctx: &ProcContext, proof: Vec<u8>) -> Result<(), Error> {
         let model = ctx.model();
 
-        // Build challenge inputs for verification
-        let mut challenge_inputs = Vec::new();
+        // 1. Extract challenge IDs from the proof (comma-separated hex strings)
+        let ids_joined = challenges::extract_proof_challenge_ids(&proof)?;
+        if ids_joined.is_empty() {
+            return Err(Error::Message("Proof contains no challenges".into()));
+        }
+        let challenge_ids: Vec<&str> = ids_joined.split(',').collect();
+
+        // 2. Collect challenge inputs from contract storage and validate
+        let mut inputs = Vec::with_capacity(challenge_ids.len());
 
         for challenge_id in &challenge_ids {
             let challenge = model
                 .challenges()
-                .get(challenge_id)
-                .ok_or_else(|| Error::Message(format!("challenge not found: {}", challenge_id)))?;
+                .get(*challenge_id)
+                .ok_or_else(|| Error::Message(format!("Challenge not found: {}", challenge_id)))?;
 
-            let status = challenge.status().load();
-            if status != ChallengeStatus::Active {
+            if challenge.status().load() != ChallengeStatus::Active {
                 return Err(Error::Message(format!(
-                    "challenge {} is not active (status: {:?})",
-                    challenge_id, status
+                    "Challenge {} is not active",
+                    challenge_id
                 )));
             }
 
-            // Get the agreement to find the file_id
-            let agreement_id = challenge.agreement_id();
             let agreement = model
                 .agreements()
-                .get(&agreement_id)
-                .ok_or_else(|| Error::Message(format!("agreement not found: {}", agreement_id)))?;
+                .get(challenge.agreement_id())
+                .ok_or_else(|| Error::Message("Agreement not found".into()))?;
 
-            challenge_inputs.push(challenges::ChallengeInput {
+            inputs.push(challenges::ChallengeInput {
                 file_id: agreement.file_id(),
                 block_height: challenge.block_height(),
                 num_challenges: challenge.num_challenges(),
@@ -345,18 +345,18 @@ impl Guest for Filestorage {
             });
         }
 
-        // Call host function to cryptographically verify the proof
-        let verify_result = challenges::verify_challenge_proof(&challenge_inputs, &proof)?;
+        // 3. Verify the cryptographic proof
+        let result = challenges::verify_proof(&proof, &inputs)?;
 
-        // Update challenge statuses based on verification result
-        let new_status = match verify_result {
+        // 4. Update statuses based on result
+        let new_status = match result {
             challenges::VerifyResult::Verified => ChallengeStatus::Proven,
             challenges::VerifyResult::Rejected => ChallengeStatus::Failed,
             challenges::VerifyResult::InvalidInput => ChallengeStatus::InvalidProof,
         };
 
         for challenge_id in &challenge_ids {
-            if let Some(challenge) = model.challenges().get(challenge_id) {
+            if let Some(challenge) = model.challenges().get(*challenge_id) {
                 challenge.set_status(new_status);
             }
         }

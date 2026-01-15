@@ -843,29 +843,44 @@ impl Runtime {
         Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
     }
 
-    /// Verify a proof against a list of challenges.
-    /// Looks up file descriptors by file_id and builds Challenge objects for verification.
-    /// Returns:
-    /// - Ok(Valid) if the proof is cryptographically valid
-    /// - Ok(Invalid) if SNARK verification failed
-    /// - Ok(InvalidInput) if proof format or challenge inputs are malformed
-    /// - Err(...) for critical failures like InvalidLedgerRoot
-    async fn _verify_challenge_proof(
+    /// Extracts challenge IDs from a serialized proof.
+    /// Returns comma-separated hex-encoded challenge IDs.
+    fn _extract_proof_challenge_ids(proof_bytes: &[u8]) -> Result<String> {
+        let proof = kontor_crypto::api::Proof::from_bytes(proof_bytes)
+            .map_err(|e| anyhow!("Failed to deserialize proof: {:?}", e))?;
+        let ids: Vec<String> = proof
+            .challenge_ids
+            .iter()
+            .map(|id| hex::encode(id.0))
+            .collect();
+        Ok(ids.join(","))
+    }
+
+    /// Verifies a proof against the provided challenge inputs.
+    /// The contract collects inputs from its own storage and passes them here.
+    async fn _verify_proof(
         &self,
-        challenge_inputs: Vec<built_in::challenges::ChallengeInput>,
-        proof_bytes: Vec<u8>,
+        proof: kontor_crypto::api::Proof,
+        inputs: Vec<built_in::challenges::ChallengeInput>,
     ) -> Result<built_in::challenges::VerifyResult> {
         use built_in::challenges::VerifyResult;
         use kontor_crypto::KontorPoRError;
 
-        // Deserialize the proof using kontor-crypto's format
-        let proof = kontor_crypto::api::Proof::from_bytes(&proof_bytes)
-            .map_err(|e| anyhow!("Failed to deserialize proof: {:?}", e))?;
+        if inputs.is_empty() {
+            return Err(anyhow!("No challenge inputs provided"));
+        }
 
-        // Build Challenge objects from the inputs
-        let mut challenges = Vec::with_capacity(challenge_inputs.len());
-        for input in challenge_inputs {
-            // Look up file descriptor by file_id
+        if inputs.len() != proof.challenge_ids.len() {
+            return Err(anyhow!(
+                "Input count {} does not match proof challenge count {}",
+                inputs.len(),
+                proof.challenge_ids.len()
+            ));
+        }
+
+        // Build Challenge objects from inputs + file ledger
+        let mut challenges = Vec::with_capacity(inputs.len());
+        for input in &inputs {
             let file_descriptor = self
                 .get_file_descriptor_direct(&input.file_id)
                 .await?
@@ -876,7 +891,7 @@ impl Runtime {
                     input.block_height,
                     input.num_challenges,
                     &input.seed,
-                    input.prover_id,
+                    input.prover_id.clone(),
                 )
                 .map_err(|e| anyhow!("Failed to build challenge: {:?}", e))?;
 
@@ -895,7 +910,7 @@ impl Runtime {
             Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => {
                 Err(anyhow!("Invalid ledger root {}: {}", proof_root, reason))
             }
-            Err(_) => Ok(VerifyResult::Rejected), // Other errors (Snark, etc.) = rejected proof
+            Err(_) => Ok(VerifyResult::Rejected),
         }
     }
 
@@ -2324,12 +2339,24 @@ impl built_in::numbers::HostWithStore for Runtime {
 impl built_in::challenges::Host for Runtime {}
 
 impl built_in::challenges::HostWithStore for Runtime {
-    async fn verify_challenge_proof<T>(
-        accessor: &Accessor<T, Self>,
-        challenges: Vec<built_in::challenges::ChallengeInput>,
+    async fn extract_proof_challenge_ids<T>(
+        _accessor: &Accessor<T, Self>,
         proof: Vec<u8>,
+    ) -> Result<Result<String, Error>> {
+        match Runtime::_extract_proof_challenge_ids(&proof) {
+            Ok(ids) => Ok(Ok(ids)),
+            Err(e) => Ok(Err(Error::Validation(e.to_string()))),
+        }
+    }
+
+    async fn verify_proof<T>(
+        accessor: &Accessor<T, Self>,
+        proof: Vec<u8>,
+        inputs: Vec<built_in::challenges::ChallengeInput>,
     ) -> Result<Result<built_in::challenges::VerifyResult, Error>> {
-        Fuel::VerifyChallengeProof(challenges.len())
+        let proof = kontor_crypto::api::Proof::from_bytes(&proof)
+            .map_err(|e| anyhow!("Failed to deserialize proof: {:?}", e))?;
+        Fuel::VerifyChallengeProof(proof.challenge_ids.len())
             .consume(
                 accessor,
                 accessor
@@ -2339,9 +2366,8 @@ impl built_in::challenges::HostWithStore for Runtime {
             .await?;
         let result = accessor
             .with(|mut access| access.get().clone())
-            ._verify_challenge_proof(challenges, proof)
+            ._verify_proof(proof, inputs)
             .await;
-        // Convert anyhow::Error to WIT Error for the inner result
         match result {
             Ok(verify_result) => Ok(Ok(verify_result)),
             Err(e) => Ok(Err(Error::Validation(e.to_string()))),

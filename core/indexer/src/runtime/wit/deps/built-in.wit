@@ -204,6 +204,12 @@ interface file-ledger {
 interface challenges {
     use error.{error};
 
+    enum verify-result {
+        verified,
+        rejected,
+        invalid-input,
+    }
+
     record challenge-input {
         file-id: string,
         block-height: u64,
@@ -212,15 +218,14 @@ interface challenges {
         prover-id: string,
     }
 
-    enum verify-result {
-        verified,
-        rejected,
-        invalid-input,
-    }
-
-    verify-challenge-proof: async func(
-        challenges: list<challenge-input>,
+    /// Returns comma-separated hex-encoded challenge IDs
+    extract-proof-challenge-ids: func(
         proof: list<u8>
+    ) -> result<string, error>;
+
+    verify-proof: async func(
+        proof: list<u8>,
+        inputs: list<challenge-input>
     ) -> result<verify-result, error>;
 }
 

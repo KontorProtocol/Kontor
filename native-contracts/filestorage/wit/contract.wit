@@ -107,7 +107,6 @@ world root {
 
   export verify-proof: async func(
     ctx: borrow<proc-context>,
-    challenge-ids: list<string>,
     proof: list<u8>
   ) -> result<_, error>;
 
