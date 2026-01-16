@@ -136,3 +136,56 @@ fn test_build_challenge_uses_correct_file_metadata() {
     );
     assert_eq!(challenge.file_metadata.filename, expected_filename);
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Proof Resource Tests
+// ─────────────────────────────────────────────────────────────────
+
+use indexer::runtime::wit::Proof;
+
+#[test]
+fn test_proof_from_bytes_invalid_bytes_fails() {
+    // Invalid bytes should fail deserialization
+    let invalid_bytes = vec![0u8; 100];
+    let result = Proof::from_bytes(&invalid_bytes);
+
+    match result {
+        Err(indexer::runtime::Error::Validation(_)) => {} // Expected
+        Err(_) => panic!("Expected Validation error"),
+        Ok(_) => panic!("Invalid proof bytes should fail deserialization"),
+    }
+}
+
+#[test]
+fn test_proof_from_bytes_empty_bytes_fails() {
+    // Empty bytes should fail deserialization
+    let result = Proof::from_bytes(&[]);
+
+    assert!(
+        result.is_err(),
+        "Empty proof bytes should fail deserialization"
+    );
+}
+
+#[test]
+fn test_proof_from_bytes_truncated_header_fails() {
+    // Bytes too short to contain valid header
+    let short_bytes = vec![0u8; 5];
+    let result = Proof::from_bytes(&short_bytes);
+
+    assert!(
+        result.is_err(),
+        "Truncated header should fail deserialization"
+    );
+}
+
+#[test]
+fn test_proof_from_bytes_wrong_magic_fails() {
+    // Wrong magic bytes
+    let mut wrong_magic = vec![0u8; 20];
+    wrong_magic[0..4].copy_from_slice(b"XXXX"); // Wrong magic
+
+    let result = Proof::from_bytes(&wrong_magic);
+
+    assert!(result.is_err(), "Wrong magic bytes should fail");
+}

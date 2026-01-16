@@ -93,8 +93,9 @@ impl Guest for Filestorage {
         }
 
         // Validate and register with the FileLedger host function
-        let fd: file_ledger::FileDescriptor = file_ledger::FileDescriptor::from_raw(&descriptor)?;
-        file_ledger::add_file(&fd);
+        let fd: file_registry::FileDescriptor =
+            file_registry::FileDescriptor::from_raw(&descriptor)?;
+        file_registry::add_file(&fd);
 
         // Create the agreement (starts inactive until nodes join)
         let agreement = AgreementData {
@@ -425,7 +426,7 @@ impl Guest for Filestorage {
                 uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
             let prover_id = active_nodes[node_index].clone();
 
-            let descriptor = match file_ledger::get_file_descriptor(&file_id) {
+            let descriptor = match file_registry::get_file_descriptor(&file_id) {
                 Some(d) => d,
                 None => continue,
             };
@@ -457,6 +458,97 @@ impl Guest for Filestorage {
         new_challenges
     }
 
+    /// Create a challenge for a specific agreement and node.
+    /// This is primarily for testing to avoid probabilistic challenge generation.
+    fn create_challenge_for_agreement(
+        ctx: &ProcContext,
+        agreement_id: String,
+        node_id: String,
+        block_height: u64,
+        seed: Vec<u8>,
+    ) -> Result<ChallengeData, Error> {
+        let model = ctx.model();
+
+        // Validate agreement exists and is active
+        let agreement = model
+            .agreements()
+            .get(&agreement_id)
+            .ok_or(Error::Message(format!(
+                "Agreement not found: {}",
+                agreement_id
+            )))?;
+
+        if !agreement.active() {
+            return Err(Error::Message(format!(
+                "Agreement {} is not active",
+                agreement_id
+            )));
+        }
+
+        // Validate node is in agreement
+        let nodes_state = model
+            .agreement_nodes()
+            .get(&agreement_id)
+            .ok_or(Error::Message("No nodes for agreement".to_string()))?;
+
+        let is_active = nodes_state.nodes().get(&node_id).unwrap_or(false);
+        if !is_active {
+            return Err(Error::Message(format!(
+                "Node {} is not active in agreement {}",
+                node_id, agreement_id
+            )));
+        }
+
+        // Check no active challenge already exists for this agreement
+        let has_active = model.challenges().keys().any(|cid: String| {
+            model.challenges().get(&cid).is_some_and(|c| {
+                c.status().load() == ChallengeStatus::Active && c.agreement_id() == agreement_id
+            })
+        });
+        if has_active {
+            return Err(Error::Message(format!(
+                "Agreement {} already has an active challenge",
+                agreement_id
+            )));
+        }
+
+        // Validate seed length
+        if seed.len() != 32 {
+            return Err(Error::Message(format!(
+                "Seed must be 32 bytes, got {}",
+                seed.len()
+            )));
+        }
+
+        let file_id = agreement.file_id();
+        let s_chal = model.s_chal();
+        let deadline_height = block_height + model.challenge_deadline_blocks();
+
+        let descriptor = file_registry::get_file_descriptor(&file_id).ok_or(Error::Message(
+            format!("File descriptor not found for {}", file_id),
+        ))?;
+
+        let challenge_id =
+            descriptor.compute_challenge_id(block_height, s_chal, &seed, &node_id)?;
+
+        let challenge = ChallengeData {
+            challenge_id,
+            agreement_id,
+            block_height,
+            num_challenges: s_chal,
+            seed,
+            prover_id: node_id,
+            deadline_height,
+            status: ChallengeStatus::Active,
+        };
+
+        model
+            .challenges()
+            .set(challenge.challenge_id.clone(), challenge.clone());
+
+        Ok(challenge)
+    }
+
     fn get_c_target(ctx: &ViewContext) -> u64 {
         ctx.model().c_target()
     }
@@ -467,6 +559,80 @@ impl Guest for Filestorage {
 
     fn get_s_chal(ctx: &ViewContext) -> u64 {
         ctx.model().s_chal()
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    fn verify_proof(ctx: &ProcContext, proof_bytes: Vec<u8>) -> Result<VerifyProofResult, Error> {
+        let model = ctx.model();
+
+        // 1. Deserialize proof (single deserialization via host resource)
+        let proof = file_registry::Proof::from_bytes(&proof_bytes)?;
+
+        // 2. Get challenge IDs from proof
+        let challenge_ids = proof.challenge_ids();
+        if challenge_ids.is_empty() {
+            return Err(Error::Message("Proof contains no challenges".to_string()));
+        }
+
+        // 3. Build challenge inputs from contract storage
+        let mut challenge_inputs = Vec::new();
+        for cid in &challenge_ids {
+            let challenge = model
+                .challenges()
+                .get(cid)
+                .ok_or(Error::Message(format!("Challenge not found: {}", cid)))?;
+
+            // Only accept proofs for active challenges
+            if challenge.status().load() != ChallengeStatus::Active {
+                return Err(Error::Message(format!(
+                    "Challenge {} is not active (status: {:?})",
+                    cid,
+                    challenge.status().load()
+                )));
+            }
+
+            // Get file_id from agreement
+            let agreement =
+                model
+                    .agreements()
+                    .get(challenge.agreement_id())
+                    .ok_or(Error::Message(format!(
+                        "Agreement not found: {}",
+                        challenge.agreement_id()
+                    )))?;
+
+            challenge_inputs.push(file_registry::ChallengeInput {
+                challenge_id: cid.clone(),
+                file_id: agreement.file_id(),
+                block_height: challenge.block_height(),
+                num_challenges: challenge.num_challenges(),
+                seed: challenge.seed(),
+                prover_id: challenge.prover_id(),
+            });
+        }
+
+        // 4. Verify the proof
+        let result = proof.verify(&challenge_inputs)?;
+
+        // 5. Update challenge statuses based on result
+        let new_status = match result {
+            file_registry::VerifyResult::Verified => ChallengeStatus::Proven,
+            file_registry::VerifyResult::Rejected => ChallengeStatus::Failed,
+            file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
+        };
+
+        for cid in &challenge_ids {
+            if let Some(c) = model.challenges().get(cid) {
+                c.set_status(new_status);
+            }
+        }
+
+        Ok(VerifyProofResult {
+            verified_count: challenge_ids.len() as u64,
+        })
     }
 }
 
