@@ -19,13 +19,24 @@ fn create_test_storage(conn: libsql::Connection) -> Storage {
 /// Helper to create a FileMetadataRow from actual file data using kontor_crypto::prepare_file.
 /// This produces real merkle roots from the cryptographic library.
 fn create_file_metadata_from_data(data: &[u8], filename: &str, height: i64) -> FileMetadataRow {
-    let (_prepared, metadata) = prepare_file(data, filename).expect("Failed to prepare file");
+    // Use a deterministic 32-byte nonce derived from filename for reproducibility
+    let mut nonce = [0u8; 32];
+    for (i, b) in filename.bytes().enumerate().take(32) {
+        nonce[i] = b;
+    }
+    let (_prepared, metadata) =
+        prepare_file(data, filename, &nonce).expect("Failed to prepare file");
 
     // Convert the FieldElement root to [u8; 32]
     let root: [u8; 32] = metadata.root.to_repr().into();
 
+    // Nonce is already 32 bytes since we passed 32 bytes
+    let nonce: [u8; 32] = metadata.nonce.try_into().expect("nonce should be 32 bytes");
+
     FileMetadataRow::builder()
-        .file_id(metadata.clone().file_id)
+        .file_id(metadata.file_id.clone())
+        .object_id(metadata.object_id.clone())
+        .nonce(nonce)
         .root(root)
         .padded_len(metadata.padded_len as u64)
         .original_size(metadata.original_size as u64)
@@ -126,12 +137,12 @@ async fn test_file_ledger_first_file_has_no_historical_root() -> Result<()> {
 
     ledger.add_file(&storage, &metadata).await?;
 
-    // First file should have no historical root (ledger was empty)
+    // Every file now snapshots the ledger root as historical (even the first one)
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert!(
-        entries[0].historical_root.is_none(),
-        "First file should have no historical root"
+        entries[0].historical_root.is_some(),
+        "First file should have a historical root (snapshot of empty ledger)"
     );
 
     Ok(())
@@ -161,20 +172,26 @@ async fn test_file_ledger_second_file_has_historical_root() -> Result<()> {
         create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2);
     ledger.add_file(&storage, &metadata2).await?;
 
-    // Verify historical roots
+    // Verify historical roots - every file now has one
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 2);
 
-    // First file should have no historical root
+    // First file should have a historical root (snapshot of empty ledger)
     assert!(
-        entries[0].historical_root.is_none(),
-        "First file should have no historical root"
+        entries[0].historical_root.is_some(),
+        "First file should have a historical root"
     );
 
     // Second file should have a historical root (the root after first file was added)
     assert!(
         entries[1].historical_root.is_some(),
         "Second file should have a historical root"
+    );
+
+    // The historical roots should be different (ledger state changed between adds)
+    assert_ne!(
+        entries[0].historical_root, entries[1].historical_root,
+        "Historical roots should differ as ledger state changed"
     );
 
     Ok(())
@@ -384,11 +401,8 @@ async fn test_file_ledger_multiple_files_correct_historical_roots() -> Result<()
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 5);
 
-    // First file should have no historical root
-    assert!(entries[0].historical_root.is_none());
-
-    // All subsequent files should have historical roots
-    for entry in entries.iter().skip(1) {
+    // All files should have historical roots (each snapshots the ledger state before add)
+    for entry in entries.iter() {
         assert!(
             entry.historical_root.is_some(),
             "File {} should have a historical root",
@@ -397,11 +411,8 @@ async fn test_file_ledger_multiple_files_correct_historical_roots() -> Result<()
     }
 
     // Each historical root should be different (since the ledger state changes)
-    let historical_roots: Vec<[u8; 32]> = entries
-        .iter()
-        .skip(1)
-        .filter_map(|e| e.historical_root)
-        .collect();
+    let historical_roots: Vec<[u8; 32]> =
+        entries.iter().filter_map(|e| e.historical_root).collect();
 
     // Check that roots are unique
     let unique_roots: std::collections::HashSet<_> = historical_roots.iter().collect();
@@ -547,14 +558,8 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     let db_entries = select_all_file_metadata(&conn).await?;
     assert_eq!(db_entries.len(), 10, "Should have 10 files total");
 
-    // Verify the first file has no historical root
-    assert!(
-        db_entries[0].historical_root.is_none(),
-        "First file should have no historical root"
-    );
-
-    // All subsequent files should have historical roots
-    for (i, entry) in db_entries.iter().enumerate().skip(1) {
+    // All files should have historical roots (each snapshots ledger state before add)
+    for (i, entry) in db_entries.iter().enumerate() {
         assert!(
             entry.historical_root.is_some(),
             "File {} (index {}) should have a historical root",
@@ -646,8 +651,8 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     // The final ledger should have 10 historical roots (one for each file after the first)
     assert_eq!(
         final_reference.historical_roots.len(),
-        10,
-        "Final ledger should have 10 historical roots (one for each file after the first)"
+        11,
+        "Final ledger should have 11 historical roots"
     );
 
     Ok(())

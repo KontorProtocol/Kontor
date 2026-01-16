@@ -36,10 +36,6 @@ world root {
     node-id: string,
   }
 
-  record submit-proof-result {
-    verified: bool,
-  }
-
   // Challenge types
   enum challenge-status {
     active,
@@ -106,12 +102,6 @@ world root {
     agreement-id: string,
     node-id: string
   ) -> bool;
-
-  export submit-proof: async func(
-    ctx: borrow<proc-context>,
-    challenge-ids: list<string>,
-    proof: list<u8>
-  ) -> result<submit-proof-result, error>;
 
   // Protocol parameters
   export get-min-nodes: async func(ctx: borrow<view-context>) -> u64;
