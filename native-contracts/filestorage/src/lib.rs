@@ -93,8 +93,9 @@ impl Guest for Filestorage {
         }
 
         // Validate and register with the FileLedger host function
-        let fd: file_ledger::FileDescriptor = file_ledger::FileDescriptor::from_raw(&descriptor)?;
-        file_ledger::add_file(&fd);
+        let fd: file_registry::FileDescriptor =
+            file_registry::FileDescriptor::from_raw(&descriptor)?;
+        file_registry::add_file(&fd);
 
         // Create the agreement (starts inactive until nodes join)
         let agreement = AgreementData {
@@ -425,7 +426,7 @@ impl Guest for Filestorage {
                 uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
             let prover_id = active_nodes[node_index].clone();
 
-            let descriptor = match file_ledger::get_file_descriptor(&file_id) {
+            let descriptor = match file_registry::get_file_descriptor(&file_id) {
                 Some(d) => d,
                 None => continue,
             };
@@ -477,7 +478,7 @@ impl Guest for Filestorage {
         let model = ctx.model();
 
         // 1. Deserialize proof (single deserialization via host resource)
-        let proof = file_ledger::Proof::from_bytes(&proof_bytes)?;
+        let proof = file_registry::Proof::from_bytes(&proof_bytes)?;
 
         // 2. Get challenge IDs from proof
         let challenge_ids = proof.challenge_ids();
@@ -506,13 +507,13 @@ impl Guest for Filestorage {
             let agreement =
                 model
                     .agreements()
-                    .get(&challenge.agreement_id())
+                    .get(challenge.agreement_id())
                     .ok_or(Error::Message(format!(
                         "Agreement not found: {}",
                         challenge.agreement_id()
                     )))?;
 
-            challenge_inputs.push(file_ledger::ChallengeInput {
+            challenge_inputs.push(file_registry::ChallengeInput {
                 challenge_id: cid.clone(),
                 file_id: agreement.file_id(),
                 block_height: challenge.block_height(),
@@ -523,15 +524,18 @@ impl Guest for Filestorage {
         }
 
         // 4. Verify the proof
-        let is_valid = proof.verify(&challenge_inputs)?;
-        if !is_valid {
-            return Err(Error::Message("Proof verification failed".to_string()));
-        }
+        let result = proof.verify(&challenge_inputs)?;
 
-        // 5. Update challenge statuses to Proven
+        // 5. Update challenge statuses based on result
+        let new_status = match result {
+            file_registry::VerifyResult::Verified => ChallengeStatus::Proven,
+            file_registry::VerifyResult::Rejected => ChallengeStatus::Failed,
+            file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
+        };
+
         for cid in &challenge_ids {
             if let Some(c) = model.challenges().get(cid) {
-                c.set_status(ChallengeStatus::Proven);
+                c.set_status(new_status);
             }
         }
 

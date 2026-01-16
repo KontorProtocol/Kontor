@@ -4,7 +4,7 @@ world root {
   include kontor:built-in/built-in;
   use kontor:built-in/context.{view-context, proc-context};
   use kontor:built-in/error.{error};
-  use kontor:built-in/file-ledger.{raw-file-descriptor};
+  use kontor:built-in/file-registry.{raw-file-descriptor};
 
   // ─────────────────────────────────────────────────────────────────
   // Output/Storage Types
@@ -42,6 +42,7 @@ world root {
     proven,
     expired,
     failed,
+    invalid,
   }
 
   record challenge-data {
