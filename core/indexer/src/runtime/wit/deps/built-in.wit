@@ -199,8 +199,26 @@ interface file-ledger {
 
     add-file: async func(file-descriptor: borrow<file-descriptor>);
 
-    /// Fetch a validated file-descriptor by file-id from the indexer database (if present).
     get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    record challenge-input {
+        challenge-id: string,
+        file-id: string,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: string,
+    }
+
+    resource proof {
+        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
+        challenge-ids: async func() -> list<string>;
+        verify: async func(challenges: list<challenge-input>) -> result<bool, error>;
+    }
 }
 
 world built-in {

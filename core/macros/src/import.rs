@@ -95,6 +95,8 @@ pub fn import(
                 "signer",
                 "file-descriptor",
                 "raw-file-descriptor",
+                "proof",
+                "challenge-input",
                 "error",
                 "keys",
                 "integer",

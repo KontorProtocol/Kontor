@@ -55,6 +55,10 @@ world root {
     status: challenge-status,
   }
 
+  record verify-proof-result {
+    verified-count: u64,
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // Functions
   // ─────────────────────────────────────────────────────────────────
@@ -127,11 +131,19 @@ world root {
     current-height: u64
   );
 
-  // Challenge generation - called by reactor each block
   export generate-challenges-for-block: async func(
     ctx: borrow<proc-context>,
     block-height: u64,
     prev-block-hash: list<u8>
   ) -> list<challenge-data>;
+
+  // ─────────────────────────────────────────────────────────────────
+  // Proof Verification
+  // ─────────────────────────────────────────────────────────────────
+
+  export verify-proof: async func(
+    ctx: borrow<proc-context>,
+    proof-bytes: list<u8>
+  ) -> result<verify-proof-result, error>;
 
 }
