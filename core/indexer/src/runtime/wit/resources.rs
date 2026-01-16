@@ -4,7 +4,7 @@ use futures_util::Stream;
 pub use indexer_types::Signer;
 
 use crate::database::types::{FileMetadataRow, bytes_to_field_element};
-use crate::runtime::kontor::built_in::{error::Error, file_ledger::RawFileDescriptor};
+use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
 

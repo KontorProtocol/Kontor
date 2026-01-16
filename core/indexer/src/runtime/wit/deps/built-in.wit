@@ -173,7 +173,7 @@ interface numbers {
     log10-decimal: async func(a: decimal) -> result<decimal, error>;
 }
 
-interface file-ledger {
+interface file-registry {
     use error.{error};
 
     record raw-file-descriptor {
@@ -214,10 +214,16 @@ interface file-ledger {
         prover-id: string,
     }
 
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
+
     resource proof {
         from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
         challenge-ids: async func() -> list<string>;
-        verify: async func(challenges: list<challenge-input>) -> result<bool, error>;
+        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
     }
 }
 
@@ -227,5 +233,5 @@ world built-in {
     import crypto;
     import error;
     import numbers;
-    import file-ledger;
+    import file-registry;
 }
