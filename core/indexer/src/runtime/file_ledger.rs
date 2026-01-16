@@ -146,4 +146,11 @@ impl FileLedger {
         let mut inner = self.inner.lock().await;
         inner.dirty = false;
     }
+
+    /// Get a clone of the inner kontor_crypto::FileLedger for verification.
+    /// This is needed for PorSystem::verify() which requires a reference to FileLedger.
+    pub async fn inner_ledger(&self) -> CryptoFileLedger {
+        let inner = self.inner.lock().await;
+        inner.ledger.clone()
+    }
 }

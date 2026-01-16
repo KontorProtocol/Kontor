@@ -838,6 +838,114 @@ impl Runtime {
         Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Resource Methods
+    // ─────────────────────────────────────────────────────────────────
+
+    async fn _proof_from_bytes<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        bytes: Vec<u8>,
+    ) -> Result<Result<Resource<wit::Proof>, Error>> {
+        Fuel::ProofFromBytes(bytes.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        let mut table = self.table.lock().await;
+        Ok(match wit::Proof::from_bytes(&bytes) {
+            Ok(proof) => Ok(table.push(proof)?),
+            Err(error) => Err(error),
+        })
+    }
+
+    async fn _proof_challenge_ids<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        rep: Resource<wit::Proof>,
+    ) -> Result<Vec<String>> {
+        Fuel::ProofChallengeIds
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        let table = self.table.lock().await;
+        let proof = table.get(&rep)?;
+        Ok(proof.challenge_ids())
+    }
+
+    async fn _proof_verify<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        rep: Resource<wit::Proof>,
+        challenge_inputs: Vec<built_in::file_ledger::ChallengeInput>,
+    ) -> Result<Result<bool, Error>> {
+        Fuel::ProofVerify
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        let table = self.table.lock().await;
+        let proof = table.get(&rep)?;
+
+        // Build Challenge objects from inputs
+        let mut challenges = Vec::new();
+        for input in &challenge_inputs {
+            // Get file metadata from database
+            let row = match self.storage.file_metadata_by_file_id(&input.file_id).await {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    return Ok(Err(Error::Validation(format!(
+                        "File not found: {}",
+                        input.file_id
+                    ))));
+                }
+                Err(e) => return Err(e),
+            };
+
+            let fd = FileDescriptor::from_row(row);
+            match fd.build_challenge(
+                input.block_height,
+                input.num_challenges,
+                &input.seed,
+                input.prover_id.clone(),
+            ) {
+                Ok(challenge) => challenges.push(challenge),
+                Err(e) => return Ok(Err(e)),
+            }
+        }
+
+        // Validate that challenge IDs match what's in the proof
+        let expected_ids: Vec<String> = challenges.iter().map(|c| hex::encode(c.id().0)).collect();
+        let proof_ids = proof.challenge_ids();
+
+        if expected_ids.len() != proof_ids.len() {
+            return Ok(Err(Error::Validation(format!(
+                "Challenge count mismatch: expected {}, got {}",
+                expected_ids.len(),
+                proof_ids.len()
+            ))));
+        }
+
+        for (expected, actual) in expected_ids.iter().zip(proof_ids.iter()) {
+            if expected != actual {
+                return Ok(Err(Error::Validation(format!(
+                    "Challenge ID mismatch: expected {}, got {}",
+                    expected, actual
+                ))));
+            }
+        }
+
+        // Get the inner ledger and verify
+        let ledger = self.file_ledger.inner_ledger().await;
+        let system = kontor_crypto::PorSystem::new(&ledger);
+
+        match system.verify(&proof.inner, &challenges) {
+            Ok(is_valid) => Ok(Ok(is_valid)),
+            Err(e) => Ok(Err(Error::Validation(format!(
+                "Proof verification failed: {}",
+                e
+            )))),
+        }
+    }
+
     async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -1304,6 +1412,48 @@ impl built_in::file_ledger::HostFileDescriptorWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._compute_challenge_id(accessor, rep, block_height, num_challenges, seed, prover_id)
+            .await
+    }
+}
+
+impl built_in::file_ledger::HostProof for Runtime {}
+
+impl built_in::file_ledger::HostProofWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<wit::Proof>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn from_bytes<T>(
+        accessor: &Accessor<T, Self>,
+        bytes: Vec<u8>,
+    ) -> Result<Result<Resource<wit::Proof>, Error>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proof_from_bytes(accessor, bytes)
+            .await
+    }
+
+    async fn challenge_ids<T>(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<wit::Proof>,
+    ) -> Result<Vec<String>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proof_challenge_ids(accessor, rep)
+            .await
+    }
+
+    async fn verify<T>(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<wit::Proof>,
+        challenges: Vec<built_in::file_ledger::ChallengeInput>,
+    ) -> Result<Result<bool, Error>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proof_verify(accessor, rep, challenges)
             .await
     }
 }

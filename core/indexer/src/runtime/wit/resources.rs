@@ -5,6 +5,7 @@ pub use indexer_types::Signer;
 
 use crate::database::types::{FileMetadataRow, bytes_to_field_element};
 use crate::runtime::kontor::built_in::{error::Error, file_ledger::RawFileDescriptor};
+use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
 
 pub trait HasContractId: 'static {
@@ -160,5 +161,29 @@ impl FileDescriptor {
     ) -> Result<String, Error> {
         let challenge = self.build_challenge(block_height, num_challenges, seed, prover_id)?;
         Ok(hex::encode(challenge.id().0))
+    }
+}
+
+/// A deserialized proof-of-retrievability proof resource.
+/// Wraps kontor_crypto::Proof and provides methods for verification.
+pub struct Proof {
+    pub inner: CryptoProof,
+}
+
+impl Proof {
+    /// Deserialize a proof from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let inner = CryptoProof::from_bytes(bytes)
+            .map_err(|e| Error::Validation(format!("Failed to deserialize proof: {}", e)))?;
+        Ok(Self { inner })
+    }
+
+    /// Get the challenge IDs this proof covers (hex-encoded).
+    pub fn challenge_ids(&self) -> Vec<String> {
+        self.inner
+            .challenge_ids
+            .iter()
+            .map(|id| hex::encode(id.0))
+            .collect()
     }
 }

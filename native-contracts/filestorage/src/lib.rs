@@ -468,6 +468,77 @@ impl Guest for Filestorage {
     fn get_s_chal(ctx: &ViewContext) -> u64 {
         ctx.model().s_chal()
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    fn verify_proof(ctx: &ProcContext, proof_bytes: Vec<u8>) -> Result<VerifyProofResult, Error> {
+        let model = ctx.model();
+
+        // 1. Deserialize proof (single deserialization via host resource)
+        let proof = file_ledger::Proof::from_bytes(&proof_bytes)?;
+
+        // 2. Get challenge IDs from proof
+        let challenge_ids = proof.challenge_ids();
+        if challenge_ids.is_empty() {
+            return Err(Error::Message("Proof contains no challenges".to_string()));
+        }
+
+        // 3. Build challenge inputs from contract storage
+        let mut challenge_inputs = Vec::new();
+        for cid in &challenge_ids {
+            let challenge = model
+                .challenges()
+                .get(cid)
+                .ok_or(Error::Message(format!("Challenge not found: {}", cid)))?;
+
+            // Only accept proofs for active challenges
+            if challenge.status().load() != ChallengeStatus::Active {
+                return Err(Error::Message(format!(
+                    "Challenge {} is not active (status: {:?})",
+                    cid,
+                    challenge.status().load()
+                )));
+            }
+
+            // Get file_id from agreement
+            let agreement =
+                model
+                    .agreements()
+                    .get(&challenge.agreement_id())
+                    .ok_or(Error::Message(format!(
+                        "Agreement not found: {}",
+                        challenge.agreement_id()
+                    )))?;
+
+            challenge_inputs.push(file_ledger::ChallengeInput {
+                challenge_id: cid.clone(),
+                file_id: agreement.file_id(),
+                block_height: challenge.block_height(),
+                num_challenges: challenge.num_challenges(),
+                seed: challenge.seed(),
+                prover_id: challenge.prover_id(),
+            });
+        }
+
+        // 4. Verify the proof
+        let is_valid = proof.verify(&challenge_inputs)?;
+        if !is_valid {
+            return Err(Error::Message("Proof verification failed".to_string()));
+        }
+
+        // 5. Update challenge statuses to Proven
+        for cid in &challenge_ids {
+            if let Some(c) = model.challenges().get(cid) {
+                c.set_status(ChallengeStatus::Proven);
+            }
+        }
+
+        Ok(VerifyProofResult {
+            verified_count: challenge_ids.len() as u64,
+        })
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
