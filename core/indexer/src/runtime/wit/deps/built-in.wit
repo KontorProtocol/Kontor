@@ -178,6 +178,8 @@ interface file-ledger {
 
     record raw-file-descriptor {
         file-id: string,
+        object-id: string,
+        nonce: list<u8>,
         root: list<u8>,
         padded-len: u64,
         original-size: u64,
@@ -186,43 +188,19 @@ interface file-ledger {
 
     resource file-descriptor {
         file-id: async func() -> string;
-        root: async func() -> list<u8>;
-        padded-len: async func() -> u64;
-        original-size: async func() -> u64;
-        filename: async func() -> string;
         from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+        compute-challenge-id: async func(
+            block-height: u64,
+            num-challenges: u64,
+            seed: list<u8>,
+            prover-id: string
+        ) -> result<string, error>;
     }
 
     add-file: async func(file-descriptor: borrow<file-descriptor>);
 
     /// Fetch a validated file-descriptor by file-id from the indexer database (if present).
     get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
-}
-
-interface challenges {
-    use error.{error};
-
-    record verify-proof-result {
-        verified: bool,
-        error-message: option<string>,
-    }
-
-    /// Compute a deterministic challenge ID using kontor-crypto (returns hex-encoded string)
-    compute-challenge-id: async func(
-        file-id: string,
-        root: list<u8>,
-        padded-len: u64,
-        original-size: u64,
-        filename: string,
-        block-height: u64,
-        num-challenges: u64,
-        seed: list<u8>,
-        prover-id: string
-    ) -> result<string, error>;
-
-    verify-challenge-proof: async func(
-        proof: list<u8>
-    ) -> result<verify-proof-result, error>;
 }
 
 world built-in {
@@ -232,5 +210,4 @@ world built-in {
     import error;
     import numbers;
     import file-ledger;
-    import challenges;
 }
