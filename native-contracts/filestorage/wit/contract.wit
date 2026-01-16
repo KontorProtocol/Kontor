@@ -138,6 +138,15 @@ world root {
     prev-block-hash: list<u8>
   ) -> list<challenge-data>;
 
+  // Create a challenge for a specific agreement and node (deterministic, for testing)
+  export create-challenge-for-agreement: async func(
+    ctx: borrow<proc-context>,
+    agreement-id: string,
+    node-id: string,
+    block-height: u64,
+    seed: list<u8>
+  ) -> result<challenge-data, error>;
+
   // ─────────────────────────────────────────────────────────────────
   // Proof Verification
   // ─────────────────────────────────────────────────────────────────
