@@ -93,9 +93,7 @@ impl Guest for Filestorage {
         }
 
         // Validate and register with the FileLedger host function
-        let fd: file_registry::FileDescriptor =
-            file_registry::FileDescriptor::from_raw(&descriptor)?;
-        file_registry::add_file(&fd);
+        register_file_descriptor(&descriptor)?;
 
         // Create the agreement (starts inactive until nodes join)
         let agreement = AgreementData {
@@ -725,6 +723,13 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
         }
         // Otherwise reject and generate a new value
     }
+}
+
+/// Validate and register a file descriptor with the file registry host.
+fn register_file_descriptor(descriptor: &RawFileDescriptor) -> Result<(), Error> {
+    let fd: file_registry::FileDescriptor = file_registry::FileDescriptor::from_raw(descriptor)?;
+    file_registry::add_file(&fd);
+    Ok(())
 }
 
 #[cfg(test)]
