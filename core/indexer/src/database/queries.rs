@@ -82,13 +82,13 @@ pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<u64, Error> 
         .await?)
 }
 
-pub async fn select_block_by_height_or_hash(
+pub async fn select_processed_block_by_height_or_hash(
     conn: &Connection,
     identifier: &str,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE height = ? OR hash = ?",
+            "SELECT height, hash, relevant FROM blocks WHERE (height = ? OR hash = ?) AND processed = 1",
             params![identifier, identifier],
         )
         .await?;
@@ -671,10 +671,12 @@ where
 
     let next_cursor = results
         .last()
-        .filter(|_| offset.is_none() && has_more)
+        .filter(|_| offset.is_none())
         .map(|last_tx| last_tx.id());
 
-    let next_offset = (cursor.is_none() && has_more).then(|| offset.unwrap_or(0) + limit);
+    let next_offset = cursor
+        .is_none()
+        .then(|| offset.unwrap_or(0) + results.len() as i64);
 
     let pagination = PaginationMeta {
         next_cursor,
@@ -936,16 +938,16 @@ pub async fn get_checkpoint_latest(
 pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetadataRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT 
-            id, 
-            file_id, 
+            r#"SELECT
+            id,
+            file_id,
             object_id,
             nonce,
             root,
             padded_len,
             original_size,
             filename,
-            height, 
+            height,
             historical_root
             FROM file_metadata
             ORDER BY id ASC"#,
@@ -966,16 +968,16 @@ pub async fn select_file_metadata_by_file_id(
 ) -> Result<Option<FileMetadataRow>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT 
-            id, 
-            file_id, 
+            r#"SELECT
+            id,
+            file_id,
             object_id,
             nonce,
             root,
             padded_len,
             original_size,
             filename,
-            height, 
+            height,
             historical_root
             FROM file_metadata
             WHERE file_id = ?
@@ -998,17 +1000,17 @@ pub async fn insert_file_metadata(
     };
 
     conn.execute(
-        r#"INSERT INTO 
-        file_metadata 
-        (file_id, 
+        r#"INSERT INTO
+        file_metadata
+        (file_id,
         object_id,
         nonce,
-        root, 
+        root,
         padded_len,
         original_size,
         filename,
         height,
-        historical_root) 
+        historical_root)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         params![
             entry.file_id.clone(),

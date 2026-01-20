@@ -683,7 +683,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
     assert_eq!(transactions[0].height, 800000);
     assert_eq!(transactions[0].tx_index, 1);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
     Ok(())
 }
@@ -738,7 +738,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     assert_eq!(transactions[0].height, 800002);
     assert_eq!(transactions[0].tx_index, 3);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
     Ok(())
 }

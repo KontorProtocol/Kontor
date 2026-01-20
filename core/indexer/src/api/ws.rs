@@ -17,6 +17,7 @@ use tracing::{Instrument, info, info_span, warn};
 use super::Env;
 
 const MAX_SEND_MILLIS: u64 = 1000;
+const PING_INTERVAL_SECS: u64 = 20;
 
 pub struct SocketState {
     pub receiver: Receiver<Event>,
@@ -31,11 +32,25 @@ pub async fn handle_socket(mut socket: WebSocket, env: Env, addr: SocketAddr, re
 
     async move {
         info!("New WebSocket connection");
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
+        ping_interval.reset(); // Don't ping immediately on connect
         loop {
             select! {
                 _ = cancel_token.cancelled() => {
                     info!("WebSocket connection cancelled");
                     break;
+                },
+                _ = ping_interval.tick() => {
+                    if timeout(
+                        Duration::from_millis(MAX_SEND_MILLIS),
+                        socket.send(ws::Message::Ping(vec![].into())),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        warn!("Failed to send ping: connection closed");
+                        break;
+                    }
                 },
                 result = state.receiver.recv() => match result {
                     Ok(event) => {
@@ -61,22 +76,12 @@ pub async fn handle_socket(mut socket: WebSocket, env: Env, addr: SocketAddr, re
                     }
                 },
                 option_result_message = socket.recv() => match option_result_message {
-                    Some(Ok(ws::Message::Ping(data))) => {
-                        if timeout(
-                            Duration::from_millis(MAX_SEND_MILLIS),
-                            socket.send(ws::Message::Pong(data)),
-                        )
-                        .await
-                        .is_err()
-                        {
-                            warn!("Failed to send pong: connection closed");
-                            break;
-                        }
-                    }
                     Some(Ok(ws::Message::Close(_))) => {
                         info!("Received close message");
                         break;
                     }
+                    // Ping/Pong are handled automatically by tungstenite at the protocol level
+                    Some(Ok(ws::Message::Ping(_) | ws::Message::Pong(_))) => {}
                     Some(Ok(_)) => {
                         info!("Received unsupported message type");
                         let error = WsResponse::Error {

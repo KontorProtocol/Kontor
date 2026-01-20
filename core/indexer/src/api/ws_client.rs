@@ -42,6 +42,11 @@ impl WebSocketClient {
     }
 
     pub async fn next(&mut self) -> Result<WsResponse> {
-        from_message(self.stream.next().await.unwrap()?)
+        loop {
+            let msg = self.stream.next().await.unwrap()?;
+            if !msg.is_ping() {
+                return from_message(msg);
+            }
+        }
     }
 }

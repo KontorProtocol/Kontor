@@ -205,7 +205,7 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].contract_height, 1);
     assert_eq!(results[0].contract_tx_index, 2);
     assert_eq!(meta.total_count, 1);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(results[0].id));
 
     // height filtering
     let (results, meta) = get_results_paginated(
@@ -263,7 +263,7 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].height, 3);
     assert_eq!(meta.total_count, 1);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(results[0].id));
 
     Ok(())
 }

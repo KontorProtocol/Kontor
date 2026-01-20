@@ -13,7 +13,7 @@ use indexer::{
             insert_contract_result, insert_contract_state, insert_file_metadata,
             insert_processed_block, insert_transaction, matching_path,
             path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
-            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
+            select_block_at_height, select_block_latest, select_processed_block_by_height_or_hash,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId},
     },
@@ -293,7 +293,7 @@ async fn test_transaction_operations() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_select_block_by_height_or_hash() -> Result<()> {
+async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -311,19 +311,19 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
         .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
         .build();
 
-    insert_block(&conn, block1.clone()).await?;
-    insert_block(&conn, block2.clone()).await?;
-    insert_block(&conn, block3.clone()).await?;
+    insert_processed_block(&conn, block1.clone()).await?;
+    insert_processed_block(&conn, block2.clone()).await?;
+    insert_processed_block(&conn, block3.clone()).await?;
 
     // Test 1: Find by height (as string)
-    let result = select_block_by_height_or_hash(&conn, "800000").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "800000").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 800000);
     assert_eq!(found_block.hash, block1.hash);
 
     // Test 2: Find by hash
-    let result = select_block_by_height_or_hash(
+    let result = select_processed_block_by_height_or_hash(
         &conn,
         "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05",
     )
@@ -334,14 +334,14 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     assert_eq!(found_block.hash, block2.hash);
 
     // Test 3: Find by different height
-    let result = select_block_by_height_or_hash(&conn, "123456").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "123456").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 123456);
     assert_eq!(found_block.hash, block3.hash);
 
     // Test 4: Find by different hash
-    let result = select_block_by_height_or_hash(
+    let result = select_processed_block_by_height_or_hash(
         &conn,
         "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
     )
@@ -352,19 +352,20 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
     assert_eq!(found_block.hash, block3.hash);
 
     // Test 5: Non-existent height
-    let result = select_block_by_height_or_hash(&conn, "999999").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "999999").await?;
     assert!(result.is_none());
 
     // Test 6: Non-existent hash
-    let result = select_block_by_height_or_hash(&conn, "nonexistenthash123456789").await?;
+    let result =
+        select_processed_block_by_height_or_hash(&conn, "nonexistenthash123456789").await?;
     assert!(result.is_none());
 
     // Test 7: Invalid height format (non-numeric string that's not a hash)
-    let result = select_block_by_height_or_hash(&conn, "invalid_height").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "invalid_height").await?;
     assert!(result.is_none());
 
     // Test 8: Empty string
-    let result = select_block_by_height_or_hash(&conn, "").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "").await?;
     assert!(result.is_none());
 
     // Test 9: Height 0 (edge case)
@@ -372,9 +373,9 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
         .height(0)
         .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
         .build();
-    insert_block(&conn, block_zero.clone()).await?;
+    insert_processed_block(&conn, block_zero.clone()).await?;
 
-    let result = select_block_by_height_or_hash(&conn, "0").await?;
+    let result = select_processed_block_by_height_or_hash(&conn, "0").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 0);
@@ -382,11 +383,12 @@ async fn test_select_block_by_height_or_hash() -> Result<()> {
 
     // Test 10: Very large height
     let large_height = u64::MAX;
-    let result = select_block_by_height_or_hash(&conn, &large_height.to_string()).await?;
+    let result = select_processed_block_by_height_or_hash(&conn, &large_height.to_string()).await?;
     assert!(result.is_none());
 
     // Test 11: Partial hash match (should not match)
-    let result = select_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
+    let result =
+        select_processed_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
     assert!(result.is_none());
 
     Ok(())

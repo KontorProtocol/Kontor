@@ -209,7 +209,7 @@ async fn test_offset_pagination() -> Result<()> {
     )
     .await?;
     assert_eq!(page4.len(), 1); // Only 1 transaction left
-    assert_eq!(meta4.next_offset, None); // No more pages
+    assert_eq!(meta4.next_offset, Some(10)); // For polling - points past last item
     assert!(!meta4.has_more);
 
     // Verify no overlap between pages
@@ -285,7 +285,7 @@ async fn test_cursor_pagination() -> Result<()> {
 
     assert_eq!(page4.len(), 1);
     assert!(!meta4.has_more);
-    assert!(meta4.next_cursor.is_none());
+    assert_eq!(meta4.next_cursor, Some(page4[0].id));
 
     // Verify no overlap
     let all_txids: Vec<String> = [&page1, &page2, &page3]
@@ -313,7 +313,7 @@ async fn test_height_filter() -> Result<()> {
     assert_eq!(transactions.len(), 3);
     assert_eq!(meta.total_count, 3);
     assert!(!meta.has_more);
-    assert!(meta.next_offset.is_none());
+    assert_eq!(meta.next_offset, Some(3));
 
     // Verify all transactions are from height 800001
     for tx in &transactions {
@@ -374,7 +374,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
 
     assert_eq!(page3.len(), 1); // Last transaction
     assert!(!meta3.has_more);
-    assert!(meta3.next_offset.is_none());
+    assert_eq!(meta3.next_offset, Some(5));
 
     Ok(())
 }
@@ -424,7 +424,7 @@ async fn test_empty_result_set() -> Result<()> {
     assert_eq!(transactions.len(), 0);
     assert_eq!(meta.total_count, 0);
     assert!(!meta.has_more);
-    assert!(meta.next_offset.is_none());
+    assert_eq!(meta.next_offset, Some(0));
     assert!(meta.next_cursor.is_none());
 
     Ok(())
@@ -442,7 +442,7 @@ async fn test_large_limit() -> Result<()> {
 
     assert_eq!(transactions.len(), 10); // All available transactions
     assert!(!meta.has_more);
-    assert!(meta.next_offset.is_none());
+    assert_eq!(meta.next_offset, Some(10));
     assert_eq!(meta.total_count, 10);
 
     Ok(())
@@ -567,7 +567,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
     assert_eq!(transactions[0].height, 800000);
     assert_eq!(transactions[0].tx_index, 0);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
     Ok(())
 }
@@ -639,7 +639,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
     assert_eq!(transactions[0].height, 800002);
     assert_eq!(transactions[0].tx_index, 0);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
     Ok(())
 }

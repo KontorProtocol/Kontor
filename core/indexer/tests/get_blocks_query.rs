@@ -83,7 +83,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
 
     Ok(())
 }
@@ -117,7 +117,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
     assert_eq!(meta.total_count, 1);
 
     let (blocks, meta) =
@@ -126,7 +126,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(!meta.has_more);
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
     assert_eq!(meta.total_count, 1);
 
     Ok(())

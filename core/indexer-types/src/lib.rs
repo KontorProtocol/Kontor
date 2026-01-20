@@ -161,9 +161,7 @@ pub struct ResultResponse<T: TS> {
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 #[serde(tag = "type")]
-pub enum WsRequest {
-    Subscribe,
-}
+pub enum WsRequest {}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
@@ -178,7 +176,7 @@ pub enum WsResponse {
 #[serde(tag = "type")]
 pub enum Event {
     Processed {
-        block: Block,
+        block: BlockRow,
     },
     Rolledback {
         #[ts(type = "number")]
@@ -303,7 +301,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]
@@ -379,6 +377,7 @@ pub struct PaginatedResponse<T> {
 pub struct Info {
     pub version: String,
     pub target: String,
+    pub network: String,
     pub available: bool,
     #[ts(type = "number")]
     pub height: i64,
