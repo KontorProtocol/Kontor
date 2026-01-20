@@ -178,7 +178,7 @@ pub enum WsResponse {
 #[serde(tag = "type")]
 pub enum Event {
     Processed {
-        block: Block,
+        block: BlockRow,
     },
     Rolledback {
         #[ts(type = "number")]
@@ -303,7 +303,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]

@@ -349,7 +349,11 @@ impl Reactor {
         if !block.transactions.is_empty()
             && let Some(tx) = &self.event_tx
         {
-            let _ = tx.send(Event::Processed { block }).await;
+            let _ = tx
+                .send(Event::Processed {
+                    block: (&block).into(),
+                })
+                .await;
         }
         info!("Block processed");
 
