@@ -17,7 +17,7 @@ use tracing::{Instrument, info, info_span, warn};
 use super::Env;
 
 const MAX_SEND_MILLIS: u64 = 1000;
-const PING_INTERVAL_SECS: u64 = 30;
+const PING_INTERVAL_SECS: u64 = 20;
 
 pub struct SocketState {
     pub receiver: Receiver<Event>,
