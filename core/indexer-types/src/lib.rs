@@ -379,6 +379,7 @@ pub struct PaginatedResponse<T> {
 pub struct Info {
     pub version: String,
     pub target: String,
+    pub network: String,
     pub available: bool,
     #[ts(type = "number")]
     pub height: i64,

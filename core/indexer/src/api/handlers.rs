@@ -43,6 +43,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
     Ok(Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
+        network: env.config.network.to_string(),
         available: *env.available.read().await,
         height,
         checkpoint,
