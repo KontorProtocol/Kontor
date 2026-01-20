@@ -12,11 +12,9 @@ use crate::{
             delete_contract_state, delete_matching_paths, exists_contract_state,
             get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
             get_latest_contract_state_value, insert_contract, insert_contract_result,
-            insert_contract_state, insert_file_metadata, matching_path,
-            path_prefix_filter_contract_state, select_all_file_metadata,
-            select_file_metadata_by_file_id,
+            insert_contract_state, matching_path, path_prefix_filter_contract_state,
         },
-        types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow},
+        types::{ContractResultRow, ContractRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
 };
@@ -227,17 +225,5 @@ impl Storage {
             None => 0,
         };
         Ok(())
-    }
-
-    pub async fn all_file_metadata(&self) -> Result<Vec<FileMetadataRow>> {
-        Ok(select_all_file_metadata(&self.conn).await?)
-    }
-
-    pub async fn file_metadata_by_file_id(&self, file_id: &str) -> Result<Option<FileMetadataRow>> {
-        Ok(select_file_metadata_by_file_id(&self.conn, file_id).await?)
-    }
-
-    pub async fn insert_file_metadata(&self, entry: FileMetadataRow) -> Result<i64> {
-        Ok(insert_file_metadata(&self.conn, &entry).await?)
     }
 }

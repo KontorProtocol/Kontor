@@ -1,10 +1,16 @@
 use anyhow::{Result, anyhow};
 use kontor_crypto::FileLedger as CryptoFileLedger;
+use kontor_crypto::Proof;
+use kontor_crypto::api::Challenge;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::database::queries::{
+    insert_file_metadata, select_all_file_metadata, select_file_metadata_by_file_id,
+};
 use crate::database::types::FileMetadataRow;
 use crate::runtime::Storage;
+use crate::runtime::wit::FileDescriptor;
 
 /// Inner state protected by a single mutex
 struct FileLedgerInner {
@@ -78,7 +84,7 @@ impl FileLedger {
         ledger: &mut CryptoFileLedger,
         storage: &Storage,
     ) -> Result<()> {
-        let rows = storage.all_file_metadata().await?;
+        let rows = select_all_file_metadata(&storage.conn).await?;
 
         // Add all files to rebuild the tree (this will generate incorrect historical roots)
         ledger
@@ -130,9 +136,7 @@ impl FileLedger {
         };
 
         // Persist to database
-        storage
-            .insert_file_metadata(metadata_with_historical)
-            .await?;
+        insert_file_metadata(&storage.conn, &metadata_with_historical).await?;
 
         // Mark ledger as dirty (needs resync on rollback)
         inner.dirty = true;
@@ -146,15 +150,24 @@ impl FileLedger {
         let mut inner = self.inner.write().await;
         inner.dirty = false;
     }
+    /// Fetch a FileDescriptor from the database by file_id.
+    pub async fn get_file_descriptor(
+        &self,
+        storage: &Storage,
+        file_id: &str,
+    ) -> Result<Option<FileDescriptor>> {
+        let row = select_file_metadata_by_file_id(&storage.conn, file_id).await?;
+        Ok(row.map(FileDescriptor::from_row))
+    }
 
-    /// Execute a closure with read access to the inner kontor_crypto::FileLedger.
-    /// This avoids cloning the ledger while still providing safe access for verification.
-    /// Uses a read lock to allow concurrent read operations (e.g., multiple proof verifications).
-    pub async fn with_ledger<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&CryptoFileLedger) -> R,
-    {
+    /// Verify a proof against challenges using the current ledger state.
+    pub async fn verify_proof(
+        &self,
+        proof: &Proof,
+        challenges: &[Challenge],
+    ) -> kontor_crypto::Result<bool> {
         let inner = self.inner.read().await;
-        f(&inner.ledger)
+        let system = kontor_crypto::PorSystem::new(&inner.ledger);
+        system.verify(proof, challenges)
     }
 }
