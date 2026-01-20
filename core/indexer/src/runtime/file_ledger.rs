@@ -9,8 +9,8 @@ use crate::database::queries::{
     insert_file_metadata, select_all_file_metadata, select_file_metadata_by_file_id,
 };
 use crate::database::types::FileMetadataRow;
-use crate::runtime::Storage;
 use crate::runtime::wit::FileDescriptor;
+use libsql::Connection;
 
 /// Inner state protected by a single mutex
 struct FileLedgerInner {
@@ -37,11 +37,11 @@ impl FileLedger {
     }
 
     /// Rebuild the ledger from database on startup.
-    pub async fn rebuild_from_db(storage: &Storage) -> Result<Self> {
+    pub async fn rebuild_from_db(conn: &Connection) -> Result<Self> {
         let file_ledger = Self::new();
         {
             let mut inner = file_ledger.inner.write().await;
-            Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
+            Self::load_entries_into_ledger(&mut inner.ledger, conn).await?;
         }
         tracing::info!("Rebuilt FileLedger from database");
         Ok(file_ledger)
@@ -51,7 +51,7 @@ impl FileLedger {
     ///
     /// Call this after a rollback to re-sync the in-memory state with the DB.
     /// Only rebuilds if the ledger has been modified (dirty flag is true).
-    pub async fn resync_from_db(&self, storage: &Storage) -> Result<()> {
+    pub async fn resync_from_db(&self, conn: &Connection) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         // Skip rebuild if ledger hasn't been modified
@@ -61,7 +61,7 @@ impl FileLedger {
         }
 
         inner.ledger = CryptoFileLedger::new();
-        Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
+        Self::load_entries_into_ledger(&mut inner.ledger, conn).await?;
 
         // Clear dirty flag after successful rebuild
         inner.dirty = false;
@@ -69,10 +69,10 @@ impl FileLedger {
         Ok(())
     }
 
-    pub async fn force_resync_from_db(&self, storage: &Storage) -> Result<()> {
+    pub async fn force_resync_from_db(&self, conn: &Connection) -> Result<()> {
         let mut inner = self.inner.write().await;
         inner.ledger = CryptoFileLedger::new();
-        Self::load_entries_into_ledger(&mut inner.ledger, storage).await?;
+        Self::load_entries_into_ledger(&mut inner.ledger, conn).await?;
         inner.dirty = false;
         tracing::info!("Force resynced FileLedger from database");
         Ok(())
@@ -82,9 +82,9 @@ impl FileLedger {
     /// Also restores the historical roots from the stored values.
     async fn load_entries_into_ledger(
         ledger: &mut CryptoFileLedger,
-        storage: &Storage,
+        conn: &Connection,
     ) -> Result<()> {
-        let rows = select_all_file_metadata(&storage.conn).await?;
+        let rows = select_all_file_metadata(conn).await?;
 
         // Add all files to rebuild the tree (this will generate incorrect historical roots)
         ledger
@@ -107,7 +107,7 @@ impl FileLedger {
     ///
     /// The historical root (the pre-modification ledger root) is captured and stored
     /// in the database for later reconstruction during rebuilds.
-    pub async fn add_file(&self, storage: &Storage, metadata: &FileMetadataRow) -> Result<()> {
+    pub async fn add_file(&self, conn: &Connection, metadata: &FileMetadataRow) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         // Capture the number of historical roots before adding
@@ -136,7 +136,7 @@ impl FileLedger {
         };
 
         // Persist to database
-        insert_file_metadata(&storage.conn, &metadata_with_historical).await?;
+        insert_file_metadata(conn, &metadata_with_historical).await?;
 
         // Mark ledger as dirty (needs resync on rollback)
         inner.dirty = true;
@@ -153,10 +153,10 @@ impl FileLedger {
     /// Fetch a FileDescriptor from the database by file_id.
     pub async fn get_file_descriptor(
         &self,
-        storage: &Storage,
+        conn: &Connection,
         file_id: &str,
     ) -> Result<Option<FileDescriptor>> {
-        let row = select_file_metadata_by_file_id(&storage.conn, file_id).await?;
+        let row = select_file_metadata_by_file_id(conn, file_id).await?;
         Ok(row.map(FileDescriptor::from_row))
     }
 
