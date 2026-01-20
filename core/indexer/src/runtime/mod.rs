@@ -783,8 +783,9 @@ impl Runtime {
     /// Fetch a FileDescriptor from the database without creating a resource.
     /// Shared helper used by both _get_file_descriptor and _proof_verify.
     async fn _fetch_file_descriptor(&self, file_id: &str) -> Result<Option<FileDescriptor>> {
-        let row = self.storage.file_metadata_by_file_id(file_id).await?;
-        Ok(row.map(FileDescriptor::from_row))
+        self.file_ledger
+            .get_file_descriptor(&self.storage, file_id)
+            .await
     }
 
     async fn _get_file_descriptor<T>(
@@ -914,13 +915,10 @@ impl Runtime {
             }
         }
 
-        // Verify using the ledger via closure to avoid cloning
+        // Verify using the ledger wrapper (keeps crypto ledger internal)
         let result = self
             .file_ledger
-            .with_ledger(|ledger| {
-                let system = kontor_crypto::PorSystem::new(ledger);
-                system.verify(&proof.inner, &challenges)
-            })
+            .verify_proof(&proof.inner, &challenges)
             .await;
 
         match result {
