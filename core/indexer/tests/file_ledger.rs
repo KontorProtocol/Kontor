@@ -87,7 +87,7 @@ async fn test_file_ledger_add_file_persists_to_database() -> Result<()> {
     let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
 
     // Add file to ledger
-    ledger.add_file(&storage, &metadata).await?;
+    ledger.add_file(&storage.conn, &metadata).await?;
 
     // Verify file was persisted to database
     let entries = select_all_file_metadata(&conn).await?;
@@ -115,7 +115,7 @@ async fn test_file_ledger_add_file_sets_dirty_flag() -> Result<()> {
     let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
 
     // Add file - this should set dirty flag
-    ledger.add_file(&storage, &metadata).await?;
+    ledger.add_file(&storage.conn, &metadata).await?;
 
     // Clear dirty should work (we can't directly verify the flag, but this tests the path)
     ledger.clear_dirty().await;
@@ -135,7 +135,7 @@ async fn test_file_ledger_first_file_has_no_historical_root() -> Result<()> {
     let ledger = FileLedger::new();
     let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
 
-    ledger.add_file(&storage, &metadata).await?;
+    ledger.add_file(&storage.conn, &metadata).await?;
 
     // Every file now snapshots the ledger root as historical (even the first one)
     let entries = select_all_file_metadata(&conn).await?;
@@ -165,12 +165,12 @@ async fn test_file_ledger_second_file_has_historical_root() -> Result<()> {
     // Add first file
     let metadata1 =
         create_file_metadata_from_data(b"test file content 001", "file_001.dat", height1);
-    ledger.add_file(&storage, &metadata1).await?;
+    ledger.add_file(&storage.conn, &metadata1).await?;
 
     // Add second file
     let metadata2 =
         create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2);
-    ledger.add_file(&storage, &metadata2).await?;
+    ledger.add_file(&storage.conn, &metadata2).await?;
 
     // Verify historical roots - every file now has one
     let entries = select_all_file_metadata(&conn).await?;
@@ -219,11 +219,11 @@ async fn test_file_ledger_rebuild_from_db_restores_files() -> Result<()> {
 
     // Create ledger and add files
     let ledger1 = FileLedger::new();
-    ledger1.add_file(&storage, &metadata1).await?;
-    ledger1.add_file(&storage, &metadata2).await?;
+    ledger1.add_file(&storage.conn, &metadata1).await?;
+    ledger1.add_file(&storage.conn, &metadata2).await?;
 
     // Rebuild from database
-    let _ledger2 = FileLedger::rebuild_from_db(&storage).await?;
+    let _ledger2 = FileLedger::rebuild_from_db(&storage.conn).await?;
 
     // Verify files are still in database
     let entries = select_all_file_metadata(&conn).await?;
@@ -252,19 +252,19 @@ async fn test_file_ledger_rebuild_from_db_restores_historical_roots() -> Result<
     let ledger1 = FileLedger::new();
     ledger1
         .add_file(
-            &storage,
+            &storage.conn,
             &create_file_metadata_from_data(b"test file content 001", "file_001.dat", height1),
         )
         .await?;
     ledger1
         .add_file(
-            &storage,
+            &storage.conn,
             &create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2),
         )
         .await?;
     ledger1
         .add_file(
-            &storage,
+            &storage.conn,
             &create_file_metadata_from_data(b"test file content 003", "file_003.dat", height3),
         )
         .await?;
@@ -275,7 +275,7 @@ async fn test_file_ledger_rebuild_from_db_restores_historical_roots() -> Result<
         original_entries.iter().map(|e| e.historical_root).collect();
 
     // Rebuild from database - this should restore historical roots
-    let _ledger2 = FileLedger::rebuild_from_db(&storage).await?;
+    let _ledger2 = FileLedger::rebuild_from_db(&storage.conn).await?;
 
     // Verify historical roots are preserved in database (rebuild doesn't modify them)
     let rebuilt_entries = select_all_file_metadata(&conn).await?;
@@ -303,7 +303,7 @@ async fn test_file_ledger_resync_skips_when_not_dirty() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Resync should complete without error (and skip the actual resync)
-    ledger.resync_from_db(&storage).await?;
+    ledger.resync_from_db(&storage.conn).await?;
 
     Ok(())
 }
@@ -321,10 +321,10 @@ async fn test_file_ledger_resync_rebuilds_when_dirty() -> Result<()> {
 
     // Add a file to make it dirty
     let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
-    ledger.add_file(&storage, &metadata).await?;
+    ledger.add_file(&storage.conn, &metadata).await?;
 
     // Resync should rebuild from database
-    ledger.resync_from_db(&storage).await?;
+    ledger.resync_from_db(&storage.conn).await?;
 
     // Verify file is still in database
     let entries = select_all_file_metadata(&conn).await?;
@@ -346,7 +346,7 @@ async fn test_file_ledger_force_resync_always_rebuilds() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Force resync should complete without error (even though not dirty)
-    ledger.force_resync_from_db(&storage).await?;
+    ledger.force_resync_from_db(&storage.conn).await?;
 
     Ok(())
 }
@@ -364,14 +364,14 @@ async fn test_file_ledger_clear_dirty() -> Result<()> {
 
     // Add a file to make it dirty
     let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
-    ledger.add_file(&storage, &metadata).await?;
+    ledger.add_file(&storage.conn, &metadata).await?;
 
     // Clear dirty flag
     ledger.clear_dirty().await;
 
     // Now resync should skip (since we cleared dirty)
     // This indirectly tests that clear_dirty works
-    ledger.resync_from_db(&storage).await?;
+    ledger.resync_from_db(&storage.conn).await?;
 
     Ok(())
 }
@@ -395,7 +395,7 @@ async fn test_file_ledger_multiple_files_correct_historical_roots() -> Result<()
         let filename = format!("file_{:03}.dat", i);
         let metadata =
             create_file_metadata_from_data(content.as_bytes(), &filename, 800000 + i as i64);
-        ledger.add_file(&storage, &metadata).await?;
+        ledger.add_file(&storage.conn, &metadata).await?;
     }
 
     let entries = select_all_file_metadata(&conn).await?;
@@ -447,12 +447,12 @@ async fn test_file_ledger_rebuild_preserves_file_order() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Add files
-    ledger.add_file(&storage, &metadata1).await?;
-    ledger.add_file(&storage, &metadata2).await?;
-    ledger.add_file(&storage, &metadata3).await?;
+    ledger.add_file(&storage.conn, &metadata1).await?;
+    ledger.add_file(&storage.conn, &metadata2).await?;
+    ledger.add_file(&storage.conn, &metadata3).await?;
 
     // Rebuild from database
-    let _ledger2 = FileLedger::rebuild_from_db(&storage).await?;
+    let _ledger2 = FileLedger::rebuild_from_db(&storage.conn).await?;
 
     // Verify order is preserved (ordered by id ASC - which is insertion order)
     let entries = select_all_file_metadata(&conn).await?;
@@ -539,7 +539,7 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     // Create the original ledger and add all files
     let original_ledger = FileLedger::new();
     for metadata in &all_metadata {
-        original_ledger.add_file(&storage, metadata).await?;
+        original_ledger.add_file(&storage.conn, metadata).await?;
     }
 
     // Build a reference CryptoFileLedger in parallel to capture expected state
@@ -569,7 +569,7 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     }
 
     // Now rebuild from database
-    let rebuilt_ledger = FileLedger::rebuild_from_db(&storage).await?;
+    let rebuilt_ledger = FileLedger::rebuild_from_db(&storage.conn).await?;
 
     // Build another reference ledger by adding the same files and restoring historical roots
     // This simulates what rebuild_from_db should do internally
@@ -616,7 +616,9 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     setup_block_and_tx(&conn, 800004).await?;
     let extra_metadata =
         create_file_metadata_from_data(b"Extra file for resync test", "extra.dat", 800004);
-    rebuilt_ledger.add_file(&storage, &extra_metadata).await?;
+    rebuilt_ledger
+        .add_file(&storage.conn, &extra_metadata)
+        .await?;
 
     // Verify the extra file was added
     let entries_after_extra = select_all_file_metadata(&conn).await?;
@@ -627,7 +629,7 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     );
 
     // Now resync (ledger is dirty after add_file)
-    rebuilt_ledger.resync_from_db(&storage).await?;
+    rebuilt_ledger.resync_from_db(&storage.conn).await?;
 
     // Verify all files are still in database
     let final_entries = select_all_file_metadata(&conn).await?;

@@ -248,7 +248,7 @@ impl Reactor {
         // Resync FileLedger after rollback (DB entries deleted via CASCADE)
         self.runtime
             .file_ledger
-            .force_resync_from_db(&self.runtime.storage)
+            .force_resync_from_db(&self.runtime.storage.conn)
             .await?;
 
         let conn = &self.reader.connection().await?;
