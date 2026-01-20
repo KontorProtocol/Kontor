@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
@@ -10,18 +8,12 @@ use indexer::{
             get_block, get_block_latest, get_block_transactions, get_transaction, get_transactions,
         },
     },
-    bitcoin_client::Client,
-    config::Config,
     database::queries::{insert_processed_block, insert_transaction},
-    event::EventSubscriber,
-    runtime,
     test_utils::new_test_db,
 };
 use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
 use libsql::params;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, mpsc};
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct BlockResponse {
@@ -100,17 +92,7 @@ async fn create_test_app() -> Result<Router> {
     insert_transaction(&conn, tx2).await?;
     insert_transaction(&conn, tx3).await?;
 
-    let (simulate_tx, _) = mpsc::channel(10);
-    let env = Env {
-        bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
-        config: Config::new_na(),
-        cancel_token: CancellationToken::new(),
-        available: Arc::new(RwLock::new(true)),
-        event_subscriber: EventSubscriber::new(),
-        runtime_pool: runtime::pool::new(db_dir.path().to_path_buf(), db_name).await?,
-        reader,
-        simulate_tx,
-    };
+    let env = Env::new_test(reader, db_dir.path(), db_name).await?;
 
     Ok(Router::new()
         .route("/api/blocks/{identifier}", get(get_block))
