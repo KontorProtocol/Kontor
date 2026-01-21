@@ -95,6 +95,9 @@ impl FileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        if bytes_to_field_element(&root).is_none() {
+            return Err(Error::Validation("Invalid root field element".to_string()));
+        }
         let nonce: [u8; 32] = raw
             .nonce
             .try_into()

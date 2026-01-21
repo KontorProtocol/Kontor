@@ -1,3 +1,5 @@
+use indexer::database::types::bytes_to_field_element;
+use indexer::runtime::RawFileDescriptor;
 use indexer::runtime::wit::FileDescriptor;
 
 fn create_valid_seed() -> [u8; 64] {
@@ -108,6 +110,36 @@ fn test_build_challenge_uses_correct_file_metadata() {
         expected_original_size as usize
     );
     assert_eq!(challenge.file_metadata.filename, expected_filename);
+}
+
+#[test]
+fn test_try_from_raw_rejects_invalid_root_field_element() {
+    let mut invalid_root = None;
+    for byte in [0x80u8, 0xFFu8] {
+        let mut candidate = [0u8; 32];
+        candidate[31] = byte;
+        if bytes_to_field_element(&candidate).is_none() {
+            invalid_root = Some(candidate);
+            break;
+        }
+    }
+    let invalid_root = invalid_root.expect("Test requires an invalid field element representation");
+
+    let raw = RawFileDescriptor {
+        file_id: "file_invalid_root".to_string(),
+        object_id: "object_file_invalid_root".to_string(),
+        nonce: vec![0u8; 32],
+        root: invalid_root.to_vec(),
+        padded_len: 16,
+        original_size: 10,
+        filename: "invalid_root.txt".to_string(),
+    };
+
+    let result = FileDescriptor::try_from_raw(raw, 0);
+    assert!(
+        matches!(result, Err(indexer::runtime::Error::Validation(_))),
+        "Expected invalid root field element to be rejected"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────

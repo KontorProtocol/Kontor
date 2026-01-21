@@ -84,9 +84,9 @@ impl FileLedger {
         ledger: &mut CryptoFileLedger,
         conn: &Connection,
     ) -> Result<()> {
-
         let rows = select_all_file_metadata(conn).await?;
         ledger
+            .add_files(&rows)
             .map_err(|e| anyhow!("Failed to add files to ledger: {:?}", e))?;
 
         // Collect the stored historical roots in order and restore them
