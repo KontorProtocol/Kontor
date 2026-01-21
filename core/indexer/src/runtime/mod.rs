@@ -910,7 +910,16 @@ impl Runtime {
                 &input.seed,
                 input.prover_id.clone(),
             ) {
-                Ok(challenge) => challenges.push(challenge),
+                Ok(challenge) => {
+                    let computed_id = hex::encode(challenge.id().0);
+                    if computed_id != input.challenge_id {
+                        return Ok(Err(Error::Validation(format!(
+                            "Challenge ID mismatch for file {}: expected {}, got {}",
+                            input.file_id, input.challenge_id, computed_id
+                        ))));
+                    }
+                    challenges.push(challenge)
+                }
                 Err(e) => return Ok(Err(e)),
             }
         }
@@ -1081,14 +1090,14 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        // Use HKDF-SHA256 to derive a 32-byte key
+        // Use HKDF-SHA256 to derive a 64-byte key
         let salt_ref = if salt.is_empty() {
             None
         } else {
             Some(salt.as_slice())
         };
         let hk = Hkdf::<Sha256>::new(salt_ref, &ikm);
-        let mut okm = [0u8; 32];
+        let mut okm = [0u8; 64];
         hk.expand(&info, &mut okm)
             .map_err(|e| anyhow::anyhow!("HKDF expand error: {}", e))?;
         Ok(okm.to_vec())

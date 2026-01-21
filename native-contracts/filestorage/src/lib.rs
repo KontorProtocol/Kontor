@@ -345,7 +345,7 @@ impl Guest for Filestorage {
         }
 
         // Derive deterministic seed from block hash for agreement selection
-        let agreement_seed = derive_seed(&prev_block_hash, b"agreement_selection");
+        let agreement_seed = derive_seed32(&prev_block_hash, b"agreement_selection");
         let mut rng_counter: u64 = 0;
 
         // Calculate expected number of challenges: θ(t) = (C_target * |F|) / B
@@ -384,10 +384,6 @@ impl Guest for Filestorage {
             }
         }
 
-        // Derive batch seed for all challenges in this block
-        let batch_seed = derive_seed(&prev_block_hash, b"batch_seed");
-        let seed: Vec<u8> = batch_seed.to_vec();
-
         let s_chal = model.s_chal();
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
@@ -418,11 +414,21 @@ impl Guest for Filestorage {
             // at most 1 active challenge per agreement total).
             let file_id = agreement.file_id();
             let node_seed_input = [prev_block_hash.as_slice(), b":", file_id.as_bytes()].concat();
-            let node_seed = derive_seed(&node_seed_input, b"node_selection");
+            let node_seed = derive_seed32(&node_seed_input, b"node_selection");
             let mut node_counter: u64 = 0;
             let node_index =
                 uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
             let prover_id = active_nodes[node_index].clone();
+
+            let seed_input = [
+                prev_block_hash.as_slice(),
+                b":",
+                file_id.as_bytes(),
+                b":",
+                prover_id.as_bytes(),
+            ]
+            .concat();
+            let seed: Vec<u8> = derive_seed(&seed_input, b"challenge_seed").to_vec();
 
             let descriptor = match file_registry::get_file_descriptor(&file_id) {
                 Some(d) => d,
@@ -511,9 +517,9 @@ impl Guest for Filestorage {
         }
 
         // Validate seed length
-        if seed.len() != 32 {
+        if seed.len() != 64 {
             return Err(Error::Message(format!(
-                "Seed must be 32 bytes, got {}",
+                "Seed must be 64 bytes, got {}",
                 seed.len()
             )));
         }
@@ -670,18 +676,23 @@ pub fn compute_num_to_challenge(
     core::cmp::min(num, total_files_u64) as usize
 }
 
-/// Derive a 32-byte seed using HKDF-SHA256 via host function
-pub fn derive_seed(ikm: &[u8], info: &[u8]) -> [u8; 32] {
-    // Use HKDF host function
-    // info is used as the "info" parameter (application-specific context)
-    // We use "kontor/hkdf/" prefix for domain separation
-    let full_info = [b"kontor/hkdf/".as_slice(), info].concat();
-    let derived = crypto::hkdf_derive(ikm, &[], &full_info);
+/// Derive a 64-byte seed using HKDF-SHA256 via host function.
+pub fn derive_seed(ikm: &[u8], domain_separator: &[u8]) -> [u8; 64] {
+    // domain_separator is used as the HKDF salt
+    // We use "kontor/hkdf/" prefix for info domain separation
+    let full_info = [b"kontor/hkdf/".as_slice(), domain_separator].concat();
+    let derived = crypto::hkdf_derive(ikm, domain_separator, &full_info);
+    derived
+        .try_into()
+        .map_err(|_| Error::Message("hkdf_derive must return 64 bytes".to_string()))
+        .expect("hkdf_derive must return 64 bytes")
+}
 
-    // Convert to fixed-size array
+/// Derive a 32-byte seed using HKDF-SHA256 via host function.
+pub fn derive_seed32(ikm: &[u8], domain_separator: &[u8]) -> [u8; 32] {
+    let full = derive_seed(ikm, domain_separator);
     let mut result = [0u8; 32];
-    let len = core::cmp::min(derived.len(), 32);
-    result[..len].copy_from_slice(&derived[..len]);
+    result.copy_from_slice(&full[..32]);
     result
 }
 

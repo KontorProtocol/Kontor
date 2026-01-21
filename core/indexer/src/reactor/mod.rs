@@ -30,9 +30,10 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage},
+    runtime::{ComponentCache, Runtime, Storage, filestorage},
     test_utils::new_mock_block_hash,
 };
+use indexer_types::Signer;
 
 pub type Simulation = (
     bitcoin::Transaction,
@@ -156,9 +157,50 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
 
     set_block_processed(&runtime.storage.conn, block.height as i64).await?;
 
-    // TODO: Challenge expiration will be done via contract calls once reactor-to-contract
-    // infrastructure is in place. For now, challenges are managed entirely within
-    // the filestorage contract via the expire_challenges function.
+    // ─────────────────────────────────────────────────────────────────
+    // File Storage Protocol: Challenge Management
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // After processing user transactions, run the file storage protocol's
+    // per-block housekeeping. These are system-level calls using Signer::Core.
+
+    let core_signer = Signer::Core(Box::new(Signer::Nobody));
+
+    // 1. Expire old challenges first
+    match filestorage::api::expire_challenges(runtime, &core_signer, block.height).await {
+        Ok(_) => {}
+        Err(e) => warn!(
+            "Failed to expire challenges at height {}: {:?}",
+            block.height, e
+        ),
+    }
+
+    // 2. Generate new challenges for this block
+    let prev_hash_bytes: Vec<u8> = AsRef::<[u8]>::as_ref(&block.prev_hash).to_vec();
+    match filestorage::api::generate_challenges_for_block(
+        runtime,
+        &core_signer,
+        block.height,
+        prev_hash_bytes,
+    )
+    .await
+    {
+        Ok(challenges) => {
+            if !challenges.is_empty() {
+                info!(
+                    "Generated {} challenges for block {}",
+                    challenges.len(),
+                    block.height
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                "Failed to generate challenges for block {}: {:?}",
+                block.height, e
+            );
+        }
+    }
 
     Ok(())
 }

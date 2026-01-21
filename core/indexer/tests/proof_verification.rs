@@ -349,11 +349,11 @@ async fn challenge_has_seed(runtime: &mut Runtime) -> Result<()> {
             .await?
             .unwrap();
 
-        // Seed should be 32 bytes
+        // Seed should be 64 bytes
         assert_eq!(
             challenge.seed.len(),
-            32,
-            "Challenge seed should be 32 bytes"
+            64,
+            "Challenge seed should be 64 bytes"
         );
     }
 

@@ -125,12 +125,7 @@ impl FileDescriptor {
         let root = bytes_to_field_element(&self.file_metadata_row.root)
             .ok_or_else(|| Error::Validation("Invalid root field element".to_string()))?;
 
-        // Convert seed bytes to FieldElement
-        let seed_bytes: [u8; 32] = seed
-            .try_into()
-            .map_err(|_| Error::Validation("Invalid seed length, expected 32 bytes".to_string()))?;
-        let seed_field = bytes_to_field_element(&seed_bytes)
-            .ok_or_else(|| Error::Validation("Invalid seed field element".to_string()))?;
+        let seed_field = seed_to_field(seed)?;
 
         let file_metadata = CryptoFileMetadata {
             file_id: self.file_metadata_row.file_id.clone(),
@@ -162,6 +157,13 @@ impl FileDescriptor {
         let challenge = self.build_challenge(block_height, num_challenges, seed, prover_id)?;
         Ok(hex::encode(challenge.id().0))
     }
+}
+
+fn seed_to_field(seed: &[u8]) -> Result<kontor_crypto::FieldElement, Error> {
+    let uniform: [u8; 64] = seed
+        .try_into()
+        .map_err(|_| Error::Validation("Seed must be 64 bytes".to_string()))?;
+    Ok(kontor_crypto::field_from_uniform_bytes(&uniform))
 }
 
 /// A deserialized proof-of-retrievability proof resource.

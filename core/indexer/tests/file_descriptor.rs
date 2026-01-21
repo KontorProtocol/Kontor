@@ -24,12 +24,11 @@ fn create_fake_file_metadata(file_id: &str, filename: &str, height: i64) -> File
         .build()
 }
 
-/// Helper to create a valid 32-byte seed
-fn create_valid_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    // Use a simple pattern that's a valid field element
+/// Helper to create a valid 64-byte seed
+fn create_valid_seed() -> [u8; 64] {
+    let mut seed = [0u8; 64];
     seed[0] = 1;
-    seed[31] = 42;
+    seed[63] = 42;
     seed
 }
 

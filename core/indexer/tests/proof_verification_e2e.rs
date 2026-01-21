@@ -8,7 +8,6 @@
 //! 5. Verify proofs through the contract
 //!
 //! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
-
 use ff::PrimeField;
 use kontor_crypto::{
     FileLedger as CryptoFileLedger,
@@ -16,9 +15,6 @@ use kontor_crypto::{
 };
 use testlib::*;
 
-/// Create valid seed bytes from an integer.
-/// Field elements must be less than the field modulus, so we create
-/// a valid field element from a small integer and convert to bytes.
 fn valid_seed_bytes(n: u64) -> Vec<u8> {
     FieldElement::from(n).to_repr().as_ref().to_vec()
 }
@@ -51,12 +47,12 @@ fn challenge_data_to_crypto_challenge(
     metadata: &api::FileMetadata,
 ) -> CryptoChallenge {
     // Convert seed bytes to FieldElement
-    let seed_bytes: [u8; 32] = challenge
+    let seed_bytes: [u8; 64] = challenge
         .seed
         .clone()
         .try_into()
-        .expect("seed should be 32 bytes");
-    let seed = FieldElement::from_repr(seed_bytes.into()).expect("valid field element");
+        .expect("seed should be 64 bytes");
+    let seed = kontor_crypto::field_from_uniform_bytes(&seed_bytes);
 
     CryptoChallenge::new(
         metadata.clone(),
