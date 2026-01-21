@@ -6,43 +6,14 @@ use indexer::{
         types::FileMetadataRow,
     },
     runtime::{Storage, file_ledger::FileLedger},
-    test_utils::{new_mock_block_hash, new_test_db},
+    test_utils::{create_fake_file_metadata, new_mock_block_hash, new_test_db},
 };
 use indexer_types::{BlockRow, TransactionRow};
-use kontor_crypto::{FileLedger as CryptoFileLedger, prepare_file};
+use kontor_crypto::FileLedger as CryptoFileLedger;
 
 /// Helper to create a test Storage from a database connection
 fn create_test_storage(conn: libsql::Connection) -> Storage {
     Storage::builder().conn(conn).build()
-}
-
-/// Helper to create a FileMetadataRow from actual file data using kontor_crypto::prepare_file.
-/// This produces real merkle roots from the cryptographic library.
-fn create_file_metadata_from_data(data: &[u8], filename: &str, height: i64) -> FileMetadataRow {
-    // Use a deterministic 32-byte nonce derived from filename for reproducibility
-    let mut nonce = [0u8; 32];
-    for (i, b) in filename.bytes().enumerate().take(32) {
-        nonce[i] = b;
-    }
-    let (_prepared, metadata) =
-        prepare_file(data, filename, &nonce).expect("Failed to prepare file");
-
-    // Convert the FieldElement root to [u8; 32]
-    let root: [u8; 32] = metadata.root.to_repr().into();
-
-    // Nonce is already 32 bytes since we passed 32 bytes
-    let nonce: [u8; 32] = metadata.nonce.try_into().expect("nonce should be 32 bytes");
-
-    FileMetadataRow::builder()
-        .file_id(metadata.file_id.clone())
-        .object_id(metadata.object_id.clone())
-        .nonce(nonce)
-        .root(root)
-        .padded_len(metadata.padded_len as u64)
-        .original_size(metadata.original_size as u64)
-        .filename(metadata.filename)
-        .height(height)
-        .build()
 }
 
 /// Helper to set up a block and transaction in the database
@@ -84,7 +55,7 @@ async fn test_file_ledger_add_file_persists_to_database() -> Result<()> {
     setup_block_and_tx(&conn, height).await?;
 
     let ledger = FileLedger::new();
-    let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
+    let metadata = create_fake_file_metadata("file_001_id", "file_001.dat", height);
 
     // Add file to ledger
     ledger.add_file(&storage.conn, &metadata).await?;
@@ -112,7 +83,7 @@ async fn test_file_ledger_add_file_sets_dirty_flag() -> Result<()> {
     setup_block_and_tx(&conn, height).await?;
 
     let ledger = FileLedger::new();
-    let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
+    let metadata = create_fake_file_metadata("file_001_id", "file_001.dat", height);
 
     // Add file - this should set dirty flag
     ledger.add_file(&storage.conn, &metadata).await?;
@@ -133,7 +104,7 @@ async fn test_file_ledger_first_file_has_no_historical_root() -> Result<()> {
     setup_block_and_tx(&conn, height).await?;
 
     let ledger = FileLedger::new();
-    let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
+    let metadata = create_fake_file_metadata("file_001_id", "file_001.dat", height);
 
     ledger.add_file(&storage.conn, &metadata).await?;
 
@@ -163,13 +134,11 @@ async fn test_file_ledger_second_file_has_historical_root() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Add first file
-    let metadata1 =
-        create_file_metadata_from_data(b"test file content 001", "file_001.dat", height1);
+    let metadata1 = create_fake_file_metadata("file_001_id", "file_001.dat", height1);
     ledger.add_file(&storage.conn, &metadata1).await?;
 
     // Add second file
-    let metadata2 =
-        create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2);
+    let metadata2 = create_fake_file_metadata("file_002_id", "file_002.dat", height2);
     ledger.add_file(&storage.conn, &metadata2).await?;
 
     // Verify historical roots - every file now has one
@@ -210,10 +179,8 @@ async fn test_file_ledger_rebuild_from_db_restores_files() -> Result<()> {
     setup_block_and_tx(&conn, height2).await?;
 
     // Create files with real data
-    let metadata1 =
-        create_file_metadata_from_data(b"test file content 001", "file_001.dat", height1);
-    let metadata2 =
-        create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2);
+    let metadata1 = create_fake_file_metadata("file_001_id", "file_001.dat", height1);
+    let metadata2 = create_fake_file_metadata("file_002_id", "file_002.dat", height2);
     let file_id1 = metadata1.file_id.clone();
     let file_id2 = metadata2.file_id.clone();
 
@@ -253,19 +220,19 @@ async fn test_file_ledger_rebuild_from_db_restores_historical_roots() -> Result<
     ledger1
         .add_file(
             &storage.conn,
-            &create_file_metadata_from_data(b"test file content 001", "file_001.dat", height1),
+            &create_fake_file_metadata("file_001_id", "file_001.dat", height1),
         )
         .await?;
     ledger1
         .add_file(
             &storage.conn,
-            &create_file_metadata_from_data(b"test file content 002", "file_002.dat", height2),
+            &create_fake_file_metadata("file_002_id", "file_002.dat", height2),
         )
         .await?;
     ledger1
         .add_file(
             &storage.conn,
-            &create_file_metadata_from_data(b"test file content 003", "file_003.dat", height3),
+            &create_fake_file_metadata("file_003_id", "file_003.dat", height3),
         )
         .await?;
 
@@ -320,7 +287,7 @@ async fn test_file_ledger_resync_rebuilds_when_dirty() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Add a file to make it dirty
-    let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
+    let metadata = create_fake_file_metadata("file_001_id", "file_001.dat", height);
     ledger.add_file(&storage.conn, &metadata).await?;
 
     // Resync should rebuild from database
@@ -363,7 +330,7 @@ async fn test_file_ledger_clear_dirty() -> Result<()> {
     let ledger = FileLedger::new();
 
     // Add a file to make it dirty
-    let metadata = create_file_metadata_from_data(b"test file content 001", "file_001.dat", height);
+    let metadata = create_fake_file_metadata("file_001_id", "file_001.dat", height);
     ledger.add_file(&storage.conn, &metadata).await?;
 
     // Clear dirty flag
@@ -391,10 +358,9 @@ async fn test_file_ledger_multiple_files_correct_historical_roots() -> Result<()
 
     // Add 5 files with distinct content
     for i in 0..5 {
-        let content = format!("test file content {:03}", i);
         let filename = format!("file_{:03}.dat", i);
         let metadata =
-            create_file_metadata_from_data(content.as_bytes(), &filename, 800000 + i as i64);
+            create_fake_file_metadata(&format!("file_{:03}_id", i), &filename, 800000 + i as i64);
         ledger.add_file(&storage.conn, &metadata).await?;
     }
 
@@ -437,9 +403,9 @@ async fn test_file_ledger_rebuild_preserves_file_order() -> Result<()> {
     }
 
     // Create files with real data - capture file_ids (SHA256 hashes)
-    let metadata1 = create_file_metadata_from_data(b"alpha file content", "alpha.dat", 800000);
-    let metadata2 = create_file_metadata_from_data(b"beta file content", "beta.dat", 800001);
-    let metadata3 = create_file_metadata_from_data(b"gamma file content", "gamma.dat", 800002);
+    let metadata1 = create_fake_file_metadata("alpha_id", "alpha.dat", 800000);
+    let metadata2 = create_fake_file_metadata("beta_id", "beta.dat", 800001);
+    let metadata3 = create_fake_file_metadata("gamma_id", "gamma.dat", 800002);
     let file_id1 = metadata1.file_id.clone();
     let file_id2 = metadata2.file_id.clone();
     let file_id3 = metadata3.file_id.clone();
@@ -485,44 +451,17 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     // Block 2: 2 files
     // Block 3: 3 files
     let files_per_block = [
+        vec![("b0_a.dat", "b0_a_id"), ("b0_b.dat", "b0_b_id")],
         vec![
-            (b"Block 0 File A - some content here".as_slice(), "b0_a.dat"),
-            (b"Block 0 File B - different content".as_slice(), "b0_b.dat"),
+            ("b1_a.dat", "b1_a_id"),
+            ("b1_b.dat", "b1_b_id"),
+            ("b1_c.dat", "b1_c_id"),
         ],
+        vec![("b2_a.dat", "b2_a_id"), ("b2_b.dat", "b2_b_id")],
         vec![
-            (
-                b"Block 1 File A - first file in block 1".as_slice(),
-                "b1_a.dat",
-            ),
-            (
-                b"Block 1 File B - second file in block 1".as_slice(),
-                "b1_b.dat",
-            ),
-            (
-                b"Block 1 File C - third file in block 1".as_slice(),
-                "b1_c.dat",
-            ),
-        ],
-        vec![
-            (
-                b"Block 2 File A - resuming after block 1".as_slice(),
-                "b2_a.dat",
-            ),
-            (b"Block 2 File B - another file here".as_slice(), "b2_b.dat"),
-        ],
-        vec![
-            (
-                b"Block 3 File A - final block first file".as_slice(),
-                "b3_a.dat",
-            ),
-            (
-                b"Block 3 File B - final block second file".as_slice(),
-                "b3_b.dat",
-            ),
-            (
-                b"Block 3 File C - final block third file, this is the last one".as_slice(),
-                "b3_c.dat",
-            ),
+            ("b3_a.dat", "b3_a_id"),
+            ("b3_b.dat", "b3_b_id"),
+            ("b3_c.dat", "b3_c_id"),
         ],
     ];
 
@@ -530,8 +469,8 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     let mut all_metadata: Vec<FileMetadataRow> = Vec::new();
     for (block_idx, files) in files_per_block.iter().enumerate() {
         let height = block_heights[block_idx];
-        for (content, filename) in files {
-            let metadata = create_file_metadata_from_data(content, filename, height);
+        for (filename, file_id) in files {
+            let metadata = create_fake_file_metadata(file_id, filename, height);
             all_metadata.push(metadata);
         }
     }
@@ -614,8 +553,7 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
     // Now test resync: add a file, mark dirty, then resync
     // First, set up another block
     setup_block_and_tx(&conn, 800004).await?;
-    let extra_metadata =
-        create_file_metadata_from_data(b"Extra file for resync test", "extra.dat", 800004);
+    let extra_metadata = create_fake_file_metadata("extra_id", "extra.dat", 800004);
     rebuilt_ledger
         .add_file(&storage.conn, &extra_metadata)
         .await?;
