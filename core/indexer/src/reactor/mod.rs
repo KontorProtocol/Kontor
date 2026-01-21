@@ -290,7 +290,7 @@ impl Reactor {
         // Resync FileLedger after rollback (DB entries deleted via CASCADE)
         self.runtime
             .file_ledger
-            .force_resync_from_db(&self.runtime.storage)
+            .force_resync_from_db(&self.runtime.storage.conn)
             .await?;
 
         let conn = &self.reader.connection().await?;
@@ -391,7 +391,11 @@ impl Reactor {
         if !block.transactions.is_empty()
             && let Some(tx) = &self.event_tx
         {
-            let _ = tx.send(Event::Processed { block }).await;
+            let _ = tx
+                .send(Event::Processed {
+                    block: (&block).into(),
+                })
+                .await;
         }
         info!("Block processed");
 

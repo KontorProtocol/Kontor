@@ -146,7 +146,7 @@ impl Runtime {
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
-        let file_ledger = FileLedger::rebuild_from_db(&storage).await?;
+        let file_ledger = FileLedger::rebuild_from_db(&storage.conn).await?;
         Ok(Self {
             engine,
             linker,
@@ -604,7 +604,7 @@ impl Runtime {
                 .await
                 .expect("Failed to rollback storage after failure to extract expression");
             self.file_ledger
-                .resync_from_db(&self.storage)
+                .resync_from_db(&self.storage.conn)
                 .await
                 .expect("Failed to resync file ledger after rollback");
         } else {
@@ -762,7 +762,7 @@ impl Runtime {
         let table = self.table.lock().await;
         let file_metadata_row = table.get(&file_descriptor)?.file_metadata_row.clone();
         self.file_ledger
-            .add_file(&self.storage, &file_metadata_row)
+            .add_file(&self.storage.conn, &file_metadata_row)
             .await
     }
 
@@ -784,7 +784,7 @@ impl Runtime {
     /// Shared helper used by both _get_file_descriptor and _proof_verify.
     async fn _fetch_file_descriptor(&self, file_id: &str) -> Result<Option<FileDescriptor>> {
         self.file_ledger
-            .get_file_descriptor(&self.storage, file_id)
+            .get_file_descriptor(&self.storage.conn, file_id)
             .await
     }
 
@@ -797,7 +797,10 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let fd = self._fetch_file_descriptor(&file_id).await?;
+        let fd = self
+            .file_ledger
+            .get_file_descriptor(&self.storage.conn, &file_id)
+            .await?;
         let mut table = self.table.lock().await;
         match fd {
             Some(file_descriptor) => Ok(Some(table.push(file_descriptor)?)),
@@ -894,7 +897,11 @@ impl Runtime {
         // Build Challenge objects from inputs
         let mut challenges = Vec::new();
         for input in &challenge_inputs {
-            let fd = match self._fetch_file_descriptor(&input.file_id).await? {
+            let fd = match self
+                .file_ledger
+                .get_file_descriptor(&self.storage.conn, &input.file_id)
+                .await?
+            {
                 Some(fd) => fd,
                 None => {
                     return Ok(Err(Error::Validation(format!(

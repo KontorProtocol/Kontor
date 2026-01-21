@@ -44,7 +44,7 @@ export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
 
-export type Event = { "type": "Processed"; block: Block } | {
+export type Event = { "type": "Processed"; block: BlockRow } | {
   "type": "Rolledback";
   height: number;
 };
@@ -52,6 +52,7 @@ export type Event = { "type": "Processed"; block: Block } | {
 export type Info = {
   version: string;
   target: string;
+  network: string;
   available: boolean;
   height: number;
   checkpoint: string | null;
@@ -203,7 +204,7 @@ export type ViewResult = { "type": "Ok"; value: string } | {
   message: string;
 };
 
-export type WsRequest = { "type": "Subscribe" };
+export type WsRequest = never;
 
 export type WsResponse = { "type": "Event"; event: Event } | {
   "type": "Error";

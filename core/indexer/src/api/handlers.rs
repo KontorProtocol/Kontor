@@ -19,7 +19,7 @@ use crate::{
         queries::{
             self, get_blocks_paginated, get_checkpoint_latest, get_op_result,
             get_results_paginated, get_transaction_by_txid, get_transactions_paginated,
-            select_block_by_height_or_hash, select_block_latest,
+            select_block_latest, select_processed_block_by_height_or_hash,
         },
         types::{BlockQuery, ContractResultPublicRow, OpResultId, ResultQuery, TransactionQuery},
     },
@@ -43,6 +43,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
     Ok(Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
+        network: env.config.network.to_string(),
         available: *env.available.read().await,
         height,
         checkpoint,
@@ -59,7 +60,9 @@ pub async fn stop(State(env): State<Env>) -> Result<Info> {
 }
 
 pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {
-    match select_block_by_height_or_hash(&*env.reader.connection().await?, &identifier).await? {
+    match select_processed_block_by_height_or_hash(&*env.reader.connection().await?, &identifier)
+        .await?
+    {
         Some(block_row) => Ok(block_row.into()),
         None => Err(HttpError::NotFound(format!("block at height or hash: {}", identifier)).into()),
     }
@@ -153,6 +156,25 @@ pub async fn get_transactions(
     validate_query(query.cursor, query.offset)?;
     let (results, pagination) =
         get_transactions_paginated(&*env.reader.connection().await?, query).await?;
+    Ok(PaginatedResponse {
+        results,
+        pagination,
+    }
+    .into())
+}
+
+pub async fn get_block_transactions(
+    Path(identifier): Path<String>,
+    Query(mut query): Query<TransactionQuery>,
+    State(env): State<Env>,
+) -> Result<PaginatedResponse<TransactionRow>> {
+    validate_query(query.cursor, query.offset)?;
+    let conn = env.reader.connection().await?;
+    let block = select_processed_block_by_height_or_hash(&conn, &identifier)
+        .await?
+        .ok_or_else(|| HttpError::NotFound(format!("block at height or hash: {}", identifier)))?;
+    query.height = Some(block.height);
+    let (results, pagination) = get_transactions_paginated(&conn, query).await?;
     Ok(PaginatedResponse {
         results,
         pagination,

@@ -621,35 +621,7 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_filestorage_create_and_get() -> Result<()> {
-    filestorage_defaults(runtime).await?;
-    filestorage_empty_file_id_fails(runtime).await?;
-    filestorage_get_all_active_agreements(runtime).await?;
-    filestorage_expire_challenges_noop(runtime).await?;
-    filestorage_create_and_get(runtime).await?;
-    filestorage_count_increments(runtime).await?;
-    filestorage_duplicate_fails(runtime).await?;
-    filestorage_invalid_root_fails(runtime).await?;
-    filestorage_invalid_padded_len_fails(runtime).await?;
-    filestorage_join_agreement(runtime).await?;
-    filestorage_join_activates_at_min_nodes(runtime).await?;
-    filestorage_double_join_fails(runtime).await?;
-    filestorage_join_nonexistent_agreement_fails(runtime).await?;
-    filestorage_leave_agreement(runtime).await?;
-    filestorage_leave_nonmember_fails(runtime).await?;
-    filestorage_leave_nonexistent_agreement_fails(runtime).await?;
-    filestorage_leave_does_not_deactivate(runtime).await?;
-    filestorage_is_node_in_agreement(runtime).await?;
-    filestorage_is_node_in_nonexistent_agreement(runtime).await?;
-    filestorage_rejoin_after_leave(runtime).await?;
-    filestorage_join_after_activation_not_reactivated(runtime).await?;
-    challenge_gen_smoke_test(runtime).await?;
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_filestorage_create_and_get_regtest() -> Result<()> {
+pub async fn run(runtime: &mut Runtime) -> Result<()> {
     filestorage_defaults(runtime).await?;
     filestorage_empty_file_id_fails(runtime).await?;
     filestorage_get_all_active_agreements(runtime).await?;
