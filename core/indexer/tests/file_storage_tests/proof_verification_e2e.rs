@@ -213,7 +213,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 // Test Runner
 // ─────────────────────────────────────────────────────────────────
 pub async fn run(runtime: &mut Runtime) -> Result<()> {
-    e2e_invalid_proof_rejected(runtime).await?;
     e2e_cross_block_aggregation_with_new_agreement(runtime).await?;
+    e2e_invalid_proof_rejected(runtime).await?;
     Ok(())
 }
