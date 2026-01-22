@@ -27,6 +27,7 @@ use crate::bitcoin_follower::rpc;
 
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
+use crate::runtime::RawFileDescriptor;
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -541,4 +542,28 @@ pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: i64) -> 
         .filename(filename.to_string())
         .height(height)
         .build()
+}
+
+pub fn make_descriptor(
+    file_id: String,
+    root: Vec<u8>,
+    padded_len: u64,
+    original_size: u64,
+    filename: String,
+) -> RawFileDescriptor {
+    let object_id = format!("object_{}", file_id);
+    let mut nonce = [0u8; 32];
+    for (i, b) in file_id.bytes().enumerate().take(32) {
+        nonce[i] = b;
+    }
+
+    RawFileDescriptor {
+        file_id,
+        object_id,
+        nonce: nonce.to_vec(),
+        root,
+        padded_len,
+        original_size,
+        filename,
+    }
 }

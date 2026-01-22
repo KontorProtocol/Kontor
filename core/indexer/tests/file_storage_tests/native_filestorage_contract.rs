@@ -1,3 +1,4 @@
+use indexer::test_utils::make_descriptor;
 use testlib::*;
 
 import!(
@@ -11,31 +12,6 @@ fn has_node(nodes: &[filestorage::NodeInfo], node_id: &str, active: bool) -> boo
     nodes
         .iter()
         .any(|n| n.node_id == node_id && n.active == active)
-}
-
-fn make_descriptor(
-    file_id: String,
-    root: Vec<u8>,
-    padded_len: u64,
-    original_size: u64,
-    filename: String,
-) -> RawFileDescriptor {
-    // Generate object_id and nonce from file_id for test determinism
-    let object_id = format!("object_{}", file_id);
-    let mut nonce = [0u8; 32];
-    for (i, b) in file_id.bytes().enumerate().take(32) {
-        nonce[i] = b;
-    }
-
-    RawFileDescriptor {
-        file_id,
-        object_id,
-        nonce: nonce.to_vec(),
-        root,
-        padded_len,
-        original_size,
-        filename,
-    }
 }
 
 async fn prepare_real_descriptor() -> Result<RawFileDescriptor> {
