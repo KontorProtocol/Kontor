@@ -388,9 +388,7 @@ impl Reactor {
 
         block_handler(&mut self.runtime, &block).await?;
 
-        if !block.transactions.is_empty()
-            && let Some(tx) = &self.event_tx
-        {
+        if let Some(tx) = &self.event_tx {
             let _ = tx
                 .send(Event::Processed {
                     block: (&block).into(),

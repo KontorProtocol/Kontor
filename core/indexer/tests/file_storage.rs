@@ -9,7 +9,6 @@ async fn test_file_storage_regtest() -> Result<()> {
     Ok(())
 }
 
-#[ignore]
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_file_storage_e2e_regtest() -> Result<()> {
     file_storage_tests::proof_verification_e2e::run(runtime).await

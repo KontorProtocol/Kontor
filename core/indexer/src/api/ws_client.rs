@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
-use indexer_types::WsResponse;
+use indexer_types::{Event, WsResponse};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
@@ -44,9 +44,19 @@ impl WebSocketClient {
     pub async fn next(&mut self) -> Result<WsResponse> {
         loop {
             let msg = self.stream.next().await.unwrap()?;
-            if !msg.is_ping() {
-                return from_message(msg);
+            if msg.is_ping() {
+                continue;
             }
+            let response = from_message(msg)?;
+            // Skip processed events for non-relevant blocks
+            if let WsResponse::Event {
+                event: Event::Processed { block },
+            } = &response
+                && !block.relevant
+            {
+                continue;
+            }
+            return Ok(response);
         }
     }
 }

@@ -10,7 +10,7 @@ error: Store derive does not support Result type in Enums
 10 |     Var(anyhow::Result<u64>),
    |     ^^^
 
-error[E0412]: cannot find type `Error` in this scope
+error[E0425]: cannot find type `Error` in this scope
  --> tests/ui/store_invalid_result_inner.rs:5:21
   |
 5 |     Var(Result<u64, Error>),

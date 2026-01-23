@@ -4,17 +4,15 @@
 //! 1. Prepare files using kontor-crypto
 //! 2. Create agreements in the filestorage contract
 //! 3. Generate challenges through the contract
-//! 4. Generate proofs using kontor-crypto PorSystem
+//! 4. Load precomputed proofs from fixtures
 //! 5. Verify proofs through the contract
 //!
 //! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
 
 use ff::PrimeField;
 use indexer::database::types::field_element_to_bytes;
-use kontor_crypto::{
-    FileLedger as CryptoFileLedger,
-    api::{self, Challenge as CryptoChallenge, FieldElement, PorSystem},
-};
+use kontor_crypto::api::{self, FieldElement};
+use serde::Deserialize;
 use testlib::*;
 
 /// Create valid seed bytes from an integer.
@@ -46,28 +44,6 @@ fn metadata_to_descriptor(metadata: &api::FileMetadata) -> RawFileDescriptor {
     }
 }
 
-/// Convert contract challenge data to kontor-crypto Challenge
-fn challenge_data_to_crypto_challenge(
-    challenge: &filestorage::ChallengeData,
-    metadata: &api::FileMetadata,
-) -> CryptoChallenge {
-    // Convert seed bytes to FieldElement
-    let seed_bytes: [u8; 32] = challenge
-        .seed
-        .clone()
-        .try_into()
-        .expect("seed should be 32 bytes");
-    let seed = FieldElement::from_repr(seed_bytes.into()).expect("valid field element");
-
-    CryptoChallenge::new(
-        metadata.clone(),
-        challenge.block_height,
-        challenge.num_challenges as usize,
-        seed,
-        challenge.prover_id.clone(),
-    )
-}
-
 /// Prepare test file data and return (PreparedFile, FileMetadata)
 fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
     // Use filename as deterministic nonce for reproducibility
@@ -79,96 +55,52 @@ fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api:
     api::prepare_file(content, filename, &nonce).expect("Failed to prepare file")
 }
 
+#[derive(Debug, Deserialize)]
+struct PorProofFixtures {
+    invalid_proof_hex: String,
+    cross_block_agg_hex: String,
+}
+
+fn load_por_fixtures() -> Result<PorProofFixtures> {
+    let raw = include_str!("../fixtures/por_proof_fixtures.json");
+    let fixtures: PorProofFixtures =
+        serde_json::from_str(raw).map_err(|e| anyhow!("Invalid fixtures JSON: {e}"))?;
+    Ok(fixtures)
+}
+
+fn decode_fixture_hex(field: &str, value: &str) -> Result<Vec<u8>> {
+    if value.trim().is_empty() {
+        return Err(anyhow!(
+            "Fixture value for {field} is empty. Run: cargo run --bin generate_por_fixtures"
+        ));
+    }
+    hex::decode(value.trim()).map_err(|e| anyhow!("Invalid hex for {field}: {e}"))
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Invalid Proof Returns Rejected
 // ─────────────────────────────────────────────────────────────────
 
-async fn e2e_invalid_proof_rejected(
-    runtime: &mut Runtime,
-    crypto_ledger: &mut CryptoFileLedger,
-) -> Result<()> {
+async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let fixtures = load_por_fixtures()?;
 
-    // Prepare two different files
-    let file1_content = b"First file content for testing";
-    let (prepared_file1, metadata1) = prepare_test_file(file1_content, "file1.txt");
-
+    // Prepare file
     let file2_content = b"Second file with different content";
     let (_prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
 
-    // Add both files to shared ledger (mirrors runtime's file_ledger)
-    crypto_ledger.add_file(&metadata1).unwrap();
-    crypto_ledger.add_file(&metadata2).unwrap();
-
-    // Create agreement for file1 in contract
-    let descriptor1 = metadata_to_descriptor(&metadata1);
-    let created1 = filestorage::create_agreement(runtime, &signer, descriptor1).await??;
-
-    // Also create agreement for file2 so it's in the system
+    // Create agreement for file2 in contract
     let descriptor2 = metadata_to_descriptor(&metadata2);
     let created2 = filestorage::create_agreement(runtime, &signer, descriptor2).await??;
 
-    // Activate both agreements
-    for agreement_id in [&created1.agreement_id, &created2.agreement_id] {
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_1").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_2").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_3").await??;
-    }
+    // Activate agreement
+    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_1").await??;
+    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_2").await??;
+    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_3").await??;
 
-    // Create challenge for file2
-    let seed = valid_seed_bytes(99);
-    let contract_challenge = filestorage::create_challenge_for_agreement(
-        runtime,
-        &signer,
-        &created2.agreement_id,
-        "node_1",
-        20000,
-        seed,
-    )
-    .await??;
-
-    // Create crypto challenge for file2
-    let crypto_challenge = challenge_data_to_crypto_challenge(&contract_challenge, &metadata2);
-
-    // Generate proof using WRONG file (file1 instead of file2)
-    // This should produce an invalid proof
-    let system = PorSystem::new(crypto_ledger);
-    let wrong_proof = system.prove(
-        vec![&prepared_file1],
-        std::slice::from_ref(&crypto_challenge),
-    );
-
-    // The proof generation itself may fail or produce invalid proof
-    match wrong_proof {
-        Ok(proof) => {
-            let proof_bytes = proof.to_bytes().expect("serialize");
-            let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await?;
-
-            // Should either error or return with challenge marked as Failed/Invalid
-            match result {
-                Ok(_verify_result) => {
-                    // Verification completed - check challenge status
-                    let challenge_after =
-                        filestorage::get_challenge(runtime, &contract_challenge.challenge_id)
-                            .await?
-                            .unwrap();
-
-                    // Should NOT be Proven if wrong file was used
-                    assert_ne!(
-                        challenge_after.status,
-                        filestorage::ChallengeStatus::Proven,
-                        "Wrong file proof should not result in Proven status"
-                    );
-                }
-                Err(_) => {
-                    // Verification error is also acceptable
-                }
-            }
-        }
-        Err(_) => {
-            // Proof generation failed with wrong file - this is expected
-        }
-    }
+    let proof_bytes = decode_fixture_hex("invalid_proof_hex", &fixtures.invalid_proof_hex)?;
+    let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await?;
+    assert!(result.is_err(), "Invalid proof should be rejected");
 
     Ok(())
 }
@@ -186,21 +118,15 @@ async fn e2e_invalid_proof_rejected(
 /// 3. Block N+2: Aggregated proof generated for A and B's challenges
 /// 4. Verification succeeds because proof's ledger_root (before C) is a valid historical root
 ///    (also exercises multi-file aggregated proof in a single run)
-async fn e2e_cross_block_aggregation_with_new_agreement(
-    runtime: &mut Runtime,
-    crypto_ledger: &mut CryptoFileLedger,
-) -> Result<()> {
+async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let fixtures = load_por_fixtures()?;
 
     // Step 1: Create files A and B (existing before the "middle" agreement)
-    let (prepared_a, metadata_a) =
+    let (_prepared_a, metadata_a) =
         prepare_test_file(b"Content of file A for cross-block", "cross_a.txt");
-    let (prepared_b, metadata_b) =
+    let (_prepared_b, metadata_b) =
         prepare_test_file(b"Content of file B for cross-block", "cross_b.txt");
-
-    // Add files A and B to ledger
-    crypto_ledger.add_file(&metadata_a).unwrap();
-    crypto_ledger.add_file(&metadata_b).unwrap();
 
     // Create agreements for A and B
     let descriptor_a = metadata_to_descriptor(&metadata_a);
@@ -243,7 +169,6 @@ async fn e2e_cross_block_aggregation_with_new_agreement(
     // File C is added after challenges were created but before proof generation
     let (_prepared_c, metadata_c) =
         prepare_test_file(b"Content of file C - new agreement", "cross_c.txt");
-    crypto_ledger.add_file(&metadata_c).unwrap();
 
     let descriptor_c = metadata_to_descriptor(&metadata_c);
     let created_c = filestorage::create_agreement(runtime, &signer, descriptor_c).await??;
@@ -253,22 +178,8 @@ async fn e2e_cross_block_aggregation_with_new_agreement(
     filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_2").await??;
     filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_3").await??;
 
-    // Step 4: Generate aggregated proof for A and B's challenges
-    // The ledger now has 3 files, but the proof will use the current ledger state
-    let crypto_challenges = vec![
-        challenge_data_to_crypto_challenge(&challenge_a, &metadata_a),
-        challenge_data_to_crypto_challenge(&challenge_b, &metadata_b),
-    ];
-
-    let system = PorSystem::new(crypto_ledger);
-    let proof = system
-        .prove(vec![&prepared_a, &prepared_b], &crypto_challenges)
-        .expect("Failed to generate aggregated proof");
-
-    // Step 5: Verify the proof
-    // The runtime's file_ledger now has file C, but the proof's ledger_root
-    // (which includes A, B, and C) should be the current root
-    let proof_bytes = proof.to_bytes().expect("serialize");
+    // Step 4: Verify the precomputed proof
+    let proof_bytes = decode_fixture_hex("cross_block_agg_hex", &fixtures.cross_block_agg_hex)?;
     let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await??;
 
     assert_eq!(
@@ -302,11 +213,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(
 // Test Runner
 // ─────────────────────────────────────────────────────────────────
 pub async fn run(runtime: &mut Runtime) -> Result<()> {
-    // Shared crypto_ledger that accumulates files in sync with runtime's file_ledger.
-    // This mirrors production where prover and verifier have the same ledger state.
-    let mut crypto_ledger = CryptoFileLedger::new();
-
-    e2e_invalid_proof_rejected(runtime, &mut crypto_ledger).await?;
-    e2e_cross_block_aggregation_with_new_agreement(runtime, &mut crypto_ledger).await?;
+    e2e_cross_block_aggregation_with_new_agreement(runtime).await?;
+    e2e_invalid_proof_rejected(runtime).await?;
     Ok(())
 }
