@@ -135,7 +135,7 @@ world root {
   export generate-challenges-for-block: async func(
     ctx: borrow<proc-context>,
     block-height: u64,
-    prev-block-hash: list<u8>
+    block-hash: list<u8>
   ) -> list<challenge-data>;
 
   // Create a challenge for a specific agreement and node (deterministic, for testing)

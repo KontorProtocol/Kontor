@@ -224,6 +224,10 @@ impl Guest for Filestorage {
             )));
         }
 
+        // NOTE: the storage protocol spec does not allow
+        // voluntary departure when the agreement would be at/below the minimum replication
+        // threshold (|N_f| <= n_min). We do not enforce that rule yet.
+
         // Mark node as inactive (don't delete, just set to false)
         nodes_state.nodes().set(node_id.clone(), false);
 
@@ -312,12 +316,17 @@ impl Guest for Filestorage {
     fn generate_challenges_for_block(
         ctx: &ProcContext,
         block_height: u64,
-        prev_block_hash: Vec<u8>,
+        block_hash: Vec<u8>,
     ) -> Vec<ChallengeData> {
         let model = ctx.model();
         let mut new_challenges = Vec::new();
 
+        // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)
+        let sigma_batch = derive_batch_seed(&block_hash, block_height);
+
         // Exclude any agreement_id that already has an active challenge.
+        //
+        // NOTE: we could change this filter to filter by active challenges by file + node
         let challenged_agreement_ids: Vec<String> = model
             .challenges()
             .keys()
@@ -344,8 +353,8 @@ impl Guest for Filestorage {
             return new_challenges;
         }
 
-        // Derive deterministic seed from block hash for agreement selection
-        let agreement_seed = derive_seed(&prev_block_hash, b"agreement_selection");
+        // Derive deterministic seed from the per-block batch seed for agreement selection
+        let agreement_seed = derive_stream_seed(&sigma_batch, b"agreement_selection");
         let mut rng_counter: u64 = 0;
 
         // Calculate expected number of challenges: θ(t) = (C_target * |F|) / B
@@ -384,10 +393,6 @@ impl Guest for Filestorage {
             }
         }
 
-        // Derive batch seed for all challenges in this block
-        let batch_seed = derive_seed(&prev_block_hash, b"batch_seed");
-        let seed: Vec<u8> = batch_seed.to_vec();
-
         let s_chal = model.s_chal();
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
@@ -414,15 +419,21 @@ impl Guest for Filestorage {
                 continue;
             }
 
+            // Get file_id early since we need it for multiple derivations
+            let file_id = agreement.file_id();
+
             // Deterministically select one node (agreement-level exclusion ensures we create
             // at most 1 active challenge per agreement total).
-            let file_id = agreement.file_id();
-            let node_seed_input = [prev_block_hash.as_slice(), b":", file_id.as_bytes()].concat();
-            let node_seed = derive_seed(&node_seed_input, b"node_selection");
+            let node_seed = derive_stream_seed_for_file(&sigma_batch, b"node_selection", &file_id);
             let mut node_counter: u64 = 0;
             let node_index =
                 uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
             let prover_id = active_nodes[node_index].clone();
+
+            // Per-challenge seed used by kontor-crypto as the Challenge.seed field.
+            // Derived deterministically from the per-block batch seed and the file_id.
+            let challenge_seed = derive_challenge_seed_for_file(&sigma_batch, &file_id);
+            let seed: Vec<u8> = challenge_seed.to_vec();
 
             let descriptor = match file_registry::get_file_descriptor(&file_id) {
                 Some(d) => d,
@@ -510,10 +521,10 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Validate seed length
-        if seed.len() != 32 {
+        // Validate seed length (64 bytes required for unbiased field element conversion)
+        if seed.len() != 64 {
             return Err(Error::Message(format!(
-                "Seed must be 32 bytes, got {}",
+                "Seed must be 64 bytes, got {}",
                 seed.len()
             )));
         }
@@ -670,35 +681,65 @@ pub fn compute_num_to_challenge(
     core::cmp::min(num, total_files_u64) as usize
 }
 
-/// Derive a 32-byte seed using HKDF-SHA256 via host function
-pub fn derive_seed(ikm: &[u8], info: &[u8]) -> [u8; 32] {
-    // Use HKDF host function
-    // info is used as the "info" parameter (application-specific context)
-    // We use "kontor/hkdf/" prefix for domain separation
-    let full_info = [b"kontor/hkdf/".as_slice(), info].concat();
-    let derived = crypto::hkdf_derive(ikm, &[], &full_info);
-
-    // Convert to fixed-size array
-    let mut result = [0u8; 32];
-    let len = core::cmp::min(derived.len(), 32);
-    result[..len].copy_from_slice(&derived[..len]);
-    result
+/// Derive the per-block batch seed:
+///   σ_batch = HKDF_SHA256(block_hash, info = "KONTOR-CHAL::v1" || block_height)
+///
+/// 64 bytes are suitable for unbiased field element conversion via from_uniform_bytes.
+pub fn derive_batch_seed(block_hash: &[u8], block_height: u64) -> [u8; 64] {
+    let full_info = [
+        b"KONTOR-CHAL::v1".as_slice(),
+        block_height.to_le_bytes().as_slice(),
+    ]
+    .concat();
+    // Spec does not require a salt here; use empty salt for determinism.
+    let derived = crypto::hkdf_derive(block_hash, &[], &full_info);
+    derived
+        .try_into()
+        .expect("hkdf_derive must return 64 bytes")
 }
 
-/// Deterministically derive a u64 from a 32-byte seed using HKDF-SHA256 via host function.
+/// Derive a deterministic stream seed from σ_batch for a particular purpose.
+pub fn derive_stream_seed(sigma_batch: &[u8; 64], domain: &[u8]) -> [u8; 64] {
+    let full_info = [b"KONTOR-CHAL-STREAM::v1/".as_slice(), domain].concat();
+    let derived = crypto::hkdf_derive(sigma_batch, &[], &full_info);
+    derived
+        .try_into()
+        .expect("hkdf_derive must return 64 bytes")
+}
+
+/// Domain-separated stream seed for a specific file.
+pub fn derive_stream_seed_for_file(
+    sigma_batch: &[u8; 64],
+    domain: &[u8],
+    file_id: &str,
+) -> [u8; 64] {
+    let full_info = [b"KONTOR-CHAL-STREAM::v1/".as_slice(), domain].concat();
+    let derived = crypto::hkdf_derive(sigma_batch, file_id.as_bytes(), &full_info);
+    derived
+        .try_into()
+        .expect("hkdf_derive must return 64 bytes")
+}
+
+/// Derive the per-file challenge seed (64 bytes) from σ_batch and file_id.
+pub fn derive_challenge_seed_for_file(sigma_batch: &[u8; 64], file_id: &str) -> [u8; 64] {
+    let derived = crypto::hkdf_derive(sigma_batch, file_id.as_bytes(), b"KONTOR-SEED::v1");
+    derived
+        .try_into()
+        .expect("hkdf_derive must return 64 bytes")
+}
+
+/// Deterministically derive a u64 from a 64-byte seed using HKDF-SHA256 via host function.
 /// `counter` is used as the HKDF salt to produce a stable stream of outputs.
-pub fn seeded_u64(seed: &[u8; 32], counter: &mut u64, info: &[u8]) -> u64 {
-    let full_info = [b"kontor/rng/".as_slice(), info].concat();
+pub fn seeded_u64(seed: &[u8; 64], counter: &mut u64, domain_separator: &[u8]) -> u64 {
+    let full_info = [b"KONTOR-RNG::v1/".as_slice(), domain_separator].concat();
     let salt = counter.to_le_bytes();
-    let bs = crypto::hkdf_derive(seed, &salt, &full_info);
-    let mut b8 = [0u8; 8];
-    b8.copy_from_slice(&bs[..8]);
+    let derived = crypto::hkdf_derive(seed, &salt, &full_info);
     *counter = counter.wrapping_add(1);
-    u64::from_le_bytes(b8)
+    u64::from_le_bytes(derived[..8].try_into().expect("slice is 8 bytes"))
 }
 
 /// Generate unbiased random index in range [0, n) using rejection sampling
-pub fn uniform_index(seed: &[u8; 32], counter: &mut u64, info: &[u8], n: usize) -> usize {
+pub fn uniform_index(seed: &[u8; 64], counter: &mut u64, info: &[u8], n: usize) -> usize {
     uniform_index_from_u64(n, &mut || seeded_u64(seed, counter, info))
 }
 

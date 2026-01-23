@@ -1080,14 +1080,14 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        // Use HKDF-SHA256 to derive a 32-byte key
+        // Use HKDF-SHA256 to derive a 64-byte key (suitable for field element conversion)
         let salt_ref = if salt.is_empty() {
             None
         } else {
             Some(salt.as_slice())
         };
         let hk = Hkdf::<Sha256>::new(salt_ref, &ikm);
-        let mut okm = [0u8; 32];
+        let mut okm = [0u8; 64];
         hk.expand(&info, &mut okm)
             .map_err(|e| anyhow::anyhow!("HKDF expand error: {}", e))?;
         Ok(okm.to_vec())

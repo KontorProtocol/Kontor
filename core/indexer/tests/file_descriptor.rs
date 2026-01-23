@@ -1,7 +1,7 @@
 use indexer::runtime::wit::FileDescriptor;
 
-fn create_valid_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
+fn create_valid_seed() -> [u8; 64] {
+    let mut seed = [0u8; 64];
     seed[0] = 1;
     seed
 }

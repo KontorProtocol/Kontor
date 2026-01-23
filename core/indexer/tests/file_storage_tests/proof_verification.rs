@@ -175,8 +175,8 @@ pub async fn run(runtime: &mut Runtime) -> Result<()> {
         );
         assert_eq!(
             challenge.seed.len(),
-            32,
-            "Challenge seed should be 32 bytes"
+            64,
+            "Challenge seed should be 64 bytes"
         );
 
         let signer = runtime.identity().await?;

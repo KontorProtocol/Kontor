@@ -7,6 +7,7 @@ use crate::database::types::{FileMetadataRow, bytes_to_field_element};
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
+use kontor_crypto::field_from_uniform_bytes;
 
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
@@ -121,16 +122,18 @@ impl FileDescriptor {
         seed: &[u8],
         prover_id: String,
     ) -> Result<Challenge, Error> {
-        // Convert root bytes to FieldElement
+        // Convert root bytes to FieldElement (root is a Poseidon hash output, already valid)
         let root = bytes_to_field_element(&self.file_metadata_row.root)
             .ok_or_else(|| Error::Validation("Invalid root field element".to_string()))?;
 
-        // Convert seed bytes to FieldElement
-        let seed_bytes: [u8; 32] = seed
+        // Convert 64-byte seed to FieldElement using from_uniform_bytes.
+        // The HKDF host function generates 64 bytes for unbiased field element conversion.
+        let seed_bytes: [u8; 64] = seed
             .try_into()
-            .map_err(|_| Error::Validation("Invalid seed length, expected 32 bytes".to_string()))?;
-        let seed_field = bytes_to_field_element(&seed_bytes)
-            .ok_or_else(|| Error::Validation("Invalid seed field element".to_string()))?;
+            .map_err(|_| Error::Validation("Invalid seed length, expected 64 bytes".to_string()))?;
+
+        // Convert to field element with proper modular reduction (never fails)
+        let seed_field = field_from_uniform_bytes(&seed_bytes);
 
         let file_metadata = CryptoFileMetadata {
             file_id: self.file_metadata_row.file_id.clone(),
