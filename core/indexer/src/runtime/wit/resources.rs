@@ -96,15 +96,11 @@ impl FileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
-        let nonce: [u8; 32] = raw
-            .nonce
-            .try_into()
-            .map_err(|_| Error::Validation("expected 32 bytes for nonce".to_string()))?;
         Ok(Self {
             file_metadata_row: FileMetadataRow::builder()
                 .file_id(raw.file_id)
                 .object_id(raw.object_id)
-                .nonce(nonce)
+                .nonce(raw.nonce)
                 .root(root)
                 .padded_len(raw.padded_len)
                 .original_size(raw.original_size)
@@ -138,7 +134,7 @@ impl FileDescriptor {
         let file_metadata = CryptoFileMetadata {
             file_id: self.file_metadata_row.file_id.clone(),
             object_id: self.file_metadata_row.object_id.clone(),
-            nonce: self.file_metadata_row.nonce.into(),
+            nonce: self.file_metadata_row.nonce.clone(),
             root,
             padded_len: self.file_metadata_row.padded_len as usize,
             original_size: self.file_metadata_row.original_size as usize,

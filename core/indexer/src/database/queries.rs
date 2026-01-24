@@ -1015,7 +1015,7 @@ pub async fn insert_file_metadata(
         params![
             entry.file_id.clone(),
             entry.object_id.clone(),
-            entry.nonce,
+            entry.nonce.clone(),
             entry.root,
             entry.padded_len,
             entry.original_size,

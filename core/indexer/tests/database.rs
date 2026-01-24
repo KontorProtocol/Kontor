@@ -654,13 +654,13 @@ async fn test_file_metadata_operations() -> Result<()> {
     let original_size = 100u64;
     let filename = "file_abc123.dat".to_string();
 
-    let object_id = "object_abc123".to_string();
-    let nonce = [3u8; 32];
+    let object_id = "obj_abc123".to_string();
+    let nonce = vec![3u8; 32];
 
     let entry1 = FileMetadataRow::builder()
         .file_id(file_id.clone())
         .object_id(object_id.clone())
-        .nonce(nonce)
+        .nonce(nonce.clone())
         .root(root)
         .padded_len(padded_len)
         .original_size(original_size)
@@ -699,8 +699,8 @@ async fn test_file_metadata_operations() -> Result<()> {
     insert_transaction(&conn, tx2.clone()).await?;
 
     let file_id2 = "file_def456".to_string();
-    let object_id2 = "object_def456".to_string();
-    let nonce2 = [4u8; 32];
+    let object_id2 = "obj_def456".to_string();
+    let nonce2 = vec![4u8; 32];
     let root2 = [2u8; 32];
     let padded_len2 = 2048u64;
     let original_size2 = 200u64;

@@ -534,8 +534,8 @@ pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: i64) -> 
 
     FileMetadataRow::builder()
         .file_id(file_id.to_string())
-        .object_id(format!("object_{}", file_id))
-        .nonce(nonce)
+        .object_id(format!("obj_{}", file_id))
+        .nonce(nonce.to_vec())
         .root(root)
         .padded_len(1024)
         .original_size(512)
