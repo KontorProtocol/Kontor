@@ -92,6 +92,15 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
     let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
 
+    // Expire any challenges that have passed their deadline.
+    // This marks challenges as Expired if deadline_height <= current block height.
+    if let Err(e) = filestorage::api::expire_challenges(runtime, &core_signer, block.height).await {
+        warn!(
+            "Failed to expire challenges at height {}: {:?}",
+            block.height, e
+        );
+    }
+
     match filestorage::api::generate_challenges_for_block(
         runtime,
         &core_signer,
@@ -182,15 +191,6 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     }
 
     set_block_processed(&runtime.storage.conn, block.height as i64).await?;
-
-    // Expire any challenges that have passed their deadline.
-    // This marks challenges as Expired if deadline_height <= current block height.
-    if let Err(e) = filestorage::api::expire_challenges(runtime, &core_signer, block.height).await {
-        warn!(
-            "Failed to expire challenges at height {}: {:?}",
-            block.height, e
-        );
-    }
 
     Ok(())
 }
