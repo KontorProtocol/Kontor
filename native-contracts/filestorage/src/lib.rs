@@ -295,8 +295,9 @@ impl Guest for Filestorage {
             .collect()
     }
 
-    fn expire_challenges(ctx: &ProcContext, current_height: u64) {
+    fn expire_challenges(ctx: &ProcContext, current_height: u64) -> u64 {
         let model = ctx.model();
+        let mut expired = 0u64;
 
         // Iterate through all challenges and expire those past deadline
         for challenge_id in model.challenges().keys::<String>() {
@@ -305,8 +306,10 @@ impl Guest for Filestorage {
                 && challenge.deadline_height() <= current_height
             {
                 challenge.set_status(ChallengeStatus::Expired);
+                expired = expired.saturating_add(1);
             }
         }
+        expired
     }
 
     // ─────────────────────────────────────────────────────────────────

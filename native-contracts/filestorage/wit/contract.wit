@@ -130,7 +130,7 @@ world root {
   export expire-challenges: async func(
     ctx: borrow<proc-context>,
     current-height: u64
-  );
+  ) -> u64;
 
   export generate-challenges-for-block: async func(
     ctx: borrow<proc-context>,
