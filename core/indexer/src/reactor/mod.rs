@@ -86,46 +86,6 @@ pub async fn simulate_handler(
 pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
-    // Generate challenges for this block using the current block hash as randomness source.
-    // This aligns with the storage protocol spec: the entropy becomes known only once the
-    // block is mined, so it cannot be predicted ahead of time by storage nodes.
-    let core_signer = Signer::Core(Box::new(Signer::Nobody));
-    let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-
-    // Expire any challenges that have passed their deadline.
-    // This marks challenges as Expired if deadline_height <= current block height.
-    if let Err(e) = filestorage::api::expire_challenges(runtime, &core_signer, block.height).await {
-        warn!(
-            "Failed to expire challenges at height {}: {:?}",
-            block.height, e
-        );
-    }
-
-    match filestorage::api::generate_challenges_for_block(
-        runtime,
-        &core_signer,
-        block.height,
-        block_hash,
-    )
-    .await
-    {
-        Ok(challenges) => {
-            if !challenges.is_empty() {
-                info!(
-                    "Generated {} challenges at block height {}",
-                    challenges.len(),
-                    block.height
-                );
-            }
-        }
-        Err(e) => {
-            warn!(
-                "Failed to generate challenges at height {}: {:?}",
-                block.height, e
-            );
-        }
-    }
-
     for t in &block.transactions {
         insert_transaction(
             &runtime.storage.conn,
@@ -187,6 +147,41 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     }
                 }
             };
+        }
+    }
+
+    let core_signer = Signer::Core(Box::new(Signer::Nobody));
+    let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
+
+    if let Err(e) = filestorage::api::expire_challenges(runtime, &core_signer, block.height).await {
+        panic!(
+            "Failed to expire challenges at height {}: {:?}",
+            block.height, e
+        );
+    }
+
+    match filestorage::api::generate_challenges_for_block(
+        runtime,
+        &core_signer,
+        block.height,
+        block_hash,
+    )
+    .await
+    {
+        Ok(challenges) => {
+            if !challenges.is_empty() {
+                info!(
+                    "Generated {} challenges at block height {}",
+                    challenges.len(),
+                    block.height
+                );
+            }
+        }
+        Err(e) => {
+            panic!(
+                "Failed to generate challenges at height {}: {:?}",
+                block.height, e
+            );
         }
     }
 

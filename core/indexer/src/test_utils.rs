@@ -536,7 +536,7 @@ pub fn valid_seed_field(n: u64) -> ValidSeed {
 
     // Fill the rest deterministically from SHA256 chaining to avoid obvious structure.
     let h1 = Sha256::digest(&bytes[..8]);
-    let h2 = Sha256::digest(&h1);
+    let h2 = Sha256::digest(h1);
     bytes[8..40].copy_from_slice(&h1);
     bytes[40..64].copy_from_slice(&h2[..24]);
 
@@ -588,4 +588,36 @@ pub fn make_descriptor(
         original_size,
         filename,
     }
+}
+
+// Pre-computed lucky block hashes for challenge generation tests.
+// Each hash guarantees a challenge when there's 1 eligible file.
+// Stored as hex strings for readability; use `lucky_hash()` to decode.
+
+/// Lucky hash for block height 1000 (roll = 7)
+pub const LUCKY_HASH_1000: &str =
+    "8db6b1269eab0af290543fc6cc3945018ba7332085b18a71170ee234e4f43676";
+
+/// Lucky hash for block height 10000 (roll = 10)
+pub const LUCKY_HASH_10000: &str =
+    "dda7bbc8c286d5f8a390fc7a9918a83eefd7046ad878a8feef7297560929c75d";
+
+/// Lucky hash for block height 50000 (roll = 1)
+pub const LUCKY_HASH_50000: &str =
+    "d998f2928dab53f43cda61ed3bd6f2ebdbae001df799175ab28601bf16187e52";
+
+/// Lucky hash for block height 100000 (roll = 2)
+pub const LUCKY_HASH_100000: &str =
+    "10adb611e366cab60d827a935bb4ced6431e36bd7576d38eb568084ab39d6bb1";
+
+/// Lucky hash for block height 500000 (roll = 8)
+pub const LUCKY_HASH_500000: &str =
+    "e68680749dc7fd55901397031d27304d63d4efd3cb67e78a7cdb8e206a17c35b";
+
+/// Decode a hex-encoded lucky hash to a 32-byte array.
+pub fn lucky_hash(hex: &str) -> [u8; 32] {
+    hex::decode(hex)
+        .expect("Invalid hex string")
+        .try_into()
+        .expect("Hash must be exactly 32 bytes")
 }

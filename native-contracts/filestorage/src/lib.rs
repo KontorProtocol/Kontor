@@ -295,8 +295,8 @@ impl Guest for Filestorage {
             .collect()
     }
 
-    fn expire_challenges(ctx: &ProcContext, current_height: u64) -> u64 {
-        let model = ctx.model();
+    fn expire_challenges(ctx: &CoreContext, current_height: u64) -> u64 {
+        let model = ctx.proc_context().model();
         let mut expired = 0u64;
 
         // Iterate through all challenges and expire those past deadline
@@ -317,11 +317,11 @@ impl Guest for Filestorage {
     // ─────────────────────────────────────────────────────────────────
 
     fn generate_challenges_for_block(
-        ctx: &ProcContext,
+        ctx: &CoreContext,
         block_height: u64,
         block_hash: Vec<u8>,
     ) -> Vec<ChallengeData> {
-        let model = ctx.model();
+        let model = ctx.proc_context().model();
         let mut new_challenges = Vec::new();
 
         // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)

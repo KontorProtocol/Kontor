@@ -10,10 +10,10 @@
 //! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
 
 use indexer::database::types::field_element_to_bytes;
+use indexer::test_utils::valid_seed_field;
 use kontor_crypto::api::{self};
 use serde::Deserialize;
 use testlib::*;
-use indexer::test_utils::valid_seed_field;
 
 import!(
     name = "filestorage",

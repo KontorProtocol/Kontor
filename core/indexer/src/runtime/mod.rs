@@ -668,8 +668,8 @@ impl Runtime {
             .expect("Failed to run burn and release gas")
             .expect("Failed to burn and release gas");
         }
-        // don't write result for native token hold function
-        if contract_address == &token::address() && func_name == "hold" {
+        // don't write result for native contract internal functions
+        if self.should_skip_result(contract_address, func_name) {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
@@ -1344,6 +1344,20 @@ impl Runtime {
     async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {
         self.table.lock().await.delete(rep)?;
         Ok(())
+    }
+}
+
+impl Runtime {
+    fn should_skip_result(&self, contract_address: &ContractAddress, func_name: &str) -> bool {
+        if contract_address == &token::address() && func_name == "hold" {
+            return true;
+        }
+        if contract_address == &filestorage::address()
+            && (func_name == "expire-challenges" || func_name == "generate-challenges-for-block")
+        {
+            return true;
+        }
+        false
     }
 }
 

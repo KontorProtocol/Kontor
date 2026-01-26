@@ -2,11 +2,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
+use indexer::test_utils::valid_seed_field;
 use kontor_crypto::{
     FileLedger, PorSystem,
     api::{self, Challenge},
 };
-use indexer::test_utils::valid_seed_field;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
