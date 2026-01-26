@@ -581,6 +581,7 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
 
     let block_hash = vec![1u8; 32];
+    let before_active = filestorage::get_active_challenges(runtime).await?;
     let challenges =
         filestorage::generate_challenges_for_block(runtime, &signer, 1000, block_hash).await?;
 
@@ -588,8 +589,8 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     assert!(challenges.len() <= 1, "Should have 0 or 1 challenges");
 
     // Verify get_active_challenges works
-    let active = filestorage::get_active_challenges(runtime).await?;
-    assert_eq!(active.len(), challenges.len());
+    let after_active = filestorage::get_active_challenges(runtime).await?;
+    assert_eq!(after_active.len(), before_active.len() + challenges.len());
 
     // Verify expire_challenges works
     filestorage::expire_challenges(runtime, &signer, 10000).await?;

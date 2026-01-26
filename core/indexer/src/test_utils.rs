@@ -17,6 +17,7 @@ use indexer_types::{Block, BlockRow, Transaction};
 use indexmap::IndexMap;
 use libsql::Connection;
 use rand::prelude::*;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -28,6 +29,7 @@ use crate::bitcoin_follower::rpc;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
 use crate::runtime::RawFileDescriptor;
+use kontor_crypto::{api::FieldElement, field_from_uniform_bytes};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -520,6 +522,26 @@ pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
         };
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidSeed {
+    pub bytes: [u8; 64],
+    pub field: FieldElement,
+}
+
+pub fn valid_seed_field(n: u64) -> ValidSeed {
+    let mut bytes = [0u8; 64];
+    bytes[..8].copy_from_slice(&n.to_le_bytes());
+
+    // Fill the rest deterministically from SHA256 chaining to avoid obvious structure.
+    let h1 = Sha256::digest(&bytes[..8]);
+    let h2 = Sha256::digest(&h1);
+    bytes[8..40].copy_from_slice(&h1);
+    bytes[40..64].copy_from_slice(&h2[..24]);
+
+    let field = field_from_uniform_bytes(&bytes);
+    ValidSeed { bytes, field }
 }
 
 /// Helper to create a fake FileMetadataRow for testing.

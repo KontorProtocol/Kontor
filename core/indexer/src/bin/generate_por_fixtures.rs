@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use kontor_crypto::{
     FileLedger, PorSystem,
-    api::{self, Challenge, FieldElement},
+    api::{self, Challenge},
 };
+use indexer::test_utils::valid_seed_field;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -61,7 +62,7 @@ fn generate_invalid_proof_hex() -> Result<String> {
     ledger.add_file(&metadata2)?;
 
     let block_height = 20000u64;
-    let seed = FieldElement::from(99u64);
+    let seed = valid_seed_field(99).field;
     let challenge = Challenge::new(
         metadata2.clone(),
         block_height,
@@ -103,14 +104,14 @@ fn generate_cross_block_agg_hex() -> Result<String> {
         metadata_a.clone(),
         block_height,
         100,
-        FieldElement::from(200u64),
+        valid_seed_field(200).field,
         "node_1".to_string(),
     );
     let challenge_b = Challenge::new(
         metadata_b.clone(),
         block_height,
         100,
-        FieldElement::from(201u64),
+        valid_seed_field(201).field,
         "node_1".to_string(),
     );
     let challenges = vec![challenge_a, challenge_b];
