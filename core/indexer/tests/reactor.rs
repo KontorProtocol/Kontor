@@ -2,7 +2,7 @@ use anyhow::Result;
 use indexer_types::Block;
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, Txid, hashes::Hash};
+use bitcoin::{BlockHash, hashes::Hash};
 
 use indexer::{
     bitcoin_follower::{
@@ -11,7 +11,7 @@ use indexer::{
     },
     database::queries,
     reactor,
-    runtime::{ComponentCache, Decimal, Runtime, Storage, filestorage, token, wit::Signer},
+    runtime::{Decimal, filestorage, token, wit::Signer},
     test_utils::{
         LUCKY_HASH_100000, await_block_at_height, lucky_hash, make_descriptor,
         new_numbered_blockchain, new_test_db,
@@ -451,29 +451,13 @@ async fn test_reactor_rollback_hash_event() -> Result<()> {
 
 #[tokio::test]
 async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    queries::insert_processed_block(
-        &writer.connection(),
-        (&Block {
-            height: 0,
-            hash: BlockHash::from_byte_array([0x00; 32]),
-            prev_hash: BlockHash::from_byte_array([0x00; 32]),
-            transactions: vec![],
-        })
-            .into(),
-    )
-    .await?;
-
-    let storage = Storage::builder()
-        .height(0)
-        .tx_index(0)
-        .conn(writer.connection())
-        .build();
-    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts().await?;
-    runtime
-        .set_context(0, 0, 0, 0, Txid::from_byte_array([0x11; 32]), None, None)
-        .await;
+    let setup_block = Block {
+        height: 0,
+        hash: BlockHash::from_byte_array([0x00; 32]),
+        prev_hash: BlockHash::from_byte_array([0x00; 32]),
+        transactions: vec![],
+    };
+    let (mut runtime, _temp_dir) = testlib::Runtime::new_local_with_block(&setup_block).await?;
 
     let descriptor = make_descriptor(
         "reactor_lucky".to_string(),
@@ -501,17 +485,6 @@ async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
         prev_hash: BlockHash::from_byte_array([0x00; 32]),
         transactions: vec![],
     };
-    runtime
-        .set_context(
-            block_height as i64,
-            0,
-            0,
-            0,
-            Txid::from_byte_array([0x22; 32]),
-            None,
-            None,
-        )
-        .await;
     reactor::block_handler(&mut runtime, &block).await?;
 
     let after = filestorage::api::get_active_challenges(&mut runtime).await?;

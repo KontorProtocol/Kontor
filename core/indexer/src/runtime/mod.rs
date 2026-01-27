@@ -31,7 +31,8 @@ use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 pub use wit::Root;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
 use wit::kontor::*;
 
@@ -669,7 +670,7 @@ impl Runtime {
             .expect("Failed to burn and release gas");
         }
         // don't write result for native contract internal functions
-        if self.should_skip_result(contract_address, func_name) {
+        if should_skip_result(contract_address, func_name) {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
@@ -1347,18 +1348,21 @@ impl Runtime {
     }
 }
 
-impl Runtime {
-    fn should_skip_result(&self, contract_address: &ContractAddress, func_name: &str) -> bool {
-        if contract_address == &token::address() && func_name == "hold" {
-            return true;
-        }
-        if contract_address == &filestorage::address()
-            && (func_name == "expire-challenges" || func_name == "generate-challenges-for-block")
-        {
-            return true;
-        }
-        false
-    }
+static SKIP_RESULT_RULES: LazyLock<HashMap<&'static str, &'static [&'static str]>> =
+    LazyLock::new(|| {
+        let token_methods: &'static [&'static str] = &["hold"];
+        let filestorage_methods: &'static [&'static str] =
+            &["expire-challenges", "generate-challenges-for-block"];
+        HashMap::from([
+            ("token", token_methods),
+            ("filestorage", filestorage_methods),
+        ])
+    });
+
+fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
+    SKIP_RESULT_RULES
+        .get(contract_address.name.as_str())
+        .is_some_and(|methods| methods.contains(&func_name))
 }
 
 impl HasData for Runtime {
