@@ -597,6 +597,8 @@ async fn test_contract_result_operations() -> Result<()> {
     let result = ContractResultRow::builder()
         .id(1)
         .tx_index(tx1.tx_index)
+        .input_index(0)
+        .op_index(0)
         .height(height)
         .contract_id(contract_id)
         .value("".to_string())

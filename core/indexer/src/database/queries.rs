@@ -751,7 +751,7 @@ pub async fn get_results_paginated(
     let from = r#"
         contract_results r
         JOIN blocks b USING (height)
-        JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+        LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
         JOIN contracts c ON r.contract_id = c.id
     "#;
     let mut where_clauses = vec!["b.processed = 1".to_string()];
@@ -821,7 +821,7 @@ pub async fn get_op_result(
                 t.txid
             FROM contract_results r
             JOIN blocks b USING (height)
-            JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+            LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
             JOIN contracts c ON r.contract_id = c.id
             WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
             ORDER BY r.result_index DESC
@@ -841,9 +841,9 @@ pub async fn get_op_result(
 pub async fn get_contract_result(
     conn: &Connection,
     height: i64,
-    tx_index: i64,
-    input_index: i64,
-    op_index: i64,
+    tx_index: Option<i64>,
+    input_index: Option<i64>,
+    op_index: Option<i64>,
     result_index: i64,
 ) -> Result<Option<ContractResultRow>, Error> {
     let mut rows = conn
@@ -862,9 +862,9 @@ pub async fn get_contract_result(
                 value
             FROM contract_results
             WHERE height = :height
-              AND tx_index = :tx_index
-              AND input_index = :input_index
-              AND op_index = :op_index
+              AND tx_index IS :tx_index
+              AND input_index IS :input_index
+              AND op_index IS :op_index
               AND result_index = :result_index
             "#,
             named_params! {

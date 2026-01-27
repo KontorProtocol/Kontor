@@ -74,6 +74,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_1_id)
             .height(1)
             .tx_index(3)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -86,6 +88,8 @@ async fn test_get_results_query() -> Result<()> {
             .func("foo".to_string())
             .height(1)
             .tx_index(4)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -126,6 +130,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_1_id)
             .height(2)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -137,6 +143,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_2_id)
             .height(2)
             .tx_index(2)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -177,6 +185,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_1_id)
             .height(3)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -188,6 +198,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_2_id)
             .height(3)
             .tx_index(2)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -218,6 +230,20 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_1_id)
             .height(4)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    // insert a contract result with NULL tx_index (no associated transaction)
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_2_id)
+            .height(3)
+            .result_index(1)
             .gas(100)
             .build(),
     )
@@ -232,7 +258,21 @@ async fn test_get_results_query() -> Result<()> {
             .build(),
     )
     .await?;
-    assert_eq!(meta.total_count, 6);
+    assert_eq!(meta.total_count, 7); // 6 + 1 with NULL tx_index
+
+    // NULL tx_index result is included with txid: None
+    let (results, _) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .height(3)
+            .order(indexer::database::types::OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results.len(), 3); // 2 with tx_index + 1 with NULL tx_index
+    let null_tx_result = results.iter().find(|r| r.tx_index.is_none()).unwrap();
+    assert!(null_tx_result.txid.is_none());
 
     // contract filtering
     let (results, meta) = get_results_paginated(

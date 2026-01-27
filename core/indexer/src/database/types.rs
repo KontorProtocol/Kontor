@@ -187,11 +187,9 @@ pub struct ContractResultRow {
     #[builder(default = 0)]
     pub id: i64,
     pub height: i64,
-    pub tx_index: i64,
-    #[builder(default = 0)]
-    pub input_index: i64,
-    #[builder(default = 0)]
-    pub op_index: i64,
+    pub tx_index: Option<i64>,
+    pub input_index: Option<i64>,
+    pub op_index: Option<i64>,
     #[builder(default = 0)]
     pub result_index: i64,
     #[builder(default = 0)]
@@ -214,11 +212,9 @@ pub struct ContractResultPublicRow {
     #[builder(default = 0)]
     pub id: i64,
     pub height: i64,
-    pub tx_index: i64,
-    #[builder(default = 0)]
-    pub input_index: i64,
-    #[builder(default = 0)]
-    pub op_index: i64,
+    pub tx_index: Option<i64>,
+    pub input_index: Option<i64>,
+    pub op_index: Option<i64>,
     #[builder(default = 0)]
     pub result_index: i64,
     #[builder(default = "".to_string())]
@@ -228,7 +224,7 @@ pub struct ContractResultPublicRow {
     pub contract_name: String,
     pub contract_height: i64,
     pub contract_tx_index: i64,
-    pub txid: String,
+    pub txid: Option<String>,
 }
 
 impl HasRowId for ContractResultPublicRow {
