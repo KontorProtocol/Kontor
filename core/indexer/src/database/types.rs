@@ -80,7 +80,7 @@ pub struct CheckpointRow {
 pub struct ContractStateRow {
     pub contract_id: i64,
     pub height: i64,
-    pub tx_index: i64,
+    pub tx_index: Option<i64>,
     pub path: String,
     #[builder(default = vec![])]
     pub value: Vec<u8>,

@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS contracts (
 CREATE TABLE IF NOT EXISTS contract_state (
   contract_id INTEGER NOT NULL,
   height INTEGER NOT NULL,
-  tx_index INTEGER NOT NULL,
+  tx_index INTEGER,
   size INTEGER NOT NULL,
   path TEXT NOT NULL,
   value BLOB NOT NULL,

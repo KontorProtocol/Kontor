@@ -272,7 +272,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_index = tx_index;
+                row.tx_index = Some(tx_index);
                 insert_contract_state(conn, row).await?;
                 true
             }
