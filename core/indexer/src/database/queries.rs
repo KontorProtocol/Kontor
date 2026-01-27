@@ -733,22 +733,27 @@ pub async fn get_results_paginated(
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "r";
     let selects = r#"
-            DISTINCT
-            r.id,
-            r.height,
-            r.tx_index,
-            r.input_index,
-            r.op_index,
-            r.result_index,
-            r.func,
-            r.gas,
-            r.value,
-            c.name as contract_name,
-            c.height as contract_height,
-            c.tx_index as contract_tx_index
-            "#;
-    let from =
-        "contract_results r JOIN blocks b USING (height) JOIN contracts c ON r.contract_id = c.id";
+        DISTINCT
+        r.id,
+        r.height,
+        r.tx_index,
+        r.input_index,
+        r.op_index,
+        r.result_index,
+        r.func,
+        r.gas,
+        r.value,
+        c.name as contract_name,
+        c.height as contract_height,
+        c.tx_index as contract_tx_index,
+        t.txid
+    "#;
+    let from = r#"
+        contract_results r
+        JOIN blocks b USING (height)
+        JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+        JOIN contracts c ON r.contract_id = c.id
+    "#;
     let mut where_clauses = vec!["b.processed = 1".to_string()];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
@@ -812,7 +817,8 @@ pub async fn get_op_result(
                 r.value,
                 c.name as contract_name,
                 c.height as contract_height,
-                c.tx_index as contract_tx_index
+                c.tx_index as contract_tx_index,
+                t.txid
             FROM contract_results r
             JOIN blocks b USING (height)
             JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index

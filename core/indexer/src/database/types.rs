@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use bon::Builder;
 use ff::PrimeField;
-use indexer_types::{BlockRow, ContractListRow, TransactionRow};
+use indexer_types::{BlockRow, ContractListRow, ResultRow, TransactionRow};
 use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
@@ -228,6 +228,7 @@ pub struct ContractResultPublicRow {
     pub contract_name: String,
     pub contract_height: i64,
     pub contract_tx_index: i64,
+    pub txid: String,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -237,6 +238,28 @@ impl HasRowId for ContractResultPublicRow {
 
     fn id_name() -> String {
         "id".to_string()
+    }
+}
+
+impl From<ContractResultPublicRow> for ResultRow {
+    fn from(row: ContractResultPublicRow) -> Self {
+        ResultRow {
+            id: row.id,
+            height: row.height,
+            tx_index: row.tx_index,
+            input_index: row.input_index,
+            op_index: row.op_index,
+            result_index: row.result_index,
+            func: row.func,
+            gas: row.gas,
+            value: row.value,
+            contract: ContractAddress {
+                name: row.contract_name,
+                height: row.contract_height as u64,
+                tx_index: row.contract_tx_index as u64,
+            }
+            .to_string(),
+        }
     }
 }
 

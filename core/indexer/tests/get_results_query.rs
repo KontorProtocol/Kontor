@@ -3,13 +3,13 @@ use indexer::{
     database::{
         queries::{
             get_results_paginated, insert_block, insert_contract, insert_contract_result,
-            insert_processed_block,
+            insert_processed_block, insert_transaction,
         },
         types::{ContractResultRow, ContractRow, ResultQuery},
     },
-    test_utils::{new_mock_block_hash, new_test_db},
+    test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
-use indexer_types::BlockRow;
+use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractAddress;
 
 #[tokio::test]
@@ -48,6 +48,26 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .txid(new_mock_transaction(1003).txid.to_string())
+            .tx_index(3)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .txid(new_mock_transaction(1004).txid.to_string())
+            .tx_index(4)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
@@ -76,6 +96,26 @@ async fn test_get_results_query() -> Result<()> {
         BlockRow::builder()
             .height(2)
             .hash(new_mock_block_hash(2))
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(2)
+            .txid(new_mock_transaction(2001).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(2)
+            .txid(new_mock_transaction(2002).txid.to_string())
+            .tx_index(2)
             .build(),
     )
     .await?;
@@ -111,6 +151,26 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(3)
+            .txid(new_mock_transaction(3001).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(3)
+            .txid(new_mock_transaction(3002).txid.to_string())
+            .tx_index(2)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
@@ -138,6 +198,16 @@ async fn test_get_results_query() -> Result<()> {
         BlockRow::builder()
             .height(4)
             .hash(new_mock_block_hash(4))
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(4)
+            .txid(new_mock_transaction(4001).txid.to_string())
+            .tx_index(1)
             .build(),
     )
     .await?;
