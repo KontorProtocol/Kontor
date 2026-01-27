@@ -224,7 +224,7 @@ impl Guest for Filestorage {
             )));
         }
 
-        // NOTE: the storage protocol spec does not allow
+        // TODO: the storage protocol spec does not allow
         // voluntary departure when the agreement would be at/below the minimum replication
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
@@ -329,7 +329,7 @@ impl Guest for Filestorage {
 
         // Exclude any agreement_id that already has an active challenge.
         //
-        // NOTE: we could change this filter to filter by active challenges by file + node
+        // TODO maybe: we could change this filter to filter by active challenges by file + node
         let challenged_agreement_ids: Vec<String> = model
             .challenges()
             .keys()

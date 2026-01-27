@@ -171,19 +171,19 @@ impl RuntimeLocal {
     pub async fn new(block: Option<&Block>) -> Result<Self> {
         let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
+        insert_processed_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
         let (height, tx_index, txid) = if let Some(block) = block {
             insert_processed_block(&conn, block.into()).await?;
             (block.height as i64, 0, new_mock_transaction(0).txid)
         } else {
-            insert_processed_block(
-                &conn,
-                BlockRow::builder()
-                    .height(0)
-                    .hash(new_mock_block_hash(0))
-                    .relevant(true)
-                    .build(),
-            )
-            .await?;
             insert_processed_block(
                 &conn,
                 BlockRow::builder()
