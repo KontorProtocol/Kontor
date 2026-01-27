@@ -437,6 +437,7 @@ pub struct ResultRow {
     pub gas: i64,
     pub value: Option<String>,
     pub contract: String,
+    pub txid: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

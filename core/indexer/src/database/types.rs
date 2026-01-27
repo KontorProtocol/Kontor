@@ -259,6 +259,7 @@ impl From<ContractResultPublicRow> for ResultRow {
                 tx_index: row.contract_tx_index as u64,
             }
             .to_string(),
+            txid: row.txid,
         }
     }
 }
