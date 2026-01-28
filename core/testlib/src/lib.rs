@@ -11,7 +11,7 @@ use indexer::{
         types::ContractRow,
     },
     reg_tester::{self, generate_taproot_address},
-    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
+    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, TransactionContext},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
@@ -200,7 +200,13 @@ impl RuntimeLocal {
         let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
         runtime.publish_native_contracts().await?;
         runtime
-            .set_context(height, tx_index, 0, 0, txid, None, None)
+            .set_context(
+                height,
+                Some(TransactionContext::builder().tx_index(tx_index).build()),
+                txid,
+                None,
+                None,
+            )
             .await;
         Ok(Self {
             runtime,

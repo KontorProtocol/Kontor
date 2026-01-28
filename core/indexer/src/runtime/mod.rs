@@ -187,19 +187,12 @@ impl Runtime {
     pub async fn set_context(
         &mut self,
         height: i64,
-        tx_index: i64,
-        input_index: i64,
-        op_index: i64,
+        tx_context: Option<TransactionContext>,
         txid: Txid,
         previous_output: Option<bitcoin::OutPoint>,
         op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
-        let tx_context = Some(TransactionContext {
-            tx_index,
-            input_index,
-            op_index,
-        });
         self.storage.tx_context = tx_context;
         self.txid = Some(txid);
         self.id_generation_counter.reset().await;
@@ -240,8 +233,14 @@ impl Runtime {
     }
 
     pub async fn publish_native_contracts(&mut self) -> Result<()> {
-        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid, None, None)
-            .await;
+        self.set_context(
+            0,
+            Some(TransactionContext::default()),
+            new_mock_transaction(0).txid,
+            None,
+            None,
+        )
+        .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
             .await?;

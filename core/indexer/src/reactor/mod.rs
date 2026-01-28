@@ -30,7 +30,7 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage, filestorage, wit::Signer},
+    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -104,9 +104,11 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
             runtime
                 .set_context(
                     block.height as i64,
-                    t.index,
-                    input_index,
-                    0,
+                    Some(TransactionContext {
+                        tx_index: t.index,
+                        input_index,
+                        op_index: 0,
+                    }),
                     t.txid,
                     Some(metadata.previous_output),
                     op_return_data.map(Into::into),

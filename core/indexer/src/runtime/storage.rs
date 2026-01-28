@@ -19,10 +19,13 @@ use crate::{
     runtime::{ContractAddress, counter::Counter, stack::Stack},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Builder)]
 pub struct TransactionContext {
+    #[builder(default = 0)]
     pub tx_index: i64,
+    #[builder(default = 0)]
     pub input_index: i64,
+    #[builder(default = 0)]
     pub op_index: i64,
 }
 
