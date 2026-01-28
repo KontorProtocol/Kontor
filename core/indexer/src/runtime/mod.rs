@@ -13,7 +13,7 @@ pub mod token;
 mod types;
 pub mod wit;
 
-use bitcoin::{Txid, hashes::Hash};
+use bitcoin::hashes::Hash;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -59,17 +59,14 @@ use wasmtime::{
 use crate::database::native_contracts::{FILESTORAGE, TOKEN};
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
-use crate::{
-    runtime::{
-        counter::Counter,
-        fuel::{Fuel, FuelGauge},
-        stack::Stack,
-        wit::{
-            FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
-            ViewStorage,
-        },
+use crate::runtime::{
+    counter::Counter,
+    fuel::{Fuel, FuelGauge},
+    stack::Stack,
+    wit::{
+        FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
+        ViewStorage,
     },
-    test_utils::new_mock_transaction,
 };
 
 impls!(host = true);
@@ -111,7 +108,6 @@ pub struct Runtime {
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
-    pub txid: Option<Txid>,
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
 }
@@ -163,7 +159,6 @@ impl Runtime {
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
-            txid: None,
             previous_output: None,
             op_return_data: None,
         })
@@ -188,13 +183,11 @@ impl Runtime {
         &mut self,
         height: i64,
         tx_context: Option<TransactionContext>,
-        txid: Txid,
         previous_output: Option<bitcoin::OutPoint>,
         op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
         self.storage.tx_context = tx_context;
-        self.txid = Some(txid);
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
         self.previous_output = previous_output;
@@ -204,7 +197,11 @@ impl Runtime {
         }
     }
 
-    pub fn tx_context(&mut self) -> Option<&mut TransactionContext> {
+    pub fn tx_context(&self) -> Option<&TransactionContext> {
+        self.storage.tx_context.as_ref()
+    }
+
+    pub fn tx_context_mut(&mut self) -> Option<&mut TransactionContext> {
         self.storage.tx_context.as_mut()
     }
 
@@ -233,14 +230,8 @@ impl Runtime {
     }
 
     pub async fn publish_native_contracts(&mut self) -> Result<()> {
-        self.set_context(
-            0,
-            Some(TransactionContext::default()),
-            new_mock_transaction(0).txid,
-            None,
-            None,
-        )
-        .await;
+        self.set_context(0, Some(TransactionContext::builder().build()), None, None)
+            .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
             .await?;
@@ -1112,8 +1103,9 @@ impl Runtime {
         Ok(hex::encode(
             &hash_bytes(
                 &[
-                    self.txid
-                        .expect("txid is not set")
+                    self.tx_context()
+                        .expect("Transaction context must be set to generate ids")
+                        .txid
                         .to_raw_hash()
                         .to_byte_array()
                         .to_vec(),
@@ -2062,7 +2054,7 @@ impl built_in::context::HostTransactionWithStore for Runtime {
 
     async fn id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
         Ok(accessor
-            .with(|mut access| access.get().txid)
+            .with(|mut access| access.get().tx_context().map(|c| c.txid))
             .expect("transaction id called without txid present")
             .to_string())
     }

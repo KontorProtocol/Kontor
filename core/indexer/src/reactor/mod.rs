@@ -108,8 +108,8 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         tx_index: t.index,
                         input_index,
                         op_index: 0,
+                        txid: t.txid,
                     }),
-                    t.txid,
                     Some(metadata.previous_output),
                     op_return_data.map(Into::into),
                 )

@@ -202,8 +202,12 @@ impl RuntimeLocal {
         runtime
             .set_context(
                 height,
-                Some(TransactionContext::builder().tx_index(tx_index).build()),
-                txid,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(tx_index)
+                        .txid(txid)
+                        .build(),
+                ),
                 None,
                 None,
             )
@@ -256,7 +260,7 @@ impl RuntimeImpl for RuntimeLocal {
         expr: &str,
     ) -> Result<String> {
         let result = self.runtime.execute(signer, contract_address, expr).await;
-        if let Some(c) = self.runtime.tx_context() {
+        if let Some(c) = self.runtime.tx_context_mut() {
             c.op_index += 1;
         }
         result

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use bitcoin::Txid;
 use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
@@ -17,9 +18,10 @@ use crate::{
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
+    test_utils::new_mock_transaction,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 pub struct TransactionContext {
     #[builder(default = 0)]
     pub tx_index: i64,
@@ -27,6 +29,8 @@ pub struct TransactionContext {
     pub input_index: i64,
     #[builder(default = 0)]
     pub op_index: i64,
+    #[builder(default = new_mock_transaction(0).txid)]
+    pub txid: Txid,
 }
 
 #[derive(Builder, Clone)]
