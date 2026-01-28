@@ -184,7 +184,8 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted = delete_contract_state(&conn, height2, tx2.tx_index, contract_id, path).await?;
+    let deleted =
+        delete_contract_state(&conn, height2, Some(tx2.tx_index), contract_id, path).await?;
     assert!(deleted);
 
     let count = conn
@@ -597,6 +598,8 @@ async fn test_contract_result_operations() -> Result<()> {
     let result = ContractResultRow::builder()
         .id(1)
         .tx_index(tx1.tx_index)
+        .input_index(0)
+        .op_index(0)
         .height(height)
         .contract_id(contract_id)
         .value("".to_string())

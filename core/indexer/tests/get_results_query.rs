@@ -3,13 +3,13 @@ use indexer::{
     database::{
         queries::{
             get_results_paginated, insert_block, insert_contract, insert_contract_result,
-            insert_processed_block,
+            insert_processed_block, insert_transaction,
         },
-        types::{ContractResultRow, ContractRow, ResultQuery},
+        types::{ContractResultRow, ContractRow, OrderDirection, ResultQuery},
     },
-    test_utils::{new_mock_block_hash, new_test_db},
+    test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
-use indexer_types::BlockRow;
+use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractAddress;
 
 #[tokio::test]
@@ -48,12 +48,34 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .txid(new_mock_transaction(1003).txid.to_string())
+            .tx_index(3)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .txid(new_mock_transaction(1004).txid.to_string())
+            .tx_index(4)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
             .contract_id(contract_1_id)
             .height(1)
             .tx_index(3)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -66,6 +88,8 @@ async fn test_get_results_query() -> Result<()> {
             .func("foo".to_string())
             .height(1)
             .tx_index(4)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -80,12 +104,34 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(2)
+            .txid(new_mock_transaction(2001).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(2)
+            .txid(new_mock_transaction(2002).txid.to_string())
+            .tx_index(2)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
             .contract_id(contract_1_id)
             .height(2)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -97,6 +143,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_2_id)
             .height(2)
             .tx_index(2)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -111,12 +159,34 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(3)
+            .txid(new_mock_transaction(3001).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(3)
+            .txid(new_mock_transaction(3002).txid.to_string())
+            .tx_index(2)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
             .contract_id(contract_1_id)
             .height(3)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -128,6 +198,8 @@ async fn test_get_results_query() -> Result<()> {
             .contract_id(contract_2_id)
             .height(3)
             .tx_index(2)
+            .input_index(0)
+            .op_index(0)
             .gas(100)
             .build(),
     )
@@ -142,12 +214,36 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(4)
+            .txid(new_mock_transaction(4001).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
             .contract_id(contract_1_id)
             .height(4)
             .tx_index(1)
+            .input_index(0)
+            .op_index(0)
+            .gas(100)
+            .build(),
+    )
+    .await?;
+
+    // insert a contract result with NULL tx_index (no associated transaction)
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_2_id)
+            .height(3)
+            .result_index(1)
             .gas(100)
             .build(),
     )
@@ -157,12 +253,26 @@ async fn test_get_results_query() -> Result<()> {
     let (_, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
     .await?;
-    assert_eq!(meta.total_count, 6);
+    assert_eq!(meta.total_count, 7); // 6 + 1 with NULL tx_index
+
+    // NULL tx_index result is included with txid: None
+    let (results, _) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .height(3)
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results.len(), 3); // 2 with tx_index + 1 with NULL tx_index
+    let null_tx_result = results.iter().find(|r| r.tx_index.is_none()).unwrap();
+    assert!(null_tx_result.txid.is_none());
 
     // contract filtering
     let (results, meta) = get_results_paginated(
@@ -173,7 +283,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -194,7 +304,7 @@ async fn test_get_results_query() -> Result<()> {
                 tx_index: 2,
             })
             .func("foo".to_string())
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -217,7 +327,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -235,7 +345,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -254,7 +364,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )

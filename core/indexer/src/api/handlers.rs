@@ -21,7 +21,7 @@ use crate::{
             get_results_paginated, get_transaction_by_txid, get_transactions_paginated,
             select_block_latest, select_processed_block_by_height_or_hash,
         },
-        types::{BlockQuery, ContractResultPublicRow, OpResultId, ResultQuery, TransactionQuery},
+        types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
     runtime::ContractAddress,
 };
@@ -277,28 +277,6 @@ pub async fn get_contract(
 
     let wit = runtime.storage.component_wit(contract_id).await?;
     Ok(ContractResponse { wit }.into())
-}
-
-impl From<ContractResultPublicRow> for ResultRow {
-    fn from(row: ContractResultPublicRow) -> Self {
-        ResultRow {
-            id: row.id,
-            height: row.height,
-            tx_index: row.tx_index,
-            input_index: row.input_index,
-            op_index: row.op_index,
-            result_index: row.result_index,
-            func: row.func,
-            gas: row.gas,
-            value: row.value,
-            contract: ContractAddress {
-                name: row.contract_name,
-                height: row.contract_height as u64,
-                tx_index: row.contract_tx_index as u64,
-            }
-            .to_string(),
-        }
-    }
 }
 
 pub async fn get_results(

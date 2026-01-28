@@ -119,14 +119,15 @@ export type ResultResponse<T> = { result: T };
 export type ResultRow = {
   id: number;
   height: number;
-  tx_index: number;
-  input_index: number;
-  op_index: number;
+  tx_index: number | null;
+  input_index: number | null;
+  op_index: number | null;
   result_index: number;
   func: string;
   gas: number;
   value: string | null;
   contract: string;
+  txid: string | null;
 };
 
 export type RevealInputs = {

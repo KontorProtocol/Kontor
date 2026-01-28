@@ -11,7 +11,7 @@ use indexer::{
         types::ContractRow,
     },
     reg_tester::{self, generate_taproot_address},
-    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage},
+    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, TransactionContext},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
@@ -195,16 +195,22 @@ impl RuntimeLocal {
             .await?;
             (1, 1, new_mock_transaction(0).txid)
         };
-        let storage = Storage::builder()
-            .height(height)
-            .tx_index(0)
-            .conn(conn)
-            .build();
+        let storage = Storage::builder().height(height).conn(conn).build();
         let component_cache = ComponentCache::new();
         let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
         runtime.publish_native_contracts().await?;
         runtime
-            .set_context(height, tx_index, 0, 0, txid, None, None)
+            .set_context(
+                height,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(tx_index)
+                        .txid(txid)
+                        .build(),
+                ),
+                None,
+                None,
+            )
             .await;
         Ok(Self {
             runtime,
@@ -254,7 +260,9 @@ impl RuntimeImpl for RuntimeLocal {
         expr: &str,
     ) -> Result<String> {
         let result = self.runtime.execute(signer, contract_address, expr).await;
-        self.runtime.storage.op_index += 1;
+        if let Some(c) = self.runtime.tx_context_mut() {
+            c.op_index += 1;
+        }
         result
     }
 
