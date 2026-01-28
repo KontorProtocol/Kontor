@@ -19,6 +19,13 @@ use crate::{
     runtime::{ContractAddress, counter::Counter, stack::Stack},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TransactionContext {
+    pub tx_index: i64,
+    pub input_index: i64,
+    pub op_index: i64,
+}
+
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
@@ -27,13 +34,8 @@ pub struct Storage {
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
     #[builder(default = 1)]
-    pub tx_index: i64,
-    #[builder(default = 1)]
     pub height: i64,
-    #[builder(default = 0)]
-    pub input_index: i64,
-    #[builder(default = 0)]
-    pub op_index: i64,
+    pub tx_context: Option<TransactionContext>,
 }
 
 impl Storage {
@@ -46,7 +48,7 @@ impl Storage {
             &self.conn,
             ContractStateRow::builder()
                 .contract_id(contract_id)
-                .tx_index(self.tx_index)
+                .maybe_tx_index(self.tx_context.as_ref().map(|c| c.tx_index))
                 .height(self.height)
                 .path(path.to_string())
                 .value(value.to_vec())
@@ -57,10 +59,14 @@ impl Storage {
     }
 
     pub async fn delete(&self, contract_id: i64, path: &str) -> Result<bool> {
-        Ok(
-            delete_contract_state(&self.conn, self.height, self.tx_index, contract_id, path)
-                .await?,
+        Ok(delete_contract_state(
+            &self.conn,
+            self.height,
+            self.tx_context.as_ref().map(|c| c.tx_index),
+            contract_id,
+            path,
         )
+        .await?)
     }
 
     pub async fn exists(&self, contract_id: i64, path: &str) -> Result<bool> {
@@ -133,7 +139,12 @@ impl Storage {
             &self.conn,
             ContractRow::builder()
                 .height(self.height)
-                .tx_index(self.tx_index)
+                .tx_index(
+                    self.tx_context
+                        .as_ref()
+                        .expect("Transaction index is required when inserting contract")
+                        .tx_index,
+                )
                 .name(name.to_string())
                 .bytes(bytes.to_vec())
                 .build(),
@@ -152,9 +163,9 @@ impl Storage {
         ContractResultRow::builder()
             .contract_id(contract_id)
             .height(self.height)
-            .tx_index(self.tx_index)
-            .input_index(self.input_index)
-            .op_index(self.op_index)
+            .maybe_tx_index(self.tx_context.as_ref().map(|c| c.tx_index))
+            .maybe_input_index(self.tx_context.as_ref().map(|c| c.input_index))
+            .maybe_op_index(self.tx_context.as_ref().map(|c| c.op_index))
             .result_index(result_index)
             .func(func)
             .gas(gas)

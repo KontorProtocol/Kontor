@@ -263,7 +263,7 @@ pub async fn get_latest_contract_state_value(
 pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
-    tx_index: i64,
+    tx_index: Option<i64>,
     contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
@@ -272,7 +272,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_index = Some(tx_index);
+                row.tx_index = tx_index;
                 insert_contract_state(conn, row).await?;
                 true
             }

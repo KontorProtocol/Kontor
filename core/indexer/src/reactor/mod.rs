@@ -236,7 +236,6 @@ impl Reactor {
         }
         let storage = Storage::builder()
             .height(0)
-            .tx_index(0)
             .conn(writer.connection())
             .build();
 

@@ -195,11 +195,7 @@ impl RuntimeLocal {
             .await?;
             (1, 1, new_mock_transaction(0).txid)
         };
-        let storage = Storage::builder()
-            .height(height)
-            .tx_index(0)
-            .conn(conn)
-            .build();
+        let storage = Storage::builder().height(height).conn(conn).build();
         let component_cache = ComponentCache::new();
         let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
         runtime.publish_native_contracts().await?;
@@ -254,7 +250,9 @@ impl RuntimeImpl for RuntimeLocal {
         expr: &str,
     ) -> Result<String> {
         let result = self.runtime.execute(signer, contract_address, expr).await;
-        self.runtime.storage.op_index += 1;
+        if let Some(c) = self.runtime.tx_context() {
+            c.op_index += 1;
+        }
         result
     }
 

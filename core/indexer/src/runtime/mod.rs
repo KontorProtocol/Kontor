@@ -26,7 +26,7 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, impls};
-pub use storage::Storage;
+pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 pub use wit::Root;
@@ -195,17 +195,24 @@ impl Runtime {
         op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
-        self.storage.tx_index = tx_index;
-        self.storage.input_index = input_index;
-        self.storage.op_index = op_index;
+        let tx_context = Some(TransactionContext {
+            tx_index,
+            input_index,
+            op_index,
+        });
+        self.storage.tx_context = tx_context;
+        self.txid = Some(txid);
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
-        self.txid = Some(txid);
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
         if let Some(gauge) = self.gauge.as_ref() {
             gauge.reset().await;
         }
+    }
+
+    pub fn tx_context(&mut self) -> Option<&mut TransactionContext> {
+        self.storage.tx_context.as_mut()
     }
 
     pub fn get_storage_conn(&self) -> Connection {
@@ -251,7 +258,10 @@ impl Runtime {
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height as u64,
-            tx_index: self.storage.tx_index as u64,
+            tx_index: self
+                .tx_context()
+                .expect("Transaction context must be set to public contracts")
+                .tx_index as u64,
         };
         if self
             .storage
@@ -296,10 +306,10 @@ impl Runtime {
         expr: &str,
     ) -> Result<String> {
         tracing::info!(
-            "Executing contract {} with expr {} at input index {}",
+            "Executing contract {} with expr {} with tx context {:?}",
             contract_address,
             expr,
-            self.storage.input_index
+            self.tx_context()
         );
         let (
             mut store,

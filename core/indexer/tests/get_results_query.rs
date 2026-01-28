@@ -5,7 +5,7 @@ use indexer::{
             get_results_paginated, insert_block, insert_contract, insert_contract_result,
             insert_processed_block, insert_transaction,
         },
-        types::{ContractResultRow, ContractRow, ResultQuery},
+        types::{ContractResultRow, ContractRow, OrderDirection, ResultQuery},
     },
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
@@ -253,7 +253,7 @@ async fn test_get_results_query() -> Result<()> {
     let (_, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -265,7 +265,7 @@ async fn test_get_results_query() -> Result<()> {
         &conn,
         ResultQuery::builder()
             .height(3)
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(10)
             .build(),
     )
@@ -283,7 +283,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -304,7 +304,7 @@ async fn test_get_results_query() -> Result<()> {
                 tx_index: 2,
             })
             .func("foo".to_string())
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -327,7 +327,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -345,7 +345,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
@@ -364,7 +364,7 @@ async fn test_get_results_query() -> Result<()> {
                 height: 1,
                 tx_index: 1,
             })
-            .order(indexer::database::types::OrderDirection::Asc)
+            .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
