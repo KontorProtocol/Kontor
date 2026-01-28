@@ -1,4 +1,4 @@
-use indexer::test_utils::make_descriptor;
+use indexer::test_utils::{LUCKY_HASH_50000, lucky_hash, make_descriptor};
 use testlib::*;
 
 import!(
@@ -118,15 +118,6 @@ async fn filestorage_get_all_active_agreements(runtime: &mut Runtime) -> Result<
     let active = filestorage::get_all_active_agreements(runtime).await?;
     assert!(!active.iter().any(|a| a.agreement_id == a2.agreement_id));
 
-    Ok(())
-}
-
-async fn filestorage_expire_challenges_noop(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
-    filestorage::expire_challenges(runtime, &signer, 0).await?;
-    filestorage::expire_challenges(runtime, &signer, 1_000_000).await?;
-    let active = filestorage::get_active_challenges(runtime).await?;
-    assert!(active.is_empty());
     Ok(())
 }
 
@@ -564,6 +555,8 @@ async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime
 
 async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let core_identity = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(core_identity));
 
     // Create an active agreement (use small root value - large ones exceed field modulus)
     let descriptor = make_descriptor(
@@ -581,27 +574,93 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
 
     let block_hash = vec![1u8; 32];
+    let before_active = filestorage::get_active_challenges(runtime).await?;
+    // Core-only: generate challenges requires core signer
     let challenges =
-        filestorage::generate_challenges_for_block(runtime, &signer, 1000, block_hash).await?;
+        filestorage::generate_challenges_for_block(runtime, &core_signer, 1000, block_hash).await?;
 
     // Verify the return type is correct (list of challenges, possibly empty)
     assert!(challenges.len() <= 1, "Should have 0 or 1 challenges");
 
     // Verify get_active_challenges works
-    let active = filestorage::get_active_challenges(runtime).await?;
-    assert_eq!(active.len(), challenges.len());
+    let after_active = filestorage::get_active_challenges(runtime).await?;
+    assert_eq!(after_active.len(), before_active.len() + challenges.len());
 
-    // Verify expire_challenges works
-    filestorage::expire_challenges(runtime, &signer, 10000).await?;
+    // Core-only: expire_challenges requires core signer
+    filestorage::expire_challenges(runtime, &core_signer, 10000).await?;
 
     Ok(())
 }
 
-pub async fn run(runtime: &mut Runtime) -> Result<()> {
+/// Test that uses a pre-computed "lucky" block hash to guarantee challenge generation.
+/// This verifies the challenge generation formula works correctly.
+async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let core_identity = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(core_identity));
+
+    // Create an active agreement
+    let descriptor = make_descriptor(
+        "lucky_hash_test".to_string(),
+        vec![1u8; 32],
+        16,
+        100,
+        "lucky.txt".to_string(),
+    );
+    let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
+
+    // Activate it with min_nodes (3)
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_0").await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+
+    // Use a pre-computed block hash that will definitely generate a challenge for 1 file
+    // With 1 eligible file and c_target=12, blocks_per_year=52560:
+    //   remainder = 12, so challenge generated when roll < 12
+    // LUCKY_HASH_50000 has roll = 1, which is < 12
+    let block_height = 50000u64;
+    let block_hash = lucky_hash(LUCKY_HASH_50000);
+
+    let before_active = filestorage::get_active_challenges(runtime).await?;
+    assert_eq!(
+        before_active.len(),
+        0,
+        "Should start with no active challenges"
+    );
+
+    // Generate challenges with the lucky hash - should definitely produce 1 challenge
+    let challenges = filestorage::generate_challenges_for_block(
+        runtime,
+        &core_signer,
+        block_height,
+        block_hash.to_vec(),
+    )
+    .await?;
+
+    // With a lucky hash, we should get exactly 1 challenge
+    assert_eq!(
+        challenges.len(),
+        1,
+        "Lucky hash should generate exactly 1 challenge"
+    );
+
+    // Verify the challenge details
+    let challenge = &challenges[0];
+    assert_eq!(challenge.agreement_id, created.agreement_id);
+    assert_eq!(challenge.block_height, block_height);
+    assert_eq!(challenge.status, filestorage::ChallengeStatus::Active);
+
+    // Verify get_active_challenges reflects the new challenge
+    let after_active = filestorage::get_active_challenges(runtime).await?;
+    assert_eq!(after_active.len(), 1);
+
+    Ok(())
+}
+
+pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_defaults(runtime).await?;
     filestorage_empty_file_id_fails(runtime).await?;
     filestorage_get_all_active_agreements(runtime).await?;
-    filestorage_expire_challenges_noop(runtime).await?;
     filestorage_create_and_get(runtime).await?;
     filestorage_count_increments(runtime).await?;
     filestorage_duplicate_fails(runtime).await?;
@@ -619,6 +678,13 @@ pub async fn run(runtime: &mut Runtime) -> Result<()> {
     filestorage_is_node_in_nonexistent_agreement(runtime).await?;
     filestorage_rejoin_after_leave(runtime).await?;
     filestorage_join_after_activation_not_reactivated(runtime).await?;
-    challenge_gen_smoke_test(runtime).await?;
     Ok(())
+}
+
+pub async fn run_core_signer_smoke(runtime: &mut Runtime) -> Result<()> {
+    challenge_gen_smoke_test(runtime).await
+}
+
+pub async fn run_core_signer_lucky(runtime: &mut Runtime) -> Result<()> {
+    challenge_gen_with_lucky_hash(runtime).await
 }

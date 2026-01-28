@@ -1,18 +1,13 @@
 use indexer::runtime::wit::FileDescriptor;
-
-fn create_valid_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    seed[0] = 1;
-    seed
-}
+use indexer::test_utils::valid_seed_field;
 
 #[test]
 fn test_build_challenge_success() {
     let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
     let descriptor = FileDescriptor::from_row(metadata);
 
-    let seed = create_valid_seed();
-    let result = descriptor.build_challenge(800000, 100, &seed, "prover1".to_string());
+    let seed = valid_seed_field(1);
+    let result = descriptor.build_challenge(800000, 100, &seed.bytes, "prover1".to_string());
 
     assert!(
         result.is_ok(),
@@ -64,8 +59,8 @@ fn test_compute_challenge_id_success() {
     let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
     let descriptor = FileDescriptor::from_row(metadata);
 
-    let seed = create_valid_seed();
-    let result = descriptor.compute_challenge_id(800000, 100, &seed, "prover1".to_string());
+    let seed = valid_seed_field(1);
+    let result = descriptor.compute_challenge_id(800000, 100, &seed.bytes, "prover1".to_string());
 
     assert!(result.is_ok(), "compute_challenge_id should succeed");
     let challenge_id = result.unwrap();
@@ -92,10 +87,10 @@ fn test_build_challenge_uses_correct_file_metadata() {
     let expected_filename = metadata.filename.clone();
 
     let descriptor = FileDescriptor::from_row(metadata);
-    let seed = create_valid_seed();
+    let seed = valid_seed_field(1);
 
     let challenge = descriptor
-        .build_challenge(800000, 100, &seed, "prover1".to_string())
+        .build_challenge(800000, 100, &seed.bytes, "prover1".to_string())
         .unwrap();
 
     assert_eq!(challenge.file_metadata.file_id, expected_file_id);

@@ -15,6 +15,8 @@ async fn setup_active_agreement_with_challenge(
     block_height: u64,
 ) -> Result<(String, Vec<filestorage::ChallengeData>)> {
     let signer = runtime.identity().await?;
+    let core_identity = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(core_identity));
     let descriptor = make_descriptor(
         file_id.to_string(),
         vec![1u8; 32],
@@ -31,10 +33,10 @@ async fn setup_active_agreement_with_challenge(
     filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
     filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
 
-    // Generate a challenge
+    // Generate a challenge (core-only)
     let block_hash = vec![42u8; 32];
     let challenges =
-        filestorage::generate_challenges_for_block(runtime, &signer, block_height, block_hash)
+        filestorage::generate_challenges_for_block(runtime, &core_signer, block_height, block_hash)
             .await?;
 
     Ok((created.agreement_id, challenges))
@@ -136,13 +138,17 @@ async fn verify_proof_result_has_verified_count(runtime: &mut Runtime) -> Result
 // Test Runner
 // ─────────────────────────────────────────────────────────────────
 
-pub async fn run(runtime: &mut Runtime) -> Result<()> {
+pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     // Deserialization error tests
     verify_proof_invalid_proof_bytes_fails(runtime).await?;
     verify_proof_empty_proof_bytes_fails(runtime).await?;
     verify_proof_truncated_header_fails(runtime).await?;
     verify_proof_wrong_magic_bytes_fails(runtime).await?;
+    verify_proof_result_has_verified_count(runtime).await?;
+    Ok(())
+}
 
+pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
     let (agreement_id, challenges) =
         setup_active_agreement_with_challenge(runtime, "baseline_checks", 1000).await?;
 
@@ -175,14 +181,16 @@ pub async fn run(runtime: &mut Runtime) -> Result<()> {
         );
         assert_eq!(
             challenge.seed.len(),
-            32,
-            "Challenge seed should be 32 bytes"
+            64,
+            "Challenge seed should be 64 bytes"
         );
 
-        let signer = runtime.identity().await?;
+        let core_identity = runtime.identity().await?;
+        let core_signer = Signer::Core(Box::new(core_identity));
         let deadline = challenge.deadline_height;
         let before_expire = filestorage::get_active_challenges(runtime).await?;
-        filestorage::expire_challenges(runtime, &signer, deadline + 1).await?;
+        // Core-only: expire_challenges requires core signer
+        filestorage::expire_challenges(runtime, &core_signer, deadline + 1).await?;
 
         let challenge_after = filestorage::get_challenge(runtime, challenge_id)
             .await?
@@ -244,9 +252,6 @@ pub async fn run(runtime: &mut Runtime) -> Result<()> {
             "Challenges should have different IDs"
         );
     }
-
-    // VerifyResult tests
-    verify_proof_result_has_verified_count(runtime).await?;
 
     Ok(())
 }

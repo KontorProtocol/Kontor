@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use bon::Builder;
 use ff::PrimeField;
-use indexer_types::{BlockRow, ContractListRow, TransactionRow};
+use indexer_types::{BlockRow, ContractListRow, ResultRow, TransactionRow};
 use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
@@ -80,7 +80,7 @@ pub struct CheckpointRow {
 pub struct ContractStateRow {
     pub contract_id: i64,
     pub height: i64,
-    pub tx_index: i64,
+    pub tx_index: Option<i64>,
     pub path: String,
     #[builder(default = vec![])]
     pub value: Vec<u8>,
@@ -187,11 +187,9 @@ pub struct ContractResultRow {
     #[builder(default = 0)]
     pub id: i64,
     pub height: i64,
-    pub tx_index: i64,
-    #[builder(default = 0)]
-    pub input_index: i64,
-    #[builder(default = 0)]
-    pub op_index: i64,
+    pub tx_index: Option<i64>,
+    pub input_index: Option<i64>,
+    pub op_index: Option<i64>,
     #[builder(default = 0)]
     pub result_index: i64,
     #[builder(default = 0)]
@@ -214,11 +212,9 @@ pub struct ContractResultPublicRow {
     #[builder(default = 0)]
     pub id: i64,
     pub height: i64,
-    pub tx_index: i64,
-    #[builder(default = 0)]
-    pub input_index: i64,
-    #[builder(default = 0)]
-    pub op_index: i64,
+    pub tx_index: Option<i64>,
+    pub input_index: Option<i64>,
+    pub op_index: Option<i64>,
     #[builder(default = 0)]
     pub result_index: i64,
     #[builder(default = "".to_string())]
@@ -228,6 +224,7 @@ pub struct ContractResultPublicRow {
     pub contract_name: String,
     pub contract_height: i64,
     pub contract_tx_index: i64,
+    pub txid: Option<String>,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -237,6 +234,29 @@ impl HasRowId for ContractResultPublicRow {
 
     fn id_name() -> String {
         "id".to_string()
+    }
+}
+
+impl From<ContractResultPublicRow> for ResultRow {
+    fn from(row: ContractResultPublicRow) -> Self {
+        ResultRow {
+            id: row.id,
+            height: row.height,
+            tx_index: row.tx_index,
+            input_index: row.input_index,
+            op_index: row.op_index,
+            result_index: row.result_index,
+            func: row.func,
+            gas: row.gas,
+            value: row.value,
+            contract: ContractAddress {
+                name: row.contract_name,
+                height: row.contract_height as u64,
+                tx_index: row.contract_tx_index as u64,
+            }
+            .to_string(),
+            txid: row.txid,
+        }
     }
 }
 
@@ -294,7 +314,7 @@ pub struct FileMetadataRow {
     pub id: i64,
     pub file_id: String,
     pub object_id: String,
-    pub nonce: [u8; 32],
+    pub nonce: Vec<u8>,
     pub root: [u8; 32],
     pub padded_len: u64,
     pub original_size: u64,

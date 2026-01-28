@@ -424,12 +424,12 @@ pub struct ResultRow {
     pub id: i64,
     #[ts(type = "number")]
     pub height: i64,
-    #[ts(type = "number")]
-    pub tx_index: i64,
-    #[ts(type = "number")]
-    pub input_index: i64,
-    #[ts(type = "number")]
-    pub op_index: i64,
+    #[ts(type = "number | null")]
+    pub tx_index: Option<i64>,
+    #[ts(type = "number | null")]
+    pub input_index: Option<i64>,
+    #[ts(type = "number | null")]
+    pub op_index: Option<i64>,
     #[ts(type = "number")]
     pub result_index: i64,
     pub func: String,
@@ -437,6 +437,7 @@ pub struct ResultRow {
     pub gas: i64,
     pub value: Option<String>,
     pub contract: String,
+    pub txid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

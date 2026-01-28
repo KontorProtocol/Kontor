@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{view-context, proc-context};
+  use kontor:built-in/context.{view-context, proc-context, core-context};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry.{raw-file-descriptor};
 
@@ -128,14 +128,14 @@ world root {
   ) -> list<challenge-data>;
 
   export expire-challenges: async func(
-    ctx: borrow<proc-context>,
+    ctx: borrow<core-context>,
     current-height: u64
-  );
+  ) -> u64;
 
   export generate-challenges-for-block: async func(
-    ctx: borrow<proc-context>,
+    ctx: borrow<core-context>,
     block-height: u64,
-    prev-block-hash: list<u8>
+    block-hash: list<u8>
   ) -> list<challenge-data>;
 
   // Create a challenge for a specific agreement and node (deterministic, for testing)

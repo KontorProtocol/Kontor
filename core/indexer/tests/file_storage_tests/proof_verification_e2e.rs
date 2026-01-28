@@ -9,18 +9,11 @@
 //!
 //! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
 
-use ff::PrimeField;
 use indexer::database::types::field_element_to_bytes;
-use kontor_crypto::api::{self, FieldElement};
+use indexer::test_utils::valid_seed_field;
+use kontor_crypto::api::{self};
 use serde::Deserialize;
 use testlib::*;
-
-/// Create valid seed bytes from an integer.
-/// Field elements must be less than the field modulus, so we create
-/// a valid field element from a small integer and convert to bytes.
-fn valid_seed_bytes(n: u64) -> Vec<u8> {
-    FieldElement::from(n).to_repr().as_ref().to_vec()
-}
 
 import!(
     name = "filestorage",
@@ -151,7 +144,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         &created_a.agreement_id,
         "node_1",
         block_n,
-        valid_seed_bytes(200),
+        valid_seed_field(200).bytes.to_vec(),
     )
     .await??;
 
@@ -161,7 +154,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         &created_b.agreement_id,
         "node_1",
         block_n,
-        valid_seed_bytes(201),
+        valid_seed_field(201).bytes.to_vec(),
     )
     .await??;
 

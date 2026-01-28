@@ -13,7 +13,7 @@ pub mod token;
 mod types;
 pub mod wit;
 
-use bitcoin::{Txid, hashes::Hash};
+use bitcoin::hashes::Hash;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -26,12 +26,13 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, impls};
-pub use storage::Storage;
+pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 pub use wit::Root;
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock};
 
 use wit::kontor::*;
 
@@ -58,17 +59,14 @@ use wasmtime::{
 use crate::database::native_contracts::{FILESTORAGE, TOKEN};
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
-use crate::{
-    runtime::{
-        counter::Counter,
-        fuel::{Fuel, FuelGauge},
-        stack::Stack,
-        wit::{
-            FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
-            ViewStorage,
-        },
+use crate::runtime::{
+    counter::Counter,
+    fuel::{Fuel, FuelGauge},
+    stack::Stack,
+    wit::{
+        FallContext, HasContractId, Keys, ProcContext, ProcStorage, Signer, ViewContext,
+        ViewStorage,
     },
-    test_utils::new_mock_transaction,
 };
 
 impls!(host = true);
@@ -110,7 +108,6 @@ pub struct Runtime {
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
-    pub txid: Option<Txid>,
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
 }
@@ -162,7 +159,6 @@ impl Runtime {
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
-            txid: None,
             previous_output: None,
             op_return_data: None,
         })
@@ -186,25 +182,29 @@ impl Runtime {
     pub async fn set_context(
         &mut self,
         height: i64,
-        tx_index: i64,
-        input_index: i64,
-        op_index: i64,
-        txid: Txid,
+        tx_context: Option<TransactionContext>,
         previous_output: Option<bitcoin::OutPoint>,
         op_return_data: Option<OpReturnData>,
     ) {
         self.storage.height = height;
-        self.storage.tx_index = tx_index;
-        self.storage.input_index = input_index;
-        self.storage.op_index = op_index;
+        self.storage.tx_context = tx_context;
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
-        self.txid = Some(txid);
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
-        if let Some(gauge) = self.gauge.as_ref() {
+        if self.storage.tx_context.is_some()
+            && let Some(gauge) = self.gauge.as_ref()
+        {
             gauge.reset().await;
         }
+    }
+
+    pub fn tx_context(&self) -> Option<&TransactionContext> {
+        self.storage.tx_context.as_ref()
+    }
+
+    pub fn tx_context_mut(&mut self) -> Option<&mut TransactionContext> {
+        self.storage.tx_context.as_mut()
     }
 
     pub fn get_storage_conn(&self) -> Connection {
@@ -232,7 +232,7 @@ impl Runtime {
     }
 
     pub async fn publish_native_contracts(&mut self) -> Result<()> {
-        self.set_context(0, 0, 0, 0, new_mock_transaction(0).txid, None, None)
+        self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
@@ -250,7 +250,10 @@ impl Runtime {
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height as u64,
-            tx_index: self.storage.tx_index as u64,
+            tx_index: self
+                .tx_context()
+                .expect("Transaction context must be set to public contracts")
+                .tx_index as u64,
         };
         if self
             .storage
@@ -295,10 +298,10 @@ impl Runtime {
         expr: &str,
     ) -> Result<String> {
         tracing::info!(
-            "Executing contract {} with expr {} at input index {}",
+            "Executing contract {} with expr {} with tx context {:?}",
             contract_address,
             expr,
-            self.storage.input_index
+            self.tx_context()
         );
         let (
             mut store,
@@ -668,8 +671,8 @@ impl Runtime {
             .expect("Failed to run burn and release gas")
             .expect("Failed to burn and release gas");
         }
-        // don't write result for native token hold function
-        if contract_address == &token::address() && func_name == "hold" {
+        // don't write result for native contract internal functions
+        if should_skip_result(contract_address, func_name) {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
@@ -1080,14 +1083,14 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        // Use HKDF-SHA256 to derive a 32-byte key
+        // Use HKDF-SHA256 to derive a 64-byte key (suitable for field element conversion)
         let salt_ref = if salt.is_empty() {
             None
         } else {
             Some(salt.as_slice())
         };
         let hk = Hkdf::<Sha256>::new(salt_ref, &ikm);
-        let mut okm = [0u8; 32];
+        let mut okm = [0u8; 64];
         hk.expand(&info, &mut okm)
             .map_err(|e| anyhow::anyhow!("HKDF expand error: {}", e))?;
         Ok(okm.to_vec())
@@ -1102,8 +1105,9 @@ impl Runtime {
         Ok(hex::encode(
             &hash_bytes(
                 &[
-                    self.txid
-                        .expect("txid is not set")
+                    self.tx_context()
+                        .expect("Transaction context must be set to generate ids")
+                        .txid
                         .to_raw_hash()
                         .to_byte_array()
                         .to_vec(),
@@ -1345,6 +1349,15 @@ impl Runtime {
         self.table.lock().await.delete(rep)?;
         Ok(())
     }
+}
+
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
+    LazyLock::new(|| [("token", ["hold"].into())].into());
+
+fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
+    SKIP_RESULT_RULES
+        .get(contract_address.name.as_str())
+        .is_some_and(|methods| methods.contains(&func_name))
 }
 
 impl HasData for Runtime {
@@ -2035,7 +2048,7 @@ impl built_in::context::HostTransactionWithStore for Runtime {
 
     async fn id<T>(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
         Ok(accessor
-            .with(|mut access| access.get().txid)
+            .with(|mut access| access.get().tx_context().map(|c| c.txid))
             .expect("transaction id called without txid present")
             .to_string())
     }
