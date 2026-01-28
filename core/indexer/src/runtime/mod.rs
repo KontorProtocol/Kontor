@@ -1,5 +1,6 @@
 extern crate alloc;
 
+mod binary;
 mod component_cache;
 pub mod counter;
 pub mod file_ledger;
@@ -354,6 +355,239 @@ impl Runtime {
                 .await;
         }
         result
+    }
+
+    pub async fn execute_binary(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_id: i64,
+        function_index: u16,
+        args: &[u8],
+        gas_limit: u64,
+    ) -> Result<String> {
+        tracing::info!(
+            "Executing binary call contract_id={} function_index={} tx context {:?}",
+            contract_id,
+            function_index,
+            self.tx_context()
+        );
+
+        let contract_address = self
+            .storage
+            .contract_address(contract_id)
+            .await?
+            .ok_or_else(|| anyhow!("Contract not found: id={}", contract_id))?;
+
+        self.set_gas_limit(gas_limit);
+
+        let component = self.load_component(contract_id).await?;
+        let mut fuel_limit = self.fuel_limit().unwrap_or(self.fuel_limit_for_non_procs());
+        let mut store = self.make_store(fuel_limit)?;
+        let instance = self
+            .linker
+            .instantiate_async(&mut store, &component)
+            .await?;
+
+        let func_name = self
+            .binary_function_name(contract_id, function_index)
+            .await?;
+        let func = instance
+            .get_func(&mut store, &func_name)
+            .ok_or_else(|| anyhow!("BinaryCall function not found: {}", func_name))?;
+
+        let component_func = func.ty(&store);
+        let func_params = component_func.params();
+        let func_param_types = func_params.map(|(_, t)| t).collect::<Vec<_>>();
+        let (func_ctx_param_type, func_arg_types) = func_param_types
+            .split_first()
+            .ok_or_else(|| anyhow!("Context/signer parameter not found"))?;
+
+        let mut params = binary::decode_postcard_args(func_arg_types, args)?;
+        let resource_type = match func_ctx_param_type {
+            wasmtime::component::Type::Borrow(t) => Ok(*t),
+            _ => Err(anyhow!("Unsupported context type")),
+        }?;
+
+        if let Some(Signer::ContractId { id, .. }) = signer
+            && self.stack.peek().await != Some(*id)
+        {
+            return Err(anyhow!("Invalid contract id signer"));
+        }
+
+        let mut is_proc = false;
+        {
+            let mut table = self.table.lock().await;
+            match (resource_type, signer) {
+                (t, Some(Signer::Core(signer)))
+                    if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
+                {
+                    is_proc = true;
+                    fuel_limit = self.fuel_limit_for_non_procs();
+                    store
+                        .set_fuel(fuel_limit)
+                        .expect("Failed to set fuel for core context procedure");
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(CoreContext {
+                                    signer: *signer.clone(),
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
+                    .insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ViewContext { contract_id })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    ),
+                (t, Some(signer))
+                    if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
+                {
+                    is_proc = true;
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(ProcContext {
+                                    signer: signer.clone(),
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
+                    is_proc = signer.is_some();
+                    params.insert(
+                        0,
+                        wasmtime::component::Val::Resource(
+                            table
+                                .push(FallContext {
+                                    signer: signer.cloned(),
+                                    contract_id,
+                                })?
+                                .try_into_resource_any(&mut store)?,
+                        ),
+                    )
+                }
+                (t, signer) => {
+                    return Err(anyhow!(
+                        "Unsupported context/signer type: {:?} {:?}",
+                        t,
+                        signer
+                    ));
+                }
+            }
+        }
+
+        let results = component_func
+            .results()
+            .map(default_val_for_type)
+            .collect::<Vec<_>>();
+
+        if is_proc
+            && let Some(signer) = signer
+            && !signer.is_core()
+        {
+            let gas_to_fuel_multiplier = self.gas_to_fuel_multiplier;
+            let gas_to_token_multiplier = self.gas_to_token_multiplier;
+            let token_limit = Decimal::from(fuel_limit)
+                .div(Decimal::from(gas_to_fuel_multiplier))
+                .expect("Failed to convert fuel limit into gas limit")
+                .mul(gas_to_token_multiplier)
+                .expect("Failed to convert gas limit into token limit");
+
+            Box::pin({
+                let mut runtime = self.clone();
+                async move {
+                    token::api::hold(
+                        &mut runtime,
+                        &Signer::Core(Box::new(signer.clone())),
+                        token_limit,
+                    )
+                    .await
+                }
+            })
+            .await
+            .expect("Failed to escrow gas")
+            .map_err(|e| {
+                anyhow!(
+                    "Signer {:?} does not have enough token to cover gas limit: {}",
+                    signer,
+                    e
+                )
+            })?;
+        }
+
+        self.stack.push(contract_id).await?;
+        self.storage.savepoint().await?;
+        self.file_ledger.clear_dirty().await;
+
+        OptionFuture::from(self.gauge.as_ref().map(|g| g.set_starting_fuel(fuel_limit))).await;
+
+        let mut results = results;
+        let (call_result, results, mut store) = tokio::spawn(async move {
+            (
+                func.call_async(&mut store, &params, &mut results).await,
+                results,
+                store,
+            )
+        })
+        .await
+        .expect("Failed to join execution");
+
+        let mut result = self
+            .handle_call(false, call_result.map_err(Into::into), results)
+            .await;
+
+        OptionFuture::from(
+            self.gauge
+                .as_ref()
+                .map(|g| g.set_ending_fuel(store.get_fuel().unwrap())),
+        )
+        .await;
+
+        if is_proc {
+            let signer = signer.expect("Signer should be available in proc");
+            result = self
+                .handle_procedure(
+                    signer,
+                    contract_id,
+                    &contract_address,
+                    &func_name,
+                    true,
+                    fuel_limit,
+                    &mut store,
+                    result,
+                )
+                .await;
+        }
+
+        result
+    }
+
+    async fn binary_function_name(&self, contract_id: i64, function_index: u16) -> Result<String> {
+        let wit = self.storage.component_wit(contract_id).await?;
+        let mut exports: Vec<String> = wit
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("export "))
+            .filter_map(|rest| {
+                rest.split_once(':')
+                    .map(|(name, _)| name.trim().to_string())
+            })
+            .collect();
+        exports.sort();
+        exports
+            .get(function_index as usize)
+            .cloned()
+            .ok_or_else(|| anyhow!("function_index out of range: {}", function_index))
     }
 
     pub async fn load_component(&self, contract_id: i64) -> Result<Component> {

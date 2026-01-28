@@ -289,6 +289,13 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    /// Protocol-level batched operations (KBL1) carried in the existing "kon" envelope.
+    ///
+    /// The payload is interpreted and executed by the indexer (not by Bitcoin Script).
+    BlsBatch {
+        metadata: OpMetadata,
+        payload: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -297,6 +304,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::BlsBatch { metadata, .. } => metadata,
         }
     }
 }

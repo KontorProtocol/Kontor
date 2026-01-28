@@ -341,3 +341,19 @@ impl FileDescriptor for FileMetadataRow {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct SignerRegistryRow {
+    #[builder(default = 0)]
+    pub id: i64,
+    pub bls_pubkey: Vec<u8>,
+    pub first_seen_height: i64,
+    pub first_seen_tx_index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct SignerNonceRow {
+    pub signer_id: i64,
+    pub nonce: i64,
+    pub height: i64,
+}

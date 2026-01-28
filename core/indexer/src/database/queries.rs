@@ -8,7 +8,8 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, SignerRegistryRow,
+        TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -1032,4 +1033,97 @@ pub async fn insert_file_metadata(
     )
     .await?;
     Ok(conn.last_insert_rowid())
+}
+
+pub async fn select_signer_registry_by_bls_pubkey(
+    conn: &Connection,
+    bls_pubkey: &[u8],
+) -> Result<Option<SignerRegistryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            id,
+            bls_pubkey,
+            first_seen_height,
+            first_seen_tx_index
+            FROM signer_registry
+            WHERE bls_pubkey = ?
+            LIMIT 1"#,
+            params![bls_pubkey.to_vec()],
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn select_signer_registry_by_id(
+    conn: &Connection,
+    signer_id: i64,
+) -> Result<Option<SignerRegistryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            id,
+            bls_pubkey,
+            first_seen_height,
+            first_seen_tx_index
+            FROM signer_registry
+            WHERE id = ?
+            LIMIT 1"#,
+            params![signer_id],
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn insert_signer_registry(
+    conn: &Connection,
+    bls_pubkey: &[u8],
+    first_seen_height: i64,
+    first_seen_tx_index: i64,
+) -> Result<i64, Error> {
+    conn.execute(
+        r#"INSERT INTO
+        signer_registry
+        (bls_pubkey,
+        first_seen_height,
+        first_seen_tx_index)
+        VALUES (?, ?, ?)"#,
+        params![bls_pubkey.to_vec(), first_seen_height, first_seen_tx_index],
+    )
+    .await?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub async fn signer_nonce_exists(
+    conn: &Connection,
+    signer_id: i64,
+    nonce: u64,
+) -> Result<bool, Error> {
+    // Store full u64 nonce space in SQLite INTEGER via two's-complement bit pattern.
+    let nonce_i64 = nonce as i64;
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM signer_nonces WHERE signer_id = ? AND nonce = ? LIMIT 1",
+            params![signer_id, nonce_i64],
+        )
+        .await?;
+    Ok(rows.next().await?.is_some())
+}
+
+pub async fn insert_signer_nonce(
+    conn: &Connection,
+    signer_id: i64,
+    nonce: u64,
+    height: i64,
+) -> Result<(), Error> {
+    // Store full u64 nonce space in SQLite INTEGER via two's-complement bit pattern.
+    let nonce_i64 = nonce as i64;
+    conn.execute(
+        "INSERT INTO signer_nonces (signer_id, nonce, height) VALUES (?, ?, ?)",
+        params![signer_id, nonce_i64, height],
+    )
+    .await?;
+    Ok(())
 }

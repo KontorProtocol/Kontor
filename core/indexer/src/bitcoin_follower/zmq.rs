@@ -130,12 +130,14 @@ pub async fn process_data_message<C: BitcoinRpc>(
                     hash: block.block_hash(),
                     prev_hash: block.header.prev_blockhash,
                     transactions: task::spawn_blocking(move || {
-                        block
+                        let mut txs = block
                             .txdata
                             .into_par_iter()
                             .enumerate()
                             .filter_map(f)
-                            .collect()
+                            .collect::<Vec<_>>();
+                        txs.sort_by_key(|t| t.index);
+                        txs
                     })
                     .await?,
                 })),

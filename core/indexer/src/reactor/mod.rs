@@ -1,8 +1,11 @@
 pub mod types;
 
 use anyhow::{Result, anyhow, bail};
+use blst::BLST_ERROR;
+use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
 use futures_util::future::pending;
 use indexer_types::{Block, BlockRow, Event, Op, OpWithResult, TransactionRow};
+use std::collections::{HashMap, HashSet};
 use tokio::{
     select,
     sync::{
@@ -25,9 +28,10 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_block_with_hash,
-            set_block_processed,
+            insert_block, insert_processed_block, insert_signer_nonce, insert_signer_registry,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
+            select_block_with_hash, select_signer_registry_by_bls_pubkey,
+            select_signer_registry_by_id, set_block_processed, signer_nonce_exists,
         },
     },
     runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
@@ -111,7 +115,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         txid: t.txid,
                     }),
                     Some(metadata.previous_output),
-                    op_return_data.map(Into::into),
+                    op_return_data.clone().map(Into::into),
                 )
                 .await;
 
@@ -146,6 +150,229 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     let result = runtime.issuance(&metadata.signer).await;
                     if result.is_err() {
                         warn!("Issuance operation failed: {:?}", result);
+                    }
+                }
+                Op::BlsBatch { metadata, payload } => {
+                    runtime
+                        .set_context(
+                            block.height as i64,
+                            Some(TransactionContext {
+                                tx_index: t.index,
+                                input_index,
+                                op_index: 0,
+                                txid: t.txid,
+                            }),
+                            Some(metadata.previous_output),
+                            op_return_data.clone().map(Into::into),
+                        )
+                        .await;
+
+                    runtime.storage.savepoint().await?;
+
+                    let result: Result<()> = async {
+                        let batch = crate::bls_batch::parse_kbl1_batch(payload)?;
+                        let decompressed =
+                            crate::bls_batch::decompress_calls_zstd(&batch.compressed_calls)?;
+                        let calls = crate::bls_batch::parse_concatenated_calls(&decompressed)?;
+
+                        // Deserialize + subgroup-check new signer public keys.
+                        let mut new_signer_pks = Vec::with_capacity(batch.new_signers.len());
+                        for pk_bytes in &batch.new_signers {
+                            let pk = BlsPublicKey::from_bytes(pk_bytes)
+                                .map_err(|e| anyhow!("invalid BLS pubkey bytes in new_signers: {e:?}"))?;
+                            pk.validate()
+                                .map_err(|e| anyhow!("invalid BLS pubkey in new_signers: {e:?}"))?;
+                            new_signer_pks.push(pk);
+                        }
+
+                        // Resolve registry IDs to public keys (with caching).
+                        let mut registry_pk_cache: HashMap<u32, BlsPublicKey> = HashMap::new();
+                        async fn get_registry_pk(
+                            conn: &libsql::Connection,
+                            cache: &mut HashMap<u32, BlsPublicKey>,
+                            id: u32,
+                        ) -> Result<BlsPublicKey> {
+                            if let Some(pk) = cache.get(&id) {
+                                return Ok(pk.clone());
+                            }
+                            let row = select_signer_registry_by_id(conn, i64::from(id))
+                                .await?
+                                .ok_or_else(|| anyhow!("unknown signer_id in batch: {id}"))?;
+                            if row.bls_pubkey.len() != crate::bls_batch::BLS_PUBKEY_LEN {
+                                bail!("invalid BLS pubkey length in registry for signer_id {id}");
+                            }
+                            let pk = BlsPublicKey::from_bytes(&row.bls_pubkey).map_err(|e| {
+                                anyhow!(
+                                    "invalid BLS pubkey bytes in registry for signer_id {id}: {e:?}"
+                                )
+                            })?;
+                            pk.validate().map_err(|e| {
+                                anyhow!("invalid BLS pubkey in registry for signer_id {id}: {e:?}")
+                            })?;
+                            cache.insert(id, pk.clone());
+                            Ok(pk)
+                        }
+
+                        // Build (message, pk) pairs in deterministic order:
+                        // 1) PoP messages for new_signers
+                        // 2) Operation messages for each call in order
+                        let mut message_bufs: Vec<Vec<u8>> = Vec::new();
+                        let mut pk_bufs: Vec<BlsPublicKey> = Vec::new();
+
+                        for (i, pk_bytes) in batch.new_signers.iter().enumerate() {
+                            message_bufs.push(crate::bls_batch::pop_message(pk_bytes));
+                            pk_bufs.push(new_signer_pks[i].clone());
+                        }
+
+                        for (op_i, parsed) in calls.iter().enumerate() {
+                            message_bufs.push(crate::bls_batch::op_message(
+                                op_i as u32,
+                                &parsed.bytes,
+                            ));
+
+                            let pk = match parsed.call.signer {
+                                crate::bls_batch::SignerRef::RegistryId(id) => {
+                                    get_registry_pk(&runtime.storage.conn, &mut registry_pk_cache, id)
+                                        .await?
+                                }
+                                crate::bls_batch::SignerRef::BundleIndex(i) => new_signer_pks
+                                    .get(i as usize)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow!("BundleIndex out of bounds: {i}"))?,
+                            };
+                            pk_bufs.push(pk);
+                        }
+
+                        let msg_refs: Vec<&[u8]> =
+                            message_bufs.iter().map(|m| m.as_slice()).collect();
+                        let pk_refs: Vec<&BlsPublicKey> =
+                            pk_bufs.iter().collect();
+
+                        let sig = BlsSignature::from_bytes(&batch.aggregate_signature).map_err(
+                            |e| anyhow!("invalid aggregate signature bytes: {e:?}"),
+                        )?;
+
+                        let verify = sig.aggregate_verify(
+                            true,
+                            msg_refs.as_slice(),
+                            crate::bls_batch::PROTOCOL_BLS_DST,
+                            pk_refs.as_slice(),
+                            true,
+                        );
+                        if verify != BLST_ERROR::BLST_SUCCESS {
+                            bail!("BLS aggregate verification failed: {verify:?}");
+                        }
+
+                        // Inline registration: insert new_signers deterministically in order.
+                        let mut bundle_index_to_id: Vec<u32> =
+                            Vec::with_capacity(batch.new_signers.len());
+                        for pk_bytes in &batch.new_signers {
+                            if select_signer_registry_by_bls_pubkey(
+                                &runtime.storage.conn,
+                                pk_bytes,
+                            )
+                            .await?
+                            .is_some()
+                            {
+                                bail!("new_signer already registered");
+                            }
+                            let inserted_id = insert_signer_registry(
+                                &runtime.storage.conn,
+                                pk_bytes,
+                                block.height as i64,
+                                t.index,
+                            )
+                            .await?;
+                            let inserted_id_u32 = u32::try_from(inserted_id)
+                                .map_err(|_| anyhow!("signer_registry id overflow"))?;
+                            bundle_index_to_id.push(inserted_id_u32);
+                        }
+
+                        // Replay protection: reject if any (signer_id, nonce) already exists or repeats within the batch.
+                        let mut seen: HashSet<(u32, u64)> = HashSet::new();
+                        for parsed in &calls {
+                            let signer_id = match parsed.call.signer {
+                                crate::bls_batch::SignerRef::RegistryId(id) => id,
+                                crate::bls_batch::SignerRef::BundleIndex(i) => *bundle_index_to_id
+                                    .get(i as usize)
+                                    .ok_or_else(|| anyhow!("BundleIndex out of bounds: {i}"))?,
+                            };
+                            let nonce = parsed.call.nonce;
+                            if !seen.insert((signer_id, nonce)) {
+                                bail!("duplicate (signer_id, nonce) within batch");
+                            }
+                            if signer_nonce_exists(&runtime.storage.conn, i64::from(signer_id), nonce)
+                                .await?
+                            {
+                                bail!("replayed (signer_id, nonce) detected");
+                            }
+                        }
+
+                        let mut seen_vec: Vec<(u32, u64)> = seen.into_iter().collect();
+                        seen_vec.sort_by_key(|(signer_id, nonce)| (*signer_id, *nonce));
+                        for (signer_id, nonce) in seen_vec {
+                            insert_signer_nonce(
+                                &runtime.storage.conn,
+                                i64::from(signer_id),
+                                nonce,
+                                block.height as i64,
+                            )
+                            .await?;
+                        }
+
+                        // Execute each call (best-effort, like legacy Op::Call). Each call gets a
+                        // distinct op_index for deterministic result IDs and unique DB rows.
+                        for (op_index, parsed) in calls.iter().enumerate() {
+                            let signer_id = match parsed.call.signer {
+                                crate::bls_batch::SignerRef::RegistryId(id) => id,
+                                crate::bls_batch::SignerRef::BundleIndex(i) => *bundle_index_to_id
+                                    .get(i as usize)
+                                    .ok_or_else(|| anyhow!("BundleIndex out of bounds: {i}"))?,
+                            };
+                            let signer = Signer::XOnlyPubKey(format!("@{}", signer_id));
+
+                            runtime
+                                .set_context(
+                                    block.height as i64,
+                                    Some(TransactionContext {
+                                        tx_index: t.index,
+                                        input_index,
+                                        op_index: op_index as i64,
+                                        txid: t.txid,
+                                    }),
+                                    Some(metadata.previous_output),
+                                    op_return_data.clone().map(Into::into),
+                                )
+                                .await;
+
+                            let result = runtime
+                                .execute_binary(
+                                    Some(&signer),
+                                    i64::from(parsed.call.contract_id),
+                                    parsed.call.function_index,
+                                    &parsed.call.args,
+                                    parsed.call.gas_limit,
+                                )
+                                .await;
+                            if let Err(e) = result {
+                                warn!(
+                                    "BinaryCallV1 failed signer_id={} contract_id={} function_index={} op_index={}: {e:?}",
+                                    signer_id,
+                                    parsed.call.contract_id,
+                                    parsed.call.function_index,
+                                    op_index,
+                                );
+                            }
+                        }
+                        Ok(())
+                    }
+                    .await;
+
+                    if let Err(e) = result {
+                        runtime.storage.rollback().await?;
+                        warn!("BLS batch failed: {e:?}");
+                    } else {
+                        runtime.storage.commit().await?;
                     }
                 }
             };

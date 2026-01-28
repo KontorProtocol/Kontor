@@ -1,4 +1,5 @@
 pub mod api;
+pub mod bls_batch;
 pub mod bitcoin_client;
 pub mod bitcoin_follower;
 pub mod block;

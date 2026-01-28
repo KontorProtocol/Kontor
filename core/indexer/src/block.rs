@@ -44,36 +44,41 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 
                     if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
                         && insts.next().is_none()
-                        && let Ok(inst) = deserialize::<Inst>(&data)
                     {
                         let metadata = OpMetadata {
                             previous_output: input.previous_output,
                             input_index: input_index as i64,
                             signer: Signer::XOnlyPubKey(signer.to_string()),
                         };
-                        return Some(match inst {
-                            Inst::Publish {
-                                gas_limit,
-                                name,
-                                bytes,
-                            } => Op::Publish {
-                                metadata,
-                                gas_limit,
-                                name,
-                                bytes,
-                            },
-                            Inst::Call {
-                                gas_limit,
-                                contract,
-                                expr,
-                            } => Op::Call {
-                                metadata,
-                                gas_limit,
-                                contract,
-                                expr,
-                            },
-                            Inst::Issuance => Op::Issuance { metadata },
-                        });
+                        if let Ok(inst) = deserialize::<Inst>(&data) {
+                            return Some(match inst {
+                                Inst::Publish {
+                                    gas_limit,
+                                    name,
+                                    bytes,
+                                } => Op::Publish {
+                                    metadata,
+                                    gas_limit,
+                                    name,
+                                    bytes,
+                                },
+                                Inst::Call {
+                                    gas_limit,
+                                    contract,
+                                    expr,
+                                } => Op::Call {
+                                    metadata,
+                                    gas_limit,
+                                    contract,
+                                    expr,
+                                },
+                                Inst::Issuance => Op::Issuance { metadata },
+                            });
+                        }
+
+                        if data.starts_with(b"KBL1") {
+                            return Some(Op::BlsBatch { metadata, payload: data });
+                        }
                     }
                 }
                 None
