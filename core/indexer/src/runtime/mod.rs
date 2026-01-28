@@ -31,7 +31,7 @@ use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 pub use wit::Root;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use wit::kontor::*;
@@ -192,7 +192,9 @@ impl Runtime {
         self.result_id_counter.reset().await;
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
-        if let Some(gauge) = self.gauge.as_ref() {
+        if self.storage.tx_context.is_some()
+            && let Some(gauge) = self.gauge.as_ref()
+        {
             gauge.reset().await;
         }
     }
@@ -1349,16 +1351,8 @@ impl Runtime {
     }
 }
 
-static SKIP_RESULT_RULES: LazyLock<HashMap<&'static str, &'static [&'static str]>> =
-    LazyLock::new(|| {
-        let token_methods: &'static [&'static str] = &["hold"];
-        let filestorage_methods: &'static [&'static str] =
-            &["expire-challenges", "generate-challenges-for-block"];
-        HashMap::from([
-            ("token", token_methods),
-            ("filestorage", filestorage_methods),
-        ])
-    });
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
+    LazyLock::new(|| [("token", ["hold"].into())].into());
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
     SKIP_RESULT_RULES

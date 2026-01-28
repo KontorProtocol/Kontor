@@ -154,11 +154,12 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
 
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
     let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-
+    runtime
+        .set_context(block.height as i64, None, None, None)
+        .await;
     filestorage::api::expire_challenges(runtime, &core_signer, block.height)
         .await
         .expect("Failed to expire challenges");
-
     let challenges = filestorage::api::generate_challenges_for_block(
         runtime,
         &core_signer,
@@ -167,7 +168,6 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     )
     .await
     .expect("Failed to generate challenges");
-
     if !challenges.is_empty() {
         info!(
             "Generated {} challenges at block height {}",
