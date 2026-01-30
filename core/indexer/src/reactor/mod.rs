@@ -17,20 +17,24 @@ use bitcoin::{BlockHash, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    batch,
     bitcoin_follower::{
         ctrl::CtrlChannel,
         events::{BlockId, Event as FollowerEvent},
     },
     block::{filter_map, inspect},
+    bls,
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_block_with_hash,
+            insert_block, insert_processed_block, insert_transaction, reserve_signer_nonce,
+            rollback_to_height, select_block_at_height, select_block_latest,
+            select_block_with_hash, select_signer_registry_by_id, select_signer_registry_by_xonly,
             set_block_processed,
         },
     },
     runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
+    signer_registry,
     test_utils::new_mock_block_hash,
 };
 
@@ -111,7 +115,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         txid: t.txid,
                     }),
                     Some(metadata.previous_output),
-                    op_return_data.map(Into::into),
+                    op_return_data.clone().map(Into::into),
                 )
                 .await;
 
@@ -146,6 +150,260 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     let result = runtime.issuance(&metadata.signer).await;
                     if result.is_err() {
                         warn!("Issuance operation failed: {:?}", result);
+                    }
+                }
+                Op::Batch { metadata, payload } => {
+                    let decoded = match batch::decode_kbl1_batch(payload) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warn!("KBL1 batch decode failed: {e}");
+                            continue;
+                        }
+                    };
+
+                    // First, process any inline registrations so later ops can resolve registry IDs.
+                    for op in decoded.ops.iter() {
+                        if let batch::BatchOpV1::RegisterSigner {
+                            xonly_pubkey,
+                            bls_pubkey,
+                            schnorr_sig,
+                            bls_sig,
+                        } = op
+                        {
+                            let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    warn!("invalid RegisterSigner bls_pubkey length (expected 96)");
+                                    continue;
+                                }
+                            };
+                            let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    warn!(
+                                        "invalid RegisterSigner schnorr_sig length (expected 64)"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    warn!("invalid RegisterSigner bls_sig length (expected 48)");
+                                    continue;
+                                }
+                            };
+                            let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey) {
+                                Ok(x) => x,
+                                Err(e) => {
+                                    warn!("invalid RegisterSigner xonly pubkey: {e}");
+                                    continue;
+                                }
+                            };
+
+                            if let Err(e) = signer_registry::register_signer(
+                                &runtime.storage.conn,
+                                &xonly,
+                                &bls_pubkey,
+                                &schnorr_sig,
+                                &bls_sig,
+                                block.height as i64,
+                                t.index,
+                            )
+                            .await
+                            {
+                                warn!("RegisterSigner failed: {e}");
+                            }
+                        }
+                    }
+
+                    // Collect the signed ops and verify the aggregate signature.
+                    struct CallEntry {
+                        signer_id: u32,
+                        signer: Signer,
+                        bls_pubkey: [u8; 96],
+                        nonce: u64,
+                        inst: indexer_types::Inst,
+                        message: Vec<u8>,
+                    }
+
+                    let mut calls: Vec<CallEntry> = Vec::new();
+                    for (op, range) in decoded.ops.iter().zip(decoded.op_ranges.iter()) {
+                        let batch::BatchOpV1::Op {
+                            signer,
+                            nonce,
+                            inst,
+                        } = op
+                        else {
+                            continue;
+                        };
+
+                        let (signer_id, xonly_pubkey, bls_pubkey) = match signer {
+                            batch::SignerRefV1::Id(id) => {
+                                let row =
+                                    match select_signer_registry_by_id(&runtime.storage.conn, *id)
+                                        .await
+                                    {
+                                        Ok(Some(r)) => r,
+                                        Ok(None) => {
+                                            warn!("unknown signer_id {id} (not in registry)");
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to look up signer_id {id}: {e}");
+                                            continue;
+                                        }
+                                    };
+                                let xonly: [u8; 32] = match row.xonly_pubkey.as_slice().try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!("registry xonly_pubkey has invalid length");
+                                        continue;
+                                    }
+                                };
+                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_slice().try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!("registry bls_pubkey has invalid length");
+                                        continue;
+                                    }
+                                };
+                                (*id, xonly, bls_pk)
+                            }
+                            batch::SignerRefV1::XOnly(xonly) => {
+                                let row = match select_signer_registry_by_xonly(
+                                    &runtime.storage.conn,
+                                    xonly,
+                                )
+                                .await
+                                {
+                                    Ok(Some(r)) => r,
+                                    Ok(None) => {
+                                        warn!("unknown xonly signer (not in registry)");
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        warn!("failed to look up xonly signer: {e}");
+                                        continue;
+                                    }
+                                };
+                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_slice().try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!("registry bls_pubkey has invalid length");
+                                        continue;
+                                    }
+                                };
+                                (u32::try_from(row.id).unwrap_or(0), *xonly, bls_pk)
+                            }
+                        };
+
+                        let signer = match bitcoin::XOnlyPublicKey::from_slice(&xonly_pubkey[..]) {
+                            Ok(x) => Signer::XOnlyPubKey(x.to_string()),
+                            Err(_) => Signer::Nobody,
+                        };
+
+                        let op_bytes = &decoded.decompressed_ops[range.clone()];
+                        let message = batch::kbl1_message_for_op_bytes(op_bytes);
+
+                        calls.push(CallEntry {
+                            signer_id,
+                            signer,
+                            bls_pubkey,
+                            nonce: *nonce,
+                            inst: inst.clone(),
+                            message,
+                        });
+                    }
+
+                    if calls.is_empty() {
+                        warn!("KBL1 batch contains no signed ops");
+                        continue;
+                    }
+
+                    let public_keys: Vec<[u8; 96]> = calls.iter().map(|c| c.bls_pubkey).collect();
+                    let message_refs: Vec<&[u8]> =
+                        calls.iter().map(|c| c.message.as_slice()).collect();
+                    if let Err(e) = bls::verify_aggregate_signature(
+                        &decoded.aggregate_signature,
+                        &public_keys,
+                        &message_refs,
+                    ) {
+                        warn!("KBL1 aggregate signature verification failed: {e}");
+                        continue;
+                    }
+
+                    // Execute ops in-order with replay protection.
+                    for (op_index, call) in calls.into_iter().enumerate() {
+                        let op_index = op_index as i64;
+                        runtime
+                            .set_context(
+                                block.height as i64,
+                                Some(TransactionContext {
+                                    tx_index: t.index,
+                                    input_index: metadata.input_index,
+                                    op_index,
+                                    txid: t.txid,
+                                }),
+                                Some(metadata.previous_output),
+                                op_return_data.clone().map(Into::into),
+                            )
+                            .await;
+
+                        if let Err(e) = reserve_signer_nonce(
+                            &runtime.storage.conn,
+                            call.signer_id,
+                            call.nonce,
+                            block.height as i64,
+                            t.index,
+                            metadata.input_index,
+                            op_index,
+                        )
+                        .await
+                        {
+                            warn!("Rejected batched op (nonce reservation failed): {e}");
+                            continue;
+                        }
+
+                        let metadata = indexer_types::OpMetadata {
+                            previous_output: metadata.previous_output,
+                            input_index: metadata.input_index,
+                            signer: call.signer,
+                        };
+
+                        match call.inst {
+                            indexer_types::Inst::Publish {
+                                gas_limit,
+                                name,
+                                bytes,
+                            } => {
+                                runtime.set_gas_limit(gas_limit);
+                                let result = runtime.publish(&metadata.signer, &name, &bytes).await;
+                                if result.is_err() {
+                                    warn!("Batched Publish operation failed: {:?}", result);
+                                }
+                            }
+                            indexer_types::Inst::Call {
+                                gas_limit,
+                                contract,
+                                expr,
+                            } => {
+                                runtime.set_gas_limit(gas_limit);
+                                let contract = (&contract).into();
+                                let result = runtime
+                                    .execute(Some(&metadata.signer), &contract, &expr)
+                                    .await;
+                                if result.is_err() {
+                                    warn!("Batched Call operation failed: {:?}", result);
+                                }
+                            }
+                            indexer_types::Inst::Issuance => {
+                                let result = runtime.issuance(&metadata.signer).await;
+                                if result.is_err() {
+                                    warn!("Batched Issuance operation failed: {:?}", result);
+                                }
+                            }
+                        };
                     }
                 }
             };

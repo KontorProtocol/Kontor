@@ -289,6 +289,10 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    Batch {
+        metadata: OpMetadata,
+        payload: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -297,6 +301,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::Batch { metadata, .. } => metadata,
         }
     }
 }

@@ -8,7 +8,8 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, SignerNonceRow,
+        SignerRegistryRow, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -1032,4 +1033,168 @@ pub async fn insert_file_metadata(
     )
     .await?;
     Ok(conn.last_insert_rowid())
+}
+
+pub async fn select_signer_registry_by_id(
+    conn: &Connection,
+    id: u32,
+) -> Result<Option<SignerRegistryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            id,
+            xonly_pubkey,
+            bls_pubkey,
+            first_seen_height,
+            first_seen_tx_index
+            FROM signer_registry
+            WHERE id = ?
+            LIMIT 1"#,
+            params![id as i64],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn select_signer_registry_by_xonly(
+    conn: &Connection,
+    xonly_pubkey: &[u8; 32],
+) -> Result<Option<SignerRegistryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            id,
+            xonly_pubkey,
+            bls_pubkey,
+            first_seen_height,
+            first_seen_tx_index
+            FROM signer_registry
+            WHERE xonly_pubkey = ?
+            LIMIT 1"#,
+            params![Value::Blob(xonly_pubkey.to_vec())],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn select_signer_registry_by_bls(
+    conn: &Connection,
+    bls_pubkey: &[u8; 96],
+) -> Result<Option<SignerRegistryRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            id,
+            xonly_pubkey,
+            bls_pubkey,
+            first_seen_height,
+            first_seen_tx_index
+            FROM signer_registry
+            WHERE bls_pubkey = ?
+            LIMIT 1"#,
+            params![Value::Blob(bls_pubkey.to_vec())],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn assign_or_get_signer_id(
+    conn: &Connection,
+    xonly_pubkey: &[u8; 32],
+    bls_pubkey: &[u8; 96],
+    height: i64,
+    tx_index: i64,
+) -> Result<u32, Error> {
+    if let Some(existing) = select_signer_registry_by_xonly(conn, xonly_pubkey).await? {
+        if existing.bls_pubkey.as_slice() != bls_pubkey {
+            return Err(Error::InvalidData(
+                "x-only pubkey already registered to a different BLS pubkey".to_string(),
+            ));
+        }
+        return u32::try_from(existing.id)
+            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+    }
+
+    if let Some(existing) = select_signer_registry_by_bls(conn, bls_pubkey).await? {
+        if existing.xonly_pubkey.as_slice() != xonly_pubkey {
+            return Err(Error::InvalidData(
+                "BLS pubkey already registered to a different x-only pubkey".to_string(),
+            ));
+        }
+        return u32::try_from(existing.id)
+            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+    }
+
+    conn.execute(
+        r#"INSERT INTO signer_registry
+        (xonly_pubkey, bls_pubkey, first_seen_height, first_seen_tx_index)
+        VALUES (?, ?, ?, ?)"#,
+        params![
+            Value::Blob(xonly_pubkey.to_vec()),
+            Value::Blob(bls_pubkey.to_vec()),
+            height,
+            tx_index
+        ],
+    )
+    .await?;
+
+    let id = conn.last_insert_rowid();
+    u32::try_from(id).map_err(|_| Error::InvalidData("signer id out of range".to_string()))
+}
+
+pub async fn select_signer_nonce(
+    conn: &Connection,
+    signer_id: u32,
+    nonce: u64,
+) -> Result<Option<SignerNonceRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+            signer_id,
+            nonce,
+            height,
+            tx_index,
+            input_index,
+            op_index
+            FROM signer_nonces
+            WHERE signer_id = ?
+            AND nonce = ?
+            LIMIT 1"#,
+            params![signer_id as i64, Value::Blob(nonce.to_le_bytes().to_vec())],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn reserve_signer_nonce(
+    conn: &Connection,
+    signer_id: u32,
+    nonce: u64,
+    height: i64,
+    tx_index: i64,
+    input_index: i64,
+    op_index: i64,
+) -> Result<(), Error> {
+    let inserted = conn
+        .execute(
+            r#"INSERT OR IGNORE INTO signer_nonces
+            (signer_id, nonce, height, tx_index, input_index, op_index)
+            VALUES (?, ?, ?, ?, ?, ?)"#,
+            params![
+                signer_id as i64,
+                Value::Blob(nonce.to_le_bytes().to_vec()),
+                height,
+                tx_index,
+                input_index,
+                op_index
+            ],
+        )
+        .await?;
+    if inserted == 0 {
+        return Err(Error::InvalidData(format!(
+            "replay detected (signer_id={}, nonce={})",
+            signer_id, nonce
+        )));
+    }
+    Ok(())
 }

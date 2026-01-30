@@ -84,3 +84,29 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+
+CREATE TABLE IF NOT EXISTS signer_registry (
+  id INTEGER PRIMARY KEY,
+  xonly_pubkey BLOB NOT NULL UNIQUE,
+  bls_pubkey BLOB NOT NULL UNIQUE,
+  first_seen_height INTEGER NOT NULL,
+  first_seen_tx_index INTEGER NOT NULL,
+  FOREIGN KEY (first_seen_height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_signer_registry_xonly ON signer_registry (xonly_pubkey);
+CREATE INDEX IF NOT EXISTS idx_signer_registry_bls ON signer_registry (bls_pubkey);
+
+CREATE TABLE IF NOT EXISTS signer_nonces (
+  signer_id INTEGER NOT NULL,
+  nonce BLOB NOT NULL,
+  height INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
+  input_index INTEGER NOT NULL,
+  op_index INTEGER NOT NULL,
+  PRIMARY KEY (signer_id, nonce),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
+  FOREIGN KEY (signer_id) REFERENCES signer_registry (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_signer_nonces_height ON signer_nonces (height);

@@ -1,7 +1,9 @@
 pub mod api;
+pub mod batch;
 pub mod bitcoin_client;
 pub mod bitcoin_follower;
 pub mod block;
+pub mod bls;
 pub mod built_info;
 pub mod config;
 pub mod database;
@@ -13,6 +15,7 @@ pub mod reactor;
 pub mod reg_tester;
 pub mod retry;
 pub mod runtime;
+pub mod signer_registry;
 pub mod stopper;
 pub mod test_utils;
 pub mod testlib_exports;
