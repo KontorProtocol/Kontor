@@ -88,7 +88,8 @@ CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
 CREATE TABLE IF NOT EXISTS signer_registry (
   id INTEGER PRIMARY KEY,
   xonly_pubkey BLOB NOT NULL UNIQUE,
-  bls_pubkey BLOB NOT NULL UNIQUE,
+  -- Nullable until the signer binds a BLS key via RegisterSigner.
+  bls_pubkey BLOB UNIQUE,
   first_seen_height INTEGER NOT NULL,
   first_seen_tx_index INTEGER NOT NULL,
   FOREIGN KEY (first_seen_height) REFERENCES blocks (height) ON DELETE CASCADE

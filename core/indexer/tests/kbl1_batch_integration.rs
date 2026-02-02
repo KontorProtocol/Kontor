@@ -8,9 +8,11 @@ use indexer::database::queries::{
     insert_processed_block, select_signer_nonce, select_signer_registry_by_xonly,
 };
 use indexer::reactor::block_handler;
-use indexer::runtime::{ComponentCache, Runtime, Storage};
+use indexer::runtime::{
+    ComponentCache, ContractAddress as RuntimeContractAddress, Runtime, Storage,
+};
 use indexer::test_utils::new_test_db;
-use indexer_types::{Block, BlockRow, Inst, Op, OpMetadata, Signer, Transaction};
+use indexer_types::{Block, BlockRow, Op, OpMetadata, Signer, Transaction};
 use indexmap::IndexMap;
 
 use blst::min_sig::SecretKey as BlsSecretKey;
@@ -69,7 +71,37 @@ async fn new_runtime_with_native_contracts() -> Result<(Runtime, libsql::Connect
 }
 
 #[tokio::test]
-async fn kbl1_inline_register_then_issuance_reserves_nonce() -> Result<()> {
+async fn binarycall_view_context_export_executes() -> Result<()> {
+    let (mut runtime, _conn) = new_runtime_with_native_contracts().await?;
+
+    let token_contract_id: u32 = runtime
+        .storage
+        .contract_id(&RuntimeContractAddress {
+            name: "token".to_string(),
+            height: 0,
+            tx_index: 0,
+        })
+        .await?
+        .expect("token contract_id exists")
+        .try_into()
+        .expect("token contract_id fits u32");
+
+    // BinaryCall function_index mapping is:
+    // - proc exports first (excluding init)
+    // - then view exports
+    //
+    // For the native token contract, `total-supply` is the 3rd view export, after 5 proc exports.
+    let total_supply_function_index: u16 = 7;
+    let args = postcard::to_allocvec(&())?;
+    let value = runtime
+        .execute_binary(None, token_contract_id, total_supply_function_index, &args)
+        .await?;
+    assert!(!value.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn kbl1_inline_register_then_binarycall_reserves_nonce() -> Result<()> {
     let (mut runtime, conn) = new_runtime_with_native_contracts().await?;
 
     let secp: Secp256k1<All> = Secp256k1::new();
@@ -97,10 +129,32 @@ async fn kbl1_inline_register_then_issuance_reserves_nonce() -> Result<()> {
         schnorr_sig: schnorr_sig.to_vec(),
         bls_sig: bls_sig.to_vec(),
     };
-    let call = BatchOpV1::Op {
+
+    let token_contract_id: u32 = runtime
+        .storage
+        .contract_id(&RuntimeContractAddress {
+            name: "token".to_string(),
+            height: 0,
+            tx_index: 0,
+        })
+        .await?
+        .expect("token contract_id exists")
+        .try_into()
+        .expect("token contract_id fits u32");
+
+    // Token.mint(ctx, amt: decimal) where decimal is (r0,r1,r2,r3,sign).
+    // We encode args as a postcard tuple of parameters, where the decimal itself is encoded as
+    // a tuple of its fields in WIT declaration order.
+    let decimal_amt = (1u64, 0u64, 0u64, 0u64, 0u32); // sign=plus (variant index 0)
+    let args = postcard::to_allocvec(&(decimal_amt,))?;
+
+    let call = BatchOpV1::Call {
         signer: SignerRefV1::XOnly(xonly_bytes),
         nonce: 1,
-        inst: Inst::Issuance,
+        gas_limit: 100_000,
+        contract_id: token_contract_id,
+        function_index: 0, // token.mint
+        args,
     };
 
     let register_bytes = postcard::to_allocvec(&register)?;
@@ -124,14 +178,24 @@ async fn kbl1_inline_register_then_issuance_reserves_nonce() -> Result<()> {
     let tx = Transaction {
         txid,
         index: 0,
-        ops: vec![Op::Batch {
-            metadata: OpMetadata {
-                previous_output: prevout,
-                input_index: 0,
-                signer: Signer::XOnlyPubKey(xonly.to_string()), // publisher (not used for auth)
+        ops: vec![
+            // Fund the signer with some tokens so the BinaryCall can escrow gas via `hold`.
+            Op::Issuance {
+                metadata: OpMetadata {
+                    previous_output: prevout,
+                    input_index: 0,
+                    signer: Signer::XOnlyPubKey(xonly.to_string()),
+                },
             },
-            payload,
-        }],
+            Op::Batch {
+                metadata: OpMetadata {
+                    previous_output: prevout,
+                    input_index: 1,
+                    signer: Signer::XOnlyPubKey(xonly.to_string()), // publisher (not used for auth)
+                },
+                payload,
+            },
+        ],
         op_return_data: IndexMap::new(),
     };
 
@@ -148,6 +212,10 @@ async fn kbl1_inline_register_then_issuance_reserves_nonce() -> Result<()> {
         .await?
         .expect("signer should be registered");
     let signer_id: u32 = row.id.try_into().expect("signer_id fits u32");
+    assert!(
+        row.bls_pubkey.is_some(),
+        "BLS pubkey should be bound after RegisterSigner"
+    );
 
     let nonce = select_signer_nonce(&conn, signer_id, 1)
         .await?
@@ -186,10 +254,29 @@ async fn kbl1_invalid_signature_does_not_reserve_nonce() -> Result<()> {
         schnorr_sig: schnorr_sig.to_vec(),
         bls_sig: bls_sig.to_vec(),
     };
-    let call = BatchOpV1::Op {
+
+    let token_contract_id: u32 = runtime
+        .storage
+        .contract_id(&RuntimeContractAddress {
+            name: "token".to_string(),
+            height: 0,
+            tx_index: 0,
+        })
+        .await?
+        .expect("token contract_id exists")
+        .try_into()
+        .expect("token contract_id fits u32");
+
+    let decimal_amt = (1u64, 0u64, 0u64, 0u64, 0u32); // sign=plus
+    let args = postcard::to_allocvec(&(decimal_amt,))?;
+
+    let call = BatchOpV1::Call {
         signer: SignerRefV1::XOnly(xonly_bytes),
         nonce: 7,
-        inst: Inst::Issuance,
+        gas_limit: 100_000,
+        contract_id: token_contract_id,
+        function_index: 0,
+        args,
     };
 
     let register_bytes = postcard::to_allocvec(&register)?;
@@ -209,14 +296,23 @@ async fn kbl1_invalid_signature_does_not_reserve_nonce() -> Result<()> {
     let tx = Transaction {
         txid,
         index: 0,
-        ops: vec![Op::Batch {
-            metadata: OpMetadata {
-                previous_output: prevout,
-                input_index: 0,
-                signer: Signer::XOnlyPubKey(xonly.to_string()),
+        ops: vec![
+            Op::Issuance {
+                metadata: OpMetadata {
+                    previous_output: prevout,
+                    input_index: 0,
+                    signer: Signer::XOnlyPubKey(xonly.to_string()),
+                },
             },
-            payload,
-        }],
+            Op::Batch {
+                metadata: OpMetadata {
+                    previous_output: prevout,
+                    input_index: 1,
+                    signer: Signer::XOnlyPubKey(xonly.to_string()),
+                },
+                payload,
+            },
+        ],
         op_return_data: IndexMap::new(),
     };
 
@@ -233,6 +329,10 @@ async fn kbl1_invalid_signature_does_not_reserve_nonce() -> Result<()> {
         .await?
         .expect("signer should be registered");
     let signer_id: u32 = row.id.try_into().expect("signer_id fits u32");
+    assert!(
+        row.bls_pubkey.is_none(),
+        "invalid aggregate signature must have no side effects (no BLS binding)"
+    );
 
     assert!(select_signer_nonce(&conn, signer_id, 7).await?.is_none());
     Ok(())
@@ -267,10 +367,29 @@ async fn mixed_legacy_and_kbl1_ops_in_one_block() -> Result<()> {
         schnorr_sig: schnorr_sig.to_vec(),
         bls_sig: bls_sig.to_vec(),
     };
-    let call = BatchOpV1::Op {
+
+    let token_contract_id: u32 = runtime
+        .storage
+        .contract_id(&RuntimeContractAddress {
+            name: "token".to_string(),
+            height: 0,
+            tx_index: 0,
+        })
+        .await?
+        .expect("token contract_id exists")
+        .try_into()
+        .expect("token contract_id fits u32");
+
+    let decimal_amt = (1u64, 0u64, 0u64, 0u64, 0u32); // sign=plus
+    let args = postcard::to_allocvec(&(decimal_amt,))?;
+
+    let call = BatchOpV1::Call {
         signer: SignerRefV1::XOnly(xonly_bytes),
         nonce: 42,
-        inst: Inst::Issuance,
+        gas_limit: 100_000,
+        contract_id: token_contract_id,
+        function_index: 0,
+        args,
     };
 
     let register_bytes = postcard::to_allocvec(&register)?;
@@ -335,4 +454,3 @@ async fn mixed_legacy_and_kbl1_ops_in_one_block() -> Result<()> {
     assert!(select_signer_nonce(&conn, signer_id, 42).await?.is_some());
     Ok(())
 }
-

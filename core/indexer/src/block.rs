@@ -9,7 +9,10 @@ use libsql::Connection;
 
 use crate::{
     batch,
-    database::{queries::get_op_result, types::OpResultId},
+    database::{
+        queries::{get_contract_address_from_id, get_op_result, select_signer_registry_by_xonly},
+        types::OpResultId,
+    },
     runtime::wit::Signer,
 };
 
@@ -127,7 +130,15 @@ pub async fn inspect(
                     if let Ok(decoded) = batch::decode_kbl1_batch(payload) {
                         let mut op_index = 0i64;
                         for (batch_op, range) in decoded.ops.iter().zip(decoded.op_ranges.iter()) {
-                            if let batch::BatchOpV1::Op { signer, inst, .. } = batch_op {
+                            if let batch::BatchOpV1::Call {
+                                signer,
+                                nonce,
+                                gas_limit,
+                                contract_id,
+                                function_index,
+                                args,
+                            } = batch_op
+                            {
                                 let id = OpResultId::builder()
                                     .txid(tx.txid.to_string())
                                     .input_index(metadata.input_index)
@@ -137,22 +148,16 @@ pub async fn inspect(
 
                                 // Best-effort signer resolution for display.
                                 let signer = match signer {
-                                    batch::SignerRefV1::Id(id) => {
-                                        crate::database::queries::select_signer_registry_by_id(
-                                            conn, *id,
-                                        )
-                                        .await?
-                                        .and_then(|row| row.xonly_pubkey.as_slice().try_into().ok())
-                                        .and_then(|xonly: [u8; 32]| {
-                                            bitcoin::XOnlyPublicKey::from_slice(&xonly).ok()
-                                        })
-                                        .map(|x| Signer::XOnlyPubKey(x.to_string()))
-                                        .unwrap_or_else(|| Signer::Nobody)
-                                    }
+                                    batch::SignerRefV1::Id(id) => Signer::new_registry_id(*id),
                                     batch::SignerRefV1::XOnly(xonly) => {
-                                        bitcoin::XOnlyPublicKey::from_slice(xonly)
-                                            .map(|x| Signer::XOnlyPubKey(x.to_string()))
-                                            .unwrap_or(Signer::Nobody)
+                                        select_signer_registry_by_xonly(conn, xonly)
+                                            .await?
+                                            .map(|row| Signer::new_registry_id(row.id as u32))
+                                            .unwrap_or_else(|| {
+                                                bitcoin::XOnlyPublicKey::from_slice(xonly)
+                                                    .map(|x| Signer::XOnlyPubKey(x.to_string()))
+                                                    .unwrap_or(Signer::Nobody)
+                                            })
                                     }
                                 };
 
@@ -161,28 +166,29 @@ pub async fn inspect(
                                     input_index: metadata.input_index,
                                     signer,
                                 };
-                                let op = match inst.clone() {
-                                    Inst::Publish {
-                                        gas_limit,
-                                        name,
-                                        bytes,
-                                    } => Op::Publish {
-                                        metadata,
-                                        gas_limit,
-                                        name,
-                                        bytes,
-                                    },
-                                    Inst::Call {
-                                        gas_limit,
-                                        contract,
-                                        expr,
-                                    } => Op::Call {
-                                        metadata,
-                                        gas_limit,
-                                        contract,
-                                        expr,
-                                    },
-                                    Inst::Issuance => Op::Issuance { metadata },
+
+                                // For now, represent BinaryCall ops as a best-effort `Op::Call` for display.
+                                // The `expr` is not executable WAVE; it is only a debug string.
+                                let contract = match get_contract_address_from_id(
+                                    conn,
+                                    i64::from(*contract_id),
+                                )
+                                .await?
+                                {
+                                    Some(addr) => addr.into(),
+                                    None => continue,
+                                };
+                                let expr = format!(
+                                    "__binary_call__(function_index={}, args_len={}, nonce={})",
+                                    function_index,
+                                    args.len(),
+                                    nonce
+                                );
+                                let op = Op::Call {
+                                    metadata,
+                                    gas_limit: *gas_limit,
+                                    contract,
+                                    expr,
                                 };
                                 ops.push(OpWithResult { op, result });
                                 op_index += 1;

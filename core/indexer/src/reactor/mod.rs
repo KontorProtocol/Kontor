@@ -27,10 +27,10 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, reserve_signer_nonce,
-            rollback_to_height, select_block_at_height, select_block_latest,
-            select_block_with_hash, select_signer_registry_by_id, select_signer_registry_by_xonly,
-            set_block_processed,
+            assign_or_get_signer_id_by_xonly, insert_block, insert_processed_block,
+            insert_transaction, reserve_signer_nonce, rollback_to_height, select_block_at_height,
+            select_block_latest, select_block_with_hash, select_signer_registry_by_id,
+            select_signer_registry_by_xonly, set_block_processed,
         },
     },
     runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
@@ -127,7 +127,26 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     bytes,
                 } => {
                     runtime.set_gas_limit(*gas_limit);
-                    let result = runtime.publish(&metadata.signer, name, bytes).await;
+                    let signer = match &metadata.signer {
+                        Signer::XOnlyPubKey(xonly_str) => {
+                            // Canonicalize direct Schnorr signers to a deterministic registry ID so
+                            // contract-visible signer identity is shared across direct + BLS paths.
+                            let xonly = xonly_str
+                                .parse::<bitcoin::XOnlyPublicKey>()
+                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
+                            let signer_id = assign_or_get_signer_id_by_xonly(
+                                &runtime.storage.conn,
+                                &xonly.serialize(),
+                                block.height as i64,
+                                t.index,
+                            )
+                            .await?;
+                            Signer::new_registry_id(signer_id)
+                        }
+                        _ => metadata.signer.clone(),
+                    };
+
+                    let result = runtime.publish(&signer, name, bytes).await;
                     if result.is_err() {
                         warn!("Publish operation failed: {:?}", result);
                     }
@@ -139,15 +158,48 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     expr,
                 } => {
                     runtime.set_gas_limit(*gas_limit);
+                    let signer = match &metadata.signer {
+                        Signer::XOnlyPubKey(xonly_str) => {
+                            let xonly = xonly_str
+                                .parse::<bitcoin::XOnlyPublicKey>()
+                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
+                            let signer_id = assign_or_get_signer_id_by_xonly(
+                                &runtime.storage.conn,
+                                &xonly.serialize(),
+                                block.height as i64,
+                                t.index,
+                            )
+                            .await?;
+                            Signer::new_registry_id(signer_id)
+                        }
+                        _ => metadata.signer.clone(),
+                    };
                     let result = runtime
-                        .execute(Some(&metadata.signer), &(contract.into()), expr)
+                        .execute(Some(&signer), &(contract.into()), expr)
                         .await;
                     if result.is_err() {
                         warn!("Call operation failed: {:?}", result);
                     }
                 }
                 Op::Issuance { metadata, .. } => {
-                    let result = runtime.issuance(&metadata.signer).await;
+                    let signer = match &metadata.signer {
+                        Signer::XOnlyPubKey(xonly_str) => {
+                            let xonly = xonly_str
+                                .parse::<bitcoin::XOnlyPublicKey>()
+                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
+                            let signer_id = assign_or_get_signer_id_by_xonly(
+                                &runtime.storage.conn,
+                                &xonly.serialize(),
+                                block.height as i64,
+                                t.index,
+                            )
+                            .await?;
+                            Signer::new_registry_id(signer_id)
+                        }
+                        _ => metadata.signer.clone(),
+                    };
+
+                    let result = runtime.issuance(&signer).await;
                     if result.is_err() {
                         warn!("Issuance operation failed: {:?}", result);
                     }
@@ -161,84 +213,90 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         }
                     };
 
-                    // First, process any inline registrations so later ops can resolve registry IDs.
+                    // -------------------------------------------------------------------------
+                    // Signature-atomic batching:
+                    //
+                    // - If aggregate signature verification fails, reject the entire batch with
+                    //   no side effects (no registry writes, no nonce reservations, no execution).
+                    // - If aggregate verification succeeds, process ops sequentially. Per-op
+                    //   failures do not roll back earlier ops.
+                    // -------------------------------------------------------------------------
+
+                    // Pre-validate registrations in-memory (no DB writes) so we can use any
+                    // new BLS pubkeys for signature verification.
+                    let mut in_batch_bls_by_xonly: std::collections::HashMap<[u8; 32], [u8; 96]> =
+                        std::collections::HashMap::new();
                     for op in decoded.ops.iter() {
-                        if let batch::BatchOpV1::RegisterSigner {
+                        let batch::BatchOpV1::RegisterSigner {
                             xonly_pubkey,
                             bls_pubkey,
                             schnorr_sig,
                             bls_sig,
                         } = op
-                        {
-                            let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
-                                Ok(v) => v,
-                                Err(_) => {
-                                    warn!("invalid RegisterSigner bls_pubkey length (expected 96)");
-                                    continue;
-                                }
-                            };
-                            let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into() {
-                                Ok(v) => v,
-                                Err(_) => {
-                                    warn!(
-                                        "invalid RegisterSigner schnorr_sig length (expected 64)"
-                                    );
-                                    continue;
-                                }
-                            };
-                            let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
-                                Ok(v) => v,
-                                Err(_) => {
-                                    warn!("invalid RegisterSigner bls_sig length (expected 48)");
-                                    continue;
-                                }
-                            };
-                            let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey) {
-                                Ok(x) => x,
-                                Err(e) => {
-                                    warn!("invalid RegisterSigner xonly pubkey: {e}");
-                                    continue;
-                                }
-                            };
-
-                            if let Err(e) = signer_registry::register_signer(
-                                &runtime.storage.conn,
-                                &xonly,
-                                &bls_pubkey,
-                                &schnorr_sig,
-                                &bls_sig,
-                                block.height as i64,
-                                t.index,
-                            )
-                            .await
-                            {
-                                warn!("RegisterSigner failed: {e}");
-                            }
-                        }
-                    }
-
-                    // Collect the signed ops and verify the aggregate signature.
-                    struct CallEntry {
-                        signer_id: u32,
-                        signer: Signer,
-                        bls_pubkey: [u8; 96],
-                        nonce: u64,
-                        inst: indexer_types::Inst,
-                        message: Vec<u8>,
-                    }
-
-                    let mut calls: Vec<CallEntry> = Vec::new();
-                    for (op, range) in decoded.ops.iter().zip(decoded.op_ranges.iter()) {
-                        let batch::BatchOpV1::Op {
-                            signer,
-                            nonce,
-                            inst,
-                        } = op
                         else {
                             continue;
                         };
 
-                        let (signer_id, xonly_pubkey, bls_pubkey) = match signer {
+                        let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                warn!("invalid RegisterSigner bls_pubkey length (expected 96)");
+                                continue;
+                            }
+                        };
+                        let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                warn!("invalid RegisterSigner schnorr_sig length (expected 64)");
+                                continue;
+                            }
+                        };
+                        let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                warn!("invalid RegisterSigner bls_sig length (expected 48)");
+                                continue;
+                            }
+                        };
+                        let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey) {
+                            Ok(x) => x,
+                            Err(e) => {
+                                warn!("invalid RegisterSigner xonly pubkey: {e}");
+                                continue;
+                            }
+                        };
+
+                        if let Err(e) = signer_registry::verify_registration_proofs(
+                            &xonly,
+                            &bls_pubkey,
+                            &schnorr_sig,
+                            &bls_sig,
+                        ) {
+                            warn!("invalid RegisterSigner proofs: {e}");
+                            continue;
+                        }
+
+                        in_batch_bls_by_xonly.insert(*xonly_pubkey, bls_pubkey);
+                    }
+
+                    // Collect the signed BinaryCall ops and verify the aggregate signature.
+                    struct CallForVerification {
+                        bls_pubkey: [u8; 96],
+                        message: Vec<u8>,
+                    }
+
+                    let mut calls: Vec<CallForVerification> = Vec::new();
+                    let mut reject_batch = false;
+                    for (op, range) in decoded.ops.iter().zip(decoded.op_ranges.iter()) {
+                        let batch::BatchOpV1::Call { signer, .. } = op else {
+                            continue;
+                        };
+
+                        // Resolve which BLS pubkey should be used for verifying this op.
+                        // Priority:
+                        // 1) If the signer has a BLS pubkey bound in the registry, use it.
+                        // 2) Otherwise, fall back to a valid in-batch RegisterSigner binding.
+                        let (xonly_pubkey, bls_pubkey) = match signer {
                             batch::SignerRefV1::Id(id) => {
                                 let row =
                                     match select_signer_registry_by_id(&runtime.storage.conn, *id)
@@ -247,73 +305,97 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                         Ok(Some(r)) => r,
                                         Ok(None) => {
                                             warn!("unknown signer_id {id} (not in registry)");
-                                            continue;
+                                            reject_batch = true;
+                                            break;
                                         }
                                         Err(e) => {
                                             warn!("failed to look up signer_id {id}: {e}");
-                                            continue;
+                                            reject_batch = true;
+                                            break;
                                         }
                                     };
                                 let xonly: [u8; 32] = match row.xonly_pubkey.as_slice().try_into() {
                                     Ok(v) => v,
                                     Err(_) => {
                                         warn!("registry xonly_pubkey has invalid length");
-                                        continue;
+                                        reject_batch = true;
+                                        break;
                                     }
                                 };
-                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_slice().try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!("registry bls_pubkey has invalid length");
-                                        continue;
-                                    }
+                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_deref() {
+                                    Some(bytes) => match bytes.try_into() {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            warn!("registry bls_pubkey has invalid length");
+                                            reject_batch = true;
+                                            break;
+                                        }
+                                    },
+                                    None => match in_batch_bls_by_xonly.get(&xonly) {
+                                        Some(pk) => *pk,
+                                        None => {
+                                            warn!("signer_id {id} has no BLS pubkey bound");
+                                            reject_batch = true;
+                                            break;
+                                        }
+                                    },
                                 };
-                                (*id, xonly, bls_pk)
+                                (xonly, bls_pk)
                             }
                             batch::SignerRefV1::XOnly(xonly) => {
-                                let row = match select_signer_registry_by_xonly(
+                                let maybe_row = match select_signer_registry_by_xonly(
                                     &runtime.storage.conn,
                                     xonly,
                                 )
                                 .await
                                 {
-                                    Ok(Some(r)) => r,
-                                    Ok(None) => {
-                                        warn!("unknown xonly signer (not in registry)");
-                                        continue;
-                                    }
+                                    Ok(r) => r,
                                     Err(e) => {
                                         warn!("failed to look up xonly signer: {e}");
-                                        continue;
+                                        reject_batch = true;
+                                        break;
                                     }
                                 };
-                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_slice().try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!("registry bls_pubkey has invalid length");
-                                        continue;
-                                    }
+                                let bls_pk: [u8; 96] = match maybe_row
+                                    .as_ref()
+                                    .and_then(|r| r.bls_pubkey.as_deref())
+                                {
+                                    Some(bytes) => match bytes.try_into() {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            warn!("registry bls_pubkey has invalid length");
+                                            reject_batch = true;
+                                            break;
+                                        }
+                                    },
+                                    None => match in_batch_bls_by_xonly.get(xonly) {
+                                        Some(pk) => *pk,
+                                        None => {
+                                            warn!("xonly signer has no BLS pubkey bound");
+                                            reject_batch = true;
+                                            break;
+                                        }
+                                    },
                                 };
-                                (u32::try_from(row.id).unwrap_or(0), *xonly, bls_pk)
+                                (*xonly, bls_pk)
                             }
-                        };
-
-                        let signer = match bitcoin::XOnlyPublicKey::from_slice(&xonly_pubkey[..]) {
-                            Ok(x) => Signer::XOnlyPubKey(x.to_string()),
-                            Err(_) => Signer::Nobody,
                         };
 
                         let op_bytes = &decoded.decompressed_ops[range.clone()];
                         let message = batch::kbl1_message_for_op_bytes(op_bytes);
 
-                        calls.push(CallEntry {
-                            signer_id,
-                            signer,
+                        let _ = xonly_pubkey; // keep available for future auditing/debug
+                        calls.push(CallForVerification {
                             bls_pubkey,
-                            nonce: *nonce,
-                            inst: inst.clone(),
                             message,
                         });
+                    }
+
+                    if reject_batch {
+                        warn!(
+                            "Rejected KBL1 batch (unable to resolve signer pubkeys for signature verification)"
+                        );
+                        continue;
                     }
 
                     if calls.is_empty() {
@@ -333,77 +415,164 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         continue;
                     }
 
-                    // Execute ops in-order with replay protection.
-                    for (op_index, call) in calls.into_iter().enumerate() {
-                        let op_index = op_index as i64;
-                        runtime
-                            .set_context(
-                                block.height as i64,
-                                Some(TransactionContext {
-                                    tx_index: t.index,
-                                    input_index: metadata.input_index,
-                                    op_index,
-                                    txid: t.txid,
-                                }),
-                                Some(metadata.previous_output),
-                                op_return_data.clone().map(Into::into),
-                            )
-                            .await;
-
-                        if let Err(e) = reserve_signer_nonce(
-                            &runtime.storage.conn,
-                            call.signer_id,
-                            call.nonce,
-                            block.height as i64,
-                            t.index,
-                            metadata.input_index,
-                            op_index,
-                        )
-                        .await
-                        {
-                            warn!("Rejected batched op (nonce reservation failed): {e}");
-                            continue;
-                        }
-
-                        let metadata = indexer_types::OpMetadata {
-                            previous_output: metadata.previous_output,
-                            input_index: metadata.input_index,
-                            signer: call.signer,
-                        };
-
-                        match call.inst {
-                            indexer_types::Inst::Publish {
-                                gas_limit,
-                                name,
-                                bytes,
+                    // Aggregate signature verified: apply side effects and execute ops sequentially.
+                    let mut call_index: i64 = 0;
+                    for op in decoded.ops.iter() {
+                        match op {
+                            batch::BatchOpV1::RegisterSigner {
+                                xonly_pubkey,
+                                bls_pubkey,
+                                schnorr_sig,
+                                bls_sig,
                             } => {
-                                runtime.set_gas_limit(gas_limit);
-                                let result = runtime.publish(&metadata.signer, &name, &bytes).await;
-                                if result.is_err() {
-                                    warn!("Batched Publish operation failed: {:?}", result);
+                                let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!(
+                                            "invalid RegisterSigner bls_pubkey length (expected 96)"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into()
+                                {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!(
+                                            "invalid RegisterSigner schnorr_sig length (expected 64)"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        warn!(
+                                            "invalid RegisterSigner bls_sig length (expected 48)"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey)
+                                {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        warn!("invalid RegisterSigner xonly pubkey: {e}");
+                                        continue;
+                                    }
+                                };
+
+                                if let Err(e) = signer_registry::register_signer(
+                                    &runtime.storage.conn,
+                                    &xonly,
+                                    &bls_pubkey,
+                                    &schnorr_sig,
+                                    &bls_sig,
+                                    block.height as i64,
+                                    t.index,
+                                )
+                                .await
+                                {
+                                    warn!("RegisterSigner failed: {e}");
                                 }
                             }
-                            indexer_types::Inst::Call {
+                            batch::BatchOpV1::Call {
+                                signer,
+                                nonce,
                                 gas_limit,
-                                contract,
-                                expr,
+                                contract_id,
+                                function_index,
+                                args,
                             } => {
-                                runtime.set_gas_limit(gas_limit);
-                                let contract = (&contract).into();
+                                let op_index = call_index;
+                                call_index += 1;
+
+                                runtime
+                                    .set_context(
+                                        block.height as i64,
+                                        Some(TransactionContext {
+                                            tx_index: t.index,
+                                            input_index: metadata.input_index,
+                                            op_index,
+                                            txid: t.txid,
+                                        }),
+                                        Some(metadata.previous_output),
+                                        op_return_data.clone().map(Into::into),
+                                    )
+                                    .await;
+
+                                // Resolve canonical signer_id for execution (creating x-only rows on first use).
+                                let signer_id: u32 = match signer {
+                                    batch::SignerRefV1::Id(id) => *id,
+                                    batch::SignerRefV1::XOnly(xonly) => {
+                                        assign_or_get_signer_id_by_xonly(
+                                            &runtime.storage.conn,
+                                            xonly,
+                                            block.height as i64,
+                                            t.index,
+                                        )
+                                        .await
+                                        .unwrap_or(0)
+                                    }
+                                };
+                                if signer_id == 0 {
+                                    warn!("Rejected batched op (unable to resolve signer_id)");
+                                    continue;
+                                }
+
+                                // For execution, require the signer to have a BLS pubkey bound in the registry
+                                // (either pre-existing or via an earlier RegisterSigner op in this batch).
+                                let signer_row = match select_signer_registry_by_id(
+                                    &runtime.storage.conn,
+                                    signer_id,
+                                )
+                                .await
+                                {
+                                    Ok(Some(r)) => r,
+                                    Ok(None) => {
+                                        warn!("Rejected batched op (unknown signer_id)");
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        warn!("Rejected batched op (failed to load signer): {e}");
+                                        continue;
+                                    }
+                                };
+                                if signer_row.bls_pubkey.is_none() {
+                                    warn!("Rejected batched op (signer has no BLS pubkey bound)");
+                                    continue;
+                                }
+
+                                if let Err(e) = reserve_signer_nonce(
+                                    &runtime.storage.conn,
+                                    signer_id,
+                                    *nonce,
+                                    block.height as i64,
+                                    t.index,
+                                    metadata.input_index,
+                                    op_index,
+                                )
+                                .await
+                                {
+                                    warn!("Rejected batched op (nonce reservation failed): {e}");
+                                    continue;
+                                }
+
+                                let signer = Signer::new_registry_id(signer_id);
+                                runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
-                                    .execute(Some(&metadata.signer), &contract, &expr)
+                                    .execute_binary(
+                                        Some(&signer),
+                                        *contract_id,
+                                        *function_index,
+                                        args,
+                                    )
                                     .await;
                                 if result.is_err() {
-                                    warn!("Batched Call operation failed: {:?}", result);
+                                    warn!("Batched BinaryCall operation failed: {:?}", result);
                                 }
                             }
-                            indexer_types::Inst::Issuance => {
-                                let result = runtime.issuance(&metadata.signer).await;
-                                if result.is_err() {
-                                    warn!("Batched Issuance operation failed: {:?}", result);
-                                }
-                            }
-                        };
+                        }
                     }
                 }
             };

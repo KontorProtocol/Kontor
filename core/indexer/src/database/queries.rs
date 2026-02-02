@@ -1098,7 +1098,48 @@ pub async fn select_signer_registry_by_bls(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-pub async fn assign_or_get_signer_id(
+/// Assign or fetch a deterministic `signer_id` for an x-only pubkey.
+///
+/// This is used for the legacy (direct Schnorr/Taproot) publication path: the signer is known
+/// only by x-only pubkey, so we create the registry row on first use. The BLS pubkey may be bound
+/// later via a `RegisterSigner` batch op.
+pub async fn assign_or_get_signer_id_by_xonly(
+    conn: &Connection,
+    xonly_pubkey: &[u8; 32],
+    height: i64,
+    tx_index: i64,
+) -> Result<u32, Error> {
+    if let Some(existing) = select_signer_registry_by_xonly(conn, xonly_pubkey).await? {
+        return u32::try_from(existing.id)
+            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+    }
+
+    conn.execute(
+        r#"INSERT INTO 
+        signer_registry
+        (xonly_pubkey, 
+        bls_pubkey, 
+        first_seen_height, 
+        first_seen_tx_index)
+        VALUES (?, NULL, ?, ?)"#,
+        params![Value::Blob(xonly_pubkey.to_vec()), height, tx_index],
+    )
+    .await?;
+
+    let id = conn.last_insert_rowid();
+    u32::try_from(id).map_err(|_| Error::InvalidData("signer id out of range".to_string()))
+}
+
+/// Bind a BLS pubkey to an x-only pubkey, creating the signer row if needed.
+///
+/// IMPORTANT: this function does **not** verify the binding proofs. Callers must verify:
+/// - Schnorr signature: x-only signs the BLS pubkey
+/// - BLS signature: BLS key signs the x-only pubkey
+///   before calling this.
+///
+/// This supports onboarding: a user can appear first via a legacy x-only-signed tx, and later bind
+/// their BLS pubkey (used for batching) to the same canonical signer_id.
+pub async fn assign_or_get_signer_id_by_xonly_and_bls(
     conn: &Connection,
     xonly_pubkey: &[u8; 32],
     bls_pubkey: &[u8; 96],
@@ -1106,10 +1147,32 @@ pub async fn assign_or_get_signer_id(
     tx_index: i64,
 ) -> Result<u32, Error> {
     if let Some(existing) = select_signer_registry_by_xonly(conn, xonly_pubkey).await? {
-        if existing.bls_pubkey.as_slice() != bls_pubkey {
-            return Err(Error::InvalidData(
-                "x-only pubkey already registered to a different BLS pubkey".to_string(),
-            ));
+        match existing.bls_pubkey.as_deref() {
+            Some(existing_bls) => {
+                if existing_bls != bls_pubkey {
+                    return Err(Error::InvalidData(
+                        "x-only pubkey already registered to a different BLS pubkey".to_string(),
+                    ));
+                }
+            }
+            None => {
+                // If the BLS pubkey is already bound elsewhere, this is a conflicting attempt.
+                if let Some(other) = select_signer_registry_by_bls(conn, bls_pubkey).await?
+                    && other.xonly_pubkey.as_slice() != xonly_pubkey
+                {
+                    return Err(Error::InvalidData(
+                        "BLS pubkey already registered to a different x-only pubkey".to_string(),
+                    ));
+                }
+
+                // Bind the BLS pubkey to the existing x-only row.
+                conn.execute(
+                    r#"UPDATE signer_registry SET bls_pubkey = ?
+                    WHERE id = ? AND bls_pubkey IS NULL"#,
+                    params![Value::Blob(bls_pubkey.to_vec()), existing.id],
+                )
+                .await?;
+            }
         }
         return u32::try_from(existing.id)
             .map_err(|_| Error::InvalidData("signer id out of range".to_string()));

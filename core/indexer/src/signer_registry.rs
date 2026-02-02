@@ -5,7 +5,7 @@ use bitcoin::secp256k1::{
 use libsql::Connection;
 
 use crate::bls;
-use crate::database::queries::{Error as DbError, assign_or_get_signer_id};
+use crate::database::queries::{Error as DbError, assign_or_get_signer_id_by_xonly_and_bls};
 
 const SCHNORR_BINDING_PREFIX: &[u8] = b"KONTOR_REG_XONLY_TO_BLS_V1";
 const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_REG_BLS_TO_XONLY_V1";
@@ -56,7 +56,7 @@ pub async fn register_signer(
     tx_index: i64,
 ) -> Result<u32, DbError> {
     verify_registration_proofs(xonly_pubkey, bls_pubkey, schnorr_sig, bls_sig)?;
-    assign_or_get_signer_id(
+    assign_or_get_signer_id_by_xonly_and_bls(
         conn,
         &xonly_pubkey.serialize(),
         bls_pubkey,
@@ -135,7 +135,7 @@ mod tests {
             .expect("row");
         let xonly_bytes = xonly.serialize();
         assert_eq!(row.xonly_pubkey.as_slice(), &xonly_bytes[..]);
-        assert_eq!(row.bls_pubkey.as_slice(), &bls_pk_bytes[..]);
+        assert_eq!(row.bls_pubkey.as_deref(), Some(&bls_pk_bytes[..]));
         assert_eq!(row.first_seen_height, height);
 
         Ok(())

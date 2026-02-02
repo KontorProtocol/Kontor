@@ -2622,6 +2622,7 @@ dependencies = [
  "wasm-wave 0.244.0",
  "wasmtime",
  "wit-component 0.244.0",
+ "wit-parser 0.244.0",
  "zmq",
  "zstd",
 ]

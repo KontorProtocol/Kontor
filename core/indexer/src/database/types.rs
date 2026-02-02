@@ -347,7 +347,7 @@ pub struct SignerRegistryRow {
     #[builder(default = 0)]
     pub id: i64,
     pub xonly_pubkey: Vec<u8>,
-    pub bls_pubkey: Vec<u8>,
+    pub bls_pubkey: Option<Vec<u8>>,
     pub first_seen_height: i64,
     pub first_seen_tx_index: i64,
 }

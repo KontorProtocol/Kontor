@@ -2,17 +2,19 @@ use std::io::Read;
 use std::ops::Range;
 
 use anyhow::{Result, anyhow};
-use indexer_types::Inst;
 use serde::{Deserialize, Serialize};
 
 pub const KBL1_MAGIC: &[u8; 4] = b"KBL1";
 const MAX_DECOMPRESSED_BATCH_BYTES: usize = 8 * 1024 * 1024;
 
-pub const KONTOR_KBL1_OP_MESSAGE_PREFIX: &[u8] = b"KONTOR_KBL1_OP_V1";
+/// Prefix for the signed message bytes of a KBL1 call op.
+///
+/// This is *domain separation* at the message level (the BLS DST stays constant).
+pub const KONTOR_KBL1_CALL_MESSAGE_PREFIX: &[u8] = b"KONTOR_OP_V1";
 
 pub fn kbl1_message_for_op_bytes(op_bytes: &[u8]) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(KONTOR_KBL1_OP_MESSAGE_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_KBL1_OP_MESSAGE_PREFIX);
+    let mut msg = Vec::with_capacity(KONTOR_KBL1_CALL_MESSAGE_PREFIX.len() + op_bytes.len());
+    msg.extend_from_slice(KONTOR_KBL1_CALL_MESSAGE_PREFIX);
     msg.extend_from_slice(op_bytes);
     msg
 }
@@ -37,13 +39,17 @@ pub enum BatchOpV1 {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
-    /// A legacy `Inst` executed with the resolved signer identity.
+    /// A binary contract call executed with the resolved signer identity.
     ///
-    /// The `(signer, nonce, inst)` tuple is what gets signed/aggregated under BLS.
-    Op {
+    /// IMPORTANT: The postcard bytes of this op (as it appears in the decompressed stream) are
+    /// what get signed and aggregated under BLS. Do not re-serialize for verification.
+    Call {
         signer: SignerRefV1,
         nonce: u64,
-        inst: Inst,
+        gas_limit: u64,
+        contract_id: u32,
+        function_index: u16,
+        args: Vec<u8>,
     },
 }
 
@@ -157,15 +163,21 @@ mod tests {
         let sk1 = BlsSecretKey::key_gen(&[1u8; 32], &[]).expect("bls sk1");
         let sk2 = BlsSecretKey::key_gen(&[2u8; 32], &[]).expect("bls sk2");
 
-        let op1 = BatchOpV1::Op {
+        let op1 = BatchOpV1::Call {
             signer: SignerRefV1::Id(1),
             nonce: 1,
-            inst: Inst::Issuance,
+            gas_limit: 100,
+            contract_id: 1,
+            function_index: 0,
+            args: vec![],
         };
-        let op2 = BatchOpV1::Op {
+        let op2 = BatchOpV1::Call {
             signer: SignerRefV1::Id(2),
             nonce: 2,
-            inst: Inst::Issuance,
+            gas_limit: 100,
+            contract_id: 1,
+            function_index: 0,
+            args: vec![],
         };
 
         let op1_bytes = postcard::to_allocvec(&op1)?;
@@ -194,15 +206,21 @@ mod tests {
         let sk1 = BlsSecretKey::key_gen(&[3u8; 32], &[]).expect("bls sk1");
         let sk2 = BlsSecretKey::key_gen(&[4u8; 32], &[]).expect("bls sk2");
 
-        let op1 = BatchOpV1::Op {
+        let op1 = BatchOpV1::Call {
             signer: SignerRefV1::Id(1),
             nonce: 1,
-            inst: Inst::Issuance,
+            gas_limit: 100,
+            contract_id: 1,
+            function_index: 0,
+            args: vec![],
         };
-        let op2 = BatchOpV1::Op {
+        let op2 = BatchOpV1::Call {
             signer: SignerRefV1::Id(2),
             nonce: 2,
-            inst: Inst::Issuance,
+            gas_limit: 100,
+            contract_id: 1,
+            function_index: 0,
+            args: vec![],
         };
 
         let op1_bytes = postcard::to_allocvec(&op1)?;
