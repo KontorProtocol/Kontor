@@ -214,6 +214,11 @@ pub struct Block {
 pub enum Signer {
     Core(Box<Signer>),
     XOnlyPubKey(String),
+    RegistryId {
+        #[ts(type = "number")]
+        id: u32,
+        id_str: String,
+    },
     ContractId {
         #[ts(type = "number")]
         id: i64,
@@ -223,6 +228,13 @@ pub enum Signer {
 }
 
 impl Signer {
+    pub fn new_registry_id(id: u32) -> Self {
+        Self::RegistryId {
+            id,
+            id_str: format!("@{}", id),
+        }
+    }
+
     pub fn new_contract_id(id: i64) -> Self {
         Self::ContractId {
             id,
@@ -242,6 +254,7 @@ impl core::ops::Deref for Signer {
             Self::Nobody => "nobody",
             Self::Core(_) => "core",
             Self::XOnlyPubKey(s) => s,
+            Self::RegistryId { id_str, .. } => id_str,
             Self::ContractId { id_str, .. } => id_str,
         }
     }
@@ -289,6 +302,10 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    Batch {
+        metadata: OpMetadata,
+        payload: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -297,6 +314,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::Batch { metadata, .. } => metadata,
         }
     }
 }

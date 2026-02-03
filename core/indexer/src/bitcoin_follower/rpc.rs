@@ -187,12 +187,14 @@ pub fn run_processor(
                                                 hash: block.block_hash(),
                                                 prev_hash: block.header.prev_blockhash,
                                                 transactions: tokio::task::spawn_blocking(move || {
-                                                    block
+                                                    let mut txs: Vec<Transaction> = block
                                                         .txdata
                                                         .into_par_iter()
                                                         .enumerate()
                                                         .filter_map(f)
-                                                        .collect()
+                                                        .collect();
+                                                    txs.sort_by_key(|t| t.index);
+                                                    txs
                                                 })
                                                 .await
                                                 .expect("spawn_blocking failed in rpc block processing"),

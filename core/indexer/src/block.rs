@@ -8,7 +8,11 @@ use indexmap::IndexMap;
 use libsql::Connection;
 
 use crate::{
-    database::{queries::get_op_result, types::OpResultId},
+    batch,
+    database::{
+        queries::{get_contract_address_from_id, get_op_result, select_signer_registry_by_xonly},
+        types::OpResultId,
+    },
     runtime::wit::Signer,
 };
 
@@ -42,38 +46,45 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                         inst = insts.next();
                     }
 
-                    if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
-                        && insts.next().is_none()
-                        && let Ok(inst) = deserialize::<Inst>(&data)
-                    {
+                    if inst == Some(Ok(Instruction::Op(OP_ENDIF))) && insts.next().is_none() {
                         let metadata = OpMetadata {
                             previous_output: input.previous_output,
                             input_index: input_index as i64,
                             signer: Signer::XOnlyPubKey(signer.to_string()),
                         };
-                        return Some(match inst {
-                            Inst::Publish {
-                                gas_limit,
-                                name,
-                                bytes,
-                            } => Op::Publish {
+
+                        if batch::is_kbl1_payload(&data) {
+                            return Some(Op::Batch {
                                 metadata,
-                                gas_limit,
-                                name,
-                                bytes,
-                            },
-                            Inst::Call {
-                                gas_limit,
-                                contract,
-                                expr,
-                            } => Op::Call {
-                                metadata,
-                                gas_limit,
-                                contract,
-                                expr,
-                            },
-                            Inst::Issuance => Op::Issuance { metadata },
-                        });
+                                payload: data,
+                            });
+                        }
+
+                        if let Ok(inst) = deserialize::<Inst>(&data) {
+                            return Some(match inst {
+                                Inst::Publish {
+                                    gas_limit,
+                                    name,
+                                    bytes,
+                                } => Op::Publish {
+                                    metadata,
+                                    gas_limit,
+                                    name,
+                                    bytes,
+                                },
+                                Inst::Call {
+                                    gas_limit,
+                                    contract,
+                                    expr,
+                                } => Op::Call {
+                                    metadata,
+                                    gas_limit,
+                                    contract,
+                                    expr,
+                                },
+                                Inst::Issuance => Op::Issuance { metadata },
+                            });
+                        }
                     }
                 }
                 None
@@ -114,13 +125,97 @@ pub async fn inspect(
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
         for op in tx.ops {
-            let id = OpResultId::builder()
-                .txid(tx.txid.to_string())
-                .input_index(op.metadata().input_index)
-                .op_index(0)
-                .build();
-            let result = get_op_result(conn, &id).await?.map(Into::into);
-            ops.push(OpWithResult { op, result });
+            match &op {
+                Op::Batch { metadata, payload } => {
+                    if let Ok(decoded) = batch::decode_kbl1_batch(payload) {
+                        let mut op_index = 0i64;
+                        for (batch_op, range) in decoded.ops.iter().zip(decoded.op_ranges.iter()) {
+                            if let batch::BatchOpV1::Call {
+                                signer,
+                                nonce,
+                                gas_limit,
+                                contract_id,
+                                function_index,
+                                args,
+                            } = batch_op
+                            {
+                                let id = OpResultId::builder()
+                                    .txid(tx.txid.to_string())
+                                    .input_index(metadata.input_index)
+                                    .op_index(op_index)
+                                    .build();
+                                let result = get_op_result(conn, &id).await?.map(Into::into);
+
+                                // Best-effort signer resolution for display.
+                                let signer = match signer {
+                                    batch::SignerRefV1::Id(id) => Signer::new_registry_id(*id),
+                                    batch::SignerRefV1::XOnly(xonly) => {
+                                        select_signer_registry_by_xonly(conn, xonly)
+                                            .await?
+                                            .map(|row| Signer::new_registry_id(row.id))
+                                            .unwrap_or_else(|| {
+                                                bitcoin::XOnlyPublicKey::from_slice(xonly)
+                                                    .map(|x| Signer::XOnlyPubKey(x.to_string()))
+                                                    .unwrap_or(Signer::Nobody)
+                                            })
+                                    }
+                                };
+
+                                let metadata = OpMetadata {
+                                    previous_output: metadata.previous_output,
+                                    input_index: metadata.input_index,
+                                    signer,
+                                };
+
+                                // For now, represent BinaryCall ops as a best-effort `Op::Call` for display.
+                                // The `expr` is not executable WAVE; it is only a debug string.
+                                let contract = match get_contract_address_from_id(
+                                    conn,
+                                    i64::from(*contract_id),
+                                )
+                                .await?
+                                {
+                                    Some(addr) => addr.into(),
+                                    None => continue,
+                                };
+                                let expr = format!(
+                                    "__binary_call__(function_index={}, args_len={}, nonce={})",
+                                    function_index,
+                                    args.len(),
+                                    nonce
+                                );
+                                let op = Op::Call {
+                                    metadata,
+                                    gas_limit: *gas_limit,
+                                    contract,
+                                    expr,
+                                };
+                                ops.push(OpWithResult { op, result });
+                                op_index += 1;
+
+                                let _ = range; // keep range available for future display/debug
+                            }
+                        }
+                    } else {
+                        let id = OpResultId::builder()
+                            .txid(tx.txid.to_string())
+                            .input_index(op.metadata().input_index)
+                            .op_index(0)
+                            .build();
+                        let result = get_op_result(conn, &id).await?.map(Into::into);
+                        ops.push(OpWithResult { op, result });
+                    }
+                }
+                _ => {
+                    let id = OpResultId::builder()
+                        .txid(tx.txid.to_string())
+                        .input_index(op.metadata().input_index)
+                        .op_index(0)
+                        .build();
+                    let result = get_op_result(conn, &id).await?.map(Into::into);
+                    ops.push(OpWithResult { op, result });
+                }
+            }
         }
     }
     Ok(ops)

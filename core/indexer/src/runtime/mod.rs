@@ -1,5 +1,6 @@
 extern crate alloc;
 
+mod binary;
 mod component_cache;
 pub mod counter;
 pub mod file_ledger;

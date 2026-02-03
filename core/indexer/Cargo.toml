@@ -23,6 +23,7 @@ tower = { workspace = true }
 wasmtime = { workspace = true }
 wasm-wave = { workspace = true }
 wit-component = { workspace = true }
+wit-parser = { workspace = true }
 libsql = { workspace = true }
 tracing = { workspace = true }
 bon = { workspace = true }
@@ -33,6 +34,9 @@ serde_with = { workspace = true }
 ts-rs = { workspace = true }
 indexmap = { workspace = true }
 bitcoin = { workspace = true }
+blst = { workspace = true }
+zstd = { workspace = true }
+postcard = { workspace = true }
 
 backon = { version = "=1.6.0", features = ["tokio-sleep"] }
 base64 = "=0.22.1"
