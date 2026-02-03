@@ -1035,10 +1035,40 @@ pub async fn insert_file_metadata(
     Ok(conn.last_insert_rowid())
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ValidatedSignerRegistryRow {
+    pub id: u32,
+    pub xonly_pubkey: [u8; 32],
+    pub bls_pubkey: Option<[u8; 96]>,
+    pub first_seen_height: i64,
+    pub first_seen_tx_index: i64,
+}
+
+fn validate_signer_registry_row(row: SignerRegistryRow) -> Result<ValidatedSignerRegistryRow, Error> {
+    let id = u32::try_from(row.id)
+        .map_err(|_| Error::InvalidData("signer id out of range".to_string()))?;
+    let xonly_pubkey: [u8; 32] = row.xonly_pubkey.as_slice().try_into().map_err(|_| {
+        Error::InvalidData("registry xonly_pubkey has invalid length".to_string())
+    })?;
+    let bls_pubkey: Option<[u8; 96]> = match row.bls_pubkey {
+        Some(bytes) => Some(bytes.as_slice().try_into().map_err(|_| {
+            Error::InvalidData("registry bls_pubkey has invalid length".to_string())
+        })?),
+        None => None,
+    };
+    Ok(ValidatedSignerRegistryRow {
+        id,
+        xonly_pubkey,
+        bls_pubkey,
+        first_seen_height: row.first_seen_height,
+        first_seen_tx_index: row.first_seen_tx_index,
+    })
+}
+
 pub async fn select_signer_registry_by_id(
     conn: &Connection,
     id: u32,
-) -> Result<Option<SignerRegistryRow>, Error> {
+) -> Result<Option<ValidatedSignerRegistryRow>, Error> {
     let mut rows = conn
         .query(
             r#"SELECT
@@ -1053,13 +1083,14 @@ pub async fn select_signer_registry_by_id(
             params![id as i64],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    let raw: Option<SignerRegistryRow> = rows.next().await?.map(|r| from_row(&r)).transpose()?;
+    Ok(raw.map(validate_signer_registry_row).transpose()?)
 }
 
 pub async fn select_signer_registry_by_xonly(
     conn: &Connection,
     xonly_pubkey: &[u8; 32],
-) -> Result<Option<SignerRegistryRow>, Error> {
+) -> Result<Option<ValidatedSignerRegistryRow>, Error> {
     let mut rows = conn
         .query(
             r#"SELECT
@@ -1074,13 +1105,14 @@ pub async fn select_signer_registry_by_xonly(
             params![Value::Blob(xonly_pubkey.to_vec())],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    let raw: Option<SignerRegistryRow> = rows.next().await?.map(|r| from_row(&r)).transpose()?;
+    Ok(raw.map(validate_signer_registry_row).transpose()?)
 }
 
 pub async fn select_signer_registry_by_bls(
     conn: &Connection,
     bls_pubkey: &[u8; 96],
-) -> Result<Option<SignerRegistryRow>, Error> {
+) -> Result<Option<ValidatedSignerRegistryRow>, Error> {
     let mut rows = conn
         .query(
             r#"SELECT
@@ -1095,7 +1127,8 @@ pub async fn select_signer_registry_by_bls(
             params![Value::Blob(bls_pubkey.to_vec())],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    let raw: Option<SignerRegistryRow> = rows.next().await?.map(|r| from_row(&r)).transpose()?;
+    Ok(raw.map(validate_signer_registry_row).transpose()?)
 }
 
 /// Assign or fetch a deterministic `signer_id` for an x-only pubkey.
@@ -1110,8 +1143,7 @@ pub async fn assign_or_get_signer_id_by_xonly(
     tx_index: i64,
 ) -> Result<u32, Error> {
     if let Some(existing) = select_signer_registry_by_xonly(conn, xonly_pubkey).await? {
-        return u32::try_from(existing.id)
-            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+        return Ok(existing.id);
     }
 
     conn.execute(
@@ -1147,9 +1179,9 @@ pub async fn assign_or_get_signer_id_by_xonly_and_bls(
     tx_index: i64,
 ) -> Result<u32, Error> {
     if let Some(existing) = select_signer_registry_by_xonly(conn, xonly_pubkey).await? {
-        match existing.bls_pubkey.as_deref() {
+        match existing.bls_pubkey {
             Some(existing_bls) => {
-                if existing_bls != bls_pubkey {
+                if &existing_bls != bls_pubkey {
                     return Err(Error::InvalidData(
                         "x-only pubkey already registered to a different BLS pubkey".to_string(),
                     ));
@@ -1158,7 +1190,7 @@ pub async fn assign_or_get_signer_id_by_xonly_and_bls(
             None => {
                 // If the BLS pubkey is already bound elsewhere, this is a conflicting attempt.
                 if let Some(other) = select_signer_registry_by_bls(conn, bls_pubkey).await?
-                    && other.xonly_pubkey.as_slice() != xonly_pubkey
+                    && &other.xonly_pubkey != xonly_pubkey
                 {
                     return Err(Error::InvalidData(
                         "BLS pubkey already registered to a different x-only pubkey".to_string(),
@@ -1169,23 +1201,21 @@ pub async fn assign_or_get_signer_id_by_xonly_and_bls(
                 conn.execute(
                     r#"UPDATE signer_registry SET bls_pubkey = ?
                     WHERE id = ? AND bls_pubkey IS NULL"#,
-                    params![Value::Blob(bls_pubkey.to_vec()), existing.id],
+                    params![Value::Blob(bls_pubkey.to_vec()), existing.id as i64],
                 )
                 .await?;
             }
         }
-        return u32::try_from(existing.id)
-            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+        return Ok(existing.id);
     }
 
     if let Some(existing) = select_signer_registry_by_bls(conn, bls_pubkey).await? {
-        if existing.xonly_pubkey.as_slice() != xonly_pubkey {
+        if &existing.xonly_pubkey != xonly_pubkey {
             return Err(Error::InvalidData(
                 "BLS pubkey already registered to a different x-only pubkey".to_string(),
             ));
         }
-        return u32::try_from(existing.id)
-            .map_err(|_| Error::InvalidData("signer id out of range".to_string()));
+        return Ok(existing.id);
     }
 
     conn.execute(

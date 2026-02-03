@@ -134,8 +134,8 @@ mod tests {
             .await?
             .expect("row");
         let xonly_bytes = xonly.serialize();
-        assert_eq!(row.xonly_pubkey.as_slice(), &xonly_bytes[..]);
-        assert_eq!(row.bls_pubkey.as_deref(), Some(&bls_pk_bytes[..]));
+        assert_eq!(row.xonly_pubkey, xonly_bytes);
+        assert_eq!(row.bls_pubkey, Some(bls_pk_bytes));
         assert_eq!(row.first_seen_height, height);
 
         Ok(())

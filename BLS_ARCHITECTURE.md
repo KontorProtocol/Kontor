@@ -243,7 +243,10 @@ Implementation:
 
 If any call’s signer pubkey cannot be resolved (no bound key and no valid in-batch registration), the batch is rejected (it is “not verifiable”).
 
-If the batch contains **zero `Call` ops** (only `RegisterSigner` ops), the current indexer treats it as invalid (“contains no signed ops”) and applies **no side effects**. TODO: this does not sound correct!
+If the batch contains **zero `Call` ops** (only `RegisterSigner` ops), the indexer treats it as a **registration-only batch**:
+
+- There is no aggregate signature to verify (aggregate signatures cover only `Call` ops).
+- The indexer applies `RegisterSigner` ops sequentially, validating each op’s PoP proofs.
 
 #### Execution phase (DB writes + runtime execution)
 

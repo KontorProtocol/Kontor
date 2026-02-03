@@ -211,7 +211,7 @@ async fn kbl1_inline_register_then_binarycall_reserves_nonce() -> Result<()> {
     let row = select_signer_registry_by_xonly(&conn, &xonly_bytes)
         .await?
         .expect("signer should be registered");
-    let signer_id: u32 = row.id.try_into().expect("signer_id fits u32");
+    let signer_id: u32 = row.id;
     assert!(
         row.bls_pubkey.is_some(),
         "BLS pubkey should be bound after RegisterSigner"
@@ -328,7 +328,7 @@ async fn kbl1_invalid_signature_does_not_reserve_nonce() -> Result<()> {
     let row = select_signer_registry_by_xonly(&conn, &xonly_bytes)
         .await?
         .expect("signer should be registered");
-    let signer_id: u32 = row.id.try_into().expect("signer_id fits u32");
+    let signer_id: u32 = row.id;
     assert!(
         row.bls_pubkey.is_none(),
         "invalid aggregate signature must have no side effects (no BLS binding)"
@@ -450,7 +450,7 @@ async fn mixed_legacy_and_kbl1_ops_in_one_block() -> Result<()> {
     let row = select_signer_registry_by_xonly(&conn, &xonly_bytes)
         .await?
         .expect("signer should be registered");
-    let signer_id: u32 = row.id.try_into().expect("signer_id fits u32");
+    let signer_id: u32 = row.id;
     assert!(select_signer_nonce(&conn, signer_id, 42).await?.is_some());
     Ok(())
 }

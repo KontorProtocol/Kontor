@@ -152,7 +152,7 @@ pub async fn inspect(
                                     batch::SignerRefV1::XOnly(xonly) => {
                                         select_signer_registry_by_xonly(conn, xonly)
                                             .await?
-                                            .map(|row| Signer::new_registry_id(row.id as u32))
+                                            .map(|row| Signer::new_registry_id(row.id))
                                             .unwrap_or_else(|| {
                                                 bitcoin::XOnlyPublicKey::from_slice(xonly)
                                                     .map(|x| Signer::XOnlyPubKey(x.to_string()))

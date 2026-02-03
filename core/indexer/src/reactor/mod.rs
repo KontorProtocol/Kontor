@@ -87,6 +87,48 @@ pub async fn simulate_handler(
     result
 }
 
+async fn canonicalize_signer(
+    conn: &libsql::Connection,
+    signer: &Signer,
+    height: i64,
+    tx_index: i64,
+) -> Result<Signer> {
+    match signer {
+        Signer::XOnlyPubKey(xonly_str) => {
+            // Canonicalize direct Schnorr signers to a deterministic registry ID so
+            // contract-visible signer identity is shared across direct + BLS paths.
+            let xonly = xonly_str
+                .parse::<bitcoin::XOnlyPublicKey>()
+                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
+            let signer_id =
+                assign_or_get_signer_id_by_xonly(conn, &xonly.serialize(), height, tx_index)
+                    .await?;
+            Ok(Signer::new_registry_id(signer_id))
+        }
+        _ => Ok(signer.clone()),
+    }
+}
+
+fn parse_register_signer_fields(
+    xonly_pubkey: &[u8; 32],
+    bls_pubkey: &[u8],
+    schnorr_sig: &[u8],
+    bls_sig: &[u8],
+) -> Result<(bitcoin::XOnlyPublicKey, [u8; 96], [u8; 64], [u8; 48])> {
+    let bls_pubkey: [u8; 96] = bls_pubkey
+        .try_into()
+        .map_err(|_| anyhow!("invalid RegisterSigner bls_pubkey length (expected 96)"))?;
+    let schnorr_sig: [u8; 64] = schnorr_sig
+        .try_into()
+        .map_err(|_| anyhow!("invalid RegisterSigner schnorr_sig length (expected 64)"))?;
+    let bls_sig: [u8; 48] = bls_sig
+        .try_into()
+        .map_err(|_| anyhow!("invalid RegisterSigner bls_sig length (expected 48)"))?;
+    let xonly = bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey)
+        .map_err(|e| anyhow!("invalid RegisterSigner xonly pubkey: {e}"))?;
+    Ok((xonly, bls_pubkey, schnorr_sig, bls_sig))
+}
+
 pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
@@ -127,24 +169,13 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     bytes,
                 } => {
                     runtime.set_gas_limit(*gas_limit);
-                    let signer = match &metadata.signer {
-                        Signer::XOnlyPubKey(xonly_str) => {
-                            // Canonicalize direct Schnorr signers to a deterministic registry ID so
-                            // contract-visible signer identity is shared across direct + BLS paths.
-                            let xonly = xonly_str
-                                .parse::<bitcoin::XOnlyPublicKey>()
-                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
-                            let signer_id = assign_or_get_signer_id_by_xonly(
-                                &runtime.storage.conn,
-                                &xonly.serialize(),
-                                block.height as i64,
-                                t.index,
-                            )
-                            .await?;
-                            Signer::new_registry_id(signer_id)
-                        }
-                        _ => metadata.signer.clone(),
-                    };
+                    let signer = canonicalize_signer(
+                        &runtime.storage.conn,
+                        &metadata.signer,
+                        block.height as i64,
+                        t.index,
+                    )
+                    .await?;
 
                     let result = runtime.publish(&signer, name, bytes).await;
                     if result.is_err() {
@@ -158,22 +189,13 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     expr,
                 } => {
                     runtime.set_gas_limit(*gas_limit);
-                    let signer = match &metadata.signer {
-                        Signer::XOnlyPubKey(xonly_str) => {
-                            let xonly = xonly_str
-                                .parse::<bitcoin::XOnlyPublicKey>()
-                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
-                            let signer_id = assign_or_get_signer_id_by_xonly(
-                                &runtime.storage.conn,
-                                &xonly.serialize(),
-                                block.height as i64,
-                                t.index,
-                            )
-                            .await?;
-                            Signer::new_registry_id(signer_id)
-                        }
-                        _ => metadata.signer.clone(),
-                    };
+                    let signer = canonicalize_signer(
+                        &runtime.storage.conn,
+                        &metadata.signer,
+                        block.height as i64,
+                        t.index,
+                    )
+                    .await?;
                     let result = runtime
                         .execute(Some(&signer), &(contract.into()), expr)
                         .await;
@@ -182,22 +204,13 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     }
                 }
                 Op::Issuance { metadata, .. } => {
-                    let signer = match &metadata.signer {
-                        Signer::XOnlyPubKey(xonly_str) => {
-                            let xonly = xonly_str
-                                .parse::<bitcoin::XOnlyPublicKey>()
-                                .map_err(|e| anyhow!("invalid xonly pubkey signer: {e}"))?;
-                            let signer_id = assign_or_get_signer_id_by_xonly(
-                                &runtime.storage.conn,
-                                &xonly.serialize(),
-                                block.height as i64,
-                                t.index,
-                            )
-                            .await?;
-                            Signer::new_registry_id(signer_id)
-                        }
-                        _ => metadata.signer.clone(),
-                    };
+                    let signer = canonicalize_signer(
+                        &runtime.storage.conn,
+                        &metadata.signer,
+                        block.height as i64,
+                        t.index,
+                    )
+                    .await?;
 
                     let result = runtime.issuance(&signer).await;
                     if result.is_err() {
@@ -237,34 +250,19 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                             continue;
                         };
 
-                        let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
-                            Ok(v) => v,
-                            Err(_) => {
-                                warn!("invalid RegisterSigner bls_pubkey length (expected 96)");
-                                continue;
-                            }
-                        };
-                        let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into() {
-                            Ok(v) => v,
-                            Err(_) => {
-                                warn!("invalid RegisterSigner schnorr_sig length (expected 64)");
-                                continue;
-                            }
-                        };
-                        let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
-                            Ok(v) => v,
-                            Err(_) => {
-                                warn!("invalid RegisterSigner bls_sig length (expected 48)");
-                                continue;
-                            }
-                        };
-                        let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey) {
-                            Ok(x) => x,
-                            Err(e) => {
-                                warn!("invalid RegisterSigner xonly pubkey: {e}");
-                                continue;
-                            }
-                        };
+                        let (xonly, bls_pubkey, schnorr_sig, bls_sig) =
+                            match parse_register_signer_fields(
+                                xonly_pubkey,
+                                bls_pubkey.as_slice(),
+                                schnorr_sig.as_slice(),
+                                bls_sig.as_slice(),
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    warn!("{e}");
+                                    continue;
+                                }
+                            };
 
                         if let Err(e) = signer_registry::verify_registration_proofs(
                             &xonly,
@@ -314,23 +312,9 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                             break;
                                         }
                                     };
-                                let xonly: [u8; 32] = match row.xonly_pubkey.as_slice().try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!("registry xonly_pubkey has invalid length");
-                                        reject_batch = true;
-                                        break;
-                                    }
-                                };
-                                let bls_pk: [u8; 96] = match row.bls_pubkey.as_deref() {
-                                    Some(bytes) => match bytes.try_into() {
-                                        Ok(v) => v,
-                                        Err(_) => {
-                                            warn!("registry bls_pubkey has invalid length");
-                                            reject_batch = true;
-                                            break;
-                                        }
-                                    },
+                                let xonly = row.xonly_pubkey;
+                                let bls_pk: [u8; 96] = match row.bls_pubkey {
+                                    Some(pk) => pk,
                                     None => match in_batch_bls_by_xonly.get(&xonly) {
                                         Some(pk) => *pk,
                                         None => {
@@ -356,18 +340,8 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                         break;
                                     }
                                 };
-                                let bls_pk: [u8; 96] = match maybe_row
-                                    .as_ref()
-                                    .and_then(|r| r.bls_pubkey.as_deref())
-                                {
-                                    Some(bytes) => match bytes.try_into() {
-                                        Ok(v) => v,
-                                        Err(_) => {
-                                            warn!("registry bls_pubkey has invalid length");
-                                            reject_batch = true;
-                                            break;
-                                        }
-                                    },
+                                let bls_pk: [u8; 96] = match maybe_row.and_then(|r| r.bls_pubkey) {
+                                    Some(pk) => pk,
                                     None => match in_batch_bls_by_xonly.get(xonly) {
                                         Some(pk) => *pk,
                                         None => {
@@ -425,42 +399,19 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 schnorr_sig,
                                 bls_sig,
                             } => {
-                                let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!(
-                                            "invalid RegisterSigner bls_pubkey length (expected 96)"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into()
-                                {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!(
-                                            "invalid RegisterSigner schnorr_sig length (expected 64)"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        warn!(
-                                            "invalid RegisterSigner bls_sig length (expected 48)"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let xonly = match bitcoin::XOnlyPublicKey::from_slice(xonly_pubkey)
-                                {
-                                    Ok(x) => x,
-                                    Err(e) => {
-                                        warn!("invalid RegisterSigner xonly pubkey: {e}");
-                                        continue;
-                                    }
-                                };
+                                let (xonly, bls_pubkey, schnorr_sig, bls_sig) =
+                                    match parse_register_signer_fields(
+                                        xonly_pubkey,
+                                        bls_pubkey.as_slice(),
+                                        schnorr_sig.as_slice(),
+                                        bls_sig.as_slice(),
+                                    ) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            warn!("{e}");
+                                            continue;
+                                        }
+                                    };
 
                                 if let Err(e) = signer_registry::register_signer(
                                     &runtime.storage.conn,
