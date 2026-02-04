@@ -12,8 +12,8 @@
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::Message;
-use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
 use blst::min_sig::SecretKey as BlsSecretKey;
+use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
 
 use testlib::*;
 
