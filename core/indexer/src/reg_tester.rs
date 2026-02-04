@@ -18,11 +18,13 @@ use bitcoin::{
     Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
     Txid, XOnlyPublicKey,
     absolute::LockTime,
+    bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
     key::{Keypair, PrivateKey, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
 };
+use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer_types::{
     ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, OpWithResult, ResultRow,
     RevealOutputs, RevealQuery, TransactionHex, ViewResult,
@@ -48,6 +50,12 @@ zmqpubsequencehwm=0
 zmqpubrawtx=tcp://127.0.0.1:28332
 zmqpubrawtxhwm=0
 "#;
+
+// `blst::min_sig::SecretKey::key_gen(ikm, info)` accepts empty `info` (`&[]`) as well.
+// Using a non-empty `info` gives defense-in-depth domain separation + a versioning knob.
+// Leaving it empty is simpler and more aligned with common BLS tooling; either is fine as long as
+// wallets/indexers make the same choice (because it changes the derived BLS key).
+const KONTOR_BLS_KEYGEN_INFO: &[u8] = b"KONTOR_BLS_KEYGEN_V1";
 
 async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
@@ -124,6 +132,19 @@ pub fn generate_taproot_address() -> (Address, Keypair) {
     )
 }
 
+pub fn derive_xpriv_from_bip32_seed(seed: &[u8], path: &str) -> Result<Xpriv> {
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(Network::Regtest, seed)?;
+    let derivation_path: DerivationPath = path.parse()?;
+    Ok(master.derive_priv(&secp, &derivation_path)?)
+}
+
+pub fn derive_secp_keypair_from_bip32_seed(seed: &[u8], path: &str) -> Result<Keypair> {
+    let secp = Secp256k1::new();
+    let child = derive_xpriv_from_bip32_seed(seed, path)?;
+    Ok(Keypair::from_secret_key(&secp, &child.private_key))
+}
+
 fn outpoint_to_utxo_id(outpoint: &OutPoint) -> String {
     format!("{}:{}", outpoint.txid, outpoint.vout)
 }
@@ -143,6 +164,13 @@ impl Identity {
     pub fn signer(&self) -> Signer {
         Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
+}
+
+#[derive(Clone)]
+pub struct BlsIdentity {
+    pub identity: Identity,
+    pub bls_secret_key: [u8; 32],
+    pub bls_pubkey: [u8; 96],
 }
 
 #[derive(Debug, Clone)]
@@ -323,7 +351,14 @@ impl RegTesterInner {
     }
 
     pub async fn identity(&mut self) -> Result<Identity> {
-        let (address, keypair) = generate_taproot_address();
+        let (_address, keypair) = generate_taproot_address();
+        self.identity_from_keypair(keypair).await
+    }
+
+    pub async fn identity_from_keypair(&mut self, keypair: Keypair) -> Result<Identity> {
+        let secp = Secp256k1::new();
+        let (x_only_public_key, ..) = keypair.x_only_public_key();
+        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
         let mut tx = Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
@@ -336,7 +371,6 @@ impl RegTesterInner {
                 script_pubkey: address.script_pubkey(),
             }],
         };
-        let secp = Secp256k1::new();
         test_utils::sign_key_spend(
             &secp,
             &mut tx,
@@ -377,6 +411,29 @@ impl RegTesterInner {
             address,
             keypair,
             next_funding_utxo,
+        })
+    }
+
+    pub async fn bls_identity_from_seed(
+        &mut self,
+        seed: &[u8],
+        taproot_path: &str,
+        kontor_path: &str,
+    ) -> Result<BlsIdentity> {
+        let keypair = derive_secp_keypair_from_bip32_seed(seed, taproot_path)?;
+        let identity = self.identity_from_keypair(keypair).await?;
+
+        let kontor_xpriv = derive_xpriv_from_bip32_seed(seed, kontor_path)?;
+        let ikm = kontor_xpriv.private_key.secret_bytes();
+        let bls_sk = BlsSecretKey::key_gen(&ikm, KONTOR_BLS_KEYGEN_INFO)
+            .map_err(|e| anyhow!("failed to derive BLS secret key: {e:?}"))?;
+        let bls_secret_key = bls_sk.to_bytes();
+        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
+
+        Ok(BlsIdentity {
+            identity,
+            bls_secret_key,
+            bls_pubkey,
         })
     }
 
@@ -663,6 +720,19 @@ impl RegTester {
 
     pub async fn identity(&mut self) -> Result<Identity> {
         self.inner.lock().await.identity().await
+    }
+
+    pub async fn bls_identity_from_seed(
+        &mut self,
+        seed: &[u8],
+        taproot_path: &str,
+        kontor_path: &str,
+    ) -> Result<BlsIdentity> {
+        self.inner
+            .lock()
+            .await
+            .bls_identity_from_seed(seed, taproot_path, kontor_path)
+            .await
     }
 
     pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
