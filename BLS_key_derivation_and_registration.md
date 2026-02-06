@@ -4,7 +4,7 @@ This document specifies how Kontor wallets derive a BLS12-381 keypair and produc
 
 ## Goals
 
-- **Key separation**: BLS keys MUST be derived from a **different BIP-32 path** than Bitcoin Taproot keys (BIP-86) to avoid cross-protocol key reuse.
+- **Key separation**: BLS keys MUST be derived using **EIP-2333** (native BLS12-381 key tree), which is an entirely separate derivation scheme from Bitcoin's BIP-32/BIP-86 (secp256k1). This prevents cross-protocol key reuse.
 - **Determinism**: given the same seed and paths, all implementations MUST derive identical BLS keys.
 - **Verifiability**: the registry can verify both proofs and then assign a compact numeric `signer_id`.
 
@@ -22,36 +22,39 @@ Default for examples/test vectors:
 
 - `m/86'/0'/0'/0/0`
 
-### 1.2 Kontor BLS derivation key (separate from Bitcoin)
+### 1.2 Kontor BLS key (EIP-2333, separate from Bitcoin)
 
-Kontor’s BLS derivation MUST use a distinct BIP-32 purpose to enforce key separation:
+Kontor's BLS derivation MUST use **EIP-2333**, which defines a hierarchical key derivation scheme native to BLS12-381. EIP-2333 operates on BLS12-381 scalars directly (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child derivation is hardened by design, so paths are written without the `'` marker.
 
-- `m/12381'/coin_type'/account'/change/address_index`
+Path structure (following EIP-2334):
+
+- `m / 12381 / coin_type / account / key_use`
   - mainnet: `coin_type = 0`
   - testnet: `coin_type = 1`
 
 Default for examples/test vectors:
 
-- `m/12381'/0'/0'/0/0`
+- `m/12381/0/0/0` (mainnet)
+- `m/12381/1/0/0` (testnet/regtest)
 
 ## 2) Derive BLS keypair
 
-### 2.1 BIP-32 derivation (seed phrase)
+### 2.1 EIP-2333 master key derivation
 
-The wallet derives a secp256k1 child private key at the Kontor BLS derivation path (`m/12381'/...`) using standard BIP-32.
+The wallet derives a BLS12-381 master secret key from the BIP-39 seed using EIP-2333:
 
-### 2.2 BLS private key
+- `master_sk = blst::min_sig::SecretKey::derive_master_eip2333(seed)`
 
-Let:
+### 2.2 EIP-2333 child key derivation
 
-- `ikm = kontor_child_secp256k1_secret_key_bytes` (32 bytes)
-- `info = "KONTOR_BLS_KEYGEN_V1"` (UTF-8 bytes)
+Traverse the path by deriving child keys at each index:
 
-Derive the BLS secret key using the IETF BLS KeyGen procedure as implemented by `blst`:
+- `sk = master_sk`
+- For each `index` in `[12381, coin_type, account, key_use]`:
+  - `sk = sk.derive_child_eip2333(index)`
+- `bls_sk = sk` (the final child key)
 
-- `bls_sk = blst::min_sig::SecretKey::key_gen(ikm, info)`
-
-### 2.4 BLS public key
+### 2.3 BLS public key
 
 - `bls_pubkey = bls_sk · G2` (96-byte compressed form)
 
@@ -109,11 +112,11 @@ The deterministic derivation outputs below (`x_only_pubkey`, `bls_pubkey`) shoul
 
 - `seed` (hex, 64 bytes): `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f`
 - Taproot path: `m/86'/1'/0'/0/0` (mainnet would be `m/86'/0'/0'/0/0`)
-- Kontor path: `m/12381'/1'/0'/0/0` (mainnet would be `m/12381'/0'/0'/0/0`)
+- Kontor BLS path (EIP-2333): `[12381, 1, 0, 0]` (mainnet would be `[12381, 0, 0, 0]`)
 
 Outputs:
 
 - `x_only_pubkey` (hex, 32 bytes): `a4b70d13d6d48919c40a0c0ddac146b18ba1dde08bd1af2224060040c6189282`
-- `bls_pubkey` (hex, 96 bytes): `b5c69f88da04d8a3aca6d47f3ee18e4a170bedd28a29ec779b33e3e72b9da8eaae5d4e0fe6af71807ad8437190e1e24315760b66670d460ecebb6457c3bc6862079e4f22f4d523c82b75aed9f3b34132c12053811dd12b2ed42393a4e1fd786e`
-- `schnorr_sig` (hex, 64 bytes) (example): `a1aab3ff872e6a98671bc8f7b43ba4697a95cdb61e9431927276f5320eb033d444d65b862f6a91fd3c1be5b3d72827b6074527ff4770cbee377cf52f8c529821`
-- `bls_sig` (hex, 48 bytes) (example): `ac5f8852015588bc8eaf0b92d53210d58ad51b0173b9139bd02110837cffe5550ee958a3ad4c1ed3d327deca77a0e1cc`
+- `bls_pubkey` (hex, 96 bytes): TODO — regenerate after first test run with EIP-2333 derivation
+- `schnorr_sig` (hex, 64 bytes) (example): TODO — regenerate (depends on new bls_pubkey)
+- `bls_sig` (hex, 48 bytes) (example): TODO — regenerate (depends on new bls_pubkey)

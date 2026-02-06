@@ -6,7 +6,7 @@
 //!
 //! Scope of this file:
 //! - Derive a Taproot identity keypair from a seed via BIP-32/BIP-86.
-//! - Derive a Kontor BLS12-381 keypair from the same seed via a *separate* BIP-32 path.
+//! - Derive a Kontor BLS12-381 keypair from the same seed via EIP-2333 (native BLS key tree).
 //! - Produce *two* binding proofs (Schnorr + BLS) and verify them.
 //! - Assert deterministic outputs (pubkeys) for a fixed seed + paths.
 use bitcoin::hashes::{Hash, sha256};
@@ -23,11 +23,17 @@ use testlib::*;
 // Regtest uses testnet coin_type (1). Mainnet would be coin_type (0).
 const TAPROOT_PATH_REGTEST: &str = "m/86'/1'/0'/0/0";
 
-// Kontor BLS key derivation path (project convention; MUST be separate from Taproot's BIP-86 path):
-//   m/12381'/coin_type'/account'/change/address_index
+// Kontor BLS key derivation path using EIP-2333 (native BLS12-381 key tree).
 //
-// This separation prevents cross-protocol key reuse (Taproot Schnorr keys vs. Kontor BLS keys).
-const KONTOR_BLS_DERIVATION_PATH_REGTEST: &str = "m/12381'/1'/0'/0/0";
+// EIP-2333 defines its own hierarchical key derivation for BLS12-381, operating natively on
+// BLS12-381 scalars. All child derivation is hardened by design (no non-hardened children),
+// so paths are written without the `'` marker.
+//
+// Path structure (following EIP-2334):
+//   m / 12381 / coin_type / account / key_use
+//
+// Regtest uses testnet coin_type (1). Mainnet would be coin_type (0).
+const KONTOR_BLS_PATH_REGTEST: &[u32] = &[12381, 1, 0, 0];
 
 // Domain-separating prefixes for the two registration proofs.
 //
@@ -80,8 +86,8 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_key_derivation_and_registration_vector_1_print() -> Result<()> {
-    // NOTE: The name is legacy ("vector_1_print"). This test is now a deterministic example that
+async fn bls_key_derivation_and_registration() -> Result<()> {
+    // This test is a deterministic example that
     // asserts the derived pubkeys and verifies the binding proofs.
     //
     // Fixed seed for example generation (64 bytes).
@@ -91,18 +97,15 @@ async fn bls_key_derivation_and_registration_vector_1_print() -> Result<()> {
     // Secp256k1 context for creating/verifying BIP340 Schnorr signatures.
     let secp = Secp256k1::new();
 
-    // Derive Taproot identity key + Kontor BLS key from the same seed via two *separate* BIP-32 paths.
+    // Derive Taproot identity key + Kontor BLS key from the same BIP-39 seed via two separate
+    // derivation schemes:
     //
     // The derivation itself lives in the regtest harness:
     // - `core/indexer/src/reg_tester.rs` → `RegTesterInner::bls_identity_from_seed(...)`
-    // - Taproot keypair: derived at `TAPROOT_PATH_REGTEST` (BIP-86)
-    // - BLS keypair: derived at `KONTOR_BLS_DERIVATION_PATH_REGTEST` and then fed into `blst` keygen
+    // - Taproot keypair: BIP-32/BIP-86 at `TAPROOT_PATH_REGTEST`
+    // - BLS keypair: EIP-2333 at `KONTOR_BLS_PATH_REGTEST` (native BLS12-381 key tree)
     let bls_identity = reg_tester
-        .bls_identity_from_seed(
-            &seed,
-            TAPROOT_PATH_REGTEST,
-            KONTOR_BLS_DERIVATION_PATH_REGTEST,
-        )
+        .bls_identity_from_seed(&seed, TAPROOT_PATH_REGTEST, KONTOR_BLS_PATH_REGTEST)
         .await?;
 
     // Deterministic derived identifiers (these are what wallet implementers care about):
@@ -135,15 +138,22 @@ async fn bls_key_derivation_and_registration_vector_1_print() -> Result<()> {
     // Sanity: the derived secret key must correspond to the derived public key.
     assert_eq!(bls_sk.sk_to_pk().to_bytes(), bls_pubkey);
     let bls_msg = bls_binding_message(&xonly_bytes);
+    // look into aug
     let bls_sig = bls_sk.sign(&bls_msg, KONTOR_BLS_DST, &[]).to_bytes();
     // Parse + validate derived BLS objects. In production paths we require subgroup checks.
     let bls_pk = BlsPublicKey::key_validate(&bls_pubkey)
         .map_err(|e| anyhow!("invalid derived BLS pubkey bytes: {e:?}"))?;
+    // sig_validate vs verify?
     let bls_sig_obj = BlsSignature::sig_validate(&bls_sig, true)
         .map_err(|e| anyhow!("invalid derived BLS signature bytes: {e:?}"))?;
     // Verify with subgroup checks enabled (the final `true`).
     let result = bls_sig_obj.verify(true, &bls_msg, KONTOR_BLS_DST, &[], &bls_pk, true);
     assert_eq!(result, blst::BLST_ERROR::BLST_SUCCESS);
+
+    // create data structure that holds the identities and the structure verifies
+    // constructor to build the sigs
+    // with verify method that could be called by registration handler
+    // put it in bls module
 
     // Length sanity checks (example values are filled in after first run).
     assert_eq!(xonly_bytes.len(), 32);
@@ -156,14 +166,24 @@ async fn bls_key_derivation_and_registration_vector_1_print() -> Result<()> {
         hex::encode(seed),
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
     );
+    // Taproot x-only pubkey (BIP-32/BIP-86 — unchanged).
     assert_eq!(
         hex::encode(xonly_bytes),
         "a4b70d13d6d48919c40a0c0ddac146b18ba1dde08bd1af2224060040c6189282"
     );
+    // BLS pubkey (EIP-2333 derivation at path [12381, 1, 0, 0]).
+    // Print for regeneration; update the assertion below after first successful run.
+    println!("bls_pubkey (EIP-2333): {}", hex::encode(bls_pubkey));
     assert_eq!(
         hex::encode(bls_pubkey),
-        "b5c69f88da04d8a3aca6d47f3ee18e4a170bedd28a29ec779b33e3e72b9da8eaae5d4e0fe6af71807ad8437190e1e24315760b66670d460ecebb6457c3bc6862079e4f22f4d523c82b75aed9f3b34132c12053811dd12b2ed42393a4e1fd786e"
+        "a56dd059afccd191121b9bb8ec2ff6b9b18e302064e18faca45b6e1b38eb7c7f37130d01ead92037459663c4ff9be3d8198223658e0a0196af2fe68de58cbce9e0299c76e6ec5223791344f3bbda528b7b81dea5fd55b204027d54fa242fdcec"
     );
+    assert_eq!(
+        hex::encode(bls_identity.bls_secret_key),
+        "403ec84ec266cc93809d5a4c576f9b60b44260c739202b857f24d4d47358461b"
+    );
+
+    assert_eq!(bls_pubkey.len(), 96);
 
     Ok(())
 }

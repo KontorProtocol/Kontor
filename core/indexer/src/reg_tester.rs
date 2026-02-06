@@ -51,11 +51,25 @@ zmqpubrawtx=tcp://127.0.0.1:28332
 zmqpubrawtxhwm=0
 "#;
 
-// `blst::min_sig::SecretKey::key_gen(ikm, info)` accepts empty `info` (`&[]`) as well.
-// Using a non-empty `info` gives defense-in-depth domain separation + a versioning knob.
-// Leaving it empty is simpler and more aligned with common BLS tooling; either is fine as long as
-// wallets/indexers make the same choice (because it changes the derived BLS key).
-const KONTOR_BLS_KEYGEN_INFO: &[u8] = b"KONTOR_BLS_KEYGEN_V1";
+/// Derive a BLS12-381 secret key from a BIP-39 seed using EIP-2333.
+///
+/// EIP-2333 defines a tree-structured key derivation for BLS12-381 that operates natively
+/// on BLS12-381 scalars (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child
+/// derivation is hardened by design, so paths are written without the `'` marker.
+///
+/// Path convention for Kontor (following EIP-2334 structure):
+///   m / 12381 / <coin_type> / <account> / <key_use>
+///
+///   Mainnet:        [12381, 0, 0, 0]
+///   Testnet/Regtest: [12381, 1, 0, 0]
+pub fn derive_bls_secret_key_eip2333(seed: &[u8], path: &[u32]) -> Result<BlsSecretKey> {
+    let mut sk = BlsSecretKey::derive_master_eip2333(seed)
+        .map_err(|e| anyhow!("EIP-2333 master key derivation failed: {e:?}"))?;
+    for &index in path {
+        sk = sk.derive_child_eip2333(index);
+    }
+    Ok(sk)
+}
 
 async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
@@ -418,15 +432,12 @@ impl RegTesterInner {
         &mut self,
         seed: &[u8],
         taproot_path: &str,
-        kontor_path: &str,
+        kontor_bls_path: &[u32],
     ) -> Result<BlsIdentity> {
         let keypair = derive_secp_keypair_from_bip32_seed(seed, taproot_path)?;
         let identity = self.identity_from_keypair(keypair).await?;
 
-        let kontor_xpriv = derive_xpriv_from_bip32_seed(seed, kontor_path)?;
-        let ikm = kontor_xpriv.private_key.secret_bytes();
-        let bls_sk = BlsSecretKey::key_gen(&ikm, KONTOR_BLS_KEYGEN_INFO)
-            .map_err(|e| anyhow!("failed to derive BLS secret key: {e:?}"))?;
+        let bls_sk = derive_bls_secret_key_eip2333(seed, kontor_bls_path)?;
         let bls_secret_key = bls_sk.to_bytes();
         let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
 
@@ -726,12 +737,12 @@ impl RegTester {
         &mut self,
         seed: &[u8],
         taproot_path: &str,
-        kontor_path: &str,
+        kontor_bls_path: &[u32],
     ) -> Result<BlsIdentity> {
         self.inner
             .lock()
             .await
-            .bls_identity_from_seed(seed, taproot_path, kontor_path)
+            .bls_identity_from_seed(seed, taproot_path, kontor_bls_path)
             .await
     }
 
