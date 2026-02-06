@@ -146,16 +146,14 @@ pub fn generate_taproot_address() -> (Address, Keypair) {
     )
 }
 
-pub fn derive_xpriv_from_bip32_seed(seed: &[u8], path: &str) -> Result<Xpriv> {
+/// Derive a secp256k1 Keypair from a BIP-39 seed via BIP-32 HD wallet derivation.
+///
+/// Full BIP-32 derivation in one step: seed → master xpriv → child xpriv at `path` → Keypair.
+pub fn derive_taproot_keypair_from_seed(seed: &[u8], path: &str) -> Result<Keypair> {
     let secp = Secp256k1::new();
     let master = Xpriv::new_master(Network::Regtest, seed)?;
     let derivation_path: DerivationPath = path.parse()?;
-    Ok(master.derive_priv(&secp, &derivation_path)?)
-}
-
-pub fn derive_secp_keypair_from_bip32_seed(seed: &[u8], path: &str) -> Result<Keypair> {
-    let secp = Secp256k1::new();
-    let child = derive_xpriv_from_bip32_seed(seed, path)?;
+    let child = master.derive_priv(&secp, &derivation_path)?;
     Ok(Keypair::from_secret_key(&secp, &child.private_key))
 }
 
@@ -168,6 +166,8 @@ pub struct Identity {
     pub address: Address,
     pub keypair: Keypair,
     pub next_funding_utxo: (OutPoint, TxOut),
+    pub bls_secret_key: Option<[u8; 32]>,
+    pub bls_pubkey: Option<[u8; 96]>,
 }
 
 impl Identity {
@@ -178,13 +178,6 @@ impl Identity {
     pub fn signer(&self) -> Signer {
         Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
-}
-
-#[derive(Clone)]
-pub struct BlsIdentity {
-    pub identity: Identity,
-    pub bls_secret_key: [u8; 32],
-    pub bls_pubkey: [u8; 96],
 }
 
 #[derive(Debug, Clone)]
@@ -364,15 +357,43 @@ impl RegTesterInner {
         }
     }
 
+    /// Create a new randomly-keyed identity, funded on-chain (no BLS keys).
     pub async fn identity(&mut self) -> Result<Identity> {
-        let (_address, keypair) = generate_taproot_address();
-        self.identity_from_keypair(keypair).await
+        let (address, keypair) = generate_taproot_address();
+        self.fund_identity(address, keypair, None, None).await
     }
 
-    pub async fn identity_from_keypair(&mut self, keypair: Keypair) -> Result<Identity> {
+    /// Create a new identity from a BIP-39 seed, with both Taproot (BIP-32/BIP-86) and
+    /// BLS (EIP-2333) keys derived deterministically, funded on-chain.
+    pub async fn identity_from_seed(
+        &mut self,
+        seed: &[u8],
+        taproot_path: &str,
+        kontor_bls_path: &[u32],
+    ) -> Result<Identity> {
+        let keypair = derive_taproot_keypair_from_seed(seed, taproot_path)?;
         let secp = Secp256k1::new();
         let (x_only_public_key, ..) = keypair.x_only_public_key();
         let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+
+        let bls_sk = derive_bls_secret_key_eip2333(seed, kontor_bls_path)?;
+        let bls_secret_key = Some(bls_sk.to_bytes());
+        let bls_pubkey = Some(bls_sk.sk_to_pk().to_bytes());
+
+        self.fund_identity(address, keypair, bls_secret_key, bls_pubkey)
+            .await
+    }
+
+    /// Fund a new identity on-chain: sends BTC from the harness funder to `address`,
+    /// mines a block, and returns the funded `Identity`.
+    async fn fund_identity(
+        &mut self,
+        address: Address,
+        keypair: Keypair,
+        bls_secret_key: Option<[u8; 32]>,
+        bls_pubkey: Option<[u8; 96]>,
+    ) -> Result<Identity> {
+        let secp = Secp256k1::new();
         let mut tx = Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
@@ -425,24 +446,6 @@ impl RegTesterInner {
             address,
             keypair,
             next_funding_utxo,
-        })
-    }
-
-    pub async fn bls_identity_from_seed(
-        &mut self,
-        seed: &[u8],
-        taproot_path: &str,
-        kontor_bls_path: &[u32],
-    ) -> Result<BlsIdentity> {
-        let keypair = derive_secp_keypair_from_bip32_seed(seed, taproot_path)?;
-        let identity = self.identity_from_keypair(keypair).await?;
-
-        let bls_sk = derive_bls_secret_key_eip2333(seed, kontor_bls_path)?;
-        let bls_secret_key = bls_sk.to_bytes();
-        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
-
-        Ok(BlsIdentity {
-            identity,
             bls_secret_key,
             bls_pubkey,
         })
@@ -608,6 +611,8 @@ impl RegTester {
             address,
             keypair,
             next_funding_utxo: (out_point, tx_out),
+            bls_secret_key: None,
+            bls_pubkey: None,
         };
         let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path()).await?;
         Ok((
@@ -733,16 +738,16 @@ impl RegTester {
         self.inner.lock().await.identity().await
     }
 
-    pub async fn bls_identity_from_seed(
+    pub async fn identity_from_seed(
         &mut self,
         seed: &[u8],
         taproot_path: &str,
         kontor_bls_path: &[u32],
-    ) -> Result<BlsIdentity> {
+    ) -> Result<Identity> {
         self.inner
             .lock()
             .await
-            .bls_identity_from_seed(seed, taproot_path, kontor_bls_path)
+            .identity_from_seed(seed, taproot_path, kontor_bls_path)
             .await
     }
 
