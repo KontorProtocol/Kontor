@@ -7,6 +7,7 @@ use crate::{
         client::RegtestRpc,
         types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
+    bls::{bls_derivation_path, derive_bls_secret_key_eip2333, taproot_derivation_path},
     config::RegtestConfig,
     database::types::OpResultId,
     retry::retry_simple,
@@ -20,8 +21,8 @@ use bitcoin::{
     absolute::LockTime,
     bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
-    key::{Keypair, PrivateKey, Secp256k1, rand},
     key::rand::RngCore,
+    key::{Keypair, PrivateKey, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
 };
@@ -121,7 +122,6 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     .await?;
     Ok((process, client))
 }
-
 
 /// Generate a random x-only public key string (for test signers that don't need a full identity).
 pub fn random_x_only_pubkey() -> String {
@@ -348,15 +348,15 @@ impl RegTesterInner {
         let mut seed = [0u8; 64];
         rand::thread_rng().fill_bytes(&mut seed);
 
-        let taproot_path = crate::bls::taproot_derivation_path(Network::Regtest);
-        let bls_path = crate::bls::bls_derivation_path(Network::Regtest);
+        let taproot_path = taproot_derivation_path(Network::Regtest);
+        let bls_path = bls_derivation_path(Network::Regtest);
 
         let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
         let secp = Secp256k1::new();
         let (x_only_public_key, ..) = keypair.x_only_public_key();
         let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
 
-        let bls_sk = crate::bls::derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
         let bls_secret_key = bls_sk.to_bytes();
         let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
 
@@ -561,13 +561,13 @@ impl RegTester {
 
         let mut seed = [0u8; 64];
         rand::thread_rng().fill_bytes(&mut seed);
-        let taproot_path = crate::bls::taproot_derivation_path(Network::Regtest);
-        let bls_path = crate::bls::bls_derivation_path(Network::Regtest);
+        let taproot_path = taproot_derivation_path(Network::Regtest);
+        let bls_path = bls_derivation_path(Network::Regtest);
         let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
         let secp = Secp256k1::new();
         let (x_only_public_key, ..) = keypair.x_only_public_key();
         let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
-        let bls_sk = crate::bls::derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
         let bls_secret_key = bls_sk.to_bytes();
         let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
         let block_hashes = bitcoin_client

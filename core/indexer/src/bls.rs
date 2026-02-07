@@ -11,10 +11,9 @@
 //!
 //! # Architecture
 //!
-//! - **Wallet-side**: [`RegistrationProof::sign`] takes a Taproot keypair and BLS secret key,
+//! - **Wallet-side**: [`RegistrationProof::new`] takes a Taproot keypair and BLS secret key,
 //!   produces both binding signatures, and returns the proof.
 //! - **Indexer-side**: [`RegistrationProof::verify`] validates both signatures using only public data.
-//! - **Deserialization**: [`RegistrationProof::new`] constructs from pre-computed fields.
 
 use anyhow::{Result, anyhow};
 use bitcoin::Network;
@@ -156,7 +155,7 @@ impl RegistrationProof {
     /// 1. Derives the BLS public key from the secret key.
     /// 2. Signs `sha256(SCHNORR_BINDING_PREFIX || bls_pubkey)` with the Taproot keypair.
     /// 3. Signs `BLS_BINDING_PREFIX || xonly_pubkey` with the BLS secret key.
-    pub fn sign(keypair: &Keypair, bls_secret_key: &[u8; 32]) -> Result<Self> {
+    pub fn new(keypair: &Keypair, bls_secret_key: &[u8; 32]) -> Result<Self> {
         let secp = Secp256k1::new();
         let x_only_pubkey = keypair.x_only_public_key().0.serialize();
 
@@ -176,23 +175,6 @@ impl RegistrationProof {
             schnorr_sig,
             bls_sig,
         })
-    }
-
-    /// Construct a registration proof from pre-computed fields.
-    ///
-    /// Used by the indexer when deserializing a proof from the wire format.
-    pub fn new(
-        x_only_pubkey: [u8; 32],
-        bls_pubkey: [u8; 96],
-        schnorr_sig: [u8; 64],
-        bls_sig: [u8; 48],
-    ) -> Self {
-        Self {
-            x_only_pubkey,
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        }
     }
 
     /// Verify both binding proofs using only the public data in this struct.
@@ -248,7 +230,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
+        let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).unwrap();
         proof.verify().unwrap();
     }
 
@@ -261,7 +243,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let mut proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
+        let mut proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).unwrap();
 
         // Swap in a different x-only pubkey — Schnorr verification should fail.
         let other_keypair = Keypair::new(&secp, &mut rand::thread_rng());
@@ -279,7 +261,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let mut proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
+        let mut proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).unwrap();
 
         // Swap in a different BLS pubkey — both verifications should fail.
         let mut ikm2 = [0u8; 32];

@@ -23,12 +23,12 @@ async fn bls_key_derivation_and_registration() -> Result<()> {
     let bls_secret_key = identity.bls_secret_key;
 
     // =========================================================================
-    // Wallet-side: construct the registration proof via RegistrationProof::sign()
+    // Wallet-side: construct the registration proof
     // =========================================================================
     //
-    // The smart constructor takes the Taproot keypair and BLS secret key, internally
+    // The constructor takes the Taproot keypair and BLS secret key, internally
     // builds the domain-separated messages, and produces both binding signatures.
-    let proof = RegistrationProof::sign(&identity.keypair, &bls_secret_key)?;
+    let proof = RegistrationProof::new(&identity.keypair, &bls_secret_key)?;
 
     // Sanity: the proof carries the same identity keys we derived.
     assert_eq!(proof.x_only_pubkey, xonly_bytes);
