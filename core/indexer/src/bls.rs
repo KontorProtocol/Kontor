@@ -11,17 +11,20 @@
 //!
 //! # Architecture
 //!
-//! The wallet constructs signatures locally using the public message helpers
-//! ([`RegistrationProof::schnorr_binding_message`], [`RegistrationProof::bls_binding_message`])
-//! and constants, then submits a [`RegistrationProof`] to the indexer.
-//! The indexer only calls [`RegistrationProof::verify`].
+//! - **Wallet-side**: [`RegistrationProof::sign`] takes a Taproot keypair and BLS secret key,
+//!   produces both binding signatures, and returns the proof.
+//! - **Indexer-side**: [`RegistrationProof::verify`] validates both signatures using only public data.
+//! - **Deserialization**: [`RegistrationProof::new`] constructs from pre-computed fields.
 
 use anyhow::{Result, anyhow};
+use bitcoin::Network;
 use bitcoin::XOnlyPublicKey;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::key::Secp256k1;
+use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::secp256k1::Message;
-use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
+use blst::min_sig::{
+    PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
+};
 
 // ---------------------------------------------------------------------------
 // Protocol constants
@@ -63,13 +66,76 @@ pub const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_BLS_TO_XONLY_V1";
 pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
 
 // ---------------------------------------------------------------------------
+// Key derivation
+// ---------------------------------------------------------------------------
+
+/// Return the coin_type index for BIP-44 / EIP-2334 derivation paths.
+///
+/// Mainnet = 0, everything else (Testnet / Signet / Regtest) = 1.
+fn coin_type(network: Network) -> u32 {
+    match network {
+        Network::Bitcoin => 0,
+        _ => 1,
+    }
+}
+
+/// Taproot identity key derivation path (BIP-86) for the given network.
+///
+/// `m/86'/<coin_type>'/0'/0/0`
+pub fn taproot_derivation_path(network: Network) -> String {
+    format!("m/86'/{coin}'/0'/0/0", coin = coin_type(network))
+}
+
+/// Kontor BLS key derivation path (EIP-2333) for the given network.
+///
+/// EIP-2333 defines hierarchical key derivation for BLS12-381, operating natively
+/// on BLS scalars. All child derivation is hardened by design.
+///
+/// Path structure (following EIP-2334): `m / 12381 / <coin_type> / <account> / <key_use>`
+pub fn bls_derivation_path(network: Network) -> Vec<u32> {
+    vec![12381, coin_type(network), 0, 0]
+}
+
+/// Derive a BLS12-381 secret key from a BIP-39 seed using EIP-2333.
+pub fn derive_bls_secret_key_eip2333(seed: &[u8], path: &[u32]) -> Result<BlsSecretKey> {
+    let mut sk = BlsSecretKey::derive_master_eip2333(seed)
+        .map_err(|e| anyhow!("EIP-2333 master key derivation failed: {e:?}"))?;
+    for &index in path {
+        sk = sk.derive_child_eip2333(index);
+    }
+    Ok(sk)
+}
+
+// ---------------------------------------------------------------------------
+// Private message construction helpers
+// ---------------------------------------------------------------------------
+
+/// Build the 32-byte Schnorr message: `sha256(SCHNORR_BINDING_PREFIX || bls_pubkey)`.
+fn schnorr_binding_message(bls_pubkey: &[u8; 96]) -> Message {
+    let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+    preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+    preimage.extend_from_slice(bls_pubkey);
+    let digest = sha256::Hash::hash(&preimage).to_byte_array();
+    Message::from_digest_slice(&digest).expect("sha256 digest is 32 bytes")
+}
+
+/// Build the raw BLS message bytes: `BLS_BINDING_PREFIX || xonly_pubkey`.
+///
+/// Not pre-hashed — `blst` hashes-to-curve internally using [`KONTOR_BLS_DST`].
+fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+    msg.extend_from_slice(BLS_BINDING_PREFIX);
+    msg.extend_from_slice(xonly_pubkey);
+    msg
+}
+
+// ---------------------------------------------------------------------------
 // RegistrationProof
 // ---------------------------------------------------------------------------
 
 /// A cryptographic proof that binds a Bitcoin Taproot identity to a BLS12-381 public key.
 ///
 /// This is the wire-format payload a wallet submits to the indexer for registration.
-/// The wallet constructs signatures locally then passes them to [`RegistrationProof::new`].
 /// The indexer calls [`verify()`](RegistrationProof::verify) before assigning a registry ID.
 #[derive(Clone, Debug)]
 pub struct RegistrationProof {
@@ -84,41 +150,37 @@ pub struct RegistrationProof {
 }
 
 impl RegistrationProof {
-    // -----------------------------------------------------------------------
-    // Message construction (public — wallets use these to know what to sign)
-    // -----------------------------------------------------------------------
-
-    /// Build the 32-byte Schnorr message: `sha256(SCHNORR_BINDING_PREFIX || bls_pubkey)`.
+    /// Construct a registration proof by signing with both keys.
     ///
-    /// Wallets sign this with the Taproot keypair to produce the Schnorr binding proof.
-    pub fn schnorr_binding_message(bls_pubkey: &[u8; 96]) -> Message {
-        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
-        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
-        preimage.extend_from_slice(bls_pubkey);
-        let digest = sha256::Hash::hash(&preimage).to_byte_array();
-        Message::from_digest_slice(&digest).expect("sha256 digest is 32 bytes")
-    }
+    /// This is the **wallet-side** operation. It:
+    /// 1. Derives the BLS public key from the secret key.
+    /// 2. Signs `sha256(SCHNORR_BINDING_PREFIX || bls_pubkey)` with the Taproot keypair.
+    /// 3. Signs `BLS_BINDING_PREFIX || xonly_pubkey` with the BLS secret key.
+    pub fn sign(keypair: &Keypair, bls_secret_key: &[u8; 32]) -> Result<Self> {
+        let secp = Secp256k1::new();
+        let x_only_pubkey = keypair.x_only_public_key().0.serialize();
 
-    /// Build the raw BLS message bytes: `BLS_BINDING_PREFIX || xonly_pubkey`.
-    ///
-    /// Wallets sign this with the BLS secret key to produce the BLS binding proof.
-    /// Not pre-hashed — `blst` hashes-to-curve internally using [`KONTOR_BLS_DST`].
-    pub fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
-        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
-        msg.extend_from_slice(BLS_BINDING_PREFIX);
-        msg.extend_from_slice(xonly_pubkey);
-        msg
-    }
+        let bls_sk = BlsSecretKey::from_bytes(bls_secret_key)
+            .map_err(|e| anyhow!("invalid BLS secret key: {e:?}"))?;
+        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
 
-    // -----------------------------------------------------------------------
-    // Construction + verification
-    // -----------------------------------------------------------------------
+        let schnorr_msg = schnorr_binding_message(&bls_pubkey);
+        let schnorr_sig = secp.sign_schnorr(&schnorr_msg, keypair).serialize();
+
+        let bls_msg = bls_binding_message(&x_only_pubkey);
+        let bls_sig = bls_sk.sign(&bls_msg, KONTOR_BLS_DST, &[]).to_bytes();
+
+        Ok(Self {
+            x_only_pubkey,
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        })
+    }
 
     /// Construct a registration proof from pre-computed fields.
     ///
-    /// The wallet is responsible for producing the signatures locally.
-    /// See [`Self::schnorr_binding_message`] and [`Self::bls_binding_message`] for the
-    /// exact bytes that must be signed.
+    /// Used by the indexer when deserializing a proof from the wire format.
     pub fn new(
         x_only_pubkey: [u8; 32],
         bls_pubkey: [u8; 96],
@@ -144,7 +206,7 @@ impl RegistrationProof {
         let secp = Secp256k1::new();
 
         // 1. Verify Schnorr binding: Taproot → BLS.
-        let schnorr_msg = Self::schnorr_binding_message(&self.bls_pubkey);
+        let schnorr_msg = schnorr_binding_message(&self.bls_pubkey);
         let x_only_pk = XOnlyPublicKey::from_slice(&self.x_only_pubkey)
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
         let schnorr_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&self.schnorr_sig)
@@ -161,7 +223,7 @@ impl RegistrationProof {
             .map_err(|e| anyhow!("invalid BLS signature (subgroup check failed): {e:?}"))?;
 
         // 4. Verify BLS binding: BLS → Taproot.
-        let bls_msg = Self::bls_binding_message(&self.x_only_pubkey);
+        let bls_msg = bls_binding_message(&self.x_only_pubkey);
         let result = bls_sig_obj.verify(true, &bls_msg, KONTOR_BLS_DST, &[], &bls_pk, true);
         if result != blst::BLST_ERROR::BLST_SUCCESS {
             return Err(anyhow!("BLS binding verification failed: {result:?}"));
@@ -174,24 +236,8 @@ impl RegistrationProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use bitcoin::key::{Keypair, rand};
-    use blst::min_sig::SecretKey as BlsSecretKey;
-
-    /// Helper: wallet-side signing logic for unit tests.
-    fn sign_proof(keypair: &Keypair, bls_sk: &BlsSecretKey) -> RegistrationProof {
-        let secp = Secp256k1::new();
-        let x_only_pubkey = keypair.x_only_public_key().0.serialize();
-        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
-
-        let schnorr_msg = RegistrationProof::schnorr_binding_message(&bls_pubkey);
-        let schnorr_sig = secp.sign_schnorr(&schnorr_msg, keypair).serialize();
-
-        let bls_msg = RegistrationProof::bls_binding_message(&x_only_pubkey);
-        let bls_sig = bls_sk.sign(&bls_msg, KONTOR_BLS_DST, &[]).to_bytes();
-
-        RegistrationProof::new(x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)
-    }
 
     #[test]
     fn sign_and_verify_roundtrip() {
@@ -202,7 +248,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let proof = sign_proof(&keypair, &bls_sk);
+        let proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
         proof.verify().unwrap();
     }
 
@@ -215,7 +261,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let mut proof = sign_proof(&keypair, &bls_sk);
+        let mut proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
 
         // Swap in a different x-only pubkey — Schnorr verification should fail.
         let other_keypair = Keypair::new(&secp, &mut rand::thread_rng());
@@ -233,7 +279,7 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut ikm);
         let bls_sk = BlsSecretKey::key_gen(&ikm, &[]).unwrap();
 
-        let mut proof = sign_proof(&keypair, &bls_sk);
+        let mut proof = RegistrationProof::sign(&keypair, &bls_sk.to_bytes()).unwrap();
 
         // Swap in a different BLS pubkey — both verifications should fail.
         let mut ikm2 = [0u8; 32];
