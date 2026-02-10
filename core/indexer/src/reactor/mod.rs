@@ -111,7 +111,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         txid: t.txid,
                     }),
                     Some(metadata.previous_output),
-                    op_return_data.map(Into::into),
+                    op_return_data.clone().map(Into::into),
                 )
                 .await;
 
@@ -146,6 +146,51 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     let result = runtime.issuance(&metadata.signer).await;
                     if result.is_err() {
                         warn!("Issuance operation failed: {:?}", result);
+                    }
+                }
+                Op::Batch { metadata, payload } => {
+                    let batch = match crate::kbl1::decode_kbl1_v1(payload) {
+                        Ok(batch) => batch,
+                        Err(e) => {
+                            warn!("Batch operation decode failed: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    // TODO(kbl1): Verify BLS aggregate signature + replay protection before executing.
+                    let _sig = batch.signature;
+
+                    for (inner_index, inner_op) in batch.ops.iter().enumerate() {
+                        runtime
+                            .set_context(
+                                block.height as i64,
+                                Some(TransactionContext {
+                                    tx_index: t.index,
+                                    input_index,
+                                    op_index: inner_index as i64,
+                                    txid: t.txid,
+                                }),
+                                Some(metadata.previous_output),
+                                op_return_data.clone().map(Into::into),
+                            )
+                            .await;
+
+                        match inner_op {
+                            crate::kbl1::Kbl1OpV1::Call {
+                                signer,
+                                gas_limit,
+                                contract,
+                                expr,
+                            } => {
+                                runtime.set_gas_limit(*gas_limit);
+                                let result = runtime
+                                    .execute(Some(signer), &(contract.into()), expr)
+                                    .await;
+                                if result.is_err() {
+                                    warn!("Batch call operation failed: {:?}", result);
+                                }
+                            }
+                        }
                     }
                 }
             };

@@ -9,6 +9,7 @@ pub mod database;
 pub mod event;
 pub mod legacy_test_utils;
 pub mod logging;
+pub mod kbl1;
 pub mod multi_psbt_test_utils;
 pub mod reactor;
 pub mod reg_tester;

@@ -2622,6 +2622,7 @@ dependencies = [
  "wasmtime",
  "wit-component 0.244.0",
  "zmq",
+ "zstd",
 ]
 
 [[package]]

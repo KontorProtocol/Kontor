@@ -63,6 +63,7 @@ kontor-crypto = "0.1.6"
 ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"
+zstd = "=0.13.3"
 
 [dev-dependencies]
 testlib = { path = "../testlib" }
