@@ -73,12 +73,10 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                 expr,
                             },
                             Inst::Issuance => Op::Issuance { metadata },
-                            Inst::CreateAgreement { file_metadata } => {
-                                Op::CreateAgreement {
-                                    metadata,
-                                    file_metadata,
-                                }
-                            }
+                            Inst::CreateAgreement { file_metadata } => Op::CreateAgreement {
+                                metadata,
+                                file_metadata,
+                            },
                             Inst::JoinAgreement {
                                 agreement_id,
                                 node_id,

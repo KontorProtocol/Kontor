@@ -2,9 +2,7 @@ pub mod types;
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::future::pending;
-use indexer_types::{
-    Block, BlockRow, Event, Op, OpWithResult, TransactionRow,
-};
+use indexer_types::{Block, BlockRow, Event, Op, OpWithResult, TransactionRow};
 use tokio::{
     select,
     sync::{
@@ -32,9 +30,7 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{
-        ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer,
-    },
+    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 

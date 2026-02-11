@@ -2,14 +2,14 @@ extern crate alloc;
 
 use anyhow::Result;
 use bitcoin::{
-    taproot::LeafVersion, BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey,
+    BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion,
 };
 use bon::Builder;
 use indexmap::IndexMap;
 use kontor_crypto::api::FileMetadata;
 use macros::contract_address;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
 pub use wit_bindgen;
 

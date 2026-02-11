@@ -298,7 +298,7 @@ impl Runtime {
         signer: &Signer,
         file_metadata: &FileMetadata,
     ) -> Result<()> {
-        match filestorage::api::create_agreement(
+        filestorage::api::create_agreement(
             self,
             signer,
             RawFileDescriptor {
@@ -312,11 +312,9 @@ impl Runtime {
             },
         )
         .await
-        {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!("CreateAgreement failed: {:?}", err)),
-            Err(err) => Err(err),
-        }
+        .expect("Failed to run create_agreement")
+        .expect("Failed to create agreement");
+        Ok(())
     }
 
     pub async fn join_agreement(
@@ -325,11 +323,11 @@ impl Runtime {
         agreement_id: &str,
         node_id: &str,
     ) -> Result<()> {
-        match filestorage::api::join_agreement(self, signer, agreement_id, node_id).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!("JoinAgreement failed: {:?}", err)),
-            Err(err) => Err(err),
-        }
+        filestorage::api::join_agreement(self, signer, agreement_id, node_id)
+            .await
+            .expect("Failed to run join_agreement")
+            .expect("Failed to join agreement");
+        Ok(())
     }
 
     pub async fn leave_agreement(
@@ -338,19 +336,19 @@ impl Runtime {
         agreement_id: &str,
         node_id: &str,
     ) -> Result<()> {
-        match filestorage::api::leave_agreement(self, signer, agreement_id, node_id).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!("LeaveAgreement failed: {:?}", err)),
-            Err(err) => Err(err),
-        }
+        filestorage::api::leave_agreement(self, signer, agreement_id, node_id)
+            .await
+            .expect("Failed to run leave_agreement")
+            .expect("Failed to leave agreement");
+        Ok(())
     }
 
     pub async fn verify_proof(&mut self, signer: &Signer, proof_bytes: &[u8]) -> Result<()> {
-        match filestorage::api::verify_proof(self, signer, proof_bytes.to_vec()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!("VerifyProof failed: {:?}", err)),
-            Err(err) => Err(err),
-        }
+        filestorage::api::verify_proof(self, signer, proof_bytes.to_vec())
+            .await
+            .expect("Failed to run verify_proof")
+            .expect("Failed to verify proof");
+        Ok(())
     }
 
     pub async fn execute(

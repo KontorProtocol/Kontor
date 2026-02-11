@@ -1,5 +1,7 @@
 use anyhow::Result;
-use indexer_types::Block;
+use indexer_types::{Block, Op, OpMetadata, Transaction};
+use indexmap::IndexMap;
+use kontor_crypto::api;
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, hashes::Hash};
@@ -491,6 +493,129 @@ async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].agreement_id, created.agreement_id);
     assert_eq!(after[0].block_height, block_height);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reactor_first_class_filestorage_ops() -> Result<()> {
+    let setup_block = Block {
+        height: 0,
+        hash: BlockHash::from_byte_array([0x00; 32]),
+        prev_hash: BlockHash::from_byte_array([0x00; 32]),
+        transactions: vec![],
+    };
+    let (mut runtime, _temp_dir) = testlib::Runtime::new_local_with_block(&setup_block).await?;
+    let core_signer = Signer::Core(Box::new(Signer::Nobody));
+    token::api::issuance(&mut runtime, &core_signer, Decimal::from(100u64)).await??;
+
+    let nonce = [42u8; 32];
+    let (_, file_metadata) = api::prepare_file(b"reactor op test", "reactor-op-test.txt", &nonce)?;
+    let agreement_id = file_metadata.file_id.clone();
+
+    let create_block = Block {
+        height: 1,
+        hash: BlockHash::from_byte_array([0x01; 32]),
+        prev_hash: BlockHash::from_byte_array([0x00; 32]),
+        transactions: vec![Transaction {
+            txid: bitcoin::Txid::from_byte_array([0x11; 32]),
+            index: 0,
+            ops: vec![Op::CreateAgreement {
+                metadata: OpMetadata {
+                    previous_output: bitcoin::OutPoint {
+                        txid: bitcoin::Txid::from_byte_array([0x21; 32]),
+                        vout: 0,
+                    },
+                    input_index: 0,
+                    signer: Signer::Nobody,
+                },
+                file_metadata,
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    reactor::block_handler(&mut runtime, &create_block).await?;
+    let created = filestorage::api::get_agreement(&mut runtime, &agreement_id).await?;
+    assert!(created.is_some());
+    assert!(!created.expect("agreement must exist").active);
+
+    let join_block = Block {
+        height: 2,
+        hash: BlockHash::from_byte_array([0x02; 32]),
+        prev_hash: BlockHash::from_byte_array([0x01; 32]),
+        transactions: vec![Transaction {
+            txid: bitcoin::Txid::from_byte_array([0x12; 32]),
+            index: 0,
+            ops: vec![
+                Op::JoinAgreement {
+                    metadata: OpMetadata {
+                        previous_output: bitcoin::OutPoint {
+                            txid: bitcoin::Txid::from_byte_array([0x22; 32]),
+                            vout: 0,
+                        },
+                        input_index: 0,
+                        signer: Signer::Nobody,
+                    },
+                    agreement_id: agreement_id.clone(),
+                    node_id: "node_1".to_string(),
+                },
+                Op::JoinAgreement {
+                    metadata: OpMetadata {
+                        previous_output: bitcoin::OutPoint {
+                            txid: bitcoin::Txid::from_byte_array([0x22; 32]),
+                            vout: 1,
+                        },
+                        input_index: 1,
+                        signer: Signer::Nobody,
+                    },
+                    agreement_id: agreement_id.clone(),
+                    node_id: "node_2".to_string(),
+                },
+                Op::JoinAgreement {
+                    metadata: OpMetadata {
+                        previous_output: bitcoin::OutPoint {
+                            txid: bitcoin::Txid::from_byte_array([0x22; 32]),
+                            vout: 2,
+                        },
+                        input_index: 2,
+                        signer: Signer::Nobody,
+                    },
+                    agreement_id: agreement_id.clone(),
+                    node_id: "node_3".to_string(),
+                },
+            ],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    reactor::block_handler(&mut runtime, &join_block).await?;
+    let after_join = filestorage::api::get_agreement(&mut runtime, &agreement_id).await?;
+    assert!(after_join.expect("agreement must exist").active);
+
+    let leave_block = Block {
+        height: 3,
+        hash: BlockHash::from_byte_array([0x03; 32]),
+        prev_hash: BlockHash::from_byte_array([0x02; 32]),
+        transactions: vec![Transaction {
+            txid: bitcoin::Txid::from_byte_array([0x13; 32]),
+            index: 0,
+            ops: vec![Op::LeaveAgreement {
+                metadata: OpMetadata {
+                    previous_output: bitcoin::OutPoint {
+                        txid: bitcoin::Txid::from_byte_array([0x23; 32]),
+                        vout: 0,
+                    },
+                    input_index: 0,
+                    signer: Signer::Nobody,
+                },
+                agreement_id: agreement_id.clone(),
+                node_id: "node_1".to_string(),
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    reactor::block_handler(&mut runtime, &leave_block).await?;
+    let nodes = filestorage::api::get_agreement_nodes(&mut runtime, &agreement_id).await?;
+    assert!(nodes.iter().any(|n| n.node_id == "node_1" && !n.active));
 
     Ok(())
 }
