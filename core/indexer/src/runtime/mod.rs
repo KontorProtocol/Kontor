@@ -46,7 +46,7 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
-use kontor_crypto::api::FileMetadata;
+use indexer_types::FileMetadata;
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -58,7 +58,6 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::{FILESTORAGE, TOKEN};
-use crate::database::types::field_element_to_bytes;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{
@@ -305,9 +304,9 @@ impl Runtime {
                 file_id: file_metadata.file_id.clone(),
                 object_id: file_metadata.object_id.clone(),
                 nonce: file_metadata.nonce.clone(),
-                root: field_element_to_bytes(&file_metadata.root).to_vec(),
-                padded_len: file_metadata.padded_len as u64,
-                original_size: file_metadata.original_size as u64,
+                root: file_metadata.root.clone(),
+                padded_len: file_metadata.padded_len,
+                original_size: file_metadata.original_size,
                 filename: file_metadata.filename.clone(),
             },
         )

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use indexer_types::{Block, Op, OpMetadata, Transaction};
 use indexmap::IndexMap;
-use kontor_crypto::api;
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, hashes::Hash};
@@ -509,8 +508,15 @@ async fn test_reactor_first_class_filestorage_ops() -> Result<()> {
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
     token::api::issuance(&mut runtime, &core_signer, Decimal::from(100u64)).await??;
 
-    let nonce = [42u8; 32];
-    let (_, file_metadata) = api::prepare_file(b"reactor op test", "reactor-op-test.txt", &nonce)?;
+    let file_metadata = indexer_types::FileMetadata {
+        root: vec![42u8; 32],
+        object_id: "obj_reactor_test".to_string(),
+        file_id: "file_reactor_test".to_string(),
+        nonce: vec![42u8; 32],
+        padded_len: 16,
+        original_size: 15,
+        filename: "reactor-op-test.txt".to_string(),
+    };
     let agreement_id = file_metadata.file_id.clone();
 
     let create_block = Block {

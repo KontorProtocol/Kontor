@@ -61,7 +61,11 @@ export type Info = {
 export type Inst =
   | { "Publish": { gas_limit: number; name: string; bytes: Array<number> } }
   | { "Call": { gas_limit: number; contract: string; expr: string } }
-  | "Issuance";
+  | "Issuance"
+  | { "CreateAgreement": { file_metadata: any } }
+  | { "JoinAgreement": { agreement_id: string; node_id: string } }
+  | { "LeaveAgreement": { agreement_id: string; node_id: string } }
+  | { "VerifyProof": { proof_bytes: Array<number> } };
 
 export type InstructionQuery = {
   address: string;
@@ -71,21 +75,40 @@ export type InstructionQuery = {
   chained_instruction: Inst | null;
 };
 
-export type Op = {
-  "Publish": {
-    metadata: OpMetadata;
-    gas_limit: number;
-    name: string;
-    bytes: Array<number>;
-  };
-} | {
-  "Call": {
-    metadata: OpMetadata;
-    gas_limit: number;
-    contract: string;
-    expr: string;
-  };
-} | { "Issuance": { metadata: OpMetadata } };
+export type Op =
+  | {
+    "Publish": {
+      metadata: OpMetadata;
+      gas_limit: number;
+      name: string;
+      bytes: Array<number>;
+    };
+  }
+  | {
+    "Call": {
+      metadata: OpMetadata;
+      gas_limit: number;
+      contract: string;
+      expr: string;
+    };
+  }
+  | { "Issuance": { metadata: OpMetadata } }
+  | { "CreateAgreement": { metadata: OpMetadata; file_metadata: any } }
+  | {
+    "JoinAgreement": {
+      metadata: OpMetadata;
+      agreement_id: string;
+      node_id: string;
+    };
+  }
+  | {
+    "LeaveAgreement": {
+      metadata: OpMetadata;
+      agreement_id: string;
+      node_id: string;
+    };
+  }
+  | { "VerifyProof": { metadata: OpMetadata; proof_bytes: Array<number> } };
 
 export type OpMetadata = {
   previous_output: string;

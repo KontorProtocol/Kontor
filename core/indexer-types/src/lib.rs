@@ -6,12 +6,22 @@ use bitcoin::{
 };
 use bon::Builder;
 use indexmap::IndexMap;
-use kontor_crypto::api::FileMetadata;
 use macros::contract_address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
 pub use wit_bindgen;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileMetadata {
+    pub root: Vec<u8>,
+    pub object_id: String,
+    pub file_id: String,
+    pub nonce: Vec<u8>,
+    pub padded_len: u64,
+    pub original_size: u64,
+    pub filename: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]

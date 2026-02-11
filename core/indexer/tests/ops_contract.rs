@@ -1,9 +1,7 @@
 use anyhow::bail;
 use bitcoin::consensus::encode::deserialize_hex;
 use indexer::reg_tester::InstructionResult;
-use indexer::test_utils::valid_seed_field;
-use indexer_types::{Inst, Op, OpMetadata};
-use kontor_crypto::api::FileMetadata;
+use indexer_types::{FileMetadata, Inst, Op, OpMetadata};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
@@ -69,7 +67,7 @@ async fn test_get_ops_from_api_create_agreement_regtest() -> Result<()> {
         file_id: "ops_test_file".to_string(),
         object_id: "object_ops_test_file".to_string(),
         nonce: vec![7u8; 32],
-        root: valid_seed_field(7).field,
+        root: vec![7u8; 32],
         padded_len: 16,
         original_size: 13,
         filename: "ops-test.txt".to_string(),
