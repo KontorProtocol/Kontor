@@ -10,7 +10,7 @@ use indexer::{
         },
         types::ContractRow,
     },
-    reg_tester::{self, generate_taproot_address},
+    reg_tester::{self},
     runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, TransactionContext},
     test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
 };
@@ -223,8 +223,8 @@ impl RuntimeLocal {
 #[async_trait]
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
-        let (address, ..) = generate_taproot_address();
-        let signer = Signer::XOnlyPubKey(address.to_string());
+        let x_only_pubkey = reg_tester::random_x_only_pubkey();
+        let signer = Signer::XOnlyPubKey(x_only_pubkey);
         self.issuance(&signer).await?;
         Ok(signer)
     }

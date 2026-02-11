@@ -7,6 +7,7 @@ use crate::{
         client::RegtestRpc,
         types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
+    bls::{bls_derivation_path, derive_bls_secret_key_eip2333, taproot_derivation_path},
     config::RegtestConfig,
     database::types::OpResultId,
     retry::retry_simple,
@@ -18,7 +19,9 @@ use bitcoin::{
     Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
     Txid, XOnlyPublicKey,
     absolute::LockTime,
+    bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
+    key::rand::RngCore,
     key::{Keypair, PrivateKey, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
@@ -49,6 +52,12 @@ zmqpubrawtx=tcp://127.0.0.1:28332
 zmqpubrawtxhwm=0
 "#;
 
+/// Derive a BLS12-381 secret key from a BIP-39 seed using EIP-2333.
+///
+/// EIP-2333 defines a tree-structured key derivation for BLS12-381 that operates natively
+/// on BLS12-381 scalars (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child
+/// derivation is hardened by design, so paths are written without the `'` marker.
+///
 async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
     f.write_all(REGTEST_CONF.as_bytes()).await?;
@@ -114,14 +123,22 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
     Ok((process, client))
 }
 
-pub fn generate_taproot_address() -> (Address, Keypair) {
+/// Generate a random x-only public key string (for test signers that don't need a full identity).
+pub fn random_x_only_pubkey() -> String {
     let secp = Secp256k1::new();
     let keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let (x_only_public_key, ..) = keypair.x_only_public_key();
-    (
-        Address::p2tr(&secp, x_only_public_key, None, Network::Regtest),
-        keypair,
-    )
+    keypair.x_only_public_key().0.to_string()
+}
+
+/// Derive a secp256k1 Keypair from a BIP-39 seed via BIP-32 HD wallet derivation.
+///
+/// Full BIP-32 derivation in one step: seed → master xpriv → child xpriv at `path` → Keypair.
+pub fn derive_taproot_keypair_from_seed(seed: &[u8], path: &str) -> Result<Keypair> {
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(Network::Regtest, seed)?;
+    let derivation_path: DerivationPath = path.parse()?;
+    let child = master.derive_priv(&secp, &derivation_path)?;
+    Ok(Keypair::from_secret_key(&secp, &child.private_key))
 }
 
 fn outpoint_to_utxo_id(outpoint: &OutPoint) -> String {
@@ -133,6 +150,8 @@ pub struct Identity {
     pub address: Address,
     pub keypair: Keypair,
     pub next_funding_utxo: (OutPoint, TxOut),
+    pub bls_secret_key: [u8; 32],
+    pub bls_pubkey: [u8; 96],
 }
 
 impl Identity {
@@ -322,8 +341,25 @@ impl RegTesterInner {
         }
     }
 
+    /// Create a new randomly-keyed identity with both Taproot and BLS keys, funded on-chain.
+    ///
+    /// Derivation paths are selected automatically based on the network (regtest → coin_type 1).
     pub async fn identity(&mut self) -> Result<Identity> {
-        let (address, keypair) = generate_taproot_address();
+        let mut seed = [0u8; 64];
+        rand::thread_rng().fill_bytes(&mut seed);
+
+        let taproot_path = taproot_derivation_path(Network::Regtest);
+        let bls_path = bls_derivation_path(Network::Regtest);
+
+        let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+        let secp = Secp256k1::new();
+        let (x_only_public_key, ..) = keypair.x_only_public_key();
+        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+
+        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+        let bls_secret_key = bls_sk.to_bytes();
+        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
+
         let mut tx = Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
@@ -336,7 +372,6 @@ impl RegTesterInner {
                 script_pubkey: address.script_pubkey(),
             }],
         };
-        let secp = Secp256k1::new();
         test_utils::sign_key_spend(
             &secp,
             &mut tx,
@@ -377,6 +412,8 @@ impl RegTesterInner {
             address,
             keypair,
             next_funding_utxo,
+            bls_secret_key,
+            bls_pubkey,
         })
     }
 
@@ -521,7 +558,18 @@ impl RegTester {
         let bitcoin_data_dir = TempDir::new()?;
         let kontor_data_dir = TempDir::new()?;
         let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
-        let (address, keypair) = generate_taproot_address();
+
+        let mut seed = [0u8; 64];
+        rand::thread_rng().fill_bytes(&mut seed);
+        let taproot_path = taproot_derivation_path(Network::Regtest);
+        let bls_path = bls_derivation_path(Network::Regtest);
+        let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+        let secp = Secp256k1::new();
+        let (x_only_public_key, ..) = keypair.x_only_public_key();
+        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+        let bls_secret_key = bls_sk.to_bytes();
+        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
         let block_hashes = bitcoin_client
             .generate_to_address(101, &address.to_string())
             .await?;
@@ -540,6 +588,8 @@ impl RegTester {
             address,
             keypair,
             next_funding_utxo: (out_point, tx_out),
+            bls_secret_key,
+            bls_pubkey,
         };
         let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path()).await?;
         Ok((
