@@ -2633,6 +2633,7 @@ dependencies = [
  "bitcoin",
  "bon",
  "indexmap 2.13.0",
+ "kontor-crypto",
  "macros",
  "postcard",
  "serde",

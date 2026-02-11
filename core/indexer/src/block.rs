@@ -79,6 +79,30 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                     expr,
                                 },
                                 Inst::Issuance => Op::Issuance { metadata },
+                                Inst::CreateAgreement { file_metadata } => Op::CreateAgreement {
+                                    metadata,
+                                    file_metadata,
+                                },
+                                Inst::JoinAgreement {
+                                    agreement_id,
+                                    node_id,
+                                } => Op::JoinAgreement {
+                                    metadata,
+                                    agreement_id,
+                                    node_id,
+                                },
+                                Inst::LeaveAgreement {
+                                    agreement_id,
+                                    node_id,
+                                } => Op::LeaveAgreement {
+                                    metadata,
+                                    agreement_id,
+                                    node_id,
+                                },
+                                Inst::VerifyProof { proof_bytes } => Op::VerifyProof {
+                                    metadata,
+                                    proof_bytes,
+                                },
                             });
                         }
                     }

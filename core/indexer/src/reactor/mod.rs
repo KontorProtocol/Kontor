@@ -148,6 +148,51 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         warn!("Issuance operation failed: {:?}", result);
                     }
                 }
+
+                Op::CreateAgreement {
+                    metadata,
+                    file_metadata,
+                } => {
+                    let result = runtime
+                        .create_agreement(&metadata.signer, file_metadata)
+                        .await;
+                    if result.is_err() {
+                        warn!("CreateAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::JoinAgreement {
+                    metadata,
+                    agreement_id,
+                    node_id,
+                } => {
+                    let result = runtime
+                        .join_agreement(&metadata.signer, agreement_id, node_id)
+                        .await;
+                    if result.is_err() {
+                        warn!("JoinAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::LeaveAgreement {
+                    metadata,
+                    agreement_id,
+                    node_id,
+                } => {
+                    let result = runtime
+                        .leave_agreement(&metadata.signer, agreement_id, node_id)
+                        .await;
+                    if result.is_err() {
+                        warn!("LeaveAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::VerifyProof {
+                    metadata,
+                    proof_bytes,
+                } => {
+                    let result = runtime.verify_proof(&metadata.signer, proof_bytes).await;
+                    if result.is_err() {
+                        warn!("VerifyProof operation failed: {:?}", result);
+                    }
+                }
                 Op::Batch { metadata, payload } => {
                     let batch = match crate::kbl1::decode_kbl1_v1(payload) {
                         Ok(batch) => batch,
@@ -193,7 +238,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         }
                     }
                 }
-            };
+            }
         }
     }
 
