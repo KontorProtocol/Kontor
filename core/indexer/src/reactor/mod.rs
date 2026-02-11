@@ -2,7 +2,9 @@ pub mod types;
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::future::pending;
-use indexer_types::{Block, BlockRow, Event, Op, OpWithResult, TransactionRow};
+use indexer_types::{
+    Block, BlockRow, Event, Op, OpWithResult, TransactionRow,
+};
 use tokio::{
     select,
     sync::{
@@ -30,7 +32,9 @@ use crate::{
             set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
+    runtime::{
+        ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer,
+    },
     test_utils::new_mock_block_hash,
 };
 
@@ -146,6 +150,50 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     let result = runtime.issuance(&metadata.signer).await;
                     if result.is_err() {
                         warn!("Issuance operation failed: {:?}", result);
+                    }
+                }
+                Op::CreateAgreement {
+                    metadata,
+                    file_metadata,
+                } => {
+                    let result = runtime
+                        .create_agreement(&metadata.signer, file_metadata)
+                        .await;
+                    if result.is_err() {
+                        warn!("CreateAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::JoinAgreement {
+                    metadata,
+                    agreement_id,
+                    node_id,
+                } => {
+                    let result = runtime
+                        .join_agreement(&metadata.signer, agreement_id, node_id)
+                        .await;
+                    if result.is_err() {
+                        warn!("JoinAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::LeaveAgreement {
+                    metadata,
+                    agreement_id,
+                    node_id,
+                } => {
+                    let result = runtime
+                        .leave_agreement(&metadata.signer, agreement_id, node_id)
+                        .await;
+                    if result.is_err() {
+                        warn!("LeaveAgreement operation failed: {:?}", result);
+                    }
+                }
+                Op::VerifyProof {
+                    metadata,
+                    proof_bytes,
+                } => {
+                    let result = runtime.verify_proof(&metadata.signer, proof_bytes).await;
+                    if result.is_err() {
+                        warn!("VerifyProof operation failed: {:?}", result);
                     }
                 }
             };

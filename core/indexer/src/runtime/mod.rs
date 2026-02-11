@@ -46,6 +46,7 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
+use kontor_crypto::api::FileMetadata;
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -57,6 +58,7 @@ use wasmtime::{
 };
 
 use crate::database::native_contracts::{FILESTORAGE, TOKEN};
+use crate::database::types::field_element_to_bytes;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{
@@ -289,6 +291,66 @@ impl Runtime {
             .expect("Failed to run issuance")
             .expect("Failed to issue tokens");
         Ok(())
+    }
+
+    pub async fn create_agreement(
+        &mut self,
+        signer: &Signer,
+        file_metadata: &FileMetadata,
+    ) -> Result<()> {
+        match filestorage::api::create_agreement(
+            self,
+            signer,
+            RawFileDescriptor {
+                file_id: file_metadata.file_id.clone(),
+                object_id: file_metadata.object_id.clone(),
+                nonce: file_metadata.nonce.clone(),
+                root: field_element_to_bytes(&file_metadata.root).to_vec(),
+                padded_len: file_metadata.padded_len as u64,
+                original_size: file_metadata.original_size as u64,
+                filename: file_metadata.filename.clone(),
+            },
+        )
+        .await
+        {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => Err(anyhow!("CreateAgreement failed: {:?}", err)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn join_agreement(
+        &mut self,
+        signer: &Signer,
+        agreement_id: &str,
+        node_id: &str,
+    ) -> Result<()> {
+        match filestorage::api::join_agreement(self, signer, agreement_id, node_id).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => Err(anyhow!("JoinAgreement failed: {:?}", err)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn leave_agreement(
+        &mut self,
+        signer: &Signer,
+        agreement_id: &str,
+        node_id: &str,
+    ) -> Result<()> {
+        match filestorage::api::leave_agreement(self, signer, agreement_id, node_id).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => Err(anyhow!("LeaveAgreement failed: {:?}", err)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn verify_proof(&mut self, signer: &Signer, proof_bytes: &[u8]) -> Result<()> {
+        match filestorage::api::verify_proof(self, signer, proof_bytes.to_vec()).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => Err(anyhow!("VerifyProof failed: {:?}", err)),
+            Err(err) => Err(err),
+        }
     }
 
     pub async fn execute(

@@ -2,13 +2,14 @@ extern crate alloc;
 
 use anyhow::Result;
 use bitcoin::{
-    BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion,
+    taproot::LeafVersion, BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey,
 };
 use bon::Builder;
 use indexmap::IndexMap;
+use kontor_crypto::api::FileMetadata;
 use macros::contract_address;
 use serde::{Deserialize, Serialize};
-use serde_with::{DisplayFromStr, serde_as};
+use serde_with::{serde_as, DisplayFromStr};
 use ts_rs::TS;
 pub use wit_bindgen;
 
@@ -289,6 +290,25 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    CreateAgreement {
+        metadata: OpMetadata,
+        #[ts(type = "any")]
+        file_metadata: FileMetadata,
+    },
+    JoinAgreement {
+        metadata: OpMetadata,
+        agreement_id: String,
+        node_id: String,
+    },
+    LeaveAgreement {
+        metadata: OpMetadata,
+        agreement_id: String,
+        node_id: String,
+    },
+    VerifyProof {
+        metadata: OpMetadata,
+        proof_bytes: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -297,6 +317,10 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::CreateAgreement { metadata, .. } => metadata,
+            Op::JoinAgreement { metadata, .. } => metadata,
+            Op::LeaveAgreement { metadata, .. } => metadata,
+            Op::VerifyProof { metadata, .. } => metadata,
         }
     }
 }
@@ -464,6 +488,21 @@ pub enum Inst {
         expr: String,
     },
     Issuance,
+    CreateAgreement {
+        #[ts(type = "any")]
+        file_metadata: FileMetadata,
+    },
+    JoinAgreement {
+        agreement_id: String,
+        node_id: String,
+    },
+    LeaveAgreement {
+        agreement_id: String,
+        node_id: String,
+    },
+    VerifyProof {
+        proof_bytes: Vec<u8>,
+    },
 }
 
 pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {

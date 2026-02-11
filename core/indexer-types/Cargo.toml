@@ -20,3 +20,4 @@ bon = { workspace = true }
 indexmap = { workspace = true }
 
 bitcoin = { version = "=0.32.8", default-features = false, features = ["serde"] }
+kontor-crypto = { workspace = true }
