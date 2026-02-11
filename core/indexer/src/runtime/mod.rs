@@ -45,8 +45,8 @@ pub use wit::kontor::built_in::numbers::{
 };
 
 use anyhow::{Result, anyhow};
-use indexer_types::{deserialize, serialize};
 use indexer_types::FileMetadata;
+use indexer_types::{deserialize, serialize};
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
