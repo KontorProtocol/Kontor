@@ -168,3 +168,9 @@ pub struct SignRawTransactionResult {
     pub hex: String,
     pub complete: bool,
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GetRawMempoolResult {
+    pub txids: Vec<Txid>,
+    pub mempool_sequence: u64,
+}

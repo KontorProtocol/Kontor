@@ -74,6 +74,13 @@ impl client::BitcoinRpc for MockClient {
         Ok(vec![])
     }
 
+    async fn get_raw_mempool_sequence(&self) -> Result<types::GetRawMempoolResult, error::Error> {
+        Ok(types::GetRawMempoolResult {
+            txids: vec![],
+            mempool_sequence: 0,
+        })
+    }
+
     async fn get_raw_transaction(&self, txid: &Txid) -> Result<bitcoin::Transaction, error::Error> {
         if let Some(id) = self.expect_get_raw_transaction_txid {
             assert_eq!(*txid, id);

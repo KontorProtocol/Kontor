@@ -7,7 +7,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::bitcoin_client::types::{
-    CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult, TestMempoolAcceptResult,
+    CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult, GetRawMempoolResult,
+    TestMempoolAcceptResult,
 };
 use crate::config::{Config, RegtestConfig};
 
@@ -173,6 +174,11 @@ impl Client {
         self.call("getrawmempool", vec![]).await
     }
 
+    pub async fn get_raw_mempool_sequence(&self) -> Result<GetRawMempoolResult, Error> {
+        self.call("getrawmempool", vec![false.into(), true.into()])
+            .await
+    }
+
     pub async fn get_mempool_info(&self) -> Result<GetMempoolInfoResult, Error> {
         self.call("getmempoolinfo", vec![]).await
     }
@@ -232,6 +238,10 @@ pub trait BitcoinRpc: Send + Sync + Clone + 'static {
 
     fn get_raw_mempool(&self) -> impl Future<Output = Result<Vec<Txid>, Error>> + Send;
 
+    fn get_raw_mempool_sequence(
+        &self,
+    ) -> impl Future<Output = Result<GetRawMempoolResult, Error>> + Send;
+
     fn get_raw_transaction(
         &self,
         txid: &Txid,
@@ -255,6 +265,9 @@ impl BitcoinRpc for Client {
     }
     async fn get_raw_mempool(&self) -> Result<Vec<Txid>, Error> {
         self.get_raw_mempool().await
+    }
+    async fn get_raw_mempool_sequence(&self) -> Result<GetRawMempoolResult, Error> {
+        self.get_raw_mempool_sequence().await
     }
     async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, Error> {
         self.get_raw_transaction(txid).await

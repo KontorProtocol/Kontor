@@ -8,19 +8,31 @@ use bitcoin::{
 use indexer_types::Block;
 
 use super::error::Error;
-use super::types::GetBlockchainInfoResult;
+use super::types::{GetBlockchainInfoResult, GetRawMempoolResult};
 use crate::bitcoin_client::client::BitcoinRpc;
 
 #[derive(Clone, Debug)]
 pub struct MockBitcoinRpc {
     blocks: Arc<Mutex<Vec<Block>>>,
+    mempool_txs: Arc<Mutex<Vec<bitcoin::Transaction>>>,
+    mempool_sequence: Arc<Mutex<u64>>,
 }
 
 impl MockBitcoinRpc {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             blocks: Arc::new(Mutex::new(blocks)),
+            mempool_txs: Arc::new(Mutex::new(vec![])),
+            mempool_sequence: Arc::new(Mutex::new(0)),
         }
+    }
+
+    pub fn set_mempool(&self, txs: Vec<bitcoin::Transaction>) {
+        *self.mempool_txs.lock().unwrap() = txs;
+    }
+
+    pub fn set_mempool_sequence(&self, seq: u64) {
+        *self.mempool_sequence.lock().unwrap() = seq;
     }
 
     pub fn append_blocks(&self, more: Vec<Block>) {
@@ -104,17 +116,46 @@ impl BitcoinRpc for MockBitcoinRpc {
     }
 
     async fn get_raw_mempool(&self) -> Result<Vec<Txid>, Error> {
-        Ok(vec![])
+        let txs = self.mempool_txs.lock().unwrap();
+        Ok(txs.iter().map(|tx| tx.compute_txid()).collect())
     }
 
-    async fn get_raw_transaction(&self, _txid: &Txid) -> Result<bitcoin::Transaction, Error> {
-        Err(Error::Unexpected("not implemented in mock".to_string()))
+    async fn get_raw_mempool_sequence(&self) -> Result<GetRawMempoolResult, Error> {
+        let txs = self.mempool_txs.lock().unwrap();
+        let seq = *self.mempool_sequence.lock().unwrap();
+        Ok(GetRawMempoolResult {
+            txids: txs.iter().map(|tx| tx.compute_txid()).collect(),
+            mempool_sequence: seq,
+        })
+    }
+
+    async fn get_raw_transaction(&self, txid: &Txid) -> Result<bitcoin::Transaction, Error> {
+        let txs = self.mempool_txs.lock().unwrap();
+        txs.iter()
+            .find(|tx| tx.compute_txid() == *txid)
+            .cloned()
+            .ok_or_else(|| {
+                Error::Unexpected(format!("No such mempool or blockchain transaction: {txid}"))
+            })
     }
 
     async fn get_raw_transactions(
         &self,
-        _txids: &[Txid],
+        txids: &[Txid],
     ) -> Result<Vec<Result<bitcoin::Transaction, Error>>, Error> {
-        Err(Error::Unexpected("not implemented in mock".to_string()))
+        let txs = self.mempool_txs.lock().unwrap();
+        Ok(txids
+            .iter()
+            .map(|txid| {
+                txs.iter()
+                    .find(|tx| tx.compute_txid() == *txid)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Unexpected(format!(
+                            "No such mempool or blockchain transaction: {txid}"
+                        ))
+                    })
+            })
+            .collect())
     }
 }
