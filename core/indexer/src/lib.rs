@@ -1,6 +1,7 @@
 pub mod api;
 pub mod bitcoin_client;
 pub mod bitcoin_follower;
+pub mod bitcoin_follower_next;
 pub mod block;
 pub mod bls;
 pub mod built_info;
