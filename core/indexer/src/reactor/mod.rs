@@ -1,5 +1,7 @@
 pub mod types;
 
+use std::str::FromStr;
+
 use anyhow::{Result, anyhow, bail};
 use futures_util::future::pending;
 use indexer_types::{Block, BlockRow, Event, Op, OpWithResult, TransactionRow};
@@ -13,31 +15,33 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::{BlockHash, XOnlyPublicKey, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::{
         ctrl::CtrlChannel,
         events::{BlockId, Event as FollowerEvent},
-    },
-    block::{filter_map, inspect},
-    database::{
+    }, block::{filter_map, inspect}, bls::RegistrationProof, database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_block_with_hash,
-            set_block_processed,
+            insert_block, insert_bls_registry_entry, insert_processed_block, insert_transaction, rollback_to_height, select_block_at_height, select_block_latest, select_block_with_hash, set_block_processed
         },
-    },
-    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
-    test_utils::new_mock_block_hash,
+    }, runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer}, test_utils::new_mock_block_hash
 };
 
 pub type Simulation = (
     bitcoin::Transaction,
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
+
+fn verify_blsbulk(
+    _conn: &libsql::Connection,
+    _ops: &[indexer_types::BlsBulkOp],
+    _signature: &[u8],
+) -> Result<()> {
+    bail!("BlsBulk verification not implemented")
+}
 
 struct Reactor {
     reader: database::Reader,
@@ -148,12 +152,85 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         warn!("Issuance operation failed: {:?}", result);
                     }
                 }
+                Op::RegisterBlsKey {
+                    metadata,
+                    bls_pubkey,
+                    schnorr_sig,
+                    bls_sig,
+                } => {
+                    let Signer::XOnlyPubKey(x_only_pubkey) = &metadata.signer else {
+                        warn!("RegisterBlsKey requires an XOnlyPubKey signer");
+                        continue;
+                    };
+
+                    let x_only_pk = match XOnlyPublicKey::from_str(x_only_pubkey) {
+                        Ok(pk) => pk,
+                        Err(e) => {
+                            warn!("RegisterBlsKey invalid x-only pubkey {}: {}", x_only_pubkey, e);
+                            continue;
+                        }
+                    };
+                    let x_only_pubkey_bytes = x_only_pk.serialize();
+
+                    let bls_pubkey: [u8; 96] = match bls_pubkey.as_slice().try_into() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            warn!("RegisterBlsKey expected 96 bytes for bls_pubkey");
+                            continue;
+                        }
+                    };
+                    let schnorr_sig: [u8; 64] = match schnorr_sig.as_slice().try_into() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            warn!("RegisterBlsKey expected 64 bytes for schnorr_sig");
+                            continue;
+                        }
+                    };
+                    let bls_sig: [u8; 48] = match bls_sig.as_slice().try_into() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            warn!("RegisterBlsKey expected 48 bytes for bls_sig");
+                            continue;
+                        }
+                    };
+
+                    let proof = RegistrationProof {
+                        x_only_pubkey: x_only_pubkey_bytes,
+                        bls_pubkey,
+                        schnorr_sig,
+                        bls_sig,
+                    };
+                    if let Err(e) = proof.verify() {
+                        warn!("RegisterBlsKey verification failed: {e}");
+                        continue;
+                    }
+
+                    let inserted = insert_bls_registry_entry(
+                        &runtime.storage.conn,
+                        x_only_pubkey,
+                        bls_pubkey.to_vec(),
+                        block.height as i64,
+                    )
+                    .await?;
+                    if inserted == 0 {
+                        warn!("BLS pubkey already registered for signer {}", x_only_pubkey);
+                    }
+                }
                 Op::BlsBulk {
                     metadata,
                     signature,
                     ops,
                 } => {
                     // TODO(blsbulk): Verify BLS aggregate signature + replay protection before executing.
+                    if let Err(e) = verify_blsbulk(
+                        &runtime.storage.conn,
+                        ops.as_slice(),
+                        signature.as_slice(),
+                    ) {
+                        warn!("Skipping BlsBulk execution: {}", e);
+                        continue;
+                    }
+
                     let _sig = signature;
 
                     for (inner_index, inner_op) in ops.iter().enumerate() {

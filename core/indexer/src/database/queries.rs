@@ -1033,3 +1033,38 @@ pub async fn insert_file_metadata(
     .await?;
     Ok(conn.last_insert_rowid())
 }
+
+pub async fn insert_bls_registry_entry(
+    conn: &Connection,
+    x_only_pubkey: &str,
+    bls_pubkey: Vec<u8>,
+    height: i64,
+) -> Result<u64, Error> {
+    Ok(conn
+        .execute(
+            r#"INSERT OR 
+            IGNORE INTO 
+            bls_registry 
+            (x_only_pubkey, 
+            bls_pubkey, height) 
+            VALUES (?, ?, ?)"#,
+            params![x_only_pubkey, bls_pubkey, height],
+        )
+        .await?)
+}
+
+pub async fn select_bls_pubkey_by_x_only_pubkey(
+    conn: &Connection,
+    x_only_pubkey: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT 
+            bls_pubkey FROM 
+            bls_registry 
+            WHERE x_only_pubkey = ? LIMIT 1",
+            params![x_only_pubkey],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}

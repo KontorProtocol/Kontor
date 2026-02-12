@@ -84,3 +84,10 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+
+CREATE TABLE IF NOT EXISTS bls_registry (
+  x_only_pubkey TEXT PRIMARY KEY,
+  bls_pubkey BLOB NOT NULL,
+  height INTEGER NOT NULL,
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
