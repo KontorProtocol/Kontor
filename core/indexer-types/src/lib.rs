@@ -269,6 +269,21 @@ pub struct OpMetadata {
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum BlsBulkOp {
+    Call {
+        signer: Signer,
+        #[ts(type = "number")]
+        gas_limit: u64,
+        #[ts(as = "String")]
+        #[serde_as(as = "DisplayFromStr")]
+        contract: ContractAddress,
+        expr: String,
+    },
+}
+
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum Op {
     Publish {
         metadata: OpMetadata,
@@ -289,6 +304,11 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    BlsBulk {
+        metadata: OpMetadata,
+        ops: Vec<BlsBulkOp>,
+        signature: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -297,6 +317,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::BlsBulk { metadata, .. } => metadata,
         }
     }
 }
@@ -464,6 +485,10 @@ pub enum Inst {
         expr: String,
     },
     Issuance,
+    BlsBulk {
+        ops: Vec<BlsBulkOp>,
+        signature: Vec<u8>,
+    },
 }
 
 pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {

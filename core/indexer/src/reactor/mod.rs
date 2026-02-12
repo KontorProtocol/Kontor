@@ -111,7 +111,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         txid: t.txid,
                     }),
                     Some(metadata.previous_output),
-                    op_return_data.map(Into::into),
+                    op_return_data.clone().map(Into::into),
                 )
                 .await;
 
@@ -148,7 +148,48 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         warn!("Issuance operation failed: {:?}", result);
                     }
                 }
-            };
+                Op::BlsBulk {
+                    metadata,
+                    signature,
+                    ops,
+                } => {
+                    // TODO(blsbulk): Verify BLS aggregate signature + replay protection before executing.
+                    let _sig = signature;
+
+                    for (inner_index, inner_op) in ops.iter().enumerate() {
+                        runtime
+                            .set_context(
+                                block.height as i64,
+                                Some(TransactionContext {
+                                    tx_index: t.index,
+                                    input_index,
+                                    op_index: inner_index as i64,
+                                    txid: t.txid,
+                                }),
+                                Some(metadata.previous_output),
+                                op_return_data.clone().map(Into::into),
+                            )
+                            .await;
+
+                        match inner_op {
+                            indexer_types::BlsBulkOp::Call {
+                                signer,
+                                gas_limit,
+                                contract,
+                                expr,
+                            } => {
+                                runtime.set_gas_limit(*gas_limit);
+                                let result = runtime
+                                    .execute(Some(signer), &(contract.into()), expr)
+                                    .await;
+                                if result.is_err() {
+                                    warn!("BlsBulk call operation failed: {:?}", result);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
