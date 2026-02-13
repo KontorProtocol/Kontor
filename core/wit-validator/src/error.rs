@@ -2,129 +2,51 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
+
+use wit_parser::{Resolve, Span};
 
 /// A validation error found in a WIT file.
 #[derive(Debug, Clone)]
 pub struct ValidationError {
     /// Clear, self-explanatory description of the error.
     pub message: String,
-    /// Where in the WIT the error occurred.
-    pub location: Location,
+    /// Source span from wit-parser (byte offsets into the source text).
+    pub span: Span,
 }
 
 impl ValidationError {
-    pub fn new(message: impl Into<String>, location: Location) -> Self {
+    pub fn new(message: impl Into<String>, span: Span) -> Self {
         Self {
             message: message.into(),
-            location,
+            span,
+        }
+    }
+
+    /// Render this error with source location from the given `Resolve`.
+    pub fn render(&self, resolve: &Resolve) -> String {
+        if self.span.is_known() {
+            format!(
+                "{}: error: {}",
+                resolve.render_location(self.span),
+                self.message,
+            )
+        } else {
+            format!("error: {}", self.message)
         }
     }
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} at {}", self.message, self.location)
+        write!(f, "error: {}", self.message)
     }
 }
 
 impl core::error::Error for ValidationError {}
-
-/// Location information for where an error occurred.
-#[derive(Debug, Clone)]
-pub struct Location {
-    /// What kind of WIT element this is.
-    pub kind: LocationKind,
-    /// The name of the element (e.g., function name, type name).
-    pub name: String,
-    /// Additional detail (e.g., field name, parameter name).
-    pub detail: Option<String>,
-}
-
-impl Location {
-    pub fn function(name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::Function,
-            name: name.into(),
-            detail: None,
-        }
-    }
-
-    pub fn type_def(name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::Type,
-            name: name.into(),
-            detail: None,
-        }
-    }
-
-    pub fn field(type_name: impl Into<String>, field_name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::Field,
-            name: type_name.into(),
-            detail: Some(field_name.into()),
-        }
-    }
-
-    pub fn parameter(func_name: impl Into<String>, param_name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::Parameter,
-            name: func_name.into(),
-            detail: Some(param_name.into()),
-        }
-    }
-
-    pub fn return_type(func_name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::ReturnType,
-            name: func_name.into(),
-            detail: None,
-        }
-    }
-
-    pub fn variant_case(type_name: impl Into<String>, case_name: impl Into<String>) -> Self {
-        Self {
-            kind: LocationKind::VariantCase,
-            name: type_name.into(),
-            detail: Some(case_name.into()),
-        }
-    }
-}
-
-impl fmt::Display for Location {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (&self.kind, &self.detail) {
-            (LocationKind::Function, None) => write!(f, "function '{}'", self.name),
-            (LocationKind::Type, None) => write!(f, "type '{}'", self.name),
-            (LocationKind::Field, Some(field)) => {
-                write!(f, "field '{}' in type '{}'", field, self.name)
-            }
-            (LocationKind::Parameter, Some(param)) => {
-                write!(f, "parameter '{}' in function '{}'", param, self.name)
-            }
-            (LocationKind::ReturnType, None) => {
-                write!(f, "return type of function '{}'", self.name)
-            }
-            (LocationKind::VariantCase, Some(case)) => {
-                write!(f, "case '{}' in variant '{}'", case, self.name)
-            }
-            _ => write!(f, "{:?} '{}'", self.kind, self.name),
-        }
-    }
-}
-
-/// The kind of WIT element where an error occurred.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocationKind {
-    Function,
-    Type,
-    Field,
-    Parameter,
-    ReturnType,
-    VariantCase,
-}
 
 /// The result of validating a WIT file.
 #[derive(Debug, Default)]
@@ -142,6 +64,18 @@ impl ValidationResult {
     /// Returns true if there are any errors.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Render all errors with source locations from the given `Resolve`.
+    pub fn render(&self, resolve: &Resolve) -> String {
+        if self.is_valid() {
+            return String::from("Validation passed");
+        }
+        let mut out = format!("Validation failed with {} error(s):\n", self.errors.len());
+        for error in &self.errors {
+            out.push_str(&format!("  - {}\n", error.render(resolve)));
+        }
+        out
     }
 }
 

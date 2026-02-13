@@ -14,7 +14,7 @@ mod error;
 mod rules;
 mod types;
 
-pub use error::{Location, LocationKind, ValidationError, ValidationResult};
+pub use error::{ValidationError, ValidationResult};
 pub use wit_parser::Resolve;
 
 const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in.wit");
@@ -368,6 +368,31 @@ world root {{
         );
         assert!(result.has_errors());
         assert!(result.errors.iter().any(|e| e.message.contains("string")));
+    }
+
+    #[test]
+    fn test_render_includes_source_location() {
+        let wit = wrap(
+            r#"
+    export init: async func(ctx: borrow<proc-context>);
+    export bad: func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        let mut resolve = Resolve::new();
+        resolve
+            .push_str("built-in.wit", BUILT_IN_WIT)
+            .expect("Failed to parse built-in.wit");
+        resolve
+            .push_str("contract.wit", &wit)
+            .expect("Failed to parse contract WIT");
+        let result = Validator::validate_resolve(&resolve);
+
+        assert!(result.has_errors());
+        let error = &result.errors[0];
+        assert_eq!(
+            error.render(&resolve),
+            "contract.wit:10:12: error: exported functions must be async"
+        );
     }
 
     #[test]

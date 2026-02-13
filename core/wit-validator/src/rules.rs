@@ -9,9 +9,9 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::error::{Location, ValidationError};
+use crate::error::ValidationError;
 use crate::types::{self, BUILTIN_TYPES, ERROR_TYPE_NAME};
-use wit_parser::{Handle, Resolve, Type, TypeDefKind, TypeId, WorldItem, WorldKey};
+use wit_parser::{Handle, Resolve, Span, Type, TypeDefKind, TypeId, WorldItem, WorldKey};
 
 /// Run all validation rules and collect errors.
 pub fn validate_all(resolve: &Resolve) -> Vec<ValidationError> {
@@ -41,7 +41,7 @@ fn validate_required_exports(resolve: &Resolve) -> Vec<ValidationError> {
         if !has_init {
             errors.push(ValidationError::new(
                 "contract must export an init function",
-                Location::type_def(&world.name),
+                world.span,
             ));
         }
     }
@@ -68,14 +68,14 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                 if !func.kind.is_async() {
                     errors.push(ValidationError::new(
                         "exported functions must be async",
-                        Location::function(name),
+                        func.span,
                     ));
                 }
 
                 if func.params.is_empty() {
                     errors.push(ValidationError::new(
                         "function must have a context parameter as its first argument",
-                        Location::function(name),
+                        func.span,
                     ));
                     continue;
                 }
@@ -92,7 +92,7 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                                      found '{}'",
                                     context_name
                                 ),
-                                Location::parameter(name, &param.name),
+                                param.span,
                             ));
                         }
                     }
@@ -100,7 +100,7 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                         errors.push(ValidationError::new(
                             "first parameter must be a borrow of a context type \
                              (e.g., `ctx: borrow<proc-context>`)",
-                            Location::parameter(name, &param.name),
+                            param.span,
                         ));
                     }
                 }
@@ -110,7 +110,7 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                         resolve,
                         &param.ty,
                         TypeContext::FunctionParam,
-                        &Location::parameter(name, &param.name),
+                        param.span,
                     ));
                 }
 
@@ -119,7 +119,7 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                         resolve,
                         result_type,
                         TypeContext::FunctionReturn,
-                        &Location::return_type(name),
+                        func.span,
                     ));
                 }
             }
@@ -133,19 +133,15 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
 /// Must be: `async func(ctx: borrow<proc-context>)`
 fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    let name = "init";
 
     if !func.kind.is_async() {
-        errors.push(ValidationError::new(
-            "init must be async",
-            Location::function(name),
-        ));
+        errors.push(ValidationError::new("init must be async", func.span));
     }
 
     if func.params.len() != 1 {
         errors.push(ValidationError::new(
             "init must have exactly one parameter: ctx: borrow<proc-context>",
-            Location::function(name),
+            func.span,
         ));
     } else {
         let param = &func.params[0];
@@ -154,7 +150,7 @@ fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec
             _ => {
                 errors.push(ValidationError::new(
                     "init parameter must be borrow<proc-context>",
-                    Location::parameter(name, &param.name),
+                    param.span,
                 ));
             }
         }
@@ -163,7 +159,7 @@ fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec
     if func.result.is_some() {
         errors.push(ValidationError::new(
             "init must not have a return type",
-            Location::return_type(name),
+            func.span,
         ));
     }
 
@@ -177,19 +173,15 @@ fn validate_fallback_function(
     func: &wit_parser::Function,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    let name = "fallback";
 
     if !func.kind.is_async() {
-        errors.push(ValidationError::new(
-            "fallback must be async",
-            Location::function(name),
-        ));
+        errors.push(ValidationError::new("fallback must be async", func.span));
     }
 
     if func.params.len() != 2 {
         errors.push(ValidationError::new(
             "fallback must have exactly two parameters: ctx: borrow<fall-context>, expr: string",
-            Location::function(name),
+            func.span,
         ));
     } else {
         // Check first param: ctx: borrow<fall-context>
@@ -199,7 +191,7 @@ fn validate_fallback_function(
             _ => {
                 errors.push(ValidationError::new(
                     "fallback first parameter must be borrow<fall-context>",
-                    Location::parameter(name, &param.name),
+                    param.span,
                 ));
             }
         }
@@ -209,7 +201,7 @@ fn validate_fallback_function(
         if !matches!(param.ty, Type::String) {
             errors.push(ValidationError::new(
                 "fallback second parameter must be string",
-                Location::parameter(name, &param.name),
+                param.span,
             ));
         }
     }
@@ -220,13 +212,13 @@ fn validate_fallback_function(
         Some(_) => {
             errors.push(ValidationError::new(
                 "fallback must return string",
-                Location::return_type(name),
+                func.span,
             ));
         }
         None => {
             errors.push(ValidationError::new(
                 "fallback must return string",
-                Location::return_type(name),
+                func.span,
             ));
         }
     }
@@ -248,7 +240,7 @@ fn validate_type_definitions(resolve: &Resolve) -> Vec<ValidationError> {
                     if record.fields.is_empty() {
                         errors.push(ValidationError::new(
                             "record must have at least one field",
-                            Location::type_def(name),
+                            type_def.span,
                         ));
                     }
 
@@ -257,7 +249,7 @@ fn validate_type_definitions(resolve: &Resolve) -> Vec<ValidationError> {
                             resolve,
                             &field.ty,
                             TypeContext::RecordField,
-                            &Location::field(name, &field.name),
+                            field.span,
                         ));
                     }
                 }
@@ -269,7 +261,7 @@ fn validate_type_definitions(resolve: &Resolve) -> Vec<ValidationError> {
                                 errors.push(ValidationError::new(
                                     "variant case payload cannot be an inline record; \
                                      define a named record type instead",
-                                    Location::variant_case(name, &case.name),
+                                    case.span,
                                 ));
                             }
 
@@ -277,7 +269,7 @@ fn validate_type_definitions(resolve: &Resolve) -> Vec<ValidationError> {
                                 resolve,
                                 payload_type,
                                 TypeContext::VariantPayload,
-                                &Location::variant_case(name, &case.name),
+                                case.span,
                             ));
                         }
                     }
@@ -286,7 +278,7 @@ fn validate_type_definitions(resolve: &Resolve) -> Vec<ValidationError> {
                 TypeDefKind::Flags(_) => {
                     errors.push(ValidationError::new(
                         "flags types are not supported",
-                        Location::type_def(name),
+                        type_def.span,
                     ));
                 }
 
@@ -323,11 +315,10 @@ fn validate_cycles(resolve: &Resolve) -> Vec<ValidationError> {
     for id in deps.keys() {
         if !visited.contains(id)
             && let Some(cycle_id) = detect_cycle(*id, &deps, &mut visited, &mut in_stack)
-            && let Some(name) = &resolve.types[cycle_id].name
         {
             errors.push(ValidationError::new(
                 "cyclic type reference detected",
-                Location::type_def(name),
+                resolve.types[cycle_id].span,
             ));
         }
     }
@@ -415,33 +406,30 @@ fn validate_type_in_context(
     resolve: &Resolve,
     ty: &Type,
     ctx: TypeContext,
-    location: &Location,
+    span: Span,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     match ty {
         Type::Char => {
-            errors.push(ValidationError::new(
-                "char type is not supported",
-                location.clone(),
-            ));
+            errors.push(ValidationError::new("char type is not supported", span));
         }
         Type::F32 | Type::F64 => {
             errors.push(ValidationError::new(
                 "floating point types are not supported",
-                location.clone(),
+                span,
             ));
         }
         Type::U8 => {
             errors.push(ValidationError::new(
                 "u8 type is only allowed as list<u8>",
-                location.clone(),
+                span,
             ));
         }
         Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
             errors.push(ValidationError::new(
                 "8/16/32-bit integer types are not supported; use s64 or u64",
-                location.clone(),
+                span,
             ));
         }
 
@@ -453,7 +441,7 @@ fn validate_type_in_context(
                     if ctx != TypeContext::FunctionReturn {
                         errors.push(ValidationError::new(
                             "result type can only be used as a function return type",
-                            location.clone(),
+                            span,
                         ));
                     }
 
@@ -464,13 +452,13 @@ fn validate_type_in_context(
                                     "result error type must be 'error', found '{}'",
                                     type_name(resolve, err_type)
                                 ),
-                                location.clone(),
+                                span,
                             ));
                         }
                     } else {
                         errors.push(ValidationError::new(
                             "result type must have an error type (use result<T, error>)",
-                            location.clone(),
+                            span,
                         ));
                     }
 
@@ -479,7 +467,7 @@ fn validate_type_in_context(
                     {
                         errors.push(ValidationError::new(
                             "nested result types are not allowed",
-                            location.clone(),
+                            span,
                         ));
                     }
 
@@ -488,7 +476,7 @@ fn validate_type_in_context(
                             resolve,
                             ok,
                             TypeContext::FunctionReturn,
-                            location,
+                            span,
                         ));
                     }
                 }
@@ -500,19 +488,19 @@ fn validate_type_in_context(
                         errors.push(ValidationError::new(
                             "list<T> (where T is not u8) can only be used in function signatures, \
                                  not in record fields or variant payloads",
-                            location.clone(),
+                            span,
                         ));
                     }
 
                     if is_list_type(resolve, inner) {
                         errors.push(ValidationError::new(
                             "nested list types are not allowed",
-                            location.clone(),
+                            span,
                         ));
                     }
 
                     if !matches!(inner, Type::U8) {
-                        errors.extend(validate_type_in_context(resolve, inner, ctx, location));
+                        errors.extend(validate_type_in_context(resolve, inner, ctx, span));
                     }
                 }
 
@@ -520,43 +508,37 @@ fn validate_type_in_context(
                     if is_option_type(resolve, inner) {
                         errors.push(ValidationError::new(
                             "nested option types are not allowed",
-                            location.clone(),
+                            span,
                         ));
                     }
 
-                    errors.extend(validate_type_in_context(resolve, inner, ctx, location));
+                    errors.extend(validate_type_in_context(resolve, inner, ctx, span));
                 }
 
                 TypeDefKind::Handle(Handle::Own(_)) => {
                     errors.push(ValidationError::new(
                         "own<T> handles are not supported; use borrow<T>",
-                        location.clone(),
+                        span,
                     ));
                 }
 
                 TypeDefKind::Future(_) => {
-                    errors.push(ValidationError::new(
-                        "future types are not supported",
-                        location.clone(),
-                    ));
+                    errors.push(ValidationError::new("future types are not supported", span));
                 }
 
                 TypeDefKind::Stream(_) => {
-                    errors.push(ValidationError::new(
-                        "stream types are not supported",
-                        location.clone(),
-                    ));
+                    errors.push(ValidationError::new("stream types are not supported", span));
                 }
 
                 TypeDefKind::Tuple(_) => {
                     errors.push(ValidationError::new(
                         "tuple types are not supported; use a named record instead",
-                        location.clone(),
+                        span,
                     ));
                 }
 
                 TypeDefKind::Type(inner) => {
-                    errors.extend(validate_type_in_context(resolve, inner, ctx, location));
+                    errors.extend(validate_type_in_context(resolve, inner, ctx, span));
                 }
 
                 _ => {}
