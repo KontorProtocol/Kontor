@@ -191,7 +191,7 @@ pub struct RegTesterInner {
 }
 
 pub struct InstructionResult {
-    pub result: ResultRow,
+    pub results: Vec<ResultRow>,
     pub commit_tx_hex: String,
     pub reveal_tx_hex: String,
 }
@@ -311,10 +311,17 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
+        let expected_results = match &inst {
+            Inst::BlsBulk { ops, .. } => ops.len(),
+            _ => 1,
+        };
+        if expected_results == 0 {
+            return Err(anyhow!("instruction produced zero results"));
+        }
+
         let (compose_res, commit_tx_hex, reveal_tx_hex) =
             self.compose_instruction(ident, inst).await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
-        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
         let txids = self
             .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
@@ -337,21 +344,30 @@ impl RegTesterInner {
             .await
             .context("Failed to receive response from websocket")?;
 
-        let result = self
-            .kontor_client
-            .result(&id)
-            .await?
-            .ok_or(anyhow!("Could not find op result"))?;
-        tracing::info!("Instruction result: {:?}", result);
-        if result.value.is_some() {
-            Ok(InstructionResult {
-                result,
-                commit_tx_hex,
-                reveal_tx_hex,
-            })
-        } else {
-            Err(anyhow!("Instruction failed in processing"))
+        let mut results = Vec::with_capacity(expected_results);
+        for op_index in 0..expected_results {
+            let id: OpResultId = OpResultId::builder()
+                .txid(reveal_txid.to_string())
+                .input_index(0)
+                .op_index(op_index as i64)
+                .build();
+            let result = self
+                .kontor_client
+                .result(&id)
+                .await?
+                .ok_or(anyhow!("Could not find op result"))?;
+            tracing::info!("Instruction result (op_index={}): {:?}", op_index, result);
+            if result.value.is_none() {
+                return Err(anyhow!("Instruction failed in processing"));
+            }
+            results.push(result);
         }
+
+        Ok(InstructionResult {
+            results,
+            commit_tx_hex,
+            reveal_tx_hex,
+        })
     }
 
     /// Create a new randomly-keyed identity with both Taproot and BLS keys, funded on-chain.

@@ -178,6 +178,8 @@ pub async fn test_compose_token_attach_and_detach(
         .await?;
     let id = OpResultId::builder()
         .txid(reveal_transaction.compute_txid().to_string())
+        .input_index(0)
+        .op_index(0)
         .build();
 
     reg_tester.wait_next_block().await?;
@@ -207,6 +209,8 @@ pub async fn test_compose_token_attach_and_detach(
 
     let id = OpResultId::builder()
         .txid(detach_transaction.compute_txid().to_string())
+        .input_index(0)
+        .op_index(0)
         .build();
 
     reg_tester.wait_next_block().await?;

@@ -50,13 +50,14 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
         .await?;
 
-    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
-        anyhow!(
-            "invalid contract address {}: {}",
-            publish.result.contract,
-            e
-        )
-    })?;
+    let arith_contract: IndexerContractAddress =
+        publish.results[0].contract.parse().map_err(|e| {
+            anyhow!(
+                "invalid contract address {}: {}",
+                publish.results[0].contract,
+                e
+            )
+        })?;
 
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
@@ -111,8 +112,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .await?;
 
     // Result for inner op 0 should decode as eval(10, id) = 10.
-    let v0 = res
-        .result
+    let v0 = res.results[0]
         .value
         .as_deref()
         .ok_or_else(|| anyhow!("expected a return value for inner op 0"))?;
@@ -123,6 +123,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&res.reveal_tx_hex)?;
     let op1_id = OpResultId::builder()
         .txid(reveal_tx.compute_txid().to_string())
+        .input_index(0)
         .op_index(1)
         .build();
     let client = reg_tester.kontor_client().await;
@@ -147,6 +148,43 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .await?;
     let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
     assert_eq!(last_op, Some(arith::Op::Sum(arith::Operand { y: 8 })));
+
+    // Inspect should surface *all* inner results for the bulk op (not just op_index=0).
+    let inspected_by_txid = reg_tester
+        .transaction_inspect(&reveal_tx.compute_txid())
+        .await?;
+    assert_eq!(inspected_by_txid.len(), 2);
+    assert_eq!(
+        inspected_by_txid[0]
+            .result
+            .as_ref()
+            .and_then(|r| r.op_index),
+        Some(0)
+    );
+    assert_eq!(
+        inspected_by_txid[1]
+            .result
+            .as_ref()
+            .and_then(|r| r.op_index),
+        Some(1)
+    );
+    let iv0 = inspected_by_txid[0]
+        .result
+        .as_ref()
+        .and_then(|r| r.value.as_deref())
+        .ok_or_else(|| anyhow!("expected a return value for inspected inner op 0"))?;
+    let iv1 = inspected_by_txid[1]
+        .result
+        .as_ref()
+        .and_then(|r| r.value.as_deref())
+        .ok_or_else(|| anyhow!("expected a return value for inspected inner op 1"))?;
+    assert_eq!(arith::wave::eval_parse_return_expr(iv0).value, 10);
+    assert_eq!(arith::wave::eval_parse_return_expr(iv1).value, 18);
+
+    let inspected_by_hex = reg_tester
+        .transaction_hex_inspect(&res.reveal_tx_hex)
+        .await?;
+    assert_eq!(inspected_by_hex, inspected_by_txid);
 
     Ok(())
 }

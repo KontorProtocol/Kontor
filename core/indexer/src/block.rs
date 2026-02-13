@@ -118,14 +118,37 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
+        let txid = tx.txid.to_string();
         for op in tx.ops {
-            let id = OpResultId::builder()
-                .txid(tx.txid.to_string())
-                .input_index(op.metadata().input_index)
-                .op_index(0)
-                .build();
-            let result = get_op_result(conn, &id).await?.map(Into::into);
-            ops.push(OpWithResult { op, result });
+            match &op {
+                Op::BlsBulk { ops: inner_ops, .. } => {
+                    if inner_ops.is_empty() {
+                        ops.push(OpWithResult { op, result: None });
+                        continue;
+                    }
+                    for (inner_index, _) in inner_ops.iter().enumerate() {
+                        let id = OpResultId::builder()
+                            .txid(txid.clone())
+                            .input_index(op.metadata().input_index)
+                            .op_index(inner_index as i64)
+                            .build();
+                        let result = get_op_result(conn, &id).await?.map(Into::into);
+                        ops.push(OpWithResult {
+                            op: op.clone(),
+                            result,
+                        });
+                    }
+                }
+                _ => {
+                    let id = OpResultId::builder()
+                        .txid(txid.clone())
+                        .input_index(op.metadata().input_index)
+                        .op_index(0)
+                        .build();
+                    let result = get_op_result(conn, &id).await?.map(Into::into);
+                    ops.push(OpWithResult { op, result });
+                }
+            }
         }
     }
     Ok(ops)
