@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use tokio::sync::{Notify, mpsc::{self, Sender, UnboundedSender}};
+use tokio::sync::{
+    Notify,
+    mpsc::{self, Sender, UnboundedSender},
+};
 use tokio::{select, task, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -121,7 +124,16 @@ async fn run_session<C: BitcoinRpc>(
         handles: vec![socket_handle, monitor_handle],
     };
 
-    run_event_loop(bitcoin, f, event_tx, cancel_token, socket_rx, monitor_rx, poll_notify).await
+    run_event_loop(
+        bitcoin,
+        f,
+        event_tx,
+        cancel_token,
+        socket_rx,
+        monitor_rx,
+        poll_notify,
+    )
+    .await
 }
 
 /// Core event loop: processes monitor events and data messages.
@@ -884,7 +896,16 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let _ = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
 
         let events = collect_events(&mut event_rx);
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(txs) if txs.len() == 3));
@@ -948,7 +969,16 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let _ = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
 
         let events = collect_events(&mut event_rx);
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(_)));
@@ -989,7 +1019,16 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let _ = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
 
         let events = collect_events(&mut event_rx);
         // Only MempoolSync, no spurious delta
@@ -1010,8 +1049,16 @@ mod tests {
         monitor_tx.send(Ok(MonitorMessage::Disconnected)).unwrap();
         drop(monitor_tx);
 
-        let result =
-            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let result = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Monitor failure"));
     }
@@ -1046,7 +1093,16 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let _ = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
 
         let events = collect_events(&mut event_rx);
         assert_eq!(events.len(), 2);
@@ -1093,8 +1149,16 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let result =
-            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
+        let result = run_event_loop(
+            &mock,
+            accept_all,
+            &event_tx,
+            cancel,
+            socket_rx,
+            monitor_rx,
+            Arc::new(Notify::new()),
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Out of sequence"));
     }

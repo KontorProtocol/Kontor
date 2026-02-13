@@ -1,6 +1,10 @@
 use bitcoin::BlockHash;
 use std::sync::Arc;
-use tokio::{select, sync::{mpsc, Notify}, task::JoinHandle};
+use tokio::{
+    select,
+    sync::{Notify, mpsc},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
