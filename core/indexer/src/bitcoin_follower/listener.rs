@@ -1,9 +1,10 @@
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use tokio::sync::mpsc::{self, Sender, UnboundedSender};
+use tokio::sync::{Notify, mpsc::{self, Sender, UnboundedSender}};
 use tokio::{select, task, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -16,12 +17,12 @@ use crate::retry::{new_backoff_limited, retry};
 use super::event::BitcoinEvent;
 use super::messages::{DataMessage, MonitorMessage};
 
-pub struct MempoolConfig {
+pub struct ListenerConfig {
     pub zmq_address: String,
     pub reconnect_delay: Duration,
 }
 
-impl MempoolConfig {
+impl ListenerConfig {
     pub fn new(zmq_address: String) -> Self {
         Self {
             zmq_address,
@@ -36,7 +37,8 @@ pub async fn run<C: BitcoinRpc>(
     f: TransactionFilterMap,
     event_tx: Sender<BitcoinEvent>,
     cancel_token: CancellationToken,
-    config: MempoolConfig,
+    poll_notify: Arc<Notify>,
+    config: ListenerConfig,
 ) -> Result<()> {
     loop {
         match run_session(
@@ -45,6 +47,7 @@ pub async fn run<C: BitcoinRpc>(
             &event_tx,
             cancel_token.clone(),
             &config.zmq_address,
+            poll_notify.clone(),
         )
         .await
         {
@@ -74,6 +77,7 @@ async fn run_session<C: BitcoinRpc>(
     event_tx: &Sender<BitcoinEvent>,
     cancel_token: CancellationToken,
     zmq_address: &str,
+    poll_notify: Arc<Notify>,
 ) -> Result<()> {
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -117,7 +121,7 @@ async fn run_session<C: BitcoinRpc>(
         handles: vec![socket_handle, monitor_handle],
     };
 
-    run_event_loop(bitcoin, f, event_tx, cancel_token, socket_rx, monitor_rx).await
+    run_event_loop(bitcoin, f, event_tx, cancel_token, socket_rx, monitor_rx, poll_notify).await
 }
 
 /// Core event loop: processes monitor events and data messages.
@@ -129,6 +133,7 @@ async fn run_event_loop<C: BitcoinRpc>(
     cancel_token: CancellationToken,
     mut socket_rx: mpsc::UnboundedReceiver<Result<(u32, DataMessage)>>,
     mut monitor_rx: mpsc::UnboundedReceiver<Result<MonitorMessage>>,
+    poll_notify: Arc<Notify>,
 ) -> Result<()> {
     let mut last_sequence_number: Option<u32> = None;
     let mut synced = false;
@@ -170,7 +175,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             last_sequence_number = new_seq;
 
                             for data_message in to_replay {
-                                if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token)
+                                if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token, &poll_notify)
                                     .await?
                                 {
                                     return Ok(());
@@ -209,7 +214,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             continue;
                         }
 
-                        if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token)
+                        if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token, &poll_notify)
                             .await?
                         {
                             return Ok(());
@@ -335,6 +340,7 @@ async fn process_delta<C: BitcoinRpc>(
     f: TransactionFilterMap,
     event_tx: &Sender<BitcoinEvent>,
     cancel_token: &CancellationToken,
+    poll_notify: &Notify,
 ) -> Result<bool> {
     match data_message {
         DataMessage::TransactionAdded { txid, .. } => {
@@ -374,7 +380,9 @@ async fn process_delta<C: BitcoinRpc>(
                 return Ok(false);
             }
         }
-        DataMessage::BlockConnected(_) | DataMessage::BlockDisconnected(_) => {}
+        DataMessage::BlockConnected(_) | DataMessage::BlockDisconnected(_) => {
+            poll_notify.notify_one();
+        }
     }
     Ok(true)
 }
@@ -643,7 +651,8 @@ mod tests {
             mempool_sequence_number: 1,
         };
 
-        let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel)
+        let notify = Notify::new();
+        let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel, &notify)
             .await
             .unwrap();
         assert!(open);
@@ -667,7 +676,8 @@ mod tests {
             mempool_sequence_number: 5,
         };
 
-        let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel)
+        let notify = Notify::new();
+        let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel, &notify)
             .await
             .unwrap();
         assert!(open);
@@ -686,12 +696,14 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(10);
         let cancel = CancellationToken::new();
 
+        let notify = Notify::new();
         let open = process_delta(
             DataMessage::BlockConnected(hash),
             &mock,
             accept_all,
             &event_tx,
             &cancel,
+            &notify,
         )
         .await
         .unwrap();
@@ -872,7 +884,7 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
 
         let events = collect_events(&mut event_rx);
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(txs) if txs.len() == 3));
@@ -936,7 +948,7 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
 
         let events = collect_events(&mut event_rx);
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(_)));
@@ -977,7 +989,7 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
 
         let events = collect_events(&mut event_rx);
         // Only MempoolSync, no spurious delta
@@ -999,7 +1011,7 @@ mod tests {
         drop(monitor_tx);
 
         let result =
-            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Monitor failure"));
     }
@@ -1034,7 +1046,7 @@ mod tests {
         drop(monitor_tx);
         drop(socket_tx);
 
-        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+        let _ = run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
 
         let events = collect_events(&mut event_rx);
         assert_eq!(events.len(), 2);
@@ -1082,7 +1094,7 @@ mod tests {
         drop(socket_tx);
 
         let result =
-            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx).await;
+            run_event_loop(&mock, accept_all, &event_tx, cancel, socket_rx, monitor_rx, Arc::new(Notify::new())).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Out of sequence"));
     }

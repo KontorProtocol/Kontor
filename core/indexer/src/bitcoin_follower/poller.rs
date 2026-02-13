@@ -1,4 +1,5 @@
 use std::{
+    sync::Arc,
     collections::{HashMap, VecDeque},
     thread,
     time::Duration,
@@ -8,7 +9,7 @@ use anyhow::{Result, bail};
 use bitcoin::BlockHash;
 use indexer_types::Block;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use tokio::{select, sync::mpsc::Sender, task::JoinSet, time::sleep};
+use tokio::{select, sync::{mpsc::Sender, Notify}, task::JoinSet, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -204,6 +205,19 @@ async fn apply_rollback(
         .is_ok()
 }
 
+/// Wait for the next poll trigger: timer, ZMQ wake, or cancellation.
+async fn wait_for_poll(
+    poll_interval: Duration,
+    poll_notify: &Notify,
+    cancel_token: &CancellationToken,
+) -> bool {
+    select! {
+        _ = sleep(poll_interval) => true,
+        _ = poll_notify.notified() => true,
+        _ = cancel_token.cancelled() => false,
+    }
+}
+
 // -- Main poller loop --
 
 pub async fn run<C: BitcoinRpc>(
@@ -213,6 +227,7 @@ pub async fn run<C: BitcoinRpc>(
     cancel_token: CancellationToken,
     start_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
+    poll_notify: Arc<Notify>,
     config: PollerConfig,
 ) -> Result<()> {
     let mut cache = BlockHashCache::new(HASH_CACHE_SIZE);
@@ -282,12 +297,10 @@ pub async fn run<C: BitcoinRpc>(
             continue;
         }
 
-        if tip < next_height {
-            select! {
-                _ = sleep(config.poll_interval) => {}
-                _ = cancel_token.cancelled() => return Ok(()),
-            }
-            continue;
+        if tip < next_height
+            && !wait_for_poll(config.poll_interval, &poll_notify, &cancel_token).await
+        {
+            return Ok(());
         }
 
         // 2. Spawn parallel fetches for blocks we're behind on
@@ -330,7 +343,6 @@ pub async fn run<C: BitcoinRpc>(
                 events,
                 next_height: new_next,
             } => {
-                let caught_up = new_next > tip;
                 next_height = new_next;
 
                 for event in events {
@@ -340,12 +352,6 @@ pub async fn run<C: BitcoinRpc>(
                     }
                 }
 
-                if caught_up {
-                    select! {
-                        _ = sleep(config.poll_interval) => {}
-                        _ = cancel_token.cancelled() => return Ok(()),
-                    }
-                }
             }
             DeliveryResult::Reorg { mismatch_height } => {
                 let fork_height =
@@ -701,7 +707,7 @@ mod tests {
 
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks {
@@ -729,7 +735,7 @@ mod tests {
         let rpc2 = rpc.clone();
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc2, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc2, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks {
@@ -771,7 +777,7 @@ mod tests {
         let rpc2 = rpc.clone();
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc2, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc2, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks {
@@ -829,7 +835,7 @@ mod tests {
         let rpc2 = rpc.clone();
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc2, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc2, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for _ in 0..5 {
@@ -877,7 +883,7 @@ mod tests {
 
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc, noop_filter, tx, cancel2, 6, known, fast_config()).await
+            run(rpc, noop_filter, tx, cancel2, 6, known, Arc::new(Notify::new()), fast_config()).await
         });
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
@@ -916,7 +922,7 @@ mod tests {
 
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc, noop_filter, tx, cancel2, 4, known, fast_config()).await
+            run(rpc, noop_filter, tx, cancel2, 4, known, Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks[3..] {
@@ -959,7 +965,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (tx, _rx) = mpsc::channel(16);
 
-        let result = run(rpc, noop_filter, tx, cancel, 6, known, fast_config()).await;
+        let result = run(rpc, noop_filter, tx, cancel, 6, known, Arc::new(Notify::new()), fast_config()).await;
         assert!(result.is_err());
     }
 
@@ -975,7 +981,7 @@ mod tests {
 
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks {
@@ -1006,7 +1012,7 @@ mod tests {
         let rpc2 = rpc.clone();
         let cancel2 = cancel.clone();
         let handle = tokio::spawn(async move {
-            run(rpc2, noop_filter, tx, cancel2, 1, vec![], fast_config()).await
+            run(rpc2, noop_filter, tx, cancel2, 1, vec![], Arc::new(Notify::new()), fast_config()).await
         });
 
         for expected in &blocks {
@@ -1067,7 +1073,7 @@ mod tests {
 
         cancel.cancel();
 
-        let result = run(rpc, noop_filter, tx, cancel, 1, vec![], fast_config()).await;
+        let result = run(rpc, noop_filter, tx, cancel, 1, vec![], Arc::new(Notify::new()), fast_config()).await;
         assert!(result.is_ok());
     }
 }

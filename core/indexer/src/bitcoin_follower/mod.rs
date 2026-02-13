@@ -1,14 +1,15 @@
 use bitcoin::BlockHash;
-use tokio::{select, sync::mpsc, task::JoinHandle};
+use std::sync::Arc;
+use tokio::{select, sync::{mpsc, Notify}, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
 
-use self::{event::BitcoinEvent, mempool::MempoolConfig, poller::PollerConfig};
+use self::{event::BitcoinEvent, listener::ListenerConfig, poller::PollerConfig};
 
 pub mod event;
-pub mod mempool;
+pub mod listener;
 pub mod messages;
 pub mod poller;
 
@@ -30,6 +31,7 @@ pub async fn run<C: BitcoinRpc>(
         .unwrap_or(starting_block_height);
 
     let handle = tokio::spawn(async move {
+        let poll_notify = Arc::new(Notify::new());
         let poller_handle = tokio::spawn(poller::run(
             bitcoin.clone(),
             f,
@@ -37,15 +39,17 @@ pub async fn run<C: BitcoinRpc>(
             cancel_token.clone(),
             start_height,
             known_hashes,
+            poll_notify.clone(),
             PollerConfig::default(),
         ));
 
-        let mempool_handle = tokio::spawn(mempool::run(
+        let listener_handle = tokio::spawn(listener::run(
             bitcoin,
             f,
             event_tx,
             cancel_token.clone(),
-            MempoolConfig::new(zmq_address),
+            poll_notify,
+            ListenerConfig::new(zmq_address),
         ));
 
         select! {
@@ -55,9 +59,9 @@ pub async fn run<C: BitcoinRpc>(
                 }
                 cancel_token.cancel();
             }
-            r = mempool_handle => {
+            r = listener_handle => {
                 if let Ok(Err(e)) = r {
-                    error!("Mempool error: {:#}", e);
+                    error!("Listener error: {:#}", e);
                 }
                 cancel_token.cancel();
             }
