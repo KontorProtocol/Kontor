@@ -9,6 +9,10 @@ export type Block = {
 
 export type BlockRow = { height: number; hash: string; relevant: boolean };
 
+export type BlsBulkOp = {
+  "Call": { signer: Signer; gas_limit: number; contract: string; expr: string };
+};
+
 export type CommitOutputs = {
   commit_transaction: string;
   commit_transaction_hex: string;
@@ -61,7 +65,8 @@ export type Info = {
 export type Inst =
   | { "Publish": { gas_limit: number; name: string; bytes: Array<number> } }
   | { "Call": { gas_limit: number; contract: string; expr: string } }
-  | "Issuance";
+  | "Issuance"
+  | { "BlsBulk": { ops: Array<BlsBulkOp>; signature: Array<number> } };
 
 export type InstructionQuery = {
   address: string;
@@ -71,21 +76,31 @@ export type InstructionQuery = {
   chained_instruction: Inst | null;
 };
 
-export type Op = {
-  "Publish": {
-    metadata: OpMetadata;
-    gas_limit: number;
-    name: string;
-    bytes: Array<number>;
+export type Op =
+  | {
+    "Publish": {
+      metadata: OpMetadata;
+      gas_limit: number;
+      name: string;
+      bytes: Array<number>;
+    };
+  }
+  | {
+    "Call": {
+      metadata: OpMetadata;
+      gas_limit: number;
+      contract: string;
+      expr: string;
+    };
+  }
+  | { "Issuance": { metadata: OpMetadata } }
+  | {
+    "BlsBulk": {
+      metadata: OpMetadata;
+      ops: Array<BlsBulkOp>;
+      signature: Array<number>;
+    };
   };
-} | {
-  "Call": {
-    metadata: OpMetadata;
-    gas_limit: number;
-    contract: string;
-    expr: string;
-  };
-} | { "Issuance": { metadata: OpMetadata } };
 
 export type OpMetadata = {
   previous_output: string;
