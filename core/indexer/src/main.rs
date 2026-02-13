@@ -5,7 +5,7 @@ use std::thread::available_parallelism;
 use crate::api::Env;
 use anyhow::Result;
 use clap::Parser;
-use indexer::database::queries::delete_unprocessed_blocks;
+use indexer::database::queries::{delete_unprocessed_blocks, select_recent_blocks};
 use indexer::event::EventSubscriber;
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
@@ -67,31 +67,34 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    let (ctrl, ctrl_rx) = bitcoin_follower::ctrl::CtrlChannel::create();
+    let conn = &*reader.connection().await?;
+    let recent_blocks = select_recent_blocks(conn, 50).await?;
+    let known_hashes: Vec<_> = recent_blocks
+        .iter()
+        .map(|b| (b.height as u64, b.hash))
+        .collect();
+
+    let (bitcoin_event_rx, follower_handle) = bitcoin_follower::run(
+        bitcoin.clone(),
+        block::filter_map,
+        cancel_token.clone(),
+        config.starting_block_height,
+        known_hashes,
+        config.zmq_address.clone(),
+    )
+    .await;
+    handles.push(follower_handle);
+
     let (init_tx, init_rx) = oneshot::channel();
     handles.push(reactor::run(
         config.starting_block_height,
         cancel_token.clone(),
-        reader.clone(),
         writer,
-        ctrl,
+        bitcoin_event_rx,
         Some(init_tx),
         Some(event_tx),
         Some(simulate_rx),
     ));
-    init_rx.await?;
-    let (init_tx, init_rx) = oneshot::channel();
-    handles.push(
-        bitcoin_follower::run(
-            config.zmq_address.clone(),
-            cancel_token.clone(),
-            bitcoin.clone(),
-            block::filter_map,
-            ctrl_rx,
-            Some(init_tx),
-        )
-        .await?,
-    );
     init_rx.await?;
     {
         let mut available = available.write().await;

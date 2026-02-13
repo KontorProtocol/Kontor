@@ -67,6 +67,20 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
+pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<BlockRow>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT ?",
+            params![limit],
+        )
+        .await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(from_row(&row)?);
+    }
+    Ok(results)
+}
+
 pub async fn set_block_processed(conn: &Connection, height: i64) -> Result<(), Error> {
     conn.execute(
         "UPDATE blocks SET processed = 1 WHERE height = ?",

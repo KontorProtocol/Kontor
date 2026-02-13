@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 
 use bitcoin::hashes::Hash;
 use bitcoin::key::TapTweak;
@@ -18,13 +18,9 @@ use indexmap::IndexMap;
 use libsql::Connection;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
-
-use crate::bitcoin_follower::blockchain_info::BlockchainInfo;
-use crate::bitcoin_follower::rpc;
 
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
@@ -383,134 +379,6 @@ pub fn gen_random_blocks(start: u64, end: u64, prev_hash: Option<BlockHash>) -> 
 
 pub fn new_random_blockchain(n: u64) -> Vec<Block> {
     gen_random_blocks(0, n, None)
-}
-
-#[derive(Clone, Debug)]
-struct State {
-    start_height: u64,
-    running: bool,
-    blocks: Vec<Block>,
-    mempool: Vec<Transaction>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MockBlockchain {
-    state: Arc<Mutex<State>>,
-}
-
-impl MockBlockchain {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self {
-            state: Mutex::new(State {
-                start_height: 0,
-                running: false,
-                blocks,
-                mempool: vec![],
-            })
-            .into(),
-        }
-    }
-
-    pub fn append_blocks(&mut self, more_blocks: Vec<Block>) {
-        let mut state = self.state.lock().unwrap();
-        state.blocks.extend(more_blocks.iter().cloned());
-    }
-
-    pub fn replace_blocks(&mut self, blocks: Vec<Block>) {
-        let mut state = self.state.lock().unwrap();
-        state.blocks = blocks;
-    }
-
-    pub fn set_mempool(&mut self, mempool: Vec<Transaction>) {
-        let mut state = self.state.lock().unwrap();
-        state.mempool = mempool;
-    }
-
-    pub fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
-        let state = self.state.lock().unwrap();
-        Ok(state.mempool.clone())
-    }
-
-    pub fn blocks(&self) -> Vec<Block> {
-        let state = self.state.lock().unwrap();
-        state.blocks.clone()
-    }
-
-    pub async fn get_blockchain_height(&self) -> Result<u64, Error> {
-        let state = self.state.lock().unwrap();
-        Ok(state.blocks.len() as u64)
-    }
-
-    pub fn start_height(&self) -> u64 {
-        self.state.lock().unwrap().start_height
-    }
-
-    pub fn running(&self) -> bool {
-        self.state.lock().unwrap().running
-    }
-
-    pub async fn await_running(&self) {
-        loop {
-            if self.state.lock().unwrap().running {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    }
-
-    pub async fn await_stopped(&self) {
-        loop {
-            if !self.state.lock().unwrap().running {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    }
-
-    pub async fn await_start_height(&self, height: u64) {
-        loop {
-            if self.state.lock().unwrap().start_height == height {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    }
-}
-
-impl rpc::BlockFetcher for MockBlockchain {
-    fn running(&self) -> bool {
-        self.running()
-    }
-
-    fn start(&mut self, start_height: u64) {
-        let mut state = self.state.lock().unwrap();
-
-        state.running = true;
-        state.start_height = start_height;
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        state.running = false;
-        Ok(())
-    }
-}
-
-impl BlockchainInfo for MockBlockchain {
-    async fn get_blockchain_height(&self) -> Result<u64, Error> {
-        self.get_blockchain_height().await
-    }
-
-    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
-        let state = self.state.lock().unwrap();
-        Ok(state.blocks[height as usize - 1].hash)
-    }
-}
-
-impl rpc::MempoolFetcher for MockBlockchain {
-    async fn get_mempool(&mut self) -> Result<Vec<Transaction>> {
-        self.get_mempool()
-    }
 }
 
 pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
