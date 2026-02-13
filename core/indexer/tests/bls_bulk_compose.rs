@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use bitcoin::consensus::encode::deserialize_hex;
-use blst::min_sig::AggregateSignature;
 use blst::BLST_ERROR;
+use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, Signer};
@@ -29,7 +29,9 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     // Ensure all participants have KOR to pay gas.
     reg_tester.instruction(&mut signer1, Inst::Issuance).await?;
     reg_tester.instruction(&mut signer2, Inst::Issuance).await?;
-    reg_tester.instruction(&mut publisher, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
 
     // Publish the `arith` contract on-chain so we can call it.
     let arith_bytes = runtime
@@ -48,11 +50,13 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
         .await?;
 
-    let arith_contract: IndexerContractAddress = publish
-        .result
-        .contract
-        .parse()
-        .map_err(|e| anyhow!("invalid contract address {}: {}", publish.result.contract, e))?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
 
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
@@ -146,4 +150,3 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 
     Ok(())
 }
-

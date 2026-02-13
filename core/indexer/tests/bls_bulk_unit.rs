@@ -1,6 +1,6 @@
 use bitcoin::Network;
-use blst::min_sig::AggregateSignature;
 use blst::BLST_ERROR;
+use blst::min_sig::AggregateSignature;
 use indexer::bls::{KONTOR_BLS_DST, bls_derivation_path, derive_bls_secret_key_eip2333};
 use indexer_types::{BlsBulkOp, ContractAddress, Signer};
 
@@ -55,7 +55,7 @@ fn bls_bulk_aggregate_signature_roundtrip() {
         .expect("failed to aggregate signatures");
     let aggregate_sig = aggregate.to_signature();
 
-    let messages = vec![msg1, msg2];
+    let messages = [msg1, msg2];
     let msg_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
     let pk_refs = [&pk1, &pk2];
     let verify_result =
@@ -118,7 +118,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     };
     let msg1_mutated = build_kontor_op_message(&op1_mutated);
 
-    let messages = vec![msg1_mutated, msg2];
+    let messages = [msg1_mutated, msg2];
     let msg_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
     let pk_refs = [&pk1, &pk2];
     let verify_result =
@@ -129,4 +129,3 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         "aggregate signature verification should fail when op bytes change"
     );
 }
-
