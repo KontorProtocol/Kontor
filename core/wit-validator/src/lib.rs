@@ -41,7 +41,7 @@ impl Validator {
     ///
     /// This automatically includes the Kontor built-in types (context, foreign, etc.)
     /// so that contracts importing from `kontor:built-in` can be validated.
-    pub fn validate_str(wit_content: &str) -> Result<ValidationResult, ParseError> {
+    pub fn validate_str(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
         let mut resolve = Resolve::new();
 
         resolve
@@ -56,7 +56,7 @@ impl Validator {
                 message: alloc::format!("Failed to parse contract WIT: {}", e),
             })?;
 
-        Ok(Self::validate_resolve(&resolve))
+        Ok((Self::validate_resolve(&resolve), resolve))
     }
 
     /// Validate an already-parsed `Resolve` against Kontor rules.
@@ -91,7 +91,8 @@ world root {{
 
     fn validate(content: &str) -> ValidationResult {
         let wit = wrap(content);
-        Validator::validate_str(&wit).expect("Failed to parse WIT")
+        let (result, _resolve) = Validator::validate_str(&wit).expect("Failed to parse WIT");
+        result
     }
 
     #[test]
@@ -417,7 +418,7 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> wrapper;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 
     #[test]
@@ -430,7 +431,7 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> tree;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 
     #[test]
@@ -445,6 +446,6 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> a;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 }
