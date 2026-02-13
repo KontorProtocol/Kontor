@@ -194,9 +194,9 @@ fn make_params(resolve: &Resolve, export: &Function) -> Result<Vec<TokenStream>>
     export
         .params
         .iter()
-        .map(|(name, ty)| {
-            let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
-            let param_ty = utils::wit_type_to_rust_type(resolve, ty, true)?;
+        .map(|param| {
+            let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+            let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
             Ok(quote! { #param_name: #param_ty })
         })
         .collect::<Result<Vec<_>>>()
@@ -209,9 +209,9 @@ fn make_call_expr(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
         .iter()
         .enumerate()
         .skip(1)
-        .map(|(_i, (name, ty))| {
-            let param_name = Ident::new(&name.to_snake_case(), Span::call_site());
-            Ok(match ty {
+        .map(|(_i, param)| {
+            let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+            Ok(match &param.ty {
                 Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
                     let _inner_ty = match resolve.types[*id].kind {
                         TypeDefKind::Option(inner) => {
@@ -302,14 +302,14 @@ pub fn generate_functions(
         .params
         .iter()
         .skip(1)
-        .map(|(name, _)| {
-            let name = Ident::new(&name.to_snake_case(), Span::call_site());
+        .map(|param| {
+            let name = Ident::new(&param.name.to_snake_case(), Span::call_site());
             quote! { #name }
         })
         .collect::<Vec<_>>();
 
-    let (_, ctx_type) = export.params.first().unwrap();
-    let ctx_type_name = utils::wit_type_to_rust_type(resolve, ctx_type, false)?;
+    let ctx_param = export.params.first().unwrap();
+    let ctx_type_name = utils::wit_type_to_rust_type(resolve, &ctx_param.ty, false)?;
     let is_proc_context = ctx_type_name.to_string() == quote! { &context::ProcContext }.to_string();
     let is_core_context = ctx_type_name.to_string() == quote! { &context::CoreContext }.to_string();
 

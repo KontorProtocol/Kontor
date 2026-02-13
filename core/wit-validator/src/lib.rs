@@ -14,7 +14,7 @@ mod error;
 mod rules;
 mod types;
 
-pub use error::{Location, LocationKind, ValidationError, ValidationResult};
+pub use error::{ValidationError, ValidationResult};
 pub use wit_parser::Resolve;
 
 const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in.wit");
@@ -41,7 +41,7 @@ impl Validator {
     ///
     /// This automatically includes the Kontor built-in types (context, foreign, etc.)
     /// so that contracts importing from `kontor:built-in` can be validated.
-    pub fn validate_str(wit_content: &str) -> Result<ValidationResult, ParseError> {
+    pub fn validate_str(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
         let mut resolve = Resolve::new();
 
         resolve
@@ -56,7 +56,7 @@ impl Validator {
                 message: alloc::format!("Failed to parse contract WIT: {}", e),
             })?;
 
-        Ok(Self::validate_resolve(&resolve))
+        Ok((Self::validate_resolve(&resolve), resolve))
     }
 
     /// Validate an already-parsed `Resolve` against Kontor rules.
@@ -91,7 +91,8 @@ world root {{
 
     fn validate(content: &str) -> ValidationResult {
         let wit = wrap(content);
-        Validator::validate_str(&wit).expect("Failed to parse WIT")
+        let (result, _resolve) = Validator::validate_str(&wit).expect("Failed to parse WIT");
+        result
     }
 
     #[test]
@@ -371,6 +372,31 @@ world root {{
     }
 
     #[test]
+    fn test_render_includes_source_location() {
+        let wit = wrap(
+            r#"
+    export init: async func(ctx: borrow<proc-context>);
+    export bad: func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        let mut resolve = Resolve::new();
+        resolve
+            .push_str("built-in.wit", BUILT_IN_WIT)
+            .expect("Failed to parse built-in.wit");
+        resolve
+            .push_str("contract.wit", &wit)
+            .expect("Failed to parse contract WIT");
+        let result = Validator::validate_resolve(&resolve);
+
+        assert!(result.has_errors());
+        let error = &result.errors[0];
+        assert_eq!(
+            error.render(&resolve),
+            "contract.wit:10:12: error: exported functions must be async"
+        );
+    }
+
+    #[test]
     fn test_invalid_missing_init() {
         let result = validate(
             r#"
@@ -392,7 +418,7 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> wrapper;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 
     #[test]
@@ -405,7 +431,7 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> tree;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 
     #[test]
@@ -420,6 +446,6 @@ world root {{
     export get: async func(ctx: borrow<view-context>) -> a;
 "#,
         ));
-        assert!(result.is_err() || result.unwrap().has_errors());
+        assert!(result.is_err() || result.unwrap().0.has_errors());
     }
 }

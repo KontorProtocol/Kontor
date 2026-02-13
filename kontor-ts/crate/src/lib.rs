@@ -29,7 +29,7 @@ impl Guest for Lib {
 
     fn validate_wit(wit_content: String) -> ValidationResult {
         match Validator::validate_str(&wit_content) {
-            Ok(result) => {
+            Ok((result, resolve)) => {
                 if result.is_valid() {
                     ValidationResult::Ok
                 } else {
@@ -38,7 +38,11 @@ impl Guest for Lib {
                         .into_iter()
                         .map(|e| ValidationError {
                             message: e.message,
-                            location: alloc::format!("{}", e.location),
+                            location: if e.span.is_known() {
+                                resolve.render_location(e.span)
+                            } else {
+                                alloc::string::String::from("<unknown>")
+                            },
                         })
                         .collect();
                     ValidationResult::ValidationErrors(errors)
