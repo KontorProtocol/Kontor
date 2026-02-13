@@ -1,761 +1,220 @@
 use anyhow::Result;
+use bitcoin::BlockHash;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{self, BlockHash, hashes::Hash};
-
 use indexer::{
-    bitcoin_follower::{
-        ctrl::{CtrlChannel, StartMessage},
-        events::Event,
-        events::{BlockId, ZmqEvent},
-        reconciler,
-    },
+    bitcoin_follower::event::BitcoinEvent,
     database::queries,
     reactor,
-    test_utils::{
-        MockBlockchain, await_block_at_height, gen_random_blocks, new_random_blockchain,
-        new_test_db,
-    },
+    test_utils::{gen_random_blocks, new_random_blockchain, new_test_db},
 };
 
+/// Poll until a processed block at `height` has the expected `hash`.
+async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
+    loop {
+        if let Ok(Some(block)) = queries::select_processed_block_at_height(conn, height).await
+            && block.hash == hash
+        {
+            return;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn send_block_and_wait(
+    tx: &mpsc::Sender<BitcoinEvent>,
+    conn: &libsql::Connection,
+    block: &indexer_types::Block,
+    target_height: u64,
+) {
+    let hash = block.hash;
+    let height = block.height as i64;
+    tx.send(BitcoinEvent::BlockInsert {
+        target_height,
+        block: block.clone(),
+    })
+    .await
+    .unwrap();
+    await_block_hash(conn, height, hash).await;
+}
+
 #[tokio::test]
-async fn test_follower_reactor_fetching() -> Result<()> {
+async fn test_reactor_fetching() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db().await?;
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = &writer.connection();
 
     let blocks = new_random_blockchain(5);
-    let conn = &writer.connection();
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[0]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[2]).into())
-            .await
-            .is_ok()
-    );
 
-    let mut handles = vec![];
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
 
-    let mock = MockBlockchain::new(blocks.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::create();
-
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
-
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
-
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-
-    handles.push(tokio::spawn(async move {
-        rec.run(ctrl_rx).await;
-    }));
-
-    let start_height = 2; // will be overriden by stored blocks
-    handles.push(reactor::run(
-        start_height,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-        None,
-        None,
-        None,
-    ));
-
-    mock.clone().await_running().await;
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[4 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[5 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash);
-
-    let block = await_block_at_height(conn, 5).await;
-    assert_eq!(block.height, 5);
-    assert_eq!(block.hash, blocks[5 - 1].hash);
-
-    cancel_token.cancel();
-
-    for handle in handles {
-        let _ = handle.await;
+    let target = 5;
+    for block in &blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
     }
 
+    for (i, expected) in blocks.iter().enumerate() {
+        let block = queries::select_processed_block_at_height(conn, (i + 1) as i64)
+            .await?
+            .unwrap();
+        assert_eq!(block.hash, expected.hash);
+    }
+
+    cancel_token.cancel();
+    let _ = handle.await;
     Ok(())
 }
 
 #[tokio::test]
-async fn test_follower_reactor_rollback_during_start() -> Result<()> {
+async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-
-    let mut blocks = new_random_blockchain(3);
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[1 - 1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[2 - 1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[3 - 1]).into())
-            .await
-            .is_ok()
-    );
 
-    let initial_block_3_hash = blocks[3 - 1].hash;
+    let blocks = new_random_blockchain(3);
 
-    // remove last block (height 3), generate 3 new blocks with different
-    // timestamp (and thus hashes) and append them to the chain.
-    _ = blocks.pop();
-    let more_blocks = gen_random_blocks(2, 5, Some(blocks[2 - 1].hash));
-    blocks.extend(more_blocks.iter().cloned());
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
 
-    let mut handles = vec![];
+    // Insert blocks 1-3
+    let target = 3;
+    for block in &blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
+    }
 
-    let mock = MockBlockchain::new(blocks.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::create();
+    let initial_block_3_hash = blocks[2].hash;
 
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
+    // Rollback to height 2 (remove block 3), then insert new blocks 3-5
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 2 })
+        .await?;
 
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let new_blocks = gen_random_blocks(2, 5, Some(blocks[1].hash));
+    let target = 5;
+    for block in &new_blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
+    }
 
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-
-    handles.push(tokio::spawn(async move {
-        rec.run(ctrl_rx).await;
-    }));
-
-    let start_height = 1; // will be overriden by stored blocks
-    handles.push(reactor::run(
-        start_height,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-        None,
-        None,
-        None,
-    ));
-
-    mock.clone().await_running().await;
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[3 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[4 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[5 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    // by reading out the two last blocks first we ensure that the rollback has been enacted
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash);
-
-    let block = await_block_at_height(conn, 5).await;
-    assert_eq!(block.height, 5);
-    assert_eq!(block.hash, blocks[5 - 1].hash);
-
-    // reading block 3, verify that it was rolled back and hash has been updated
-    let block = await_block_at_height(conn, 3).await;
-    assert_eq!(block.height, 3);
-    assert_eq!(block.hash, blocks[3 - 1].hash);
+    // Block 3 should have a different hash now
+    let block = queries::select_processed_block_at_height(conn, 3)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, new_blocks[0].hash);
     assert_ne!(block.hash, initial_block_3_hash);
 
-    cancel_token.cancel();
-
-    for handle in handles {
-        let _ = handle.await;
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_follower_reactor_rollback_during_catchup() -> Result<()> {
-    let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-
-    let mut blocks = new_random_blockchain(5);
-
-    let conn = &writer.connection();
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[1 - 1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[2 - 1]).into())
-            .await
-            .is_ok()
-    );
-
-    let mut handles = vec![];
-
-    let mut mock = MockBlockchain::new(blocks.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::create();
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel();
-
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-
-    handles.push(tokio::spawn(async move {
-        rec.run(ctrl_rx).await;
-    }));
-
-    let start_height = 3;
-    handles.push(reactor::run(
-        start_height,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-        None,
-        None,
-        None,
-    ));
-
-    mock.await_running().await;
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[3 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[4 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    let conn = &writer.connection();
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash);
-
-    // roll back all but the first block (height 1), generate new blocks with mismatching hashes
-    blocks.truncate(1);
-    let more_blocks = gen_random_blocks(1, 5, Some(blocks[1 - 1].hash));
-    blocks.extend(more_blocks.iter().cloned());
-    mock.replace_blocks(blocks.clone());
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[5 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    // wait for fetcher mock to be rewinded to new start height
-    mock.await_start_height(2).await;
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[2 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[3 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[4 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash); // matches new hash
-
-    cancel_token.cancel();
-
-    for handle in handles {
-        let _ = handle.await;
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_follower_handle_control_signal() -> Result<()> {
-    let cancel_token = CancellationToken::new();
-
-    let blocks = new_random_blockchain(5);
-    let mock = MockBlockchain::new(blocks.clone());
-
-    // start-up at block height 3
-    let (_rpc_tx, rpc_rx) = mpsc::channel(1);
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
-
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-    let (event_tx, _event_rx) = mpsc::channel(1);
-    let res = rec
-        .handle_start(StartMessage {
-            start_height: 3,
-            last_hash: None,
-            event_tx,
-        })
-        .await
+    // Blocks 4-5 should exist with new hashes
+    let block = queries::select_processed_block_at_height(conn, 5)
+        .await?
         .unwrap();
-    assert_eq!(res, vec![]);
-    assert_eq!(rec.state.latest_block_height, Some(2));
-    assert_eq!(rec.state.target_block_height, Some(5));
-    assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
-    assert!(rec.fetcher.running());
+    assert_eq!(block.hash, new_blocks[2].hash);
 
-    // start-up at block height 3 with mismatching hash for last block at 2
-    let (_rpc_tx, rpc_rx) = mpsc::channel(1);
-    let mock = MockBlockchain::new(blocks.clone());
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-    let (event_tx, _event_rx) = mpsc::channel(1);
-    let res = rec
-        .handle_start(StartMessage {
-            start_height: 3,
-            last_hash: Some(BlockHash::from_byte_array([0x00; 32])), // not matching
-            event_tx,
-        })
-        .await
-        .unwrap();
-    assert_eq!(res, vec![Event::BlockRemove(BlockId::Height(1))]);
-    assert!(!rec.fetcher.running());
-
-    // start-up at block height 3 with matching hash for last block at 2
-    let (_rpc_tx, rpc_rx) = mpsc::channel(1);
-    let mock = MockBlockchain::new(blocks.clone());
-    let (_zmq_tx, zmq_rx) = mpsc::unbounded_channel::<ZmqEvent>();
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-    let (event_tx, _event_rx) = mpsc::channel(1);
-    let res = rec
-        .handle_start(StartMessage {
-            start_height: 3,
-            last_hash: Some(blocks[2 - 1].hash),
-            event_tx,
-        })
-        .await
-        .unwrap();
-    assert_eq!(res, vec![]);
-    assert_eq!(rec.state.latest_block_height, Some(2));
-    assert_eq!(rec.state.target_block_height, Some(5));
-    assert_eq!(rec.state.mode, reconciler::Mode::Rpc);
-    assert!(rec.fetcher.running());
-
+    cancel_token.cancel();
+    let _ = handle.await;
     Ok(())
 }
 
 #[tokio::test]
-// test_follower_reactor_rollback_zmq_message_multiple_blocks tests handling of a ZMQ
-// BlockDisconnected message several blocks deep. The system should purge the blocks
-// down to it and start fetching new blocks from that height.
-async fn test_follower_reactor_rollback_zmq_message_multiple_blocks() -> Result<()> {
+async fn test_reactor_deep_rollback() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-
-    let mut blocks = new_random_blockchain(2);
-
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[1 - 1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[2 - 1]).into())
-            .await
-            .is_ok()
-    );
 
-    let mut handles = vec![];
+    let blocks = new_random_blockchain(4);
 
-    let mut mock = MockBlockchain::new(blocks.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::create();
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
-    let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
 
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-
-    handles.push(tokio::spawn(async move {
-        rec.run(ctrl_rx).await;
-    }));
-
-    let start_height = 3;
-    handles.push(reactor::run(
-        start_height,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-        None,
-        None,
-        None,
-    ));
-
-    mock.await_running().await;
-
-    assert!(zmq_tx.send(ZmqEvent::Connected).is_ok());
-
-    mock.await_stopped().await;
-
-    // add more blocks
-    blocks.extend(
-        gen_random_blocks(2, 5, Some(blocks[2 - 1].hash))
-            .iter()
-            .cloned(),
-    );
-    mock.replace_blocks(blocks.clone());
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockConnected(blocks[3 - 1].clone()))
-            .is_ok()
-    );
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockConnected(blocks[4 - 1].clone()))
-            .is_ok()
-    );
-
-    let conn = &writer.connection();
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash);
-
-    let initial_block_2_hash = blocks[2 - 1].hash;
-
-    // roll back all but the first block (height 1), generate new blocks with mismatching hashes
-    blocks.truncate(1);
-    let more_blocks = gen_random_blocks(1, 5, Some(blocks[1 - 1].hash));
-    blocks.extend(more_blocks.iter().cloned());
-    mock.replace_blocks(blocks.clone());
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockDisconnected(initial_block_2_hash))
-            .is_ok()
-    );
-
-    mock.await_running().await;
-    assert_eq!(mock.start_height(), 2);
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[2 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    let block = await_block_at_height(conn, 2).await;
-    assert_eq!(block.height, 2);
-    assert_eq!(block.hash, blocks[2 - 1].hash); // matches new hash
-
-    cancel_token.cancel();
-
-    for handle in handles {
-        let _ = handle.await;
+    // Insert blocks 1-4
+    let target = 4;
+    for block in &blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
     }
 
+    // Roll back to height 1 (remove blocks 2-4)
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 1 })
+        .await?;
+
+    // Insert new chain from block 1
+    let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
+    let target = 4;
+    for block in &new_blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
+    }
+
+    // Block 1 should be preserved
+    let block = queries::select_processed_block_at_height(conn, 1)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, blocks[0].hash);
+
+    // Block 2 should have new hash
+    let block = queries::select_processed_block_at_height(conn, 2)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, new_blocks[0].hash);
+
+    cancel_token.cancel();
+    let _ = handle.await;
     Ok(())
 }
 
 #[tokio::test]
-// test_follower_reactor_rollback_zmq_message_redundant_messages tests handling of multiple
-// ZMQ BlockDisconnected messages, including a redundant message for a block that was already
-// removed.
-async fn test_follower_reactor_rollback_zmq_message_redundant_messages() -> Result<()> {
+async fn test_reactor_rollback_then_extend() -> Result<()> {
     let cancel_token = CancellationToken::new();
-    let (reader, writer, _temp_dir) = new_test_db().await?;
-
-    let mut blocks = new_random_blockchain(2);
-
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[1 - 1]).into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        queries::insert_processed_block(conn, (&blocks[2 - 1]).into())
-            .await
-            .is_ok()
-    );
 
-    let mut handles = vec![];
+    let blocks = new_random_blockchain(2);
 
-    let mut mock = MockBlockchain::new(blocks.clone());
-    let (ctrl, ctrl_rx) = CtrlChannel::create();
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
-    let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
 
-    let mut rec = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        mock.clone(),
-        mock.clone(),
-        mock.clone(),
-        rpc_rx,
-        zmq_rx,
-        None,
-    );
-
-    handles.push(tokio::spawn(async move {
-        rec.run(ctrl_rx).await;
-    }));
-
-    let start_height = 3;
-    handles.push(reactor::run(
-        start_height,
-        cancel_token.clone(),
-        reader.clone(),
-        writer.clone(),
-        ctrl,
-        None,
-        None,
-        None,
-    ));
-
-    mock.await_running().await;
-
-    assert!(zmq_tx.send(ZmqEvent::Connected).is_ok());
-
-    mock.await_stopped().await;
-
-    // add one more block
-    blocks.extend(
-        gen_random_blocks(2, 3, Some(blocks[2 - 1].hash))
-            .iter()
-            .cloned(),
-    );
-    mock.replace_blocks(blocks.clone());
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockConnected(blocks[3 - 1].clone()))
-            .is_ok()
-    );
-
-    let conn = &writer.connection();
-    let block = await_block_at_height(conn, 3).await;
-    assert_eq!(block.height, 3);
-    assert_eq!(block.hash, blocks[3 - 1].hash);
-
-    let initial_block_2_hash = blocks[2 - 1].hash;
-    let initial_block_3_hash = blocks[3 - 1].hash;
-
-    // roll back all but the first block (height 1), generate new blocks with mismatching hashes
-    blocks.truncate(1);
-    let more_blocks = gen_random_blocks(1, 3, Some(blocks[1 - 1].hash));
-    blocks.extend(more_blocks.iter().cloned());
-    mock.replace_blocks(blocks.clone());
-
-    let unknown_hash = BlockHash::from_byte_array([0xff; 32]);
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockDisconnected(unknown_hash))
-            .is_ok()
-    );
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockDisconnected(initial_block_2_hash))
-            .is_ok()
-    );
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockDisconnected(initial_block_3_hash))
-            .is_ok()
-    );
-
-    mock.await_running().await;
-    assert_eq!(mock.start_height(), 2);
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[2 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    assert!(
-        rpc_tx
-            .send((
-                mock.get_blockchain_height().await.unwrap(),
-                blocks[3 - 1].clone(),
-            ))
-            .await
-            .is_ok()
-    );
-
-    let block = await_block_at_height(conn, 2).await;
-    assert_eq!(block.height, 2);
-    assert_eq!(block.hash, blocks[2 - 1].hash); // matches new hash
-
-    mock.await_stopped().await;
-
-    // add one more block
-    blocks.extend(
-        gen_random_blocks(4 - 1, 5 - 1, Some(blocks[3 - 1].hash))
-            .iter()
-            .cloned(),
-    );
-    mock.replace_blocks(blocks.clone());
-
-    assert!(
-        zmq_tx
-            .send(ZmqEvent::BlockConnected(blocks[4 - 1].clone()))
-            .is_ok()
-    );
-
-    let block = await_block_at_height(conn, 4).await;
-    assert_eq!(block.height, 4);
-    assert_eq!(block.hash, blocks[4 - 1].hash);
-
-    cancel_token.cancel();
-
-    for handle in handles {
-        let _ = handle.await;
+    // Insert blocks 1-2
+    let target = 2;
+    for block in &blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
     }
 
+    // Extend with blocks 3-4
+    let more_blocks = gen_random_blocks(2, 4, Some(blocks[1].hash));
+    let target = 4;
+    for block in &more_blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
+    }
+
+    let block = queries::select_processed_block_at_height(conn, 4)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, more_blocks[1].hash);
+
+    // Roll back to height 1, insert entirely new chain
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 1 })
+        .await?;
+
+    let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
+    let target = 4;
+    for block in &new_blocks {
+        send_block_and_wait(&event_tx, conn, block, target).await;
+    }
+
+    // Verify block 2 has new hash
+    let block = queries::select_processed_block_at_height(conn, 2)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, new_blocks[0].hash);
+
+    // Verify block 4 has new hash
+    let block = queries::select_processed_block_at_height(conn, 4)
+        .await?
+        .unwrap();
+    assert_eq!(block.hash, new_blocks[2].hash);
+
+    cancel_token.cancel();
+    let _ = handle.await;
     Ok(())
 }

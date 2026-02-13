@@ -1,117 +1,76 @@
-use anyhow::Result;
-use std::time::Duration;
+use bitcoin::BlockHash;
+use std::sync::Arc;
 use tokio::{
     select,
-    sync::{
-        mpsc::{self, Receiver, UnboundedSender},
-        oneshot,
-    },
+    sync::{Notify, mpsc},
     task::JoinHandle,
-    time::sleep,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::error;
 
-use crate::{
-    bitcoin_client::client::BitcoinRpc,
-    bitcoin_follower::{blockchain_info::Info, ctrl::StartMessage, events::ZmqEvent},
-    block::TransactionFilterMap,
-};
+use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
 
-pub mod blockchain_info;
-pub mod ctrl;
-pub mod events;
+use self::{event::BitcoinEvent, listener::ListenerConfig, poller::PollerConfig};
+
+pub mod event;
+pub mod listener;
 pub mod messages;
-pub mod reconciler;
-pub mod rpc;
-pub mod zmq;
-
-async fn zmq_runner<C: BitcoinRpc>(
-    addr: String,
-    cancel_token: CancellationToken,
-    bitcoin: C,
-    f: TransactionFilterMap,
-    tx: UnboundedSender<ZmqEvent>,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        loop {
-            match zmq::run(&addr, cancel_token.clone(), bitcoin.clone(), f, tx.clone()).await {
-                Ok(handle) => match handle.await {
-                    Ok(Ok(_)) => return Ok(()),
-                    Ok(Err(e)) => {
-                        if tx.send(ZmqEvent::Disconnected(e)).is_err() {
-                            return Ok(());
-                        }
-                    }
-                    Err(e) => {
-                        if tx.send(ZmqEvent::Disconnected(e.into())).is_err() {
-                            return Ok(());
-                        }
-                    }
-                },
-                Err(e) => {
-                    error!("ZMQ listener failed to start: {}", e);
-                }
-            }
-
-            select! {
-                _ = sleep(Duration::from_secs(10)) => {}
-                _ = cancel_token.cancelled() => {
-                    info!("cancelled");
-                    return Ok(());
-                }
-            }
-
-            info!("Restarting ZMQ listener");
-        }
-    })
-}
+pub mod poller;
 
 pub async fn run<C: BitcoinRpc>(
-    zmq_address: String,
-    cancel_token: CancellationToken,
     bitcoin: C,
     f: TransactionFilterMap,
-    ctrl_rx: Receiver<StartMessage>,
-    init_tx: Option<oneshot::Sender<bool>>,
-) -> Result<JoinHandle<()>> {
-    let info = Info::new(cancel_token.clone(), bitcoin.clone());
+    cancel_token: CancellationToken,
+    starting_block_height: u64,
+    known_hashes: Vec<(u64, BlockHash)>,
+    zmq_address: String,
+) -> (mpsc::Receiver<BitcoinEvent>, JoinHandle<()>) {
+    let (event_tx, event_rx) = mpsc::channel(32);
 
-    let (rpc_tx, rpc_rx) = mpsc::channel(10);
-    let fetcher = rpc::Fetcher::new(bitcoin.clone(), f, rpc_tx);
-    let mempool = rpc::MempoolFetcherImpl::new(cancel_token.clone(), bitcoin.clone(), f);
+    let start_height = known_hashes
+        .iter()
+        .map(|(h, _)| *h)
+        .max()
+        .map(|h| h + 1)
+        .unwrap_or(starting_block_height);
 
-    let (zmq_tx, zmq_rx) = mpsc::unbounded_channel();
-    let runner_cancel_token = CancellationToken::new();
-    let runner_handle = zmq_runner(
-        zmq_address,
-        runner_cancel_token.clone(),
-        bitcoin.clone(),
-        f,
-        zmq_tx.clone(),
-    )
-    .await;
+    let handle = tokio::spawn(async move {
+        let poll_notify = Arc::new(Notify::new());
+        let poller_handle = tokio::spawn(poller::run(
+            bitcoin.clone(),
+            f,
+            event_tx.clone(),
+            cancel_token.clone(),
+            start_height,
+            known_hashes,
+            poll_notify.clone(),
+            PollerConfig::default(),
+        ));
 
-    let mut reconciler = reconciler::Reconciler::new(
-        cancel_token.clone(),
-        info,
-        fetcher,
-        mempool,
-        rpc_rx,
-        zmq_rx,
-        init_tx,
-    );
+        let listener_handle = tokio::spawn(listener::run(
+            bitcoin,
+            f,
+            event_tx,
+            cancel_token.clone(),
+            poll_notify,
+            ListenerConfig::new(zmq_address),
+        ));
 
-    Ok(tokio::spawn(async move {
-        reconciler.run(ctrl_rx).await;
-
-        runner_cancel_token.cancel();
-        match runner_handle.await {
-            Err(_) => error!("ZMQ runner panicked on join"),
-            Ok(Err(e)) => error!("ZMQ runner failed to start with error: {}", e),
-            Ok(Ok(_)) => (),
+        select! {
+            r = poller_handle => {
+                if let Ok(Err(e)) = r {
+                    error!("Poller error: {:#}", e);
+                }
+                cancel_token.cancel();
+            }
+            r = listener_handle => {
+                if let Ok(Err(e)) = r {
+                    error!("Listener error: {:#}", e);
+                }
+                cancel_token.cancel();
+            }
         }
+    });
 
-        info!("Exited");
-    }))
+    (event_rx, handle)
 }

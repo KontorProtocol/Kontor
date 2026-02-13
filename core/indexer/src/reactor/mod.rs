@@ -17,17 +17,13 @@ use bitcoin::{BlockHash, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::{
-        ctrl::CtrlChannel,
-        events::{BlockId, Event as FollowerEvent},
-    },
+    bitcoin_follower::event::BitcoinEvent,
     block::{filter_map, inspect},
     database::{
         self,
         queries::{
             insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_block_with_hash,
-            set_block_processed,
+            select_block_at_height, select_block_latest, set_block_processed,
         },
     },
     runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
@@ -40,11 +36,9 @@ pub type Simulation = (
 );
 
 struct Reactor {
-    reader: database::Reader,
     writer: database::Writer,
     cancel_token: CancellationToken,
-    ctrl: CtrlChannel,
-    bitcoin_event_rx: Option<Receiver<FollowerEvent>>,
+    bitcoin_event_rx: Receiver<BitcoinEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     runtime: Runtime,
@@ -184,15 +178,14 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
 impl Reactor {
     pub async fn new(
         starting_block_height: u64,
-        reader: database::Reader,
         writer: database::Writer,
-        ctrl: CtrlChannel,
+        bitcoin_event_rx: Receiver<BitcoinEvent>,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
     ) -> Result<Self> {
-        let conn = &*reader.connection().await?;
+        let conn = &writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
             Some(block) => {
                 let block_height = block.height as u64;
@@ -244,11 +237,9 @@ impl Reactor {
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         runtime.publish_native_contracts().await?;
         Ok(Self {
-            reader,
             writer,
             cancel_token,
-            ctrl,
-            bitcoin_event_rx: None,
+            bitcoin_event_rx,
             simulate_rx,
             last_height,
             option_last_hash,
@@ -262,13 +253,12 @@ impl Reactor {
         rollback_to_height(&self.writer.connection(), height).await?;
         self.last_height = height;
 
-        // Resync FileLedger after rollback (DB entries deleted via CASCADE)
         self.runtime
             .file_ledger
             .force_resync_from_db(&self.runtime.storage.conn)
             .await?;
 
-        let conn = &self.reader.connection().await?;
+        let conn = &self.writer.connection();
         if let Some(block) = select_block_at_height(conn, height as i64).await? {
             self.option_last_hash = Some(block.hash);
             info!("Rollback to height {} ({})", height, block.hash);
@@ -277,40 +267,11 @@ impl Reactor {
             warn!("Rollback to height {}, no previous block found", height);
         }
 
-        info!("Seek: start fetching from height {}", self.last_height + 1);
-        match self
-            .ctrl
-            .clone()
-            .start(self.last_height + 1, self.option_last_hash)
-            .await
-        {
-            Ok(bitcoin_event_rx) => {
-                // close and drain old channel before switching to the new one
-                if let Some(rx) = self.bitcoin_event_rx.as_mut() {
-                    rx.close();
-                    while rx.recv().await.is_some() {}
-                }
-                self.bitcoin_event_rx = Some(bitcoin_event_rx);
-                if let Some(tx) = &self.event_tx {
-                    let _ = tx.send(Event::Rolledback { height }).await;
-                }
-                Ok(())
-            }
-            Err(e) => {
-                bail!("Failed to execute start: {}", e);
-            }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(Event::Rolledback { height }).await;
         }
-    }
 
-    async fn rollback_hash(&mut self, hash: BlockHash) -> Result<()> {
-        let conn = &self.writer.connection();
-        let block_row = select_block_with_hash(conn, &hash).await?;
-        if let Some(row) = block_row {
-            self.rollback((row.height as u64) - 1).await
-        } else {
-            error!("attemped rollback to hash {} failed, block not found", hash);
-            Ok(())
-        }
+        Ok(())
     }
 
     async fn handle_block(&mut self, block: Block) -> Result<()> {
@@ -318,19 +279,9 @@ impl Reactor {
         let hash = block.hash;
         let prev_hash = block.prev_hash;
 
-        if height < self.last_height + 1 {
-            warn!(
-                "Rollback required; received block at height {} below expected height {}",
-                height,
-                self.last_height + 1,
-            );
-
-            self.rollback(height - 1).await?;
-            return Ok(());
-        }
-        if height > self.last_height + 1 {
+        if height != self.last_height + 1 {
             bail!(
-                "Order exception, received block at height {}, expected height {}",
+                "Unexpected block height {}, expected {}",
                 height,
                 self.last_height + 1
             );
@@ -338,16 +289,12 @@ impl Reactor {
 
         if let Some(last_hash) = self.option_last_hash {
             if prev_hash != last_hash {
-                warn!(
-                    "Rollback required; received block at height {} with prev_hash {} \
-                         not matching last hash {}",
-                    height, prev_hash, last_hash
+                bail!(
+                    "Block at height {} has prev_hash {} but expected {}",
+                    height,
+                    prev_hash,
+                    last_hash
                 );
-
-                // roll back 2 steps since we know both the received block and the
-                // last one stored must be bad.
-                self.rollback(height - 2).await?;
-                return Ok(());
             }
         } else {
             info!(
@@ -376,29 +323,9 @@ impl Reactor {
     }
 
     async fn run_event_loop(&mut self) -> Result<()> {
-        let rx = match self
-            .ctrl
-            .clone()
-            .start(self.last_height + 1, self.option_last_hash)
-            .await
-        {
-            Ok(rx) => rx,
-            Err(e) => {
-                bail!("initial start failed: {}", e);
-            }
-        };
-
-        self.bitcoin_event_rx = Some(rx);
         self.init_tx.take().map(|tx| tx.send(true));
 
         loop {
-            let bitcoin_event_rx = match self.bitcoin_event_rx.as_mut() {
-                Some(rx) => rx,
-                None => {
-                    bail!("handler loop started with missing event channel");
-                }
-            };
-
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
                     rx.recv().await
@@ -412,33 +339,27 @@ impl Reactor {
                     info!("Cancelled");
                     break;
                 }
-                option_event = bitcoin_event_rx.recv() => {
+                option_event = self.bitcoin_event_rx.recv() => {
                     match option_event {
                         Some(event) => {
                             match event {
-                                FollowerEvent::BlockInsert((target_height, block)) => {
+                                BitcoinEvent::BlockInsert { target_height, block } => {
                                     info!("Block {}/{} {}", block.height,
                                           target_height, block.hash);
-                                    debug!("(implicit) MempoolRemove {}", block.transactions.len());
                                     self.handle_block(block).await?;
                                 },
-                                FollowerEvent::BlockRemove(BlockId::Height(height)) => {
-                                    info!("(implicit) MempoolClear");
-                                    self.rollback(height).await?;
+                                BitcoinEvent::Rollback { to_height } => {
+                                    self.rollback(to_height).await?;
                                 },
-                                FollowerEvent::BlockRemove(BlockId::Hash(block_hash)) => {
-                                    info!("(implicit) MempoolClear");
-                                    self.rollback_hash(block_hash).await?;
+                                BitcoinEvent::MempoolSync(txs) => {
+                                    info!("MempoolSync {}", txs.len());
                                 },
-                                FollowerEvent::MempoolRemove(removed) => {
-                                    debug!("MempoolRemove {}", removed.len());
+                                BitcoinEvent::MempoolInsert(tx) => {
+                                    debug!("MempoolInsert {}", tx.txid);
                                 },
-                                FollowerEvent::MempoolInsert(added) => {
-                                    debug!("MempoolInsert {}", added.len());
+                                BitcoinEvent::MempoolRemove(txid) => {
+                                    debug!("MempoolRemove {}", txid);
                                 },
-                                FollowerEvent::MempoolSet(txs) => {
-                                    info!("MempoolSet {}", txs.len());
-                                }
                             }
                         },
                         None => {
@@ -458,23 +379,15 @@ impl Reactor {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let res = self.run_event_loop().await;
-
-        if let Some(rx) = self.bitcoin_event_rx.as_mut() {
-            rx.close();
-            while rx.recv().await.is_some() {}
-        }
-
-        res
+        self.run_event_loop().await
     }
 }
 
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
-    reader: database::Reader,
     writer: database::Writer,
-    ctrl: CtrlChannel,
+    bitcoin_event_rx: Receiver<BitcoinEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
@@ -483,9 +396,8 @@ pub fn run(
         async move {
             let mut reactor = match Reactor::new(
                 starting_block_height,
-                reader,
                 writer,
-                ctrl.clone(),
+                bitcoin_event_rx,
                 cancel_token.clone(),
                 init_tx,
                 event_tx,

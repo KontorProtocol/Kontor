@@ -231,6 +231,27 @@ impl RegTesterInner {
             .await
             .map_err(|e| anyhow!("Failed to accept transactions: {}", e))
     }
+
+    /// Validate and broadcast transactions to the mempool without mining.
+    pub async fn send_to_mempool(&self, raw_txs: &[String]) -> Result<Vec<Txid>> {
+        self.mempool_accept(raw_txs).await?;
+        let mut txids = Vec::with_capacity(raw_txs.len());
+        for raw_tx in raw_txs {
+            let txid_str = self.bitcoin_client.send_raw_transaction(raw_tx).await?;
+            txids.push(Txid::from_str(&txid_str)?);
+        }
+        Ok(txids)
+    }
+
+    /// Mine blocks, sending coinbase rewards to the initial identity's address.
+    pub async fn mine(&mut self, count: u64) -> Result<()> {
+        self.bitcoin_client
+            .generate_to_address(count, &self.identity.address.to_string())
+            .await?;
+        self.height += count as i64;
+        Ok(())
+    }
+
     pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
         let result = self.bitcoin_client.get_mempool_info().await?;
         Ok(result)
@@ -292,24 +313,16 @@ impl RegTesterInner {
     ) -> Result<InstructionResult> {
         let (compose_res, commit_tx_hex, reveal_tx_hex) =
             self.compose_instruction(ident, inst).await?;
-        let commit_txid = self
-            .bitcoin_client
-            .send_raw_transaction(&commit_tx_hex)
-            .await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
         let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
-        self.bitcoin_client
-            .send_raw_transaction(&reveal_tx_hex)
+        let txids = self
+            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
-
-        self.bitcoin_client
-            .generate_to_address(1, &self.identity.address.to_string())
-            .await?;
-        self.height += 1;
+        self.mine(1).await?;
 
         ident.next_funding_utxo = (
             OutPoint {
-                txid: Txid::from_str(&commit_txid)?,
+                txid: txids[0],
                 vout: (compose_res.commit_transaction.output.len() - 1) as u32,
             },
             compose_res
@@ -382,12 +395,11 @@ impl RegTesterInner {
         )?;
 
         let raw_tx = hex::encode(serialize_tx(&tx));
-        self.mempool_accept(std::slice::from_ref(&raw_tx)).await?;
-        let txid = self.bitcoin_client.send_raw_transaction(&raw_tx).await?;
-        self.bitcoin_client
-            .generate_to_address(1, &self.identity.address.to_string())
-            .await?;
-        self.height += 1;
+        let txids = self.send_to_mempool(&[raw_tx]).await?;
+        let txid = txids[0];
+        self.mine(1).await?;
+
+        // Refresh self.identity's funding UTXO from the newly matured coinbase
         let block_hash = self
             .bitcoin_client
             .get_block_hash((self.height - 100) as u64)
@@ -401,13 +413,7 @@ impl RegTesterInner {
             block.txdata[0].output[0].clone(),
         );
 
-        let next_funding_utxo = (
-            OutPoint {
-                txid: Txid::from_str(&txid)?,
-                vout: 0,
-            },
-            tx.output[0].clone(),
-        );
+        let next_funding_utxo = (OutPoint { txid, vout: 0 }, tx.output[0].clone());
         Ok(Identity {
             address,
             keypair,
@@ -481,13 +487,11 @@ impl RegTesterInner {
         )?;
 
         let raw_tx = hex::encode(serialize_tx(&tx));
-        self.mempool_accept(std::slice::from_ref(&raw_tx)).await?;
-        let txid_str = self.bitcoin_client.send_raw_transaction(&raw_tx).await?;
-        let txid = Txid::from_str(&txid_str)?;
-        self.bitcoin_client
-            .generate_to_address(1, &self.identity.address.to_string())
-            .await?;
-        self.height += 1;
+        let txids = self.send_to_mempool(&[raw_tx]).await?;
+        let txid = txids[0];
+        self.mine(1).await?;
+
+        // Refresh self.identity's funding UTXO from the newly matured coinbase
         let block_hash = self
             .bitcoin_client
             .get_block_hash((self.height - 100) as u64)
@@ -652,6 +656,14 @@ impl RegTester {
         raw_txs: &[String],
     ) -> Result<Vec<TestMempoolAcceptResult>> {
         self.inner.lock().await.mempool_accept_result(raw_txs).await
+    }
+
+    pub async fn send_to_mempool(&self, raw_txs: &[String]) -> Result<Vec<Txid>> {
+        self.inner.lock().await.send_to_mempool(raw_txs).await
+    }
+
+    pub async fn mine(&self, count: u64) -> Result<()> {
+        self.inner.lock().await.mine(count).await
     }
 
     pub async fn transaction_hex_inspect(&self, tx_hex: &str) -> Result<Vec<OpWithResult>> {
