@@ -80,9 +80,9 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                     continue;
                 }
 
-                let (param_name, param_type) = &func.params[0];
+                let param = &func.params[0];
 
-                match get_borrowed_type_name(resolve, param_type) {
+                match get_borrowed_type_name(resolve, &param.ty) {
                     Some(context_name) => {
                         if !types::is_context_type(&context_name) {
                             errors.push(ValidationError::new(
@@ -92,7 +92,7 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                                      found '{}'",
                                     context_name
                                 ),
-                                Location::parameter(name, param_name),
+                                Location::parameter(name, &param.name),
                             ));
                         }
                     }
@@ -100,17 +100,17 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
                         errors.push(ValidationError::new(
                             "first parameter must be a borrow of a context type \
                              (e.g., `ctx: borrow<proc-context>`)",
-                            Location::parameter(name, param_name),
+                            Location::parameter(name, &param.name),
                         ));
                     }
                 }
 
-                for (param_name, param_type) in func.params.iter().skip(1) {
+                for param in func.params.iter().skip(1) {
                     errors.extend(validate_type_in_context(
                         resolve,
-                        param_type,
+                        &param.ty,
                         TypeContext::FunctionParam,
-                        &Location::parameter(name, param_name),
+                        &Location::parameter(name, &param.name),
                     ));
                 }
 
@@ -148,13 +148,13 @@ fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec
             Location::function(name),
         ));
     } else {
-        let (param_name, param_type) = &func.params[0];
-        match get_borrowed_type_name(resolve, param_type) {
+        let param = &func.params[0];
+        match get_borrowed_type_name(resolve, &param.ty) {
             Some(context_name) if context_name == "proc-context" => {}
             _ => {
                 errors.push(ValidationError::new(
                     "init parameter must be borrow<proc-context>",
-                    Location::parameter(name, param_name),
+                    Location::parameter(name, &param.name),
                 ));
             }
         }
@@ -193,23 +193,23 @@ fn validate_fallback_function(
         ));
     } else {
         // Check first param: ctx: borrow<fall-context>
-        let (param_name, param_type) = &func.params[0];
-        match get_borrowed_type_name(resolve, param_type) {
+        let param = &func.params[0];
+        match get_borrowed_type_name(resolve, &param.ty) {
             Some(context_name) if context_name == "fall-context" => {}
             _ => {
                 errors.push(ValidationError::new(
                     "fallback first parameter must be borrow<fall-context>",
-                    Location::parameter(name, param_name),
+                    Location::parameter(name, &param.name),
                 ));
             }
         }
 
         // Check second param: expr: string
-        let (param_name, param_type) = &func.params[1];
-        if !matches!(param_type, Type::String) {
+        let param = &func.params[1];
+        if !matches!(param.ty, Type::String) {
             errors.push(ValidationError::new(
                 "fallback second parameter must be string",
-                Location::parameter(name, param_name),
+                Location::parameter(name, &param.name),
             ));
         }
     }

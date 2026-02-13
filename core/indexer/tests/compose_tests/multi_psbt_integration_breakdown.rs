@@ -7,7 +7,7 @@ use indexer::{
     multi_psbt_test_utils::{NodeInfo, get_node_addresses, get_portal_info, tx_vbytes},
 };
 use indexer_types::{Inst, serialize};
-use rand::Rng;
+use rand::RngExt;
 use testlib::RegTester;
 use tracing::info;
 
