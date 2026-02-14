@@ -142,6 +142,24 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         warn!("Issuance operation failed: {:?}", result);
                     }
                 }
+                Op::RegisterBlsKey {
+                    metadata,
+                    bls_pubkey,
+                    schnorr_sig,
+                    bls_sig,
+                } => {
+                    if let Err(e) = runtime
+                        .register_bls_key(
+                            &metadata.signer,
+                            bls_pubkey.as_slice(),
+                            schnorr_sig.as_slice(),
+                            bls_sig.as_slice(),
+                        )
+                        .await
+                    {
+                        warn!("RegisterBlsKey failed: {e}");
+                    }
+                }
                 Op::BlsBulk {
                     metadata,
                     signature,
@@ -178,6 +196,24 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                     .await;
                                 if result.is_err() {
                                     warn!("BlsBulk call operation failed: {:?}", result);
+                                }
+                            }
+                            indexer_types::BlsBulkOp::RegisterBlsKey {
+                                signer,
+                                bls_pubkey,
+                                schnorr_sig,
+                                bls_sig,
+                            } => {
+                                if let Err(e) = runtime
+                                    .register_bls_key(
+                                        signer,
+                                        bls_pubkey.as_slice(),
+                                        schnorr_sig.as_slice(),
+                                        bls_sig.as_slice(),
+                                    )
+                                    .await
+                                {
+                                    warn!("BlsBulk RegisterBlsKey failed: {e}");
                                 }
                             }
                         }
