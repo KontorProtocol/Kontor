@@ -17,4 +17,3 @@ pub fn address() -> ContractAddress {
         tx_index: 0,
     }
 }
-

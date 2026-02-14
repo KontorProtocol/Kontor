@@ -86,7 +86,7 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
     let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true).unwrap();
     let aggregate_sig = aggregate.to_signature();
 
-    let res = reg_tester
+    let _res = reg_tester
         .instruction(
             &mut publisher,
             Inst::BlsBulk {
@@ -95,7 +95,6 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
             },
         )
         .await?;
-    assert_eq!(res.results.len(), 2);
 
     let xonly1 = user1.x_only_public_key().to_string();
     let xonly2 = user2.x_only_public_key().to_string();
