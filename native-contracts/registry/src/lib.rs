@@ -86,11 +86,16 @@ impl Guest for Registry {
     }
 
     fn get_signer_id(ctx: &ViewContext, x_only_pubkey: String) -> Option<u64> {
-        ctx.model().entries().get(&x_only_pubkey).map(|e| e.signer_id())
+        ctx.model()
+            .entries()
+            .get(&x_only_pubkey)
+            .map(|e| e.signer_id())
     }
 
     fn get_bls_pubkey(ctx: &ViewContext, x_only_pubkey: String) -> Option<Vec<u8>> {
-        ctx.model().entries().get(&x_only_pubkey).map(|e| e.bls_pubkey())
+        ctx.model()
+            .entries()
+            .get(&x_only_pubkey)
+            .map(|e| e.bls_pubkey())
     }
 }
-

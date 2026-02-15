@@ -58,8 +58,8 @@ use wasmtime::{
     },
 };
 
-use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
 use crate::bls::RegistrationProof;
+use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{

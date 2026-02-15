@@ -11,6 +11,13 @@ export type BlockRow = { height: number; hash: string; relevant: boolean };
 
 export type BlsBulkOp = {
   "Call": { signer: Signer; gas_limit: number; contract: string; expr: string };
+} | {
+  "RegisterBlsKey": {
+    signer: Signer;
+    bls_pubkey: Array<number>;
+    schnorr_sig: Array<number>;
+    bls_sig: Array<number>;
+  };
 };
 
 export type CommitOutputs = {
@@ -66,6 +73,13 @@ export type Inst =
   | { "Publish": { gas_limit: number; name: string; bytes: Array<number> } }
   | { "Call": { gas_limit: number; contract: string; expr: string } }
   | "Issuance"
+  | {
+    "RegisterBlsKey": {
+      bls_pubkey: Array<number>;
+      schnorr_sig: Array<number>;
+      bls_sig: Array<number>;
+    };
+  }
   | { "BlsBulk": { ops: Array<BlsBulkOp>; signature: Array<number> } };
 
 export type InstructionQuery = {
@@ -94,6 +108,14 @@ export type Op =
     };
   }
   | { "Issuance": { metadata: OpMetadata } }
+  | {
+    "RegisterBlsKey": {
+      metadata: OpMetadata;
+      bls_pubkey: Array<number>;
+      schnorr_sig: Array<number>;
+      bls_sig: Array<number>;
+    };
+  }
   | {
     "BlsBulk": {
       metadata: OpMetadata;

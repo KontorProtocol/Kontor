@@ -57,7 +57,9 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
 
     reg_tester.instruction(&mut user1, Inst::Issuance).await?;
     reg_tester.instruction(&mut user2, Inst::Issuance).await?;
-    reg_tester.instruction(&mut publisher, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
 
     let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
     let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
@@ -111,4 +113,3 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
 
     Ok(())
 }
-
