@@ -7,13 +7,14 @@ pub mod filestorage;
 pub mod fuel;
 pub mod numerics;
 pub mod pool;
+pub mod registry;
 mod stack;
 mod storage;
 pub mod token;
 mod types;
 pub mod wit;
 
-use bitcoin::hashes::Hash;
+use bitcoin::{XOnlyPublicKey, hashes::Hash};
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -46,6 +47,7 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
+use std::str::FromStr;
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -56,7 +58,8 @@ use wasmtime::{
     },
 };
 
-use crate::database::native_contracts::{FILESTORAGE, TOKEN};
+use crate::bls::RegistrationProof;
+use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{
@@ -243,6 +246,12 @@ impl Runtime {
             FILESTORAGE,
         )
         .await?;
+        self.publish(
+            &Signer::Core(Box::new(Signer::Nobody)),
+            "registry",
+            REGISTRY,
+        )
+        .await?;
         Ok(())
     }
 
@@ -289,6 +298,49 @@ impl Runtime {
             .expect("Failed to run issuance")
             .expect("Failed to issue tokens");
         Ok(())
+    }
+
+    pub async fn register_bls_key(
+        &mut self,
+        signer: &Signer,
+        bls_pubkey: &[u8],
+        schnorr_sig: &[u8],
+        bls_sig: &[u8],
+    ) -> Result<()> {
+        self.set_gas_limit(self.gas_limit_for_non_procs);
+
+        let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
+            return Err(anyhow!("RegisterBlsKey requires an XOnlyPubKey signer"));
+        };
+        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
+            .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
+
+        let bls_pubkey: [u8; 96] = bls_pubkey
+            .try_into()
+            .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;
+        let schnorr_sig: [u8; 64] = schnorr_sig
+            .try_into()
+            .map_err(|_| anyhow!("RegisterBlsKey expected 64 bytes for schnorr_sig"))?;
+        let bls_sig: [u8; 48] = bls_sig
+            .try_into()
+            .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
+
+        let proof = RegistrationProof {
+            x_only_pubkey: x_only_pk.serialize(),
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        };
+        proof.verify()?;
+
+        registry::api::register_bls_key(
+            self,
+            &Signer::Core(Box::new(signer.clone())),
+            proof.bls_pubkey.to_vec(),
+        )
+        .await?
+        .map(|_entry| ())
+        .map_err(|e| anyhow!("registry register-bls-key failed: {e:?}"))
     }
 
     pub async fn execute(

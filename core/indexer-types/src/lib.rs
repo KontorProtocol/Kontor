@@ -279,6 +279,12 @@ pub enum BlsBulkOp {
         contract: ContractAddress,
         expr: String,
     },
+    RegisterBlsKey {
+        signer: Signer,
+        bls_pubkey: Vec<u8>,
+        schnorr_sig: Vec<u8>,
+        bls_sig: Vec<u8>,
+    },
 }
 
 #[serde_as]
@@ -304,6 +310,12 @@ pub enum Op {
     Issuance {
         metadata: OpMetadata,
     },
+    RegisterBlsKey {
+        metadata: OpMetadata,
+        bls_pubkey: Vec<u8>,
+        schnorr_sig: Vec<u8>,
+        bls_sig: Vec<u8>,
+    },
     BlsBulk {
         metadata: OpMetadata,
         ops: Vec<BlsBulkOp>,
@@ -317,6 +329,7 @@ impl Op {
             Op::Publish { metadata, .. } => metadata,
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
+            Op::RegisterBlsKey { metadata, .. } => metadata,
             Op::BlsBulk { metadata, .. } => metadata,
         }
     }
@@ -485,6 +498,11 @@ pub enum Inst {
         expr: String,
     },
     Issuance,
+    RegisterBlsKey {
+        bls_pubkey: Vec<u8>,
+        schnorr_sig: Vec<u8>,
+        bls_sig: Vec<u8>,
+    },
     BlsBulk {
         ops: Vec<BlsBulkOp>,
         signature: Vec<u8>,

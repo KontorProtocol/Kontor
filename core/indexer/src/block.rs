@@ -72,6 +72,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                                 contract,
                                 expr,
                             },
+                            Inst::RegisterBlsKey {
+                                bls_pubkey,
+                                schnorr_sig,
+                                bls_sig,
+                            } => Op::RegisterBlsKey {
+                                metadata,
+                                bls_pubkey,
+                                schnorr_sig,
+                                bls_sig,
+                            },
                             Inst::BlsBulk { signature, ops } => Op::BlsBulk {
                                 metadata,
                                 signature,

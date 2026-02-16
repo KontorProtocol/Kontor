@@ -7,7 +7,10 @@ use crate::{
         client::RegtestRpc,
         types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
-    bls::{bls_derivation_path, derive_bls_secret_key_eip2333, taproot_derivation_path},
+    bls::{
+        RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
+        taproot_derivation_path,
+    },
     config::RegtestConfig,
     database::types::OpResultId,
     retry::retry_simple,
@@ -414,13 +417,24 @@ impl RegTesterInner {
         );
 
         let next_funding_utxo = (OutPoint { txid, vout: 0 }, tx.output[0].clone());
-        Ok(Identity {
+        let proof = RegistrationProof::new(&keypair, &bls_secret_key)?;
+        let mut identity = Identity {
             address,
             keypair,
             next_funding_utxo,
             bls_secret_key,
             bls_pubkey,
-        })
+        };
+        self.instruction(
+            &mut identity,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof.bls_pubkey.to_vec(),
+                schnorr_sig: proof.schnorr_sig.to_vec(),
+                bls_sig: proof.bls_sig.to_vec(),
+            },
+        )
+        .await?;
+        Ok(identity)
     }
 
     pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {

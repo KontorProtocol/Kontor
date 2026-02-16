@@ -1,0 +1,42 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{core-context, view-context, proc-context};
+  use kontor:built-in/error.{error};
+
+  record registry-entry {
+    signer-id: u64,
+    x-only-pubkey: string,
+    bls-pubkey: list<u8>,
+  }
+
+  export init: async func(ctx: borrow<proc-context>);
+
+  // Core-only mutation: indexers register BLS keys after verifying proofs.
+  export register-bls-key: async func(
+    ctx: borrow<core-context>,
+    bls-pubkey: list<u8>
+  ) -> result<registry-entry, error>;
+
+  export get-entry: async func(
+    ctx: borrow<view-context>,
+    x-only-pubkey: string
+  ) -> option<registry-entry>;
+
+  export get-entry-by-id: async func(
+    ctx: borrow<view-context>,
+    signer-id: u64
+  ) -> option<registry-entry>;
+
+  export get-signer-id: async func(
+    ctx: borrow<view-context>,
+    x-only-pubkey: string
+  ) -> option<u64>;
+
+  export get-bls-pubkey: async func(
+    ctx: borrow<view-context>,
+    x-only-pubkey: string
+  ) -> option<list<u8>>;
+}
+

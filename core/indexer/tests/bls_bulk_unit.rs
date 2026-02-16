@@ -103,18 +103,20 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     let aggregate_sig = aggregate.to_signature();
 
     // Mutate op1 after signing (e.g. bundler changes gas_limit). Verification must fail.
-    let op1_mutated = match &op1 {
-        BlsBulkOp::Call {
-            signer,
-            gas_limit: _,
-            contract,
-            expr,
-        } => BlsBulkOp::Call {
-            signer: signer.clone(),
-            gas_limit: 60_000,
-            contract: contract.clone(),
-            expr: expr.clone(),
-        },
+    let BlsBulkOp::Call {
+        signer,
+        gas_limit: _,
+        contract,
+        expr,
+    } = &op1
+    else {
+        panic!("expected BlsBulkOp::Call");
+    };
+    let op1_mutated = BlsBulkOp::Call {
+        signer: signer.clone(),
+        gas_limit: 60_000,
+        contract: contract.clone(),
+        expr: expr.clone(),
     };
     let msg1_mutated = build_kontor_op_message(&op1_mutated);
 
