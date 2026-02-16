@@ -4,10 +4,16 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, Signer};
+use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
+import!(
+    name = "registry",
+    height = 0,
+    tx_index = 0,
+    path = "../../native-contracts/registry/wit",
+);
 
 const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
 
@@ -58,15 +64,22 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
     })?;
 
+    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
+    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
+
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey(signer1.x_only_public_key().to_string()),
+        signer_id: signer1_id,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey(signer2.x_only_public_key().to_string()),
+        signer_id: signer2_id,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
@@ -148,5 +161,166 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
     assert_eq!(last_op, Some(arith::Op::Sum(arith::Operand { y: 8 })));
 
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+
+    let op0 = BlsBulkOp::Call {
+        signer_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(5, arith::Op::Id),
+    };
+    let op1 = BlsBulkOp::Call {
+        signer_id: signer_id + 10_000,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(7, arith::Op::Id),
+    };
+    let op2 = BlsBulkOp::Call {
+        signer_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(11, arith::Op::Id),
+    };
+
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0, op1, op2],
+                signature: vec![0u8; 48],
+            },
+        )
+        .await?;
+
+    let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&res.reveal_tx_hex)?;
+    let client = reg_tester.kontor_client().await;
+    let op1_result = client
+        .result(
+            &OpResultId::builder()
+                .txid(reveal_tx.compute_txid().to_string())
+                .op_index(1)
+                .build(),
+        )
+        .await?;
+    assert!(
+        op1_result.is_none(),
+        "unknown signer_id op should not produce a result"
+    );
+
+    let op2_result = client
+        .result(
+            &OpResultId::builder()
+                .txid(reveal_tx.compute_txid().to_string())
+                .op_index(2)
+                .build(),
+        )
+        .await?
+        .ok_or_else(|| anyhow!("missing result for op_index=2"))?;
+    let decoded2 = arith::wave::eval_parse_return_expr(
+        op2_result
+            .value
+            .as_deref()
+            .ok_or_else(|| anyhow!("missing value for op_index=2"))?,
+    );
+    assert_eq!(decoded2.value, 11);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+
+    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
+        .to_string()
+        .parse()
+        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
+    let last_op_before_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
+
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![BlsBulkOp::Call {
+                    signer_id: 999_999_999,
+                    gas_limit: 50_000,
+                    contract: arith_contract,
+                    expr: arith::wave::eval_call_expr(10, arith::Op::Id),
+                }],
+                signature: vec![0u8; 48],
+            },
+        )
+        .await;
+    assert!(res.is_err(), "expected unregistered signer_id to fail");
+
+    let last_op_after_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
+    assert_eq!(last_op_after, last_op_before);
     Ok(())
 }

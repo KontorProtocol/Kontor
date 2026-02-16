@@ -185,16 +185,32 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
 
                         match inner_op {
                             indexer_types::BlsBulkOp::Call {
-                                signer,
+                                signer_id,
                                 gas_limit,
                                 contract,
                                 expr,
                             } => {
+                                let entry = crate::runtime::registry::api::get_entry_by_id(
+                                    runtime, *signer_id,
+                                )
+                                .await?;
+                                let Some(entry) = entry else {
+                                    // TODO(blsbulk): decide how to expose inner-op failures
+                                    // to clients without failing the entire BlsBulk.
+                                    warn!(
+                                        "BlsBulk call operation failed: unknown signer_id {}",
+                                        signer_id
+                                    );
+                                    continue;
+                                };
+                                let signer = Signer::XOnlyPubKey(entry.x_only_pubkey);
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
-                                    .execute(Some(signer), &(contract.into()), expr)
+                                    .execute(Some(&signer), &(contract.into()), expr)
                                     .await;
                                 if result.is_err() {
+                                    // TODO(blsbulk): decide how to expose inner-op failures
+                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk call operation failed: {:?}", result);
                                 }
                             }
@@ -213,6 +229,8 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                     )
                                     .await
                                 {
+                                    // TODO(blsbulk): decide how to expose inner-op failures
+                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk RegisterBlsKey failed: {e}");
                                 }
                             }
