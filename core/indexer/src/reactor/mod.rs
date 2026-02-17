@@ -165,8 +165,11 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    // TODO(blsbulk): Verify BLS aggregate signature + replay protection before executing.
-                    let _sig = signature;
+                    if let Err(e) = crate::bls::verify_bls_bulk(runtime, ops.as_slice(), signature).await
+                    {
+                        warn!("BlsBulk aggregate verification failed: {e}");
+                        continue;
+                    }
 
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
