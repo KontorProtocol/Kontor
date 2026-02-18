@@ -350,10 +350,10 @@ impl RegistrationProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::key::rand;
-    use bitcoin::key::rand::RngCore;
     use crate::database::connection::new_connection;
     use crate::runtime::{ComponentCache, Storage};
+    use bitcoin::key::rand;
+    use bitcoin::key::rand::RngCore;
     use indexer_types::{ContractAddress, Signer};
     use tempfile::TempDir;
 
@@ -446,7 +446,10 @@ mod tests {
         let err = verify_bls_bulk(&mut runtime, &ops, &short_sig)
             .await
             .expect_err("wrong signature length must be rejected");
-        assert!(err.to_string().contains("invalid aggregate signature length"));
+        assert!(
+            err.to_string()
+                .contains("invalid aggregate signature length")
+        );
     }
 
     #[tokio::test]
@@ -470,7 +473,10 @@ mod tests {
         let err = verify_bls_bulk(&mut runtime, &ops, &bad_sig)
             .await
             .expect_err("invalid signature bytes must be rejected");
-        assert!(err.to_string().contains("invalid aggregate signature bytes"));
+        assert!(
+            err.to_string()
+                .contains("invalid aggregate signature bytes")
+        );
     }
 
     #[tokio::test]

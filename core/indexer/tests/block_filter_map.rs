@@ -1,6 +1,6 @@
 use bitcoin::absolute::LockTime;
-use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::key::rand;
+use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::opcodes::all::{OP_ADD, OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
@@ -11,7 +11,10 @@ use indexer::block::filter_map;
 use indexer::test_utils::{PublicKey as TestPublicKey, build_inscription};
 use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, Signer, serialize};
 
-fn tx_with_taproot_script_witness(tap_script: ScriptBuf, internal_key: bitcoin::XOnlyPublicKey) -> Transaction {
+fn tx_with_taproot_script_witness(
+    tap_script: ScriptBuf,
+    internal_key: bitcoin::XOnlyPublicKey,
+) -> Transaction {
     let secp = Secp256k1::new();
     let spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone())
@@ -82,10 +85,7 @@ fn filter_map_parses_valid_blsbulk_envelope() {
             ops,
             signature,
         } => {
-            assert_eq!(
-                metadata.signer,
-                Signer::XOnlyPubKey(xonly.to_string())
-            );
+            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
             assert_eq!(ops.as_slice(), &[op]);
             assert_eq!(signature.as_slice(), &[9u8; 48]);
         }
@@ -176,10 +176,7 @@ fn filter_map_concatenates_multi_push_payload() {
             contract,
             expr,
         } => {
-            assert_eq!(
-                metadata.signer,
-                Signer::XOnlyPubKey(xonly.to_string())
-            );
+            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
             assert_eq!(*gas_limit, 7);
             assert_eq!(contract.name, "arith");
             assert_eq!(contract.height, 1);
@@ -233,4 +230,3 @@ fn filter_map_rejects_invalid_xonly_pubkey_bytes() {
     let tx = tx_with_taproot_script_witness(tap_script, internal_key);
     assert!(filter_map((0, tx)).is_none());
 }
-

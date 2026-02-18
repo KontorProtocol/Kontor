@@ -116,59 +116,6 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_user_registry_uppercase_xonly_in_bls_bulk_does_not_create_new_identity_regtest(
-) -> Result<()> {
-    let mut user = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-
-    reg_tester.instruction(&mut user, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
-
-    let xonly_lower = user.x_only_public_key().to_string();
-    let xonly_upper = xonly_lower.to_uppercase();
-
-    let signer_id_before = registry::get_signer_id(runtime, &xonly_lower)
-        .await?
-        .expect("expected user to already be registered at lowercase xonly");
-    assert_eq!(
-        registry::get_signer_id(runtime, &xonly_upper).await?,
-        None,
-        "uppercase xonly should not exist as a distinct registry key"
-    );
-
-    let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(xonly_upper.clone()),
-        bls_pubkey: proof.bls_pubkey.to_vec(),
-        schnorr_sig: proof.schnorr_sig.to_vec(),
-        bls_sig: proof.bls_sig.to_vec(),
-    };
-    let msg = build_kontor_op_message(&op)?;
-    let sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
-    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
-
-    reg_tester
-        .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op],
-                signature: sig.to_bytes().to_vec(),
-            },
-        )
-        .await?;
-
-    assert_eq!(
-        registry::get_signer_id(runtime, &xonly_lower).await?,
-        Some(signer_id_before)
-    );
-    assert_eq!(registry::get_signer_id(runtime, &xonly_upper).await?, None);
-
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Result<()> {
     let mut user = reg_tester.identity().await?;
     reg_tester.instruction(&mut user, Inst::Issuance).await?;

@@ -165,7 +165,8 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    if let Err(e) = crate::bls::verify_bls_bulk(runtime, ops.as_slice(), signature).await
+                    if let Err(e) =
+                        crate::bls::verify_bls_bulk(runtime, ops.as_slice(), signature).await
                     {
                         warn!("BlsBulk aggregate verification failed: {e}");
                         continue;
