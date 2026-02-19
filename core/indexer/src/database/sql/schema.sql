@@ -84,3 +84,16 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+
+CREATE TABLE IF NOT EXISTS signer_nonces (
+  signer_id BLOB NOT NULL,
+  nonce BLOB NOT NULL,
+  height INTEGER NOT NULL,
+  tx_index INTEGER,
+  input_index INTEGER,
+  op_index INTEGER,
+  UNIQUE (signer_id, nonce),
+  CHECK (length(signer_id) = 8),
+  CHECK (length(nonce) = 8),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
