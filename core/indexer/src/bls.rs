@@ -25,7 +25,7 @@ use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
 use indexer_types::BlsBulkOp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::runtime::Runtime;
@@ -247,8 +247,28 @@ pub async fn verify_bls_bulk(
     let mut pk_indices: Vec<usize> = Vec::with_capacity(ops.len());
     let mut unique_pks: Vec<BlsPublicKey> = Vec::new();
     let mut signer_pk_index: HashMap<u64, usize> = HashMap::new();
+    let mut seen_nonces: HashSet<(u64, u64)> = HashSet::new();
 
     for op in ops {
+        if let BlsBulkOp::Call { signer_id, nonce, .. } = op {
+            if !seen_nonces.insert((*signer_id, *nonce)) {
+                return Err(anyhow!(
+                    "duplicate (signer_id, nonce) within BlsBulk: signer_id {} nonce {}",
+                    signer_id,
+                    nonce
+                ));
+            }
+            if crate::database::queries::signer_nonce_exists(&runtime.storage.conn, *signer_id, *nonce)
+                .await?
+            {
+                return Err(anyhow!(
+                    "replayed nonce for signer_id {}: nonce {}",
+                    signer_id,
+                    nonce
+                ));
+            }
+        }
+
         // 5) Reconstruct the exact bytes each signer must have authorized. If the bundler
         // mutates any op field after signing, this message changes and verification fails.
         let msg = build_kontor_op_message(op)?;
@@ -281,6 +301,50 @@ pub async fn verify_bls_bulk(
         ));
     }
 
+    Ok(())
+}
+
+pub async fn record_bls_bulk_nonces(runtime: &mut Runtime, ops: &[BlsBulkOp]) -> Result<()> {
+    let Some(tx_ctx) = runtime.tx_context() else {
+        return Err(anyhow!("missing transaction context for BlsBulk nonce recording"));
+    };
+    let height = runtime.storage.height;
+    let tx_index = tx_ctx.tx_index;
+    let input_index = tx_ctx.input_index;
+
+    let mut seen_nonces: HashSet<(u64, u64)> = HashSet::new();
+    if !ops.iter().any(|op| matches!(op, BlsBulkOp::Call { .. })) {
+        return Ok(());
+    }
+
+    runtime.storage.savepoint().await?;
+    for (inner_index, op) in ops.iter().enumerate() {
+        if let BlsBulkOp::Call { signer_id, nonce, .. } = op {
+            if !seen_nonces.insert((*signer_id, *nonce)) {
+                runtime.storage.rollback().await?;
+                return Err(anyhow!(
+                    "duplicate (signer_id, nonce) within BlsBulk: signer_id {} nonce {}",
+                    signer_id,
+                    nonce
+                ));
+            }
+            if let Err(e) = crate::database::queries::insert_signer_nonce(
+                &runtime.storage.conn,
+                *signer_id,
+                *nonce,
+                height,
+                tx_index,
+                input_index,
+                inner_index as i64,
+            )
+            .await
+            {
+                runtime.storage.rollback().await?;
+                return Err(anyhow!("failed to record nonce for signer_id {signer_id}: {e}"));
+            }
+        }
+    }
+    runtime.storage.commit().await?;
     Ok(())
 }
 
@@ -405,11 +469,13 @@ impl RegistrationProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::queries::insert_processed_block;
     use crate::database::connection::new_connection;
-    use crate::runtime::{ComponentCache, Storage};
+    use crate::runtime::{ComponentCache, Storage, TransactionContext};
+    use crate::test_utils::new_mock_block_hash;
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use indexer_types::{ContractAddress, Signer};
+    use indexer_types::{BlockRow, ContractAddress, Signer};
     use tempfile::TempDir;
 
     async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -489,6 +555,7 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -512,6 +579,7 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -541,6 +609,7 @@ mod tests {
         for _ in 0..=MAX_BLS_BULK_OPS {
             ops.push(BlsBulkOp::Call {
                 signer_id: 0,
+                nonce: 0,
                 gas_limit: 0,
                 contract: ContractAddress {
                     name: String::new(),
@@ -562,6 +631,7 @@ mod tests {
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -577,6 +647,169 @@ mod tests {
             .await
             .expect_err("message bytes cap must be enforced");
         assert!(err.to_string().contains("signed message bytes exceed max"));
+    }
+
+    #[tokio::test]
+    async fn record_bls_bulk_nonces_inserts_and_rejects_reuse() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+
+        insert_processed_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(1)
+                .hash(new_mock_block_hash(1))
+                .relevant(true)
+                .build(),
+        )
+        .await
+        .expect("insert block");
+        runtime
+            .set_context(
+                1,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(0)
+                        .input_index(0)
+                        .op_index(0)
+                        .build(),
+                ),
+                None,
+                None,
+            )
+            .await;
+
+        let contract = ContractAddress {
+            name: String::new(),
+            height: 0,
+            tx_index: 0,
+        };
+        let ops = vec![
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 7,
+                gas_limit: 0,
+                contract: contract.clone(),
+                expr: String::new(),
+            },
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 8,
+                gas_limit: 0,
+                contract,
+                expr: String::new(),
+            },
+        ];
+
+        record_bls_bulk_nonces(&mut runtime, &ops)
+            .await
+            .expect("nonce recording should succeed");
+
+        assert!(
+            crate::database::queries::signer_nonce_exists(&runtime.storage.conn, 1, 7)
+                .await
+                .expect("nonce lookup"),
+            "expected (signer_id, nonce) to be recorded"
+        );
+        assert!(
+            crate::database::queries::signer_nonce_exists(&runtime.storage.conn, 1, 8)
+                .await
+                .expect("nonce lookup"),
+            "expected (signer_id, nonce) to be recorded"
+        );
+
+        let err = record_bls_bulk_nonces(&mut runtime, &ops)
+            .await
+            .expect_err("reused nonce must be rejected");
+        assert!(err.to_string().contains("failed to record nonce"));
+    }
+
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_replayed_nonce() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+
+        insert_processed_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(1)
+                .hash(new_mock_block_hash(1))
+                .relevant(true)
+                .build(),
+        )
+        .await
+        .expect("insert block");
+        runtime
+            .set_context(
+                1,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(0)
+                        .input_index(0)
+                        .op_index(0)
+                        .build(),
+                ),
+                None,
+                None,
+            )
+            .await;
+
+        let op = BlsBulkOp::Call {
+            signer_id: 1,
+            nonce: 7,
+            gas_limit: 0,
+            contract: ContractAddress {
+                name: String::new(),
+                height: 0,
+                tx_index: 0,
+            },
+            expr: String::new(),
+        };
+
+        let ops = vec![op];
+        record_bls_bulk_nonces(&mut runtime, &ops)
+            .await
+            .expect("nonce recording should succeed");
+
+        let sk = BlsSecretKey::key_gen(&[9u8; 32], &[]).expect("BLS key_gen");
+        let sig = sk.sign(b"nonce-test", KONTOR_BLS_DST, &[]).to_bytes();
+
+        let err = verify_bls_bulk(&mut runtime, &ops, &sig)
+            .await
+            .expect_err("replayed nonce must be rejected");
+        assert!(err.to_string().contains("replayed nonce"));
+    }
+
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_duplicate_nonce_within_bundle() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let contract = ContractAddress {
+            name: String::new(),
+            height: 0,
+            tx_index: 0,
+        };
+        let ops = vec![
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 7,
+                gas_limit: 0,
+                contract: contract.clone(),
+                expr: "a()".to_string(),
+            },
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 7,
+                gas_limit: 0,
+                contract,
+                expr: "b()".to_string(),
+            },
+        ];
+
+        let sk = BlsSecretKey::key_gen(&[11u8; 32], &[]).expect("BLS key_gen");
+        let sig = sk.sign(b"dup-nonce-test", KONTOR_BLS_DST, &[]).to_bytes();
+
+        let err = verify_bls_bulk(&mut runtime, &ops, &sig)
+            .await
+            .expect_err("duplicate nonce within bundle must be rejected");
+        assert!(err.to_string().contains("duplicate (signer_id, nonce)"));
     }
 
     #[tokio::test]

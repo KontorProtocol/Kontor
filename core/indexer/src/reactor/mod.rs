@@ -172,6 +172,12 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         continue;
                     }
 
+                    if let Err(e) = crate::bls::record_bls_bulk_nonces(runtime, ops.as_slice()).await
+                    {
+                        warn!("BlsBulk nonce recording failed: {e}");
+                        continue;
+                    }
+
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
                             .set_context(
@@ -190,6 +196,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         match inner_op {
                             indexer_types::BlsBulkOp::Call {
                                 signer_id,
+                                nonce: _,
                                 gas_limit,
                                 contract,
                                 expr,

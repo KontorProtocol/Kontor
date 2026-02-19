@@ -74,12 +74,14 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
         signer_id: signer1_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
@@ -165,6 +167,140 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_replay_protection_nonce_regtest() -> Result<()> {
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+
+    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+
+    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
+        .to_string()
+        .parse()
+        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
+
+    let nonce = 7;
+
+    // First bundle: nonce is fresh → should succeed.
+    let op0 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(2, arith::Op::Id),
+    };
+    let msg0 = build_kontor_op_message(&op0)?;
+    let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
+    let aggregate0 = AggregateSignature::aggregate(&[&sig0], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+    reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0],
+                signature: aggregate0.to_signature().to_bytes().to_vec(),
+            },
+        )
+        .await?;
+
+    let last_op_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
+    assert_eq!(last_op, Some(arith::Op::Id));
+
+    // Second bundle: reuse the same (signer_id, nonce) → must be rejected (even if the op differs).
+    let op1 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(3, arith::Op::Sum(arith::Operand { y: 8 })),
+    };
+    let msg1 = build_kontor_op_message(&op1)?;
+    let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let aggregate1 = AggregateSignature::aggregate(&[&sig1], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op1],
+                signature: aggregate1.to_signature().to_bytes().to_vec(),
+            },
+        )
+        .await;
+    assert!(res.is_err(), "expected reused nonce to be rejected");
+
+    let last_op_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
+    assert_eq!(last_op, Some(arith::Op::Id));
+
+    // Third bundle: new nonce → should succeed and update state.
+    let op2 = BlsBulkOp::Call {
+        signer_id,
+        nonce: nonce + 1,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(3, arith::Op::Sum(arith::Operand { y: 8 })),
+    };
+    let msg2 = build_kontor_op_message(&op2)?;
+    let sig2 = sk.sign(&msg2, KONTOR_BLS_DST, &[]);
+    let aggregate2 = AggregateSignature::aggregate(&[&sig2], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+    reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op2],
+                signature: aggregate2.to_signature().to_bytes().to_vec(),
+            },
+        )
+        .await?;
+
+    let last_op_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
+    assert_eq!(last_op, Some(arith::Op::Sum(arith::Operand { y: 8 })));
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
     let mut signer = reg_tester.identity().await?;
     let mut publisher = reg_tester.identity().await?;
@@ -201,18 +337,21 @@ async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
 
     let op0 = BlsBulkOp::Call {
         signer_id,
+        nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(5, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer_id + 10_000,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(7, arith::Op::Id),
     };
     let op2 = BlsBulkOp::Call {
         signer_id,
+        nonce: 2,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(11, arith::Op::Id),
@@ -285,6 +424,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
 
     let op = BlsBulkOp::Call {
         signer_id: 999_999_999,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract,
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
@@ -355,18 +495,21 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
 
     let op0 = BlsBulkOp::Call {
         signer_id: signer1_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(2, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(3, arith::Op::Id),
     };
     let op1_tampered = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(4, arith::Op::Id),

@@ -96,6 +96,43 @@ pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<u64, Error> 
         .await?)
 }
 
+fn u64_to_blob_be(v: u64) -> Vec<u8> {
+    v.to_be_bytes().to_vec()
+}
+
+pub async fn signer_nonce_exists(conn: &Connection, signer_id: u64, nonce: u64) -> Result<bool, Error> {
+    let signer_id = u64_to_blob_be(signer_id);
+    let nonce = u64_to_blob_be(nonce);
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM signer_nonces WHERE signer_id = ? AND nonce = ? LIMIT 1",
+            params![signer_id, nonce],
+        )
+        .await?;
+    Ok(rows.next().await?.is_some())
+}
+
+pub async fn insert_signer_nonce(
+    conn: &Connection,
+    signer_id: u64,
+    nonce: u64,
+    height: i64,
+    tx_index: i64,
+    input_index: i64,
+    op_index: i64,
+) -> Result<(), Error> {
+    let signer_id = u64_to_blob_be(signer_id);
+    let nonce = u64_to_blob_be(nonce);
+    conn.execute(
+        r#"INSERT INTO signer_nonces
+        (signer_id, nonce, height, tx_index, input_index, op_index)
+        VALUES (?, ?, ?, ?, ?, ?)"#,
+        params![signer_id, nonce, height, tx_index, input_index, op_index],
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn select_processed_block_by_height_or_hash(
     conn: &Connection,
     identifier: &str,
