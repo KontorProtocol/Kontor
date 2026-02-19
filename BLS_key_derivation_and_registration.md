@@ -60,10 +60,10 @@ Traverse the path by deriving child keys at each index:
 
 ## 3) Registration proofs (bind Taproot ↔ BLS)
 
-Define binding prefixes:
+Define registration domain tags:
 
 - `SCHNORR_BINDING_PREFIX = "KONTOR_XONLY_TO_BLS_V1"`
-- `BLS_BINDING_PREFIX     = "KONTOR_BLS_TO_XONLY_V1"`
+- `KONTOR_POP_PREFIX      = "KONTOR-POP-V1"`
 
 Define the BLS domain separation tag (DST) for protocol-level BLS signatures:
 
@@ -79,11 +79,11 @@ Then signs `msg` with the **Taproot key** (BIP-86 path) using BIP340 Schnorr:
 
 - `schnorr_sig: [u8; 64]`
 
-### 3.2 Proof 2: BLS key possesses secret + binds back to Taproot (BLS)
+### 3.2 Proof 2: BLS proof of possession (PoP)
 
 Wallet constructs:
 
-- `msg = BLS_BINDING_PREFIX || xonly_pubkey` (raw bytes, no hash)
+- `msg = KONTOR_POP_PREFIX || bls_pubkey` (raw bytes, no hash)
 
 Then signs with the derived BLS secret key using `KONTOR_BLS_DST` as DST:
 

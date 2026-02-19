@@ -14,7 +14,7 @@ pub mod token;
 mod types;
 pub mod wit;
 
-use bitcoin::{XOnlyPublicKey, hashes::Hash};
+use bitcoin::hashes::Hash;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -47,7 +47,6 @@ pub use wit::kontor::built_in::numbers::{
 
 use anyhow::{Result, anyhow};
 use indexer_types::{deserialize, serialize};
-use std::str::FromStr;
 use wasmtime::{
     AsContext, AsContextMut, Engine, Store,
     component::{
@@ -312,26 +311,9 @@ impl Runtime {
         let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
             return Err(anyhow!("RegisterBlsKey requires an XOnlyPubKey signer"));
         };
-        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
-            .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
+        let (x_only_pk, proof) =
+            RegistrationProof::parse(x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)?;
         let canonical_signer = Signer::XOnlyPubKey(x_only_pk.to_string());
-
-        let bls_pubkey: [u8; 96] = bls_pubkey
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;
-        let schnorr_sig: [u8; 64] = schnorr_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 64 bytes for schnorr_sig"))?;
-        let bls_sig: [u8; 48] = bls_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
-
-        let proof = RegistrationProof {
-            x_only_pubkey: x_only_pk.serialize(),
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        };
         proof.verify()?;
 
         registry::api::register_bls_key(
