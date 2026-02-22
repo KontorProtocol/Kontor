@@ -64,6 +64,19 @@ ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"
 
+# Malachite BFT consensus from main
+malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app-channel" }
+malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app" }
+malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types" }
+malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-engine" }
+malachitebft-config = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-config" }
+malachitebft-signing = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing" }
+malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519" }
+malachitebft-codec = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-codec" }
+malachitebft-test = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-test" }
+bytes = "1"
+sha3 = "0.10"
+
 [dev-dependencies]
 testlib = { path = "../testlib" }
 
