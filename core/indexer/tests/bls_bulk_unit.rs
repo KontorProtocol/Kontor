@@ -2,7 +2,7 @@ use bitcoin::Network;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::{KONTOR_BLS_DST, bls_derivation_path, derive_bls_secret_key_eip2333};
-use indexer_types::{BlsBulkOp, ContractAddress, Signer};
+use indexer_types::{BlsBulkOp, ContractAddress};
 
 const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
 
@@ -34,13 +34,13 @@ fn bls_bulk_aggregate_signature_roundtrip() {
     };
 
     let op1 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey("signer1".to_string()),
+        signer_id: 1,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey("signer2".to_string()),
+        signer_id: 2,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, sum({y: 8}))".to_string(),
@@ -81,13 +81,13 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     };
 
     let op1 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey("signer1".to_string()),
+        signer_id: 1,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer: Signer::XOnlyPubKey("signer2".to_string()),
+        signer_id: 2,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, sum({y: 8}))".to_string(),
@@ -104,7 +104,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
 
     // Mutate op1 after signing (e.g. bundler changes gas_limit). Verification must fail.
     let BlsBulkOp::Call {
-        signer,
+        signer_id,
         gas_limit: _,
         contract,
         expr,
@@ -113,7 +113,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         panic!("expected BlsBulkOp::Call");
     };
     let op1_mutated = BlsBulkOp::Call {
-        signer: signer.clone(),
+        signer_id: *signer_id,
         gas_limit: 60_000,
         contract: contract.clone(),
         expr: expr.clone(),
@@ -130,4 +130,48 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         BLST_ERROR::BLST_SUCCESS,
         "aggregate signature verification should fail when op bytes change"
     );
+}
+
+#[test]
+fn bls_bulk_call_roundtrip_serialization_preserves_signer_id() {
+    let contract = ContractAddress {
+        name: "arith".to_string(),
+        height: 7,
+        tx_index: 3,
+    };
+    let op = BlsBulkOp::Call {
+        signer_id: 42,
+        gas_limit: 50_000,
+        contract,
+        expr: "eval(10, id)".to_string(),
+    };
+
+    let bytes = indexer_types::serialize(&op).expect("serialize");
+    let decoded: BlsBulkOp = indexer_types::deserialize(&bytes).expect("deserialize");
+    assert_eq!(decoded, op);
+}
+
+#[test]
+fn bls_bulk_message_changes_when_signer_id_changes() {
+    let contract = ContractAddress {
+        name: "arith".to_string(),
+        height: 123,
+        tx_index: 4,
+    };
+    let op1 = BlsBulkOp::Call {
+        signer_id: 1,
+        gas_limit: 50_000,
+        contract: contract.clone(),
+        expr: "eval(10, id)".to_string(),
+    };
+    let op2 = BlsBulkOp::Call {
+        signer_id: 2,
+        gas_limit: 50_000,
+        contract,
+        expr: "eval(10, id)".to_string(),
+    };
+
+    let msg1 = build_kontor_op_message(&op1);
+    let msg2 = build_kontor_op_message(&op2);
+    assert_ne!(msg1, msg2, "signer_id must affect signed bytes");
 }

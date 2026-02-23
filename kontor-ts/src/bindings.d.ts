@@ -10,7 +10,12 @@ export type Block = {
 export type BlockRow = { height: number; hash: string; relevant: boolean };
 
 export type BlsBulkOp = {
-  "Call": { signer: Signer; gas_limit: number; contract: string; expr: string };
+  "Call": {
+    signer_id: number;
+    gas_limit: number;
+    contract: string;
+    expr: string;
+  };
 } | {
   "RegisterBlsKey": {
     signer: Signer;

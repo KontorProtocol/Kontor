@@ -271,7 +271,8 @@ pub struct OpMetadata {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum BlsBulkOp {
     Call {
-        signer: Signer,
+        #[ts(type = "number")]
+        signer_id: u64,
         #[ts(type = "number")]
         gas_limit: u64,
         #[ts(as = "String")]
