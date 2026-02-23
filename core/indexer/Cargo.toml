@@ -67,14 +67,19 @@ blst = "=0.3.16"
 # Malachite BFT consensus from main
 malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app-channel" }
 malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app" }
-malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types" }
+malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types", features = ["serde"] }
 malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-engine" }
 malachitebft-config = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-config" }
 malachitebft-signing = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing" }
-malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519" }
+malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519", features = ["rand", "serde"] }
 malachitebft-codec = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-codec" }
-malachitebft-test = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-test" }
+malachitebft-core-consensus = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-consensus" }
+malachitebft-proto = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-proto" }
+malachitebft-sync = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-sync" }
+
+async-trait = "0.1"
 bytes = "1"
+prost = "0.13"
 sha3 = "0.10"
 
 [dev-dependencies]
@@ -87,3 +92,5 @@ proptest = "=1.10.0"
 [build-dependencies]
 glob = { workspace = true }
 built = { version = "=0.8.0", features = ["git2"] }
+prost-build = "0.13"
+protox = "0.8"

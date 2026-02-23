@@ -8,10 +8,10 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_app_channel::{
     ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
 };
-use malachitebft_test::codec::proto::ProtobufCodec;
-use malachitebft_test::{
-    Address, Ed25519Provider, Genesis, PrivateKey, TestContext, Validator, ValidatorSet,
-};
+
+use indexer::consensus::codec::ProtobufCodec;
+use indexer::consensus::signing::{Ed25519Provider, PrivateKey};
+use indexer::consensus::{Address, Ctx, Genesis, Validator, ValidatorSet};
 
 use indexer::consensus::app::{self, State};
 
@@ -86,13 +86,12 @@ async fn run_node(
 
     info!(%address, "Starting validator");
 
-    let ctx = TestContext::new();
+    let ctx = Ctx::new();
     let wal_dir = tempfile::tempdir()?;
     let wal_path = wal_dir.path().join("consensus.wal");
 
     let identity = NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
 
-    // Ed25519Provider doesn't impl Clone
     let engine_provider = Ed25519Provider::new(private_key.clone());
     let app_provider = Ed25519Provider::new(private_key);
 

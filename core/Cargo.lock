@@ -1268,8 +1268,6 @@ dependencies = [
  "eyre",
  "indexer",
  "informalsystems-malachitebft-app-channel",
- "informalsystems-malachitebft-signing-ed25519",
- "informalsystems-malachitebft-test",
  "rand 0.8.5",
  "tempfile",
  "tokio",
@@ -3424,6 +3422,7 @@ name = "indexer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.8.8",
  "axum-server",
  "axum-test",
@@ -3449,11 +3448,13 @@ dependencies = [
  "informalsystems-malachitebft-app-channel",
  "informalsystems-malachitebft-codec",
  "informalsystems-malachitebft-config",
+ "informalsystems-malachitebft-core-consensus",
  "informalsystems-malachitebft-core-types",
  "informalsystems-malachitebft-engine",
+ "informalsystems-malachitebft-proto",
  "informalsystems-malachitebft-signing",
  "informalsystems-malachitebft-signing-ed25519",
- "informalsystems-malachitebft-test",
+ "informalsystems-malachitebft-sync",
  "kontor-crypto",
  "libsql",
  "macros",
@@ -3461,6 +3462,9 @@ dependencies = [
  "num",
  "once_cell",
  "proptest",
+ "prost 0.13.5",
+ "prost-build",
+ "protox",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
  "rayon",
@@ -3751,8 +3755,6 @@ source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1
 dependencies = [
  "bs58",
  "multihash",
- "rand 0.8.5",
- "serde",
  "thiserror 2.0.18",
 ]
 
@@ -3808,43 +3810,6 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-test"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "ed25519-consensus",
- "eyre",
- "futures",
- "hex",
- "informalsystems-malachitebft-app",
- "informalsystems-malachitebft-codec",
- "informalsystems-malachitebft-config",
- "informalsystems-malachitebft-core-consensus",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-engine",
- "informalsystems-malachitebft-peer",
- "informalsystems-malachitebft-proto",
- "informalsystems-malachitebft-signing",
- "informalsystems-malachitebft-signing-ed25519",
- "informalsystems-malachitebft-sync",
- "libp2p-identity",
- "prost 0.13.5",
- "prost-build",
- "prost-types",
- "protox",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "sha3",
- "signature",
- "tokio",
  "tracing",
 ]
 

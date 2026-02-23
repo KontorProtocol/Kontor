@@ -39,8 +39,30 @@ fn build(contract_dir: &std::path::Path) {
     }
 }
 
+fn build_protos() {
+    let protos = &[
+        "src/consensus/proto/consensus.proto",
+        "src/consensus/proto/sync.proto",
+        "src/consensus/proto/liveness.proto",
+    ];
+
+    for proto in protos {
+        println!("cargo:rerun-if-changed={proto}");
+    }
+
+    let fds = protox::compile(protos, ["src/consensus/proto"]).expect("protobuf compilation");
+
+    let mut config = prost_build::Config::new();
+    config.enable_type_names();
+    config.bytes(["."]);
+
+    config.compile_fds(fds).expect("prost codegen");
+}
+
 fn main() {
     built::write_built_file().expect("Failed to acquire build-time information");
+
+    build_protos();
 
     // Get the path to the contracts directory
     let mut cd = std::env::current_dir().unwrap();
