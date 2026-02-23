@@ -263,10 +263,18 @@ impl From<ContractResultPublicRow> for ResultRow {
 #[derive(Debug, Clone, Builder, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct OpResultId {
     pub txid: String,
-    #[builder(default = 0)]
     pub input_index: i64,
-    #[builder(default = 0)]
     pub op_index: i64,
+}
+
+impl OpResultId {
+    pub fn new(txid: impl Into<String>, input_index: i64, op_index: i64) -> Self {
+        Self {
+            txid: txid.into(),
+            input_index,
+            op_index,
+        }
+    }
 }
 
 impl Display for OpResultId {
