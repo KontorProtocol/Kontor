@@ -1,10 +1,10 @@
 use clap::Parser;
 use eyre::Result;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 use malachitebft_app_channel::app::config::*;
-use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_app_channel::app::types::Keypair;
+use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_app_channel::{
     ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
 };
@@ -63,10 +63,8 @@ fn make_config(index: usize, total: usize) -> SimConfig {
             enabled: true,
             value_payload: ValuePayload::ProposalAndParts,
             p2p: P2pConfig {
-                listen_addr: TransportProtocol::Tcp.multiaddr(
-                    "127.0.0.1",
-                    CONSENSUS_BASE_PORT + index,
-                ),
+                listen_addr: TransportProtocol::Tcp
+                    .multiaddr("127.0.0.1", CONSENSUS_BASE_PORT + index),
                 persistent_peers,
                 ..Default::default()
             },
@@ -92,11 +90,7 @@ async fn run_node(
     let wal_dir = tempfile::tempdir()?;
     let wal_path = wal_dir.path().join("consensus.wal");
 
-    let identity = NetworkIdentity::new(
-        config.moniker.clone(),
-        keypair,
-        Some(address.to_string()),
-    );
+    let identity = NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
 
     // Ed25519Provider doesn't impl Clone
     let engine_provider = Ed25519Provider::new(private_key.clone());
