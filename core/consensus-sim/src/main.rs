@@ -1,5 +1,6 @@
+use clap::Parser;
 use eyre::Result;
-use tracing::info;
+use tracing::{info, Instrument};
 
 use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::types::core::VotingPower;
@@ -13,6 +14,16 @@ use malachitebft_test::{
 };
 
 use indexer::consensus::app::{self, State};
+
+const CONSENSUS_BASE_PORT: usize = 27000;
+
+#[derive(Parser)]
+#[command(name = "consensus-sim")]
+struct Args {
+    /// Number of validators to run
+    #[arg(long, default_value_t = 1)]
+    validators: usize,
+}
 
 /// Minimal config implementing NodeConfig for start_engine.
 #[derive(Clone, Debug, Default)]
@@ -40,46 +51,46 @@ impl NodeConfig for SimConfig {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".parse().unwrap()),
-        )
-        .init();
+fn make_config(index: usize, total: usize) -> SimConfig {
+    let persistent_peers: Vec<_> = (0..total)
+        .filter(|j| *j != index)
+        .map(|j| TransportProtocol::Tcp.multiaddr("127.0.0.1", CONSENSUS_BASE_PORT + j))
+        .collect();
 
-    let mut rng = rand::thread_rng();
-    let private_key = PrivateKey::generate(&mut rng);
-    let public_key = private_key.public_key();
-    let address = Address::from_public_key(&public_key);
-    let keypair = Keypair::ed25519_from_bytes(private_key.inner().to_bytes())?;
-
-    info!(%address, "Starting single-validator consensus simulator");
-
-    let validator = Validator::new(public_key, 1 as VotingPower);
-    let validator_set = ValidatorSet::new(vec![validator]);
-    let genesis = Genesis { validator_set };
-
-    let ctx = TestContext::new();
-
-    let wal_dir = tempfile::tempdir()?;
-    let wal_path = wal_dir.path().join("consensus.wal");
-
-    let config = SimConfig {
-        moniker: "sim-node-0".to_string(),
+    SimConfig {
+        moniker: format!("sim-node-{index}"),
         consensus: ConsensusConfig {
             enabled: true,
             value_payload: ValuePayload::ProposalAndParts,
             p2p: P2pConfig {
-                listen_addr: TransportProtocol::Tcp.multiaddr("127.0.0.1", 27000),
-                persistent_peers: vec![],
+                listen_addr: TransportProtocol::Tcp.multiaddr(
+                    "127.0.0.1",
+                    CONSENSUS_BASE_PORT + index,
+                ),
+                persistent_peers,
                 ..Default::default()
             },
             ..Default::default()
         },
         value_sync: ValueSyncConfig::default(),
-    };
+    }
+}
+
+async fn run_node(
+    index: usize,
+    private_key: PrivateKey,
+    genesis: Genesis,
+    config: SimConfig,
+) -> Result<()> {
+    let public_key = private_key.public_key();
+    let address = Address::from_public_key(&public_key);
+    let keypair = Keypair::ed25519_from_bytes(private_key.inner().to_bytes())?;
+
+    info!(%address, "Starting validator");
+
+    let ctx = TestContext::new();
+    let wal_dir = tempfile::tempdir()?;
+    let wal_path = wal_dir.path().join("consensus.wal");
 
     let identity = NetworkIdentity::new(
         config.moniker.clone(),
@@ -87,7 +98,7 @@ async fn main() -> Result<()> {
         Some(address.to_string()),
     );
 
-    // Need separate providers — Ed25519Provider doesn't impl Clone
+    // Ed25519Provider doesn't impl Clone
     let engine_provider = Ed25519Provider::new(private_key.clone());
     let app_provider = Ed25519Provider::new(private_key);
 
@@ -102,12 +113,62 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    info!("Engine started, entering app loop");
+    info!(node = index, "Engine started, entering app loop");
 
     let mut state = State::new(app_provider, genesis, address);
     app::run(&mut state, &mut channels)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
+
+    drop(wal_dir);
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info".parse().unwrap()),
+        )
+        .init();
+
+    let args = Args::parse();
+    let n = args.validators;
+
+    let mut rng = rand::thread_rng();
+    let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
+
+    let validators: Vec<Validator> = private_keys
+        .iter()
+        .map(|pk| Validator::new(pk.public_key(), 1 as VotingPower))
+        .collect();
+
+    let validator_set = ValidatorSet::new(validators);
+    let genesis = Genesis { validator_set };
+
+    info!(validators = n, "Starting consensus simulator");
+
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for (i, private_key) in private_keys.into_iter().enumerate() {
+        let genesis = genesis.clone();
+        let config = make_config(i, n);
+        join_set.spawn(
+            async move {
+                if let Err(e) = run_node(i, private_key, genesis, config).await {
+                    tracing::error!(node = i, error = %e, "Node exited with error");
+                }
+            }
+            .instrument(tracing::info_span!("validator", id = i)),
+        );
+    }
+
+    while let Some(result) = join_set.join_next().await {
+        if let Err(e) = result {
+            tracing::error!(error = %e, "Node task panicked");
+        }
+    }
 
     Ok(())
 }
