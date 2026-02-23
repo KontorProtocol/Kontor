@@ -11,21 +11,22 @@ use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
 use malachitebft_core_types::{CommitCertificate, HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
-use malachitebft_test::codec::proto::ProtobufCodec;
-use malachitebft_test::{
-    Address, Ed25519Provider, Genesis, Height, ProposalData, ProposalFin, ProposalInit,
-    ProposalPart, TestContext, ValidatorSet, Value,
+
+use crate::consensus::codec::ProtobufCodec;
+use crate::consensus::signing::Ed25519Provider;
+use crate::consensus::{
+    Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
+    ValidatorSet, Value,
 };
 
-/// Minimal consensus app state.
 pub struct State {
     signing_provider: Ed25519Provider,
     genesis: Genesis,
     address: Address,
     current_height: Height,
     current_round: Round,
-    decided: BTreeMap<Height, (Value, CommitCertificate<TestContext>)>,
-    undecided: BTreeMap<(Height, Round), ProposedValue<TestContext>>,
+    decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
+    undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
     value_counter: u64,
 }
 
@@ -49,10 +50,11 @@ impl State {
 
     fn make_value(&mut self) -> Value {
         self.value_counter += 1;
-        Value::new(self.value_counter)
+        // Dummy value: anchor_height = counter, no txids yet
+        Value::new(self.value_counter, vec![])
     }
 
-    fn height_params(&self) -> HeightParams<TestContext> {
+    fn height_params(&self) -> HeightParams<Ctx> {
         HeightParams::new(self.validator_set(), LinearTimeouts::default(), None)
     }
 
@@ -65,7 +67,7 @@ impl State {
 
     fn stream_proposal(
         &self,
-        value: &LocallyProposedValue<TestContext>,
+        value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
     ) -> Vec<StreamMessage<ProposalPart>> {
         use sha3::Digest;
@@ -73,7 +75,10 @@ impl State {
         let mut hasher = sha3::Keccak256::new();
         hasher.update(value.height.as_u64().to_be_bytes());
         hasher.update(value.round.as_i64().to_be_bytes());
-        hasher.update(value.value.value.to_be_bytes());
+        hasher.update(value.value.anchor_height.to_be_bytes());
+        for txid in &value.value.txids {
+            hasher.update(txid);
+        }
 
         let hash = hasher.finalize();
         let signature = self.signing_provider.sign(&hash);
@@ -85,7 +90,10 @@ impl State {
                 pol_round,
                 self.address,
             )),
-            ProposalPart::Data(ProposalData::new(value.value.value)),
+            ProposalPart::Data(ProposalData::new(
+                value.value.anchor_height,
+                value.value.txids.clone(),
+            )),
             ProposalPart::Fin(ProposalFin::new(signature)),
         ];
 
@@ -110,7 +118,7 @@ impl State {
 }
 
 /// Run the consensus app loop, handling messages from the engine.
-pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> anyhow::Result<()> {
+pub async fn run(state: &mut State, channels: &mut Channels<Ctx>) -> anyhow::Result<()> {
     while let Some(msg) = channels.consensus.recv().await {
         match msg {
             AppMsg::ConsensusReady { reply } => {
@@ -196,7 +204,7 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> any
                 let proposed = match &part.content {
                     StreamContent::Data(ProposalPart::Data(data)) => {
                         if !state.undecided.contains_key(&(height, round)) {
-                            let value = Value::new(data.factor);
+                            let value = Value::new(data.anchor_height, data.txids.clone());
                             let proposed = ProposedValue {
                                 height,
                                 round,
@@ -257,8 +265,9 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> any
                     "Finalized"
                 );
 
-                if let Some(proposal) =
-                    state.undecided.remove(&(certificate.height, certificate.round))
+                if let Some(proposal) = state
+                    .undecided
+                    .remove(&(certificate.height, certificate.round))
                 {
                     state
                         .decided
@@ -315,7 +324,7 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> any
                 value_bytes,
                 reply,
             } => {
-                let result: Option<ProposedValue<TestContext>> =
+                let result: Option<ProposedValue<Ctx>> =
                     if let Ok(value) = ProtobufCodec.decode(value_bytes) {
                         let proposed = ProposedValue {
                             height,

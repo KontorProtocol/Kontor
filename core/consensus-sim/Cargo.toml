@@ -6,8 +6,6 @@ edition = "2024"
 [dependencies]
 indexer = { path = "../indexer" }
 malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app-channel" }
-malachitebft-test = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-test" }
-malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519", features = ["rand"] }
 
 clap = { version = "4.5", features = ["derive"] }
 eyre = "0.6"
