@@ -12,9 +12,9 @@ use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
 use malachitebft_core_types::{CommitCertificate, HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
-use crate::consensus::codec::ProtobufCodec;
-use crate::consensus::signing::Ed25519Provider;
-use crate::consensus::{
+use indexer::consensus::codec::ProtobufCodec;
+use indexer::consensus::signing::Ed25519Provider;
+use indexer::consensus::{
     Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     ValidatorSet, Value,
 };

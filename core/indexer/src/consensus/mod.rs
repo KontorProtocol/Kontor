@@ -1,5 +1,4 @@
 mod address;
-pub mod app;
 pub mod codec;
 mod context;
 mod genesis;

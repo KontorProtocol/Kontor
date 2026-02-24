@@ -1264,13 +1264,20 @@ dependencies = [
 name = "consensus-sim"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bitcoin",
  "clap",
  "eyre",
  "indexer",
+ "indexer-types",
  "informalsystems-malachitebft-app-channel",
+ "informalsystems-malachitebft-core-types",
+ "informalsystems-malachitebft-engine",
  "rand 0.8.5",
+ "sha3",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
