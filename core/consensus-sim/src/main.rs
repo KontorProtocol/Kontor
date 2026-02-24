@@ -13,7 +13,9 @@ use indexer::consensus::codec::ProtobufCodec;
 use indexer::consensus::signing::{Ed25519Provider, PrivateKey};
 use indexer::consensus::{Address, Ctx, Genesis, Validator, ValidatorSet};
 
-use indexer::consensus::app::{self, State};
+mod mock_bitcoin;
+mod reactor;
+use reactor::State;
 
 const CONSENSUS_BASE_PORT: usize = 27000;
 
@@ -109,7 +111,7 @@ async fn run_node(
     info!(node = index, "Engine started, entering app loop");
 
     let mut state = State::new(app_provider, genesis, address);
-    app::run(&mut state, &mut channels)
+    reactor::run(&mut state, &mut channels)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
 

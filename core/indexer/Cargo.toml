@@ -39,7 +39,7 @@ base64 = "=0.22.1"
 deadpool = "=0.12.3"
 reqwest = { version = "=0.13.2", default-features = false, features = ["http2", "json", "rustls"] }
 thiserror = "=2.0.18"
-tokio-util = "=0.7.18"
+tokio-util = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json"] }
 zmq = "=0.10.0"
 scopeguard = "=1.2.0"
