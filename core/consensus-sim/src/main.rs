@@ -1,7 +1,12 @@
+use std::time::Duration;
+
 use clap::Parser;
 use eyre::Result;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
+use indexer::bitcoin_follower::event::BitcoinEvent;
 use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::app::types::core::VotingPower;
@@ -81,6 +86,7 @@ async fn run_node(
     private_key: PrivateKey,
     genesis: Genesis,
     config: SimConfig,
+    mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
 ) -> Result<()> {
     let public_key = private_key.public_key();
     let address = Address::from_public_key(&public_key);
@@ -111,7 +117,7 @@ async fn run_node(
     info!(node = index, "Engine started, entering app loop");
 
     let mut state = State::new(app_provider, genesis, address);
-    reactor::run(&mut state, &mut channels)
+    reactor::run(&mut state, &mut channels, &mut bitcoin_rx)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
 
@@ -144,14 +150,53 @@ async fn main() -> Result<()> {
 
     info!(validators = n, "Starting consensus simulator");
 
+    let cancel_token = CancellationToken::new();
+
+    // Spawn mock bitcoin source with a shared broadcast sender
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<BitcoinEvent>(256);
+    let mock_bitcoin_tx = {
+        let (tx, rx) = mpsc::channel(256);
+        let btx = broadcast_tx.clone();
+        // Bridge: mpsc from mock_bitcoin::run → broadcast to all nodes
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Some(event) = rx.recv().await {
+                let _ = btx.send(event);
+            }
+        });
+        tx
+    };
+
+    tokio::spawn({
+        let cancel = cancel_token.clone();
+        async move {
+            mock_bitcoin::run(mock_bitcoin_tx, cancel, Duration::from_secs(10), 3).await;
+        }
+    });
+
     let mut join_set = tokio::task::JoinSet::new();
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
         let config = make_config(i, n);
+
+        // Per-node: bridge broadcast → mpsc
+        let bitcoin_rx = {
+            let (tx, rx) = mpsc::channel(256);
+            let mut brx = broadcast_tx.subscribe();
+            tokio::spawn(async move {
+                while let Ok(event) = brx.recv().await {
+                    if tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        };
+
         join_set.spawn(
             async move {
-                if let Err(e) = run_node(i, private_key, genesis, config).await {
+                if let Err(e) = run_node(i, private_key, genesis, config, bitcoin_rx).await {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
             }
@@ -165,5 +210,6 @@ async fn main() -> Result<()> {
         }
     }
 
+    cancel_token.cancel();
     Ok(())
 }

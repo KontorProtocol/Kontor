@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::anyhow;
-use tracing::{error, info};
+use bitcoin::hashes::Hash;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info};
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -12,6 +14,7 @@ use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
 use malachitebft_core_types::{CommitCertificate, HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
+use indexer::bitcoin_follower::event::BitcoinEvent;
 use indexer::consensus::codec::ProtobufCodec;
 use indexer::consensus::signing::Ed25519Provider;
 use indexer::consensus::{
@@ -27,7 +30,10 @@ pub struct State {
     current_round: Round,
     decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
     undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
-    value_counter: u64,
+
+    // Bitcoin state
+    mempool: HashSet<[u8; 32]>,
+    chain_tip: u64,
 }
 
 impl State {
@@ -40,7 +46,8 @@ impl State {
             current_round: Round::new(0),
             decided: BTreeMap::new(),
             undecided: BTreeMap::new(),
-            value_counter: 0,
+            mempool: HashSet::new(),
+            chain_tip: 0,
         }
     }
 
@@ -49,9 +56,8 @@ impl State {
     }
 
     fn make_value(&mut self) -> Value {
-        self.value_counter += 1;
-        // Dummy value: anchor_height = counter, no txids yet
-        Value::new(self.value_counter, vec![])
+        let txids: Vec<[u8; 32]> = self.mempool.iter().copied().collect();
+        Value::new(self.chain_tip, txids)
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
@@ -117,10 +123,68 @@ impl State {
     }
 }
 
-/// Run the consensus app loop, handling messages from the engine.
-pub async fn run(state: &mut State, channels: &mut Channels<Ctx>) -> anyhow::Result<()> {
-    while let Some(msg) = channels.consensus.recv().await {
-        match msg {
+/// Run the reactor loop, handling both consensus messages and bitcoin events.
+pub async fn run(
+    state: &mut State,
+    channels: &mut Channels<Ctx>,
+    bitcoin_rx: &mut mpsc::Receiver<BitcoinEvent>,
+) -> anyhow::Result<()> {
+    loop {
+        tokio::select! {
+            Some(event) = bitcoin_rx.recv() => {
+                handle_bitcoin_event(state, event);
+            }
+            Some(msg) = channels.consensus.recv() => {
+                handle_consensus_msg(state, channels, msg).await?;
+            }
+            else => break,
+        }
+    }
+
+    Err(anyhow!("All channels closed"))
+}
+
+fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
+    match event {
+        BitcoinEvent::BlockInsert { block, .. } => {
+            state.chain_tip = block.height;
+            for tx in &block.transactions {
+                state.mempool.remove(&tx.txid.to_byte_array());
+            }
+            info!(
+                height = block.height,
+                txs = block.transactions.len(),
+                mempool = state.mempool.len(),
+                "Block confirmed"
+            );
+        }
+        BitcoinEvent::MempoolInsert(tx) => {
+            state.mempool.insert(tx.txid.to_byte_array());
+            debug!(txid = %tx.txid, mempool = state.mempool.len(), "Mempool insert");
+        }
+        BitcoinEvent::MempoolRemove(txid) => {
+            state.mempool.remove(&txid.to_byte_array());
+            debug!(%txid, mempool = state.mempool.len(), "Mempool remove");
+        }
+        BitcoinEvent::MempoolSync(txs) => {
+            state.mempool.clear();
+            for tx in txs {
+                state.mempool.insert(tx.txid.to_byte_array());
+            }
+            info!(mempool = state.mempool.len(), "Mempool sync");
+        }
+        BitcoinEvent::Rollback { to_height } => {
+            info!(to_height, "Bitcoin rollback");
+        }
+    }
+}
+
+async fn handle_consensus_msg(
+    state: &mut State,
+    channels: &mut Channels<Ctx>,
+    msg: AppMsg<Ctx>,
+) -> anyhow::Result<()> {
+    match msg {
             AppMsg::ConsensusReady { reply } => {
                 let start_height = state.current_height;
                 info!(%start_height, "Consensus is ready");
@@ -371,7 +435,6 @@ pub async fn run(state: &mut State, channels: &mut Channels<Ctx>) -> anyhow::Res
                 }
             }
         }
-    }
 
-    Err(anyhow!("Consensus channel closed unexpectedly"))
+    Ok(())
 }
