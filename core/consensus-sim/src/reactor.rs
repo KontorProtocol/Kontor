@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::anyhow;
 use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+
+use crate::DecidedBatch;
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -23,6 +26,7 @@ use indexer::consensus::{
 };
 
 pub struct State {
+    node_index: usize,
     signing_provider: Ed25519Provider,
     genesis: Genesis,
     address: Address,
@@ -34,11 +38,21 @@ pub struct State {
     // Bitcoin state
     mempool: HashSet<[u8; 32]>,
     chain_tip: u64,
+
+    // Observation channel for tests
+    decided_tx: Option<mpsc::Sender<DecidedBatch>>,
 }
 
 impl State {
-    pub fn new(signing_provider: Ed25519Provider, genesis: Genesis, address: Address) -> Self {
+    pub fn new(
+        node_index: usize,
+        signing_provider: Ed25519Provider,
+        genesis: Genesis,
+        address: Address,
+        decided_tx: Option<mpsc::Sender<DecidedBatch>>,
+    ) -> Self {
         Self {
+            node_index,
             signing_provider,
             genesis,
             address,
@@ -48,6 +62,7 @@ impl State {
             undecided: BTreeMap::new(),
             mempool: HashSet::new(),
             chain_tip: 0,
+            decided_tx,
         }
     }
 
@@ -128,9 +143,14 @@ pub async fn run(
     state: &mut State,
     channels: &mut Channels<Ctx>,
     bitcoin_rx: &mut mpsc::Receiver<BitcoinEvent>,
+    cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     loop {
         tokio::select! {
+            _ = cancel.cancelled() => {
+                info!("Reactor cancelled");
+                return Ok(());
+            }
             Some(event) = bitcoin_rx.recv() => {
                 handle_bitcoin_event(state, event);
             }
@@ -333,6 +353,13 @@ async fn handle_consensus_msg(
                     .undecided
                     .remove(&(certificate.height, certificate.round))
                 {
+                    if let Some(tx) = &state.decided_tx {
+                        let _ = tx.try_send(DecidedBatch {
+                            node_index: state.node_index,
+                            consensus_height: certificate.height,
+                            value: proposal.value.clone(),
+                        });
+                    }
                     state
                         .decided
                         .insert(certificate.height, (proposal.value, certificate.clone()));

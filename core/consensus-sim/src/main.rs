@@ -6,21 +6,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
+use consensus_sim::{make_config, mock_bitcoin, run_node};
 use indexer::bitcoin_follower::event::BitcoinEvent;
-use malachitebft_app_channel::app::config::*;
-use malachitebft_app_channel::app::types::Keypair;
+use indexer::consensus::signing::PrivateKey;
+use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use malachitebft_app_channel::app::types::core::VotingPower;
-use malachitebft_app_channel::{
-    ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
-};
-
-use indexer::consensus::codec::ProtobufCodec;
-use indexer::consensus::signing::{Ed25519Provider, PrivateKey};
-use indexer::consensus::{Address, Ctx, Genesis, Validator, ValidatorSet};
-
-mod mock_bitcoin;
-mod reactor;
-use reactor::State;
 
 const CONSENSUS_BASE_PORT: usize = 27000;
 
@@ -30,99 +20,6 @@ struct Args {
     /// Number of validators to run
     #[arg(long, default_value_t = 1)]
     validators: usize,
-}
-
-/// Minimal config implementing NodeConfig for start_engine.
-#[derive(Clone, Debug, Default)]
-struct SimConfig {
-    moniker: String,
-    consensus: ConsensusConfig,
-    value_sync: ValueSyncConfig,
-}
-
-impl NodeConfig for SimConfig {
-    fn moniker(&self) -> &str {
-        &self.moniker
-    }
-    fn consensus(&self) -> &ConsensusConfig {
-        &self.consensus
-    }
-    fn consensus_mut(&mut self) -> &mut ConsensusConfig {
-        &mut self.consensus
-    }
-    fn value_sync(&self) -> &ValueSyncConfig {
-        &self.value_sync
-    }
-    fn value_sync_mut(&mut self) -> &mut ValueSyncConfig {
-        &mut self.value_sync
-    }
-}
-
-fn make_config(index: usize, total: usize) -> SimConfig {
-    let persistent_peers: Vec<_> = (0..total)
-        .filter(|j| *j != index)
-        .map(|j| TransportProtocol::Tcp.multiaddr("127.0.0.1", CONSENSUS_BASE_PORT + j))
-        .collect();
-
-    SimConfig {
-        moniker: format!("sim-node-{index}"),
-        consensus: ConsensusConfig {
-            enabled: true,
-            value_payload: ValuePayload::ProposalAndParts,
-            p2p: P2pConfig {
-                listen_addr: TransportProtocol::Tcp
-                    .multiaddr("127.0.0.1", CONSENSUS_BASE_PORT + index),
-                persistent_peers,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        value_sync: ValueSyncConfig::default(),
-    }
-}
-
-async fn run_node(
-    index: usize,
-    private_key: PrivateKey,
-    genesis: Genesis,
-    config: SimConfig,
-    mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
-) -> Result<()> {
-    let public_key = private_key.public_key();
-    let address = Address::from_public_key(&public_key);
-    let keypair = Keypair::ed25519_from_bytes(private_key.inner().to_bytes())?;
-
-    info!(%address, "Starting validator");
-
-    let ctx = Ctx::new();
-    let wal_dir = tempfile::tempdir()?;
-    let wal_path = wal_dir.path().join("consensus.wal");
-
-    let identity = NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
-
-    let engine_provider = Ed25519Provider::new(private_key.clone());
-    let app_provider = Ed25519Provider::new(private_key);
-
-    let (mut channels, _engine_handle) = malachitebft_app_channel::start_engine(
-        ctx,
-        config,
-        WalContext::new(wal_path, ProtobufCodec),
-        NetworkContext::new(identity, ProtobufCodec),
-        ConsensusContext::new(address, engine_provider),
-        SyncContext::new(ProtobufCodec),
-        RequestContext::new(100),
-    )
-    .await?;
-
-    info!(node = index, "Engine started, entering app loop");
-
-    let mut state = State::new(app_provider, genesis, address);
-    reactor::run(&mut state, &mut channels, &mut bitcoin_rx)
-        .await
-        .map_err(|e| eyre::eyre!("{e}"))?;
-
-    drop(wal_dir);
-    Ok(())
 }
 
 #[tokio::main]
@@ -157,7 +54,6 @@ async fn main() -> Result<()> {
     let mock_bitcoin_tx = {
         let (tx, rx) = mpsc::channel(256);
         let btx = broadcast_tx.clone();
-        // Bridge: mpsc from mock_bitcoin::run → broadcast to all nodes
         tokio::spawn(async move {
             let mut rx = rx;
             while let Some(event) = rx.recv().await {
@@ -178,7 +74,7 @@ async fn main() -> Result<()> {
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, n);
+        let config = make_config(i, n, CONSENSUS_BASE_PORT);
 
         // Per-node: bridge broadcast → mpsc
         let bitcoin_rx = {
@@ -194,9 +90,12 @@ async fn main() -> Result<()> {
             rx
         };
 
+        let cancel = cancel_token.clone();
         join_set.spawn(
             async move {
-                if let Err(e) = run_node(i, private_key, genesis, config, bitcoin_rx).await {
+                if let Err(e) =
+                    run_node(i, private_key, genesis, config, bitcoin_rx, None, cancel).await
+                {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
             }
