@@ -314,7 +314,7 @@ impl Runtime {
         };
         let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
-        let canonical_signer = Signer::XOnlyPubKey(x_only_pk.to_string());
+        let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
         let bls_pubkey: [u8; 96] = bls_pubkey
             .try_into()

@@ -24,59 +24,15 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::BlsBulkOp;
+use indexer_types::{
+    BLS_BINDING_PREFIX, BLS_SIGNATURE_BYTES, BlsBulkOp, KONTOR_BLS_DST, MAX_BLS_BULK_OPS,
+    MAX_BLS_BULK_TOTAL_MESSAGE_BYTES, SCHNORR_BINDING_PREFIX,
+};
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
+use crate::runtime::registry::api::get_entry_by_id;
 
-// ---------------------------------------------------------------------------
-// Protocol constants
-// ---------------------------------------------------------------------------
-
-/// Domain-separating prefix for the Schnorr binding proof (Taproot → BLS).
-pub const SCHNORR_BINDING_PREFIX: &[u8] = b"KONTOR_XONLY_TO_BLS_V1";
-
-/// Domain-separating prefix for the BLS binding proof (BLS → Taproot).
-pub const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_BLS_TO_XONLY_V1";
-
-/// Hash-to-curve DST for protocol-level BLS signatures (BLS12-381 min_sig, G1).
-///
-/// Structured per RFC 9380 / draft-irtf-cfrg-bls-signature-05. Each segment is either
-/// fixed by the curve/security requirements or a deliberate Kontor protocol choice:
-///
-/// **Kontor protocol choices:**
-/// - `BLS_SIG` — tags this DST for signatures (the BLS spec defines separate DSTs
-///   for key-gen and PoP; we don't mix them into the same domain).
-/// - `BLS12381G1` — signatures live in G1 (48 bytes), pubkeys in G2 (96 bytes).
-///   This is the "min_sig" scheme. Kontor chose min_sig because signatures get
-///   aggregated and go on-chain (smaller = cheaper), while pubkeys live in the
-///   registry where 96 bytes is acceptable.
-/// - `NUL_` — basic scheme, no augmentation. The BLS spec offers three modes:
-///   NUL (sign raw message), AUG (auto-prepend signer pubkey), and POP (separate
-///   proof-of-possession ceremony). Kontor uses NUL because rogue key defense is
-///   handled explicitly via [`RegistrationProof`], which serves as the PoP. Using
-///   AUG would redundantly prepend the pubkey to every operation signature.
-///
-/// **Fixed by the curve / required for security:**
-/// - `XMD:SHA-256` — expand-message-XMD with SHA-256; the standard hash-to-curve
-///   expansion for BLS12-381.
-/// - `SSWU` — Simplified SWU map-to-curve; the only map-to-curve method specified
-///   for BLS12-381 G1 in RFC 9380.
-/// - `RO` — random-oracle security (hash-to-curve, not encode-to-curve); required
-///   for BLS signature EUF-CMA security.
-///
-/// Portal / storage node BLS uses *different* DSTs; those are intentionally not compatible.
-pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
-pub const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-
-/// Compressed BLS12-381 MinSig signature length in bytes.
-pub const BLS_SIGNATURE_BYTES: usize = 48;
-/// Hard cap on number of operations per `Inst::BlsBulk`.
-pub const MAX_BLS_BULK_OPS: usize = 10_000;
-/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
-///
-/// This is computed as the sum of `KONTOR-OP-V1 || postcard(op)` across all ops.
-pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
 
 // ---------------------------------------------------------------------------
 // Key derivation
@@ -142,19 +98,12 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
     msg
 }
 
-pub fn build_kontor_op_message(op: &BlsBulkOp) -> Result<Vec<u8>> {
-    let op_bytes = indexer_types::serialize(op)?;
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    Ok(msg)
-}
-
 async fn resolve_op_bls_pubkey_index(
     runtime: &mut Runtime,
     op: &BlsBulkOp,
     pubkeys: &mut Vec<BlsPublicKey>,
     pubkey_index_by_signer_id: &mut HashMap<u64, usize>,
+    pubkey_index_by_raw: &mut HashMap<Vec<u8>, usize>,
 ) -> Result<usize> {
     match op {
         BlsBulkOp::Call { signer_id, .. } => {
@@ -166,7 +115,7 @@ async fn resolve_op_bls_pubkey_index(
             }
 
             // Resolve the BLS pubkey from the on-chain registry mapping.
-            let entry = crate::runtime::registry::api::get_entry_by_id(runtime, signer_id).await?;
+            let entry = get_entry_by_id(runtime, signer_id).await?;
             let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
             // Subgroup validation is mandatory for BLS12-381 (cofactor safety).
             let pk = BlsPublicKey::key_validate(entry.bls_pubkey.as_slice())
@@ -177,13 +126,21 @@ async fn resolve_op_bls_pubkey_index(
             Ok(idx)
         }
         BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
+            // Deduplicate by raw pubkey bytes: multiple RegisterBlsKey ops for the same
+            // BLS pubkey reuse the validated key, avoiding redundant subgroup checks.
+            if let Some(&idx) = pubkey_index_by_raw.get(bls_pubkey.as_slice()) {
+                return Ok(idx);
+            }
+
             // Register ops carry the raw pubkey being registered, so the aggregate can be
             // verified without relying on prior registry state.
             // Subgroup validation is mandatory here as well (reject malformed points).
             let pk = BlsPublicKey::key_validate(bls_pubkey.as_slice())
                 .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
             pubkeys.push(pk);
-            Ok(pubkeys.len() - 1)
+            let idx = pubkeys.len() - 1;
+            pubkey_index_by_raw.insert(bls_pubkey.clone(), idx);
+            Ok(idx)
         }
     }
 }
@@ -223,11 +180,12 @@ pub async fn verify_bls_bulk(
     let mut pk_indices: Vec<usize> = Vec::with_capacity(ops.len());
     let mut unique_pks: Vec<BlsPublicKey> = Vec::new();
     let mut signer_pk_index: HashMap<u64, usize> = HashMap::new();
+    let mut register_pk_index: HashMap<Vec<u8>, usize> = HashMap::new();
 
     for op in ops {
         // 5) Reconstruct the exact bytes each signer must have authorized. If the bundler
         // mutates any op field after signing, this message changes and verification fails.
-        let msg = build_kontor_op_message(op)?;
+        let msg = op.signing_message()?;
         // 6) DoS hardening: cap total signed bytes we will hash-to-curve & verify.
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
@@ -239,9 +197,15 @@ pub async fn verify_bls_bulk(
         msgs.push(msg);
 
         // 7) Resolve the BLS public key for this op (registry lookup for Calls; inline for
-        // Register ops). Subgroup validation happens during resolution.
-        let pk_index =
-            resolve_op_bls_pubkey_index(runtime, op, &mut unique_pks, &mut signer_pk_index).await?;
+        // Register ops). Both paths deduplicate and cache to avoid redundant subgroup checks.
+        let pk_index = resolve_op_bls_pubkey_index(
+            runtime,
+            op,
+            &mut unique_pks,
+            &mut signer_pk_index,
+            &mut register_pk_index,
+        )
+        .await?;
         pk_indices.push(pk_index);
     }
 

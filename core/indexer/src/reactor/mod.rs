@@ -17,17 +17,13 @@ use bitcoin::{BlockHash, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::event::BitcoinEvent,
-    block::{filter_map, inspect},
-    database::{
+    bitcoin_follower::event::BitcoinEvent, block::{filter_map, inspect}, bls::verify_bls_bulk, database::{
         self,
         queries::{
             insert_block, insert_processed_block, insert_transaction, rollback_to_height,
             select_block_at_height, select_block_latest, set_block_processed,
         },
-    },
-    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
-    test_utils::new_mock_block_hash,
+    }, runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer}, test_utils::new_mock_block_hash
 };
 
 pub type Simulation = (
@@ -165,9 +161,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    if let Err(e) =
-                        crate::bls::verify_bls_bulk(runtime, ops.as_slice(), signature).await
-                    {
+                    if let Err(e) = verify_bls_bulk(runtime, ops.as_slice(), signature).await {
                         warn!("BlsBulk aggregate verification failed: {e}");
                         continue;
                     }
@@ -194,18 +188,26 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 contract,
                                 expr,
                             } => {
-                                let entry = crate::runtime::registry::api::get_entry_by_id(
+                                let entry = match crate::runtime::registry::api::get_entry_by_id(
                                     runtime, *signer_id,
                                 )
-                                .await?;
-                                let Some(entry) = entry else {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
-                                    warn!(
-                                        "BlsBulk call operation failed: unknown signer_id {}",
-                                        signer_id
-                                    );
-                                    continue;
+                                .await
+                                {
+                                    Ok(Some(entry)) => entry,
+                                    Ok(None) => {
+                                        warn!(
+                                            "BlsBulk call operation failed: unknown signer_id {}",
+                                            signer_id
+                                        );
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "BlsBulk call operation failed: registry lookup error for signer_id {}: {e}",
+                                            signer_id
+                                        );
+                                        continue;
+                                    }
                                 };
                                 let signer = Signer::XOnlyPubKey(entry.x_only_pubkey);
                                 runtime.set_gas_limit(*gas_limit);

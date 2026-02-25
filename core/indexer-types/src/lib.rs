@@ -266,6 +266,41 @@ pub struct OpMetadata {
     pub signer: Signer,
 }
 
+// ---------------------------------------------------------------------------
+// BLS protocol constants
+// ---------------------------------------------------------------------------
+
+/// Hash-to-curve DST for protocol-level BLS signatures (BLS12-381 min_sig, G1).
+///
+/// Structured per RFC 9380 / draft-irtf-cfrg-bls-signature-05:
+/// - `BLS_SIG` — signature domain
+/// - `BLS12381G1` — min_sig scheme (signatures in G1, 48 bytes)
+/// - `XMD:SHA-256` — expand-message-XMD with SHA-256
+/// - `SSWU` — Simplified SWU map-to-curve
+/// - `RO` — random-oracle security
+/// - `NUL_` — basic scheme; rogue-key defense handled via RegistrationProof
+pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
+
+/// Domain-separating prefix for BLS operation signing messages.
+pub const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
+
+/// Compressed BLS12-381 MinSig signature length in bytes.
+pub const BLS_SIGNATURE_BYTES: usize = 48;
+
+/// Hard cap on number of operations per `Inst::BlsBulk`.
+pub const MAX_BLS_BULK_OPS: usize = 10_000;
+
+/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
+pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
+
+/// Domain-separating prefix for the Schnorr binding proof (Taproot → BLS).
+pub const SCHNORR_BINDING_PREFIX: &[u8] = b"KONTOR_XONLY_TO_BLS_V1";
+
+/// Domain-separating prefix for the BLS binding proof (BLS → Taproot).
+pub const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_BLS_TO_XONLY_V1";
+
+// ---------------------------------------------------------------------------
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
@@ -286,6 +321,19 @@ pub enum BlsBulkOp {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+}
+
+impl BlsBulkOp {
+    /// Build the domain-separated message that signers authorize for this operation.
+    ///
+    /// Returns `KONTOR-OP-V1 || postcard(self)`.
+    pub fn signing_message(&self) -> Result<Vec<u8>> {
+        let op_bytes = serialize(self)?;
+        let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
+        msg.extend_from_slice(KONTOR_OP_PREFIX);
+        msg.extend_from_slice(&op_bytes);
+        Ok(msg)
+    }
 }
 
 #[serde_as]
@@ -542,4 +590,9 @@ pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {
 
 pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
     bytes_to_json::<OpReturnData>(bytes)
+}
+
+pub fn bls_bulk_op_signing_message_from_json(json: String) -> Vec<u8> {
+    let op = serde_json::from_str::<BlsBulkOp>(&json).expect("Invalid BlsBulkOp JSON");
+    op.signing_message().expect("Failed to build signing message")
 }

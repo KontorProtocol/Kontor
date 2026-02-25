@@ -2,9 +2,8 @@ use anyhow::{Result, anyhow};
 use bitcoin::consensus::encode::deserialize_hex;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
-use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
+use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, KONTOR_BLS_DST};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -14,16 +13,6 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/registry/wit",
 );
-
-const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-
-fn build_kontor_op_message(op: &BlsBulkOp) -> Result<Vec<u8>> {
-    let op_bytes = indexer_types::serialize(op)?;
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    Ok(msg)
-}
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
@@ -86,8 +75,8 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     };
 
     // Each signer signs their op message; publisher aggregates.
-    let msg0 = build_kontor_op_message(&op0)?;
-    let msg1 = build_kontor_op_message(&op1)?;
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
@@ -218,9 +207,9 @@ async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
         expr: arith::wave::eval_call_expr(11, arith::Op::Id),
     };
 
-    let msg0 = build_kontor_op_message(&op0)?;
-    let msg1 = build_kontor_op_message(&op1)?;
-    let msg2 = build_kontor_op_message(&op2)?;
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
+    let msg2 = op2.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
@@ -289,7 +278,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         contract: arith_contract,
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
     };
-    let msg = build_kontor_op_message(&op)?;
+    let msg = op.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
@@ -372,8 +361,8 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         expr: arith::wave::eval_call_expr(4, arith::Op::Id),
     };
 
-    let msg0 = build_kontor_op_message(&op0)?;
-    let msg1 = build_kontor_op_message(&op1)?;
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)

@@ -51,6 +51,22 @@ impl Guest for Lib {
             Err(e) => ValidationResult::ParseError(e.message),
         }
     }
+
+    fn get_bls_constants() -> BlsConstants {
+        BlsConstants {
+            kontor_bls_dst: String::from(core::str::from_utf8(KONTOR_BLS_DST).unwrap()),
+            kontor_op_prefix: String::from(core::str::from_utf8(KONTOR_OP_PREFIX).unwrap()),
+            bls_signature_bytes: BLS_SIGNATURE_BYTES as u32,
+            max_bls_bulk_ops: MAX_BLS_BULK_OPS as u32,
+            max_bls_bulk_total_message_bytes: MAX_BLS_BULK_TOTAL_MESSAGE_BYTES as u32,
+            schnorr_binding_prefix: String::from(core::str::from_utf8(SCHNORR_BINDING_PREFIX).unwrap()),
+            bls_binding_prefix: String::from(core::str::from_utf8(BLS_BINDING_PREFIX).unwrap()),
+        }
+    }
+
+    fn bls_bulk_op_signing_message(json_str: String) -> Vec<u8> {
+        bls_bulk_op_signing_message_from_json(json_str)
+    }
 }
 
 export!(Lib);

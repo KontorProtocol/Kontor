@@ -1,18 +1,8 @@
 use bitcoin::Network;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
-use indexer::bls::{KONTOR_BLS_DST, bls_derivation_path, derive_bls_secret_key_eip2333};
-use indexer_types::{BlsBulkOp, ContractAddress};
-
-const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-
-fn build_kontor_op_message(op: &BlsBulkOp) -> Vec<u8> {
-    let op_bytes = indexer_types::serialize(op).expect("failed to serialize BlsBulkOp");
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    msg
-}
+use indexer::bls::{bls_derivation_path, derive_bls_secret_key_eip2333};
+use indexer_types::{BlsBulkOp, ContractAddress, KONTOR_BLS_DST};
 
 fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
     let seed = [seed_byte; 64];
@@ -46,8 +36,8 @@ fn bls_bulk_aggregate_signature_roundtrip() {
         expr: "eval(10, sum({y: 8}))".to_string(),
     };
 
-    let msg1 = build_kontor_op_message(&op1);
-    let msg2 = build_kontor_op_message(&op2);
+    let msg1 = op1.signing_message().unwrap();
+    let msg2 = op2.signing_message().unwrap();
     let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
     let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
 
@@ -93,8 +83,8 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         expr: "eval(10, sum({y: 8}))".to_string(),
     };
 
-    let msg1 = build_kontor_op_message(&op1);
-    let msg2 = build_kontor_op_message(&op2);
+    let msg1 = op1.signing_message().unwrap();
+    let msg2 = op2.signing_message().unwrap();
     let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
     let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
 
@@ -118,7 +108,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         contract: contract.clone(),
         expr: expr.clone(),
     };
-    let msg1_mutated = build_kontor_op_message(&op1_mutated);
+    let msg1_mutated = op1_mutated.signing_message().unwrap();
 
     let messages = [msg1_mutated, msg2];
     let msg_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
@@ -171,7 +161,7 @@ fn bls_bulk_message_changes_when_signer_id_changes() {
         expr: "eval(10, id)".to_string(),
     };
 
-    let msg1 = build_kontor_op_message(&op1);
-    let msg2 = build_kontor_op_message(&op2);
+    let msg1 = op1.signing_message().unwrap();
+    let msg2 = op2.signing_message().unwrap();
     assert_ne!(msg1, msg2, "signer_id must affect signed bytes");
 }

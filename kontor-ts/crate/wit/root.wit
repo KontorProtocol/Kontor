@@ -19,4 +19,17 @@ world root {
   }
 
   export validate-wit: func(wit-content: string) -> validation-result;
+
+  record bls-constants {
+    kontor-bls-dst: string,
+    kontor-op-prefix: string,
+    bls-signature-bytes: u32,
+    max-bls-bulk-ops: u32,
+    max-bls-bulk-total-message-bytes: u32,
+    schnorr-binding-prefix: string,
+    bls-binding-prefix: string,
+  }
+
+  export get-bls-constants: func() -> bls-constants;
+  export bls-bulk-op-signing-message: func(json-str: string) -> list<u8>;
 }
