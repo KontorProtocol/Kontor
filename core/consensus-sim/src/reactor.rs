@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::anyhow;
 use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::DecidedBatch;
 
@@ -25,6 +25,29 @@ use indexer::consensus::{
     ValidatorSet, Value,
 };
 
+pub const FINALITY_WINDOW: u64 = 6;
+
+#[derive(Debug, Clone)]
+pub struct PendingBatch {
+    pub consensus_height: Height,
+    pub anchor_height: u64,
+    pub txids: Vec<[u8; 32]>,
+    pub deadline: u64, // anchor_height + FINALITY_WINDOW
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FinalityEvent {
+    BatchFinalized {
+        consensus_height: Height,
+        anchor_height: u64,
+    },
+    Rollback {
+        from_anchor: u64,
+        invalidated_batches: Vec<Height>,
+        missing_txids: Vec<[u8; 32]>,
+    },
+}
+
 pub struct State {
     node_index: usize,
     signing_provider: Ed25519Provider,
@@ -39,8 +62,13 @@ pub struct State {
     mempool: HashSet<[u8; 32]>,
     chain_tip: u64,
 
-    // Observation channel for tests
+    // Finality tracking
+    pending_batches: Vec<PendingBatch>,
+    confirmed_txids: HashMap<[u8; 32], u64>, // txid -> block height where first confirmed
+
+    // Observation channels
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
+    finality_tx: Option<mpsc::Sender<FinalityEvent>>,
 }
 
 impl State {
@@ -50,6 +78,7 @@ impl State {
         genesis: Genesis,
         address: Address,
         decided_tx: Option<mpsc::Sender<DecidedBatch>>,
+        finality_tx: Option<mpsc::Sender<FinalityEvent>>,
     ) -> Self {
         Self {
             node_index,
@@ -62,7 +91,10 @@ impl State {
             undecided: BTreeMap::new(),
             mempool: HashSet::new(),
             chain_tip: 0,
+            pending_batches: Vec::new(),
+            confirmed_txids: HashMap::new(),
             decided_tx,
+            finality_tx,
         }
     }
 
@@ -73,6 +105,122 @@ impl State {
     fn make_value(&mut self) -> Value {
         let txids: Vec<[u8; 32]> = self.mempool.iter().copied().collect();
         Value::new(self.chain_tip, txids)
+    }
+
+    /// Record a decided batch for finality tracking.
+    fn record_decided_batch(&mut self, consensus_height: Height, value: &Value) {
+        let pending = PendingBatch {
+            consensus_height,
+            anchor_height: value.anchor_height,
+            txids: value.txids.clone(),
+            deadline: value.anchor_height + FINALITY_WINDOW,
+        };
+        info!(
+            consensus_height = %consensus_height,
+            anchor = value.anchor_height,
+            deadline = pending.deadline,
+            txids = value.txids.len(),
+            "Tracking batch for finality"
+        );
+        self.pending_batches.push(pending);
+    }
+
+    /// Record txids confirmed in a block. Returns finality events triggered by the new tip.
+    fn record_confirmed_block(&mut self, height: u64, txids: &[[u8; 32]]) -> Vec<FinalityEvent> {
+        for txid in txids {
+            self.confirmed_txids.entry(*txid).or_insert(height);
+        }
+        self.check_finality()
+    }
+
+    /// Check all pending batches whose deadline <= chain_tip.
+    fn check_finality(&mut self) -> Vec<FinalityEvent> {
+        let mut events = Vec::new();
+        let tip = self.chain_tip;
+
+        // Partition: batches that have reached their deadline vs still pending
+        let mut still_pending = Vec::new();
+        let mut at_deadline = Vec::new();
+
+        for batch in self.pending_batches.drain(..) {
+            if batch.deadline <= tip {
+                at_deadline.push(batch);
+            } else {
+                still_pending.push(batch);
+            }
+        }
+
+        // Sort by anchor so we process earliest anchors first
+        at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+        for batch in &at_deadline {
+            let missing: Vec<[u8; 32]> = batch
+                .txids
+                .iter()
+                .filter(|txid| !self.confirmed_txids.contains_key(*txid))
+                .copied()
+                .collect();
+
+            if missing.is_empty() {
+                info!(
+                    consensus_height = %batch.consensus_height,
+                    anchor = batch.anchor_height,
+                    "Batch finalized"
+                );
+                events.push(FinalityEvent::BatchFinalized {
+                    consensus_height: batch.consensus_height,
+                    anchor_height: batch.anchor_height,
+                });
+            } else {
+                // Cascade: invalidate this batch and all still-pending batches
+                // from this anchor forward
+                let from_anchor = batch.anchor_height;
+                let mut invalidated = vec![batch.consensus_height];
+
+                // Pull out any still-pending batches at or after this anchor
+                let mut surviving = Vec::new();
+                for pending in still_pending.drain(..) {
+                    if pending.anchor_height >= from_anchor {
+                        invalidated.push(pending.consensus_height);
+                    } else {
+                        surviving.push(pending);
+                    }
+                }
+                still_pending = surviving;
+
+                // Also invalidate remaining at-deadline batches at or after this anchor
+                // (they haven't been processed yet in this loop iteration)
+
+                warn!(
+                    from_anchor,
+                    invalidated = ?invalidated,
+                    missing = missing.len(),
+                    "Cascade invalidation triggered"
+                );
+
+                events.push(FinalityEvent::Rollback {
+                    from_anchor,
+                    invalidated_batches: invalidated,
+                    missing_txids: missing,
+                });
+
+                // After a rollback, remaining at-deadline batches from this anchor
+                // forward are already invalidated — skip them by breaking.
+                // Batches at earlier anchors in at_deadline were already processed.
+                break;
+            }
+        }
+
+        self.pending_batches = still_pending;
+        events
+    }
+
+    fn emit_finality_events(&self, events: &[FinalityEvent]) {
+        if let Some(tx) = &self.finality_tx {
+            for event in events {
+                let _ = tx.try_send(event.clone());
+            }
+        }
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
@@ -168,8 +316,13 @@ fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
     match event {
         BitcoinEvent::BlockInsert { block, .. } => {
             state.chain_tip = block.height;
-            for tx in &block.transactions {
-                state.mempool.remove(&tx.txid.to_byte_array());
+            let confirmed_txids: Vec<[u8; 32]> = block
+                .transactions
+                .iter()
+                .map(|tx| tx.txid.to_byte_array())
+                .collect();
+            for txid in &confirmed_txids {
+                state.mempool.remove(txid);
             }
             info!(
                 height = block.height,
@@ -177,6 +330,8 @@ fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
                 mempool = state.mempool.len(),
                 "Block confirmed"
             );
+            let finality_events = state.record_confirmed_block(block.height, &confirmed_txids);
+            state.emit_finality_events(&finality_events);
         }
         BitcoinEvent::MempoolInsert(tx) => {
             state.mempool.insert(tx.txid.to_byte_array());
@@ -360,6 +515,7 @@ async fn handle_consensus_msg(
                             value: proposal.value.clone(),
                         });
                     }
+                    state.record_decided_batch(certificate.height, &proposal.value);
                     state
                         .decided
                         .insert(certificate.height, (proposal.value, certificate.clone()));

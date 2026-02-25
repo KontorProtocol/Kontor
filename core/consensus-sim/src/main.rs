@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
         join_set.spawn(
             async move {
                 if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, None, cancel).await
+                    run_node(i, private_key, genesis, config, bitcoin_rx, None, None, cancel).await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }

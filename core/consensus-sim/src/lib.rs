@@ -22,6 +22,8 @@ use indexer::consensus::{Address, Ctx, Genesis, Height, Validator, ValidatorSet}
 pub mod mock_bitcoin;
 pub mod reactor;
 
+pub use reactor::FinalityEvent;
+
 /// A decided batch observed from a node.
 #[derive(Debug, Clone)]
 pub struct DecidedBatch {
@@ -79,6 +81,7 @@ pub fn make_config(index: usize, total: usize, base_port: usize) -> SimConfig {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_node(
     index: usize,
     private_key: PrivateKey,
@@ -86,6 +89,7 @@ pub async fn run_node(
     config: SimConfig,
     mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
+    finality_tx: Option<mpsc::Sender<FinalityEvent>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let public_key = private_key.public_key();
@@ -117,7 +121,8 @@ pub async fn run_node(
 
     info!(node = index, "Engine started, entering app loop");
 
-    let mut state = reactor::State::new(index, app_provider, genesis, address, decided_tx);
+    let mut state =
+        reactor::State::new(index, app_provider, genesis, address, decided_tx, finality_tx);
     reactor::run(&mut state, &mut channels, &mut bitcoin_rx, cancel)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
@@ -130,6 +135,7 @@ pub async fn run_node(
 pub struct ClusterHandle {
     pub bitcoin_tx: broadcast::Sender<BitcoinEvent>,
     pub decided_rx: mpsc::Receiver<DecidedBatch>,
+    pub finality_rx: mpsc::Receiver<FinalityEvent>,
     pub cancel: CancellationToken,
     join_set: JoinSet<()>,
     node_count: usize,
@@ -171,6 +177,31 @@ impl ClusterHandle {
         results
     }
 
+    /// Collect finality events until we have at least `count`, or timeout.
+    pub async fn wait_for_finality_events(
+        &mut self,
+        count: usize,
+        timeout: Duration,
+    ) -> Vec<FinalityEvent> {
+        let mut events = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            if events.len() >= count {
+                break;
+            }
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(event) = self.finality_rx.recv() => {
+                    events.push(event);
+                }
+            }
+        }
+
+        events
+    }
+
     /// Shut down the cluster.
     pub async fn shutdown(mut self) {
         self.cancel.cancel();
@@ -196,8 +227,9 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
     let (bitcoin_tx, _) = broadcast::channel::<BitcoinEvent>(256);
     let cancel = CancellationToken::new();
 
-    // Single merged channel for all decided batches
+    // Single merged channels for observation
     let (decided_tx, decided_rx) = mpsc::channel(1024);
+    let (finality_tx, finality_rx) = mpsc::channel(1024);
 
     let mut join_set = JoinSet::new();
 
@@ -232,11 +264,12 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
         };
 
         let dtx = decided_tx.clone();
+        let ftx = finality_tx.clone();
 
         join_set.spawn(
             async move {
                 if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, Some(dtx), cancel).await
+                    run_node(i, private_key, genesis, config, bitcoin_rx, Some(dtx), Some(ftx), cancel).await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
@@ -248,6 +281,7 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
     Ok(ClusterHandle {
         bitcoin_tx,
         decided_rx,
+        finality_rx,
         cancel,
         join_set,
         node_count: n,
