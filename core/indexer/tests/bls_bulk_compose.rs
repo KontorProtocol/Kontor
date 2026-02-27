@@ -3,7 +3,8 @@ use bitcoin::consensus::encode::deserialize_hex;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, KONTOR_BLS_DST};
+use indexer::bls::KONTOR_BLS_DST;
+use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);

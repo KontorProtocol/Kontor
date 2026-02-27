@@ -24,15 +24,40 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::{
-    BLS_BINDING_PREFIX, BLS_SIGNATURE_BYTES, BlsBulkOp, KONTOR_BLS_DST, MAX_BLS_BULK_OPS,
-    MAX_BLS_BULK_TOTAL_MESSAGE_BYTES, SCHNORR_BINDING_PREFIX,
-};
+use indexer_types::BlsBulkOp;
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
 use crate::runtime::registry::api::get_entry_by_id;
 
+/// Hash-to-curve DST for protocol-level BLS signatures (BLS12-381 min_sig, G1).
+///
+/// Structured per RFC 9380 / draft-irtf-cfrg-bls-signature-05:
+/// - `BLS_SIG` — signature domain
+/// - `BLS12381G1` — min_sig scheme (signatures in G1, 48 bytes)
+/// - `XMD:SHA-256` — expand-message-XMD with SHA-256
+/// - `SSWU` — Simplified SWU map-to-curve
+/// - `RO` — random-oracle security
+/// - `NUL_` — basic scheme; rogue-key defense handled via RegistrationProof
+pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
+
+/// Domain-separating prefix for BLS operation signing messages.
+pub const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
+
+/// Compressed BLS12-381 MinSig signature length in bytes.
+pub const BLS_SIGNATURE_BYTES: usize = 48;
+
+/// Hard cap on number of operations per `Inst::BlsBulk`.
+pub const MAX_BLS_BULK_OPS: usize = 10_000;
+
+/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
+pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
+
+/// Domain-separating prefix for the Schnorr binding proof (Taproot → BLS).
+pub const SCHNORR_BINDING_PREFIX: &[u8] = b"KONTOR_XONLY_TO_BLS_V1";
+
+/// Domain-separating prefix for the BLS binding proof (BLS → Taproot).
+pub const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_BLS_TO_XONLY_V1";
 
 // ---------------------------------------------------------------------------
 // Key derivation
@@ -105,7 +130,12 @@ async fn resolve_op_bls_pubkey_index(
     pubkey_index_by_signer_id: &mut HashMap<u64, usize>,
     pubkey_index_by_raw: &mut HashMap<Vec<u8>, usize>,
 ) -> Result<usize> {
-    match op {
+    enum CacheKey {
+        SignerId(u64),
+        RawPubkey(Vec<u8>),
+    }
+
+    let (cache_key, pubkey_bytes) = match op {
         BlsBulkOp::Call { signer_id, .. } => {
             let signer_id = *signer_id;
             // Many ops share a signer. Cache `signer_id -> pubkey index` so we don't
@@ -113,17 +143,10 @@ async fn resolve_op_bls_pubkey_index(
             if let Some(&idx) = pubkey_index_by_signer_id.get(&signer_id) {
                 return Ok(idx);
             }
-
             // Resolve the BLS pubkey from the on-chain registry mapping.
             let entry = get_entry_by_id(runtime, signer_id).await?;
             let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-            // Subgroup validation is mandatory for BLS12-381 (cofactor safety).
-            let pk = BlsPublicKey::key_validate(entry.bls_pubkey.as_slice())
-                .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-            pubkeys.push(pk);
-            let idx = pubkeys.len() - 1;
-            pubkey_index_by_signer_id.insert(signer_id, idx);
-            Ok(idx)
+            (CacheKey::SignerId(signer_id), entry.bls_pubkey)
         }
         BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
             // Deduplicate by raw pubkey bytes: multiple RegisterBlsKey ops for the same
@@ -131,18 +154,28 @@ async fn resolve_op_bls_pubkey_index(
             if let Some(&idx) = pubkey_index_by_raw.get(bls_pubkey.as_slice()) {
                 return Ok(idx);
             }
-
             // Register ops carry the raw pubkey being registered, so the aggregate can be
             // verified without relying on prior registry state.
-            // Subgroup validation is mandatory here as well (reject malformed points).
-            let pk = BlsPublicKey::key_validate(bls_pubkey.as_slice())
-                .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-            pubkeys.push(pk);
-            let idx = pubkeys.len() - 1;
-            pubkey_index_by_raw.insert(bls_pubkey.clone(), idx);
-            Ok(idx)
+            (CacheKey::RawPubkey(bls_pubkey.clone()), bls_pubkey.clone())
+        }
+    };
+
+    // Subgroup validation is mandatory for BLS12-381 (cofactor safety).
+    let pk = BlsPublicKey::key_validate(pubkey_bytes.as_slice())
+        .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
+    pubkeys.push(pk);
+    let idx = pubkeys.len() - 1;
+
+    match cache_key {
+        CacheKey::SignerId(signer_id) => {
+            pubkey_index_by_signer_id.insert(signer_id, idx);
+        }
+        CacheKey::RawPubkey(raw) => {
+            pubkey_index_by_raw.insert(raw, idx);
         }
     }
+
+    Ok(idx)
 }
 
 pub async fn verify_bls_bulk(
@@ -182,10 +215,10 @@ pub async fn verify_bls_bulk(
     let mut signer_pk_index: HashMap<u64, usize> = HashMap::new();
     let mut register_pk_index: HashMap<Vec<u8>, usize> = HashMap::new();
 
-    for op in ops {
+    let prepared_msgs: Vec<Vec<u8>> = ops.iter().map(BlsBulkOp::signing_message).collect::<Result<_>>()?;
+    for (op, msg) in ops.iter().zip(prepared_msgs.into_iter()) {
         // 5) Reconstruct the exact bytes each signer must have authorized. If the bundler
         // mutates any op field after signing, this message changes and verification fails.
-        let msg = op.signing_message()?;
         // 6) DoS hardening: cap total signed bytes we will hash-to-curve & verify.
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
