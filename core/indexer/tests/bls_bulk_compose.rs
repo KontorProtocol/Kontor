@@ -15,16 +15,6 @@ import!(
     path = "../../native-contracts/registry/wit",
 );
 
-const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-
-fn build_kontor_op_message(op: &BlsBulkOp) -> Result<Vec<u8>> {
-    let op_bytes = indexer_types::serialize(op)?;
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    Ok(msg)
-}
-
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     // Two distinct signers inside the bundle; a third identity publishes the Bitcoin tx.
@@ -86,8 +76,8 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     };
 
     // Each signer signs their op message; publisher aggregates.
-    let msg0 = build_kontor_op_message(&op0)?;
-    let msg1 = build_kontor_op_message(&op1)?;
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
@@ -114,7 +104,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         "aggregate signature verification failed"
     );
 
-    // Compose + publish the BlsBulk container. (Indexer does not verify signature yet.)
+    // Compose + publish the BlsBulk container.
     let bls_bulk_inst = Inst::BlsBulk {
         ops: vec![op0, op1],
         signature: aggregate_sig.to_bytes().to_vec(),
@@ -218,53 +208,35 @@ async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
         expr: arith::wave::eval_call_expr(11, arith::Op::Id),
     };
 
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
+    let msg2 = op2.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
+    let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let sig2 = sk.sign(&msg2, KONTOR_BLS_DST, &[]);
+    let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1, &sig2], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+
     let res = reg_tester
         .instruction(
             &mut publisher,
             Inst::BlsBulk {
                 ops: vec![op0, op1, op2],
-                signature: vec![0u8; 48],
+                signature: aggregate.to_signature().to_bytes().to_vec(),
             },
         )
-        .await?;
-
-    let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&res.reveal_tx_hex)?;
-    let client = reg_tester.kontor_client().await;
-    let op1_result = client
-        .result(
-            &OpResultId::builder()
-                .txid(reveal_tx.compute_txid().to_string())
-                .op_index(1)
-                .build(),
-        )
-        .await?;
-    assert!(
-        op1_result.is_none(),
-        "unknown signer_id op should not produce a result"
-    );
-
-    let op2_result = client
-        .result(
-            &OpResultId::builder()
-                .txid(reveal_tx.compute_txid().to_string())
-                .op_index(2)
-                .build(),
-        )
-        .await?
-        .ok_or_else(|| anyhow!("missing result for op_index=2"))?;
-    let decoded2 = arith::wave::eval_parse_return_expr(
-        op2_result
-            .value
-            .as_deref()
-            .ok_or_else(|| anyhow!("missing value for op_index=2"))?,
-    );
-    assert_eq!(decoded2.value, 11);
+        .await;
+    assert!(res.is_err(), "expected unknown signer_id to reject bundle");
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
+    let mut signer = reg_tester.identity().await?;
     let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
     reg_tester
         .instruction(&mut publisher, Inst::Issuance)
         .await?;
@@ -301,21 +273,128 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         .await?;
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
+    let op = BlsBulkOp::Call {
+        signer_id: 999_999_999,
+        gas_limit: 50_000,
+        contract: arith_contract,
+        expr: arith::wave::eval_call_expr(10, arith::Op::Id),
+    };
+    let msg = op.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
     let res = reg_tester
         .instruction(
             &mut publisher,
             Inst::BlsBulk {
-                ops: vec![BlsBulkOp::Call {
-                    signer_id: 999_999_999,
-                    gas_limit: 50_000,
-                    contract: arith_contract,
-                    expr: arith::wave::eval_call_expr(10, arith::Op::Id),
-                }],
-                signature: vec![0u8; 48],
+                ops: vec![op],
+                signature: sig.to_bytes().to_vec(),
             },
         )
         .await;
     assert!(res.is_err(), "expected unregistered signer_id to fail");
+
+    let last_op_after_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
+    assert_eq!(last_op_after, last_op_before);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result<()> {
+    let mut signer1 = reg_tester.identity().await?;
+    let mut signer2 = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer1, Inst::Issuance).await?;
+    reg_tester.instruction(&mut signer2, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
+    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
+
+    let op0 = BlsBulkOp::Call {
+        signer_id: signer1_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(2, arith::Op::Id),
+    };
+    let op1 = BlsBulkOp::Call {
+        signer_id: signer2_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(3, arith::Op::Id),
+    };
+    let op1_tampered = BlsBulkOp::Call {
+        signer_id: signer2_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(4, arith::Op::Id),
+    };
+
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
+    let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
+    let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer2 BLS secret key: {e:?}"))?;
+    let sig0 = sk1.sign(&msg0, KONTOR_BLS_DST, &[]);
+    let sig1 = sk2.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+
+    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
+        .to_string()
+        .parse()
+        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
+    let last_op_before_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
+
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0, op1_tampered],
+                signature: aggregate.to_signature().to_bytes().to_vec(),
+            },
+        )
+        .await;
+    assert!(
+        res.is_err(),
+        "expected tampered op payload to fail aggregate verification"
+    );
 
     let last_op_after_wave = reg_tester
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
