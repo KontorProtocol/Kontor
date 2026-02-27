@@ -51,7 +51,6 @@ impl Guest for Lib {
             Err(e) => ValidationResult::ParseError(e.message),
         }
     }
-
 }
 
 export!(Lib);

@@ -19,5 +19,4 @@ world root {
   }
 
   export validate-wit: func(wit-content: string) -> validation-result;
-
 }

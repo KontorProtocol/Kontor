@@ -1,8 +1,8 @@
 use bitcoin::Network;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
-use indexer::bls::{bls_derivation_path, derive_bls_secret_key_eip2333};
 use indexer::bls::KONTOR_BLS_DST;
+use indexer::bls::{bls_derivation_path, derive_bls_secret_key_eip2333};
 use indexer_types::{BlsBulkOp, ContractAddress};
 
 fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {

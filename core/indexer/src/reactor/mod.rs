@@ -17,13 +17,18 @@ use bitcoin::{BlockHash, hashes::Hash};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::event::BitcoinEvent, block::{filter_map, inspect}, bls::verify_bls_bulk, database::{
+    bitcoin_follower::event::BitcoinEvent,
+    block::{filter_map, inspect},
+    bls::verify_bls_bulk,
+    database::{
         self,
         queries::{
             insert_block, insert_processed_block, insert_transaction, rollback_to_height,
             select_block_at_height, select_block_latest, set_block_processed,
         },
-    }, runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer}, test_utils::new_mock_block_hash
+    },
+    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
+    test_utils::new_mock_block_hash,
 };
 
 pub type Simulation = (

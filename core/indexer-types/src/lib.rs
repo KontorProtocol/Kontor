@@ -557,8 +557,3 @@ pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {
 pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
     bytes_to_json::<OpReturnData>(bytes)
 }
-
-pub fn bls_bulk_op_signing_message_from_json(json: String) -> Vec<u8> {
-    let op = serde_json::from_str::<BlsBulkOp>(&json).expect("Invalid BlsBulkOp JSON");
-    op.signing_message().expect("Failed to build signing message")
-}

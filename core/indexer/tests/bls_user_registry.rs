@@ -1,8 +1,8 @@
 use anyhow::Result;
 use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
-use indexer::bls::RegistrationProof;
 use indexer::bls::KONTOR_BLS_DST;
+use indexer::bls::RegistrationProof;
 use indexer_types::{BlsBulkOp, Inst, Signer};
 use testlib::*;
 
