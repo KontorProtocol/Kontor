@@ -288,6 +288,20 @@ pub enum BlsBulkOp {
     },
 }
 
+impl BlsBulkOp {
+    /// Build the domain-separated message that signers authorize for this operation.
+    ///
+    /// Returns `KONTOR-OP-V1 || postcard(self)`.
+    pub fn signing_message(&self) -> Result<Vec<u8>> {
+        const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
+        let op_bytes = serialize(self)?;
+        let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
+        msg.extend_from_slice(KONTOR_OP_PREFIX);
+        msg.extend_from_slice(&op_bytes);
+        Ok(msg)
+    }
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
