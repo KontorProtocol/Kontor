@@ -155,6 +155,80 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_call_only_does_not_require_pop_regtest() -> Result<()> {
+    // A single Call op bundle should verify and execute without any PoP signatures.
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+
+    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+
+    let op0 = BlsBulkOp::Call {
+        signer_id,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(5, arith::Op::Id),
+    };
+
+    let msg0 = op0.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
+
+    let aggregate = AggregateSignature::aggregate(&[&sig0], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+    let aggregate_sig = aggregate.to_signature();
+
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0],
+                signature: aggregate_sig.to_bytes().to_vec(),
+            },
+        )
+        .await?;
+
+    let v0 = res
+        .result
+        .value
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a return value for inner op 0"))?;
+    let decoded0 = arith::wave::eval_parse_return_expr(v0);
+    assert_eq!(decoded0.value, 5);
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
     let mut signer = reg_tester.identity().await?;
     let mut publisher = reg_tester.identity().await?;

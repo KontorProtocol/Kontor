@@ -236,13 +236,11 @@ pub async fn verify_bls_bulk(
     let mut signer_pk_index: HashMap<u64, usize> = HashMap::new();
     let mut register_pk_index: HashMap<Vec<u8>, usize> = HashMap::new();
 
-    let prepared_msgs: Vec<Vec<u8>> = ops
-        .iter()
-        .map(BlsBulkOp::signing_message)
-        .collect::<Result<_>>()?;
-    for (op, msg) in ops.iter().zip(prepared_msgs.into_iter()) {
+    for op in ops.iter() {
         // 5) Reconstruct the exact bytes each signer must have authorized. If the bundler
         // mutates any op field after signing, this message changes and verification fails.
+        let msg = op.signing_message()?;
+
         // 6) DoS hardening: cap total signed bytes we will hash-to-curve & verify.
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
@@ -264,11 +262,26 @@ pub async fn verify_bls_bulk(
         )
         .await?;
         pk_indices.push(pk_index);
+
+        // 8) PoP domain separation: registration ops must additionally prove knowledge of the
+        // secret key by signing `KONTOR-POP-V1 || bls_pubkey` in the same aggregate.
+        if let BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } = op {
+            let pop_msg = BlsBulkOp::pop_message(bls_pubkey.as_slice());
+            total_message_bytes = total_message_bytes.saturating_add(pop_msg.len());
+            if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
+                return Err(anyhow!(
+                    "BlsBulk signed message bytes exceed max {}",
+                    MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
+                ));
+            }
+            msgs.push(pop_msg);
+            pk_indices.push(pk_index);
+        }
     }
 
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
     let pk_refs: Vec<&BlsPublicKey> = pk_indices.iter().map(|i| &unique_pks[*i]).collect();
-    // 8) Aggregate verification proves every op's message was signed by the corresponding
+    // 9) Aggregate verification proves every message was signed by the corresponding
     // signer pubkey, while storing only a single 48-byte signature on-chain.
     let verify_result =
         aggregate_sig.aggregate_verify(true, msg_refs.as_slice(), KONTOR_BLS_DST, &pk_refs, true);
@@ -375,6 +388,7 @@ mod tests {
     use crate::runtime::{ComponentCache, Storage};
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
+    use blst::min_sig::AggregateSignature;
     use indexer_types::{ContractAddress, Signer};
     use tempfile::TempDir;
 
@@ -566,5 +580,101 @@ mod tests {
             .await
             .expect_err("invalid pubkey bytes must be rejected");
         assert!(err.to_string().contains("invalid BLS pubkey"));
+    }
+
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_register_op_missing_pop_signature() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+
+        let sk = BlsSecretKey::key_gen(&[11u8; 32], &[]).expect("BLS key_gen");
+        let pk_bytes = sk.sk_to_pk().to_bytes().to_vec();
+
+        let op = BlsBulkOp::RegisterBlsKey {
+            signer: Signer::XOnlyPubKey("00".repeat(32)),
+            bls_pubkey: pk_bytes,
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        };
+
+        // Sign only the op-authorization message, but omit the required PoP message.
+        let msg = op.signing_message().expect("signing_message");
+        let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]).to_bytes();
+
+        let err = verify_bls_bulk(&mut runtime, &[op], &sig)
+            .await
+            .expect_err("missing PoP must reject bundle");
+        assert!(
+            err.to_string()
+                .contains("BLS aggregate signature verification failed"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_register_op_with_wrong_pop_message() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+
+        let sk = BlsSecretKey::key_gen(&[12u8; 32], &[]).expect("BLS key_gen");
+        let mut pk_bytes = sk.sk_to_pk().to_bytes().to_vec();
+
+        let op = BlsBulkOp::RegisterBlsKey {
+            signer: Signer::XOnlyPubKey("00".repeat(32)),
+            bls_pubkey: pk_bytes.clone(),
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        };
+
+        let msg = op.signing_message().expect("signing_message");
+        let sig_op = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
+        // Sign a PoP for the *wrong* pubkey bytes.
+        pk_bytes[0] ^= 1;
+        let wrong_pop_msg = BlsBulkOp::pop_message(pk_bytes.as_slice());
+        let sig_pop_wrong = sk.sign(&wrong_pop_msg, KONTOR_BLS_DST, &[]);
+
+        let aggregate =
+            AggregateSignature::aggregate(&[&sig_op, &sig_pop_wrong], true).expect("aggregate");
+        let agg_bytes = aggregate.to_signature().to_bytes().to_vec();
+
+        let err = verify_bls_bulk(&mut runtime, &[op], agg_bytes.as_slice())
+            .await
+            .expect_err("wrong PoP message must reject bundle");
+        assert!(
+            err.to_string()
+                .contains("BLS aggregate signature verification failed"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_register_op_if_op_signature_is_reused_as_pop() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+
+        let sk = BlsSecretKey::key_gen(&[13u8; 32], &[]).expect("BLS key_gen");
+        let pk_bytes = sk.sk_to_pk().to_bytes().to_vec();
+
+        let op = BlsBulkOp::RegisterBlsKey {
+            signer: Signer::XOnlyPubKey("00".repeat(32)),
+            bls_pubkey: pk_bytes,
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        };
+
+        let msg = op.signing_message().expect("signing_message");
+        let sig_op = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
+        // Attempt to "satisfy" the PoP requirement by duplicating the op signature.
+        let aggregate =
+            AggregateSignature::aggregate(&[&sig_op, &sig_op], true).expect("aggregate");
+        let agg_bytes = aggregate.to_signature().to_bytes().to_vec();
+
+        let err = verify_bls_bulk(&mut runtime, &[op], agg_bytes.as_slice())
+            .await
+            .expect_err("reusing op signature for PoP must reject bundle");
+        assert!(
+            err.to_string()
+                .contains("BLS aggregate signature verification failed"),
+            "unexpected error: {err:?}"
+        );
     }
 }

@@ -289,6 +289,9 @@ pub enum BlsBulkOp {
 }
 
 impl BlsBulkOp {
+    /// Domain-separating prefix for BLS proof-of-possession (PoP) messages.
+    pub const KONTOR_POP_PREFIX: &[u8] = b"KONTOR-POP-V1";
+
     /// Build the domain-separated message that signers authorize for this operation.
     ///
     /// Returns `KONTOR-OP-V1 || postcard(self)`.
@@ -299,6 +302,16 @@ impl BlsBulkOp {
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);
         Ok(msg)
+    }
+
+    /// Build the PoP message bytes for a raw BLS public key.
+    ///
+    /// Returns `KONTOR-POP-V1 || bls_pubkey_bytes`.
+    pub fn pop_message(bls_pubkey: &[u8]) -> Vec<u8> {
+        let mut msg = Vec::with_capacity(Self::KONTOR_POP_PREFIX.len() + bls_pubkey.len());
+        msg.extend_from_slice(Self::KONTOR_POP_PREFIX);
+        msg.extend_from_slice(bls_pubkey);
+        msg
     }
 }
 

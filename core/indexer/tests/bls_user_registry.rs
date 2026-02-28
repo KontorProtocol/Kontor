@@ -71,13 +71,18 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
 
     let msg0 = op0.signing_message()?;
     let msg1 = op1.signing_message()?;
+    let pop0 = BlsBulkOp::pop_message(proof1.bls_pubkey.as_slice());
+    let pop1 = BlsBulkOp::pop_message(proof2.bls_pubkey.as_slice());
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&user1.bls_secret_key).unwrap();
     let sk2 = blst::min_sig::SecretKey::from_bytes(&user2.bls_secret_key).unwrap();
     let sig0 = sk1.sign(&msg0, KONTOR_BLS_DST, &[]);
     let sig1 = sk2.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let pop_sig0 = sk1.sign(&pop0, KONTOR_BLS_DST, &[]);
+    let pop_sig1 = sk2.sign(&pop1, KONTOR_BLS_DST, &[]);
 
-    let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true).unwrap();
+    let aggregate =
+        AggregateSignature::aggregate(&[&sig0, &pop_sig0, &sig1, &pop_sig1], true).unwrap();
     let aggregate_sig = aggregate.to_signature();
 
     let _res = reg_tester
