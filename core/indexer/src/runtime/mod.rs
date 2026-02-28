@@ -58,7 +58,7 @@ use wasmtime::{
     },
 };
 
-use crate::bls::RegistrationProof;
+use crate::bls::DirectRegistrationProof;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
@@ -300,12 +300,19 @@ impl Runtime {
         Ok(())
     }
 
+    /// Register a BLS key, used by both the direct (`Inst::RegisterBlsKey`) and
+    /// inline (`BlsBulkOp::RegisterBlsKey`) paths.
+    ///
+    /// When `bls_sig` is `Some`, this is the direct path: both Schnorr binding and
+    /// BLS PoP are verified here via [`DirectRegistrationProof`]. When `None`, this is
+    /// the inline path: the BLS PoP was already verified as part of the aggregate
+    /// signature in `verify_bls_bulk`, so only the Schnorr binding is checked.
     pub async fn register_bls_key(
         &mut self,
         signer: &Signer,
         bls_pubkey: &[u8],
         schnorr_sig: &[u8],
-        bls_sig: &[u8],
+        bls_sig: Option<&[u8]>,
     ) -> Result<()> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
 
@@ -314,7 +321,7 @@ impl Runtime {
         };
         let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
-        let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
+        let canonical_signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
         let bls_pubkey: [u8; 96] = bls_pubkey
             .try_into()
@@ -322,22 +329,31 @@ impl Runtime {
         let schnorr_sig: [u8; 64] = schnorr_sig
             .try_into()
             .map_err(|_| anyhow!("RegisterBlsKey expected 64 bytes for schnorr_sig"))?;
-        let bls_sig: [u8; 48] = bls_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
 
-        let proof = RegistrationProof {
-            x_only_pubkey: x_only_pk.serialize(),
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        };
-        proof.verify()?;
+        if let Some(bls_sig) = bls_sig {
+            let bls_sig: [u8; 48] = bls_sig
+                .try_into()
+                .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
+            let proof = DirectRegistrationProof {
+                x_only_pubkey: x_only_pk.serialize(),
+                bls_pubkey,
+                schnorr_sig,
+                bls_sig,
+            };
+            proof.verify()?;
+        } else {
+            let secp = bitcoin::key::Secp256k1::verification_only();
+            let schnorr_msg = crate::bls::schnorr_binding_message(&bls_pubkey);
+            let schnorr_sig_obj = bitcoin::secp256k1::schnorr::Signature::from_slice(&schnorr_sig)
+                .map_err(|e| anyhow!("invalid schnorr signature bytes: {e}"))?;
+            secp.verify_schnorr(&schnorr_sig_obj, &schnorr_msg, &x_only_pk)
+                .map_err(|e| anyhow!("schnorr binding verification failed: {e}"))?;
+        }
 
         registry::api::register_bls_key(
             self,
             &Signer::Core(Box::new(canonical_signer)),
-            proof.bls_pubkey.to_vec(),
+            bls_pubkey.to_vec(),
         )
         .await?
         .map(|_entry| ())

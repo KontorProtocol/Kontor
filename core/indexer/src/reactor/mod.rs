@@ -154,7 +154,7 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                             &metadata.signer,
                             bls_pubkey.as_slice(),
                             schnorr_sig.as_slice(),
-                            bls_sig.as_slice(),
+                            Some(bls_sig.as_slice()),
                         )
                         .await
                     {
@@ -166,10 +166,13 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    if let Err(e) = verify_bls_bulk(runtime, ops.as_slice(), signature).await {
-                        warn!("BlsBulk aggregate verification failed: {e}");
-                        continue;
-                    }
+                    let resolved_signers = match verify_bls_bulk(runtime, ops.as_slice(), signature).await {
+                        Ok(signers) => signers,
+                        Err(e) => {
+                            warn!("BlsBulk aggregate verification failed: {e}");
+                            continue;
+                        }
+                    };
 
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
@@ -193,35 +196,22 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 contract,
                                 expr,
                             } => {
-                                let entry = match crate::runtime::registry::api::get_entry_by_id(
-                                    runtime, *signer_id,
-                                )
-                                .await
-                                {
-                                    Ok(Some(entry)) => entry,
-                                    Ok(None) => {
+                                let x_only_pubkey = match resolved_signers.get(signer_id) {
+                                    Some(xonly) => xonly.clone(),
+                                    None => {
                                         warn!(
                                             "BlsBulk call operation failed: unknown signer_id {}",
                                             signer_id
                                         );
                                         continue;
                                     }
-                                    Err(e) => {
-                                        warn!(
-                                            "BlsBulk call operation failed: registry lookup error for signer_id {}: {e}",
-                                            signer_id
-                                        );
-                                        continue;
-                                    }
                                 };
-                                let signer = Signer::XOnlyPubKey(entry.x_only_pubkey);
+                                let signer = Signer::XOnlyPubKey(x_only_pubkey);
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
                                     .execute(Some(&signer), &(contract.into()), expr)
                                     .await;
                                 if result.is_err() {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk call operation failed: {:?}", result);
                                 }
                             }
@@ -229,19 +219,16 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 signer,
                                 bls_pubkey,
                                 schnorr_sig,
-                                bls_sig,
                             } => {
                                 if let Err(e) = runtime
                                     .register_bls_key(
                                         signer,
                                         bls_pubkey.as_slice(),
                                         schnorr_sig.as_slice(),
-                                        bls_sig.as_slice(),
+                                        None,
                                     )
                                     .await
                                 {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk RegisterBlsKey failed: {e}");
                                 }
                             }

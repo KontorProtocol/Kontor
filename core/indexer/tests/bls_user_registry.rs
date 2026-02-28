@@ -2,7 +2,7 @@ use anyhow::Result;
 use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::KONTOR_BLS_DST;
-use indexer::bls::RegistrationProof;
+use indexer::bls::DirectRegistrationProof;
 use indexer_types::{BlsBulkOp, Inst, Signer};
 use testlib::*;
 
@@ -19,7 +19,7 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
 
     reg_tester.instruction(&mut user, Inst::Issuance).await?;
 
-    let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
+    let proof = DirectRegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     reg_tester
         .instruction(
             &mut user,
@@ -53,26 +53,30 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
         .instruction(&mut publisher, Inst::Issuance)
         .await?;
 
-    let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
-    let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
+    let proof1 = DirectRegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
+    let proof2 = DirectRegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
 
     let op0 = BlsBulkOp::RegisterBlsKey {
         signer: Signer::XOnlyPubKey(user1.x_only_public_key().to_string()),
         bls_pubkey: proof1.bls_pubkey.to_vec(),
         schnorr_sig: proof1.schnorr_sig.to_vec(),
-        bls_sig: proof1.bls_sig.to_vec(),
     };
     let op1 = BlsBulkOp::RegisterBlsKey {
         signer: Signer::XOnlyPubKey(user2.x_only_public_key().to_string()),
         bls_pubkey: proof2.bls_pubkey.to_vec(),
         schnorr_sig: proof2.schnorr_sig.to_vec(),
-        bls_sig: proof2.bls_sig.to_vec(),
     };
 
     let msg0 = op0.signing_message()?;
     let msg1 = op1.signing_message()?;
-    let pop0 = BlsBulkOp::pop_message(proof1.bls_pubkey.as_slice());
-    let pop1 = BlsBulkOp::pop_message(proof2.bls_pubkey.as_slice());
+    let pop0 = BlsBulkOp::pop_message(
+        proof1.bls_pubkey.as_slice(),
+        &user1.x_only_public_key().serialize(),
+    );
+    let pop1 = BlsBulkOp::pop_message(
+        proof2.bls_pubkey.as_slice(),
+        &user2.x_only_public_key().serialize(),
+    );
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&user1.bls_secret_key).unwrap();
     let sk2 = blst::min_sig::SecretKey::from_bytes(&user2.bls_secret_key).unwrap();
@@ -116,7 +120,7 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
     let mut user = reg_tester.identity().await?;
     reg_tester.instruction(&mut user, Inst::Issuance).await?;
 
-    let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
+    let proof = DirectRegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     reg_tester
         .instruction(
             &mut user,
@@ -156,7 +160,7 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     let mut user = reg_tester.identity().await?;
     reg_tester.instruction(&mut user, Inst::Issuance).await?;
 
-    let original = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
+    let original = DirectRegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     reg_tester
         .instruction(
             &mut user,
@@ -171,7 +175,7 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     let mut ikm = [0u8; 32];
     ikm[0] = 99;
     let alt_sk = BlsSecretKey::key_gen(&ikm, &[]).expect("alt key_gen");
-    let alt_proof = RegistrationProof::new(&user.keypair, &alt_sk.to_bytes())?;
+    let alt_proof = DirectRegistrationProof::new(&user.keypair, &alt_sk.to_bytes())?;
 
     let xonly = user.x_only_public_key().to_string();
     let signer_id_before = registry::get_signer_id(runtime, &xonly).await?;

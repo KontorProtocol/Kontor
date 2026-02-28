@@ -7,9 +7,9 @@
 //! Scope of this file:
 //! - Derive a Taproot identity keypair from a seed via BIP-32/BIP-86.
 //! - Derive a Kontor BLS12-381 keypair from the same seed via EIP-2333 (native BLS key tree).
-//! - Produce a [`RegistrationProof`] via the smart constructor and verify it.
+//! - Produce a [`DirectRegistrationProof`] via the smart constructor and verify it.
 //! - Assert deterministic outputs (pubkeys) for a fixed seed + paths.
-use indexer::bls::RegistrationProof;
+use indexer::bls::DirectRegistrationProof;
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
@@ -28,7 +28,7 @@ async fn bls_key_derivation_and_registration() -> Result<()> {
     //
     // The constructor takes the Taproot keypair and BLS secret key, internally
     // builds the domain-separated messages, and produces both binding signatures.
-    let proof = RegistrationProof::new(&identity.keypair, &bls_secret_key)?;
+    let proof = DirectRegistrationProof::new(&identity.keypair, &bls_secret_key)?;
 
     // Sanity: the proof carries the same identity keys we derived.
     assert_eq!(proof.x_only_pubkey, xonly_bytes);

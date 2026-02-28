@@ -8,7 +8,7 @@ use crate::{
         types::{GetMempoolInfoResult, TestMempoolAcceptResult},
     },
     bls::{
-        RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
+        DirectRegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
         taproot_derivation_path,
     },
     config::RegtestConfig,
@@ -417,7 +417,7 @@ impl RegTesterInner {
         );
 
         let next_funding_utxo = (OutPoint { txid, vout: 0 }, tx.output[0].clone());
-        let proof = RegistrationProof::new(&keypair, &bls_secret_key)?;
+        let proof = DirectRegistrationProof::new(&keypair, &bls_secret_key)?;
         let mut identity = Identity {
             address,
             keypair,

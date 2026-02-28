@@ -21,7 +21,6 @@ export type BlsBulkOp = {
     signer: Signer;
     bls_pubkey: Array<number>;
     schnorr_sig: Array<number>;
-    bls_sig: Array<number>;
   };
 };
 
