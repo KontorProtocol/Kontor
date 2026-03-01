@@ -1274,6 +1274,7 @@ dependencies = [
  "informalsystems-malachitebft-core-types",
  "informalsystems-malachitebft-engine",
  "rand 0.8.5",
+ "serial_test",
  "sha3",
  "tempfile",
  "tokio",

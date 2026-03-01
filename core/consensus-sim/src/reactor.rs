@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::anyhow;
 use bitcoin::hashes::Hash;
@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::DecidedBatch;
+use crate::state_log::{StateLog, TxStatus};
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -48,6 +49,26 @@ pub enum FinalityEvent {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum StateEvent {
+    BlockProcessed {
+        height: u64,
+        unbatched_count: usize,
+        checkpoint: [u8; 32],
+    },
+    BatchApplied {
+        consensus_height: Height,
+        anchor_height: u64,
+        txid_count: usize,
+        checkpoint: [u8; 32],
+    },
+    RollbackExecuted {
+        to_anchor: u64,
+        entries_removed: usize,
+        checkpoint: [u8; 32],
+    },
+}
+
 pub struct State {
     node_index: usize,
     signing_provider: Ed25519Provider,
@@ -66,9 +87,16 @@ pub struct State {
     pending_batches: Vec<PendingBatch>,
     confirmed_txids: HashMap<[u8; 32], u64>, // txid -> block height where first confirmed
 
+    // State machine replication
+    state_log: StateLog,
+    block_history: BTreeMap<u64, Vec<[u8; 32]>>, // height -> txids in that block
+    pending_blocks: VecDeque<u64>,                // heights received but not yet processed
+    last_processed_anchor: u64,
+
     // Observation channels
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     finality_tx: Option<mpsc::Sender<FinalityEvent>>,
+    state_tx: Option<mpsc::Sender<StateEvent>>,
 }
 
 impl State {
@@ -79,6 +107,7 @@ impl State {
         address: Address,
         decided_tx: Option<mpsc::Sender<DecidedBatch>>,
         finality_tx: Option<mpsc::Sender<FinalityEvent>>,
+        state_tx: Option<mpsc::Sender<StateEvent>>,
     ) -> Self {
         Self {
             node_index,
@@ -93,8 +122,13 @@ impl State {
             chain_tip: 0,
             pending_batches: Vec::new(),
             confirmed_txids: HashMap::new(),
+            state_log: StateLog::new(),
+            block_history: BTreeMap::new(),
+            pending_blocks: VecDeque::new(),
+            last_processed_anchor: 0,
             decided_tx,
             finality_tx,
+            state_tx,
         }
     }
 
@@ -125,12 +159,11 @@ impl State {
         self.pending_batches.push(pending);
     }
 
-    /// Record txids confirmed in a block. Returns finality events triggered by the new tip.
-    fn record_confirmed_block(&mut self, height: u64, txids: &[[u8; 32]]) -> Vec<FinalityEvent> {
+    /// Record txids confirmed in a block for finality tracking.
+    fn record_confirmed_block(&mut self, height: u64, txids: &[[u8; 32]]) {
         for txid in txids {
             self.confirmed_txids.entry(*txid).or_insert(height);
         }
-        self.check_finality()
     }
 
     /// Check all pending batches whose deadline <= chain_tip.
@@ -221,6 +254,142 @@ impl State {
                 let _ = tx.try_send(event.clone());
             }
         }
+    }
+
+    fn emit_state_event(&self, event: StateEvent) {
+        if let Some(tx) = &self.state_tx {
+            let _ = tx.try_send(event);
+        }
+    }
+
+    /// Run finality checks and execute any rollbacks.
+    /// `replay_up_to` is the exclusive upper bound for block replay after rollback.
+    fn run_finality_checks(&mut self, replay_up_to: u64) {
+        let finality_events = self.check_finality();
+        for event in &finality_events {
+            if let FinalityEvent::Rollback { from_anchor, .. } = event {
+                let removed = self.rollback_state(*from_anchor);
+                info!(from_anchor, removed, "Rollback executed: truncated state log");
+
+                self.emit_state_event(StateEvent::RollbackExecuted {
+                    to_anchor: *from_anchor,
+                    entries_removed: removed,
+                    checkpoint: self.state_log.checkpoint(),
+                });
+
+                let replay_heights: Vec<u64> = self
+                    .block_history
+                    .range(*from_anchor..)
+                    .map(|(h, _)| *h)
+                    .filter(|h| *h < replay_up_to)
+                    .collect();
+                for h in replay_heights {
+                    if let Some(txids) = self.block_history.get(&h).cloned() {
+                        for txid in &txids {
+                            if self.validate_transaction(txid) {
+                                self.execute_transaction(h, *txid, TxStatus::Confirmed);
+                            }
+                        }
+                    }
+                }
+
+                self.last_processed_anchor = from_anchor.saturating_sub(1);
+            }
+        }
+        self.emit_finality_events(&finality_events);
+    }
+
+    // --- Extension points: replace with real implementations in production ---
+
+    /// Simulator: always true. Production: validate signatures, check WASM preconditions.
+    fn validate_transaction(&self, _txid: &[u8; 32]) -> bool {
+        true
+    }
+
+    /// Simulator: append to state log. Production: run WASM contract, write to DB.
+    fn execute_transaction(&mut self, anchor_height: u64, txid: [u8; 32], status: TxStatus) {
+        self.state_log.append_entry(anchor_height, txid, status);
+    }
+
+    /// Simulator: truncate state log. Production: DELETE FROM blocks WHERE height > ?.
+    fn rollback_state(&mut self, to_anchor: u64) -> usize {
+        self.state_log.rollback_to(to_anchor)
+    }
+
+    // --- End extension points ---
+
+    /// Two-phase processing triggered when a batch is decided at anchor A:
+    /// 1. Drain pending blocks up to (not including) A as unbatched
+    /// 2. Apply batch (first), then block A's unbatched txs (deduplicating)
+    ///
+    /// Finality checks run separately on BlockInsert, not here.
+    fn process_decided_batch(&mut self, anchor_height: u64, consensus_height: Height, batch_txids: &[[u8; 32]]) {
+        // Phase 1: process queued blocks before this anchor
+        while let Some(&next) = self.pending_blocks.front() {
+            if next >= anchor_height {
+                break;
+            }
+            self.pending_blocks.pop_front();
+            let mut unbatched_count = 0;
+            if let Some(block_txids) = self.block_history.get(&next).cloned() {
+                for txid in &block_txids {
+                    if self.validate_transaction(txid) {
+                        self.execute_transaction(next, *txid, TxStatus::Confirmed);
+                        unbatched_count += 1;
+                    }
+                }
+            }
+            self.emit_state_event(StateEvent::BlockProcessed {
+                height: next,
+                unbatched_count,
+                checkpoint: self.state_log.checkpoint(),
+            });
+        }
+
+        // Phase 2: apply batch txs first
+        for txid in batch_txids {
+            if self.validate_transaction(txid) {
+                self.execute_transaction(anchor_height, *txid, TxStatus::Batched);
+            }
+        }
+
+        // Phase 2b: apply unbatched txs from the anchor block (deduplicating against batch)
+        let batch_set: HashSet<[u8; 32]> = batch_txids.iter().copied().collect();
+        let mut unbatched_at_anchor = 0;
+        if let Some(block_txids) = self.block_history.get(&anchor_height).cloned() {
+            for txid in &block_txids {
+                if !batch_set.contains(txid) && self.validate_transaction(txid) {
+                    self.execute_transaction(anchor_height, *txid, TxStatus::Confirmed);
+                    unbatched_at_anchor += 1;
+                }
+            }
+        }
+
+        // Remove anchor from pending_blocks if present
+        self.pending_blocks.retain(|h| *h != anchor_height);
+        self.last_processed_anchor = anchor_height;
+
+        self.emit_state_event(StateEvent::BatchApplied {
+            consensus_height,
+            anchor_height,
+            txid_count: batch_txids.len(),
+            checkpoint: self.state_log.checkpoint(),
+        });
+
+        if unbatched_at_anchor > 0 {
+            self.emit_state_event(StateEvent::BlockProcessed {
+                height: anchor_height,
+                unbatched_count: unbatched_at_anchor,
+                checkpoint: self.state_log.checkpoint(),
+            });
+        }
+
+        info!(
+            anchor = anchor_height,
+            consensus_height = %consensus_height,
+            checkpoint = ?&self.state_log.checkpoint()[..4],
+            "Three-phase processing complete"
+        );
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
@@ -324,14 +493,31 @@ fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
             for txid in &confirmed_txids {
                 state.mempool.remove(txid);
             }
+
+            // Store block history for replay and queue for processing
+            state.block_history.insert(block.height, confirmed_txids.clone());
+            state.pending_blocks.push_back(block.height);
+
+            // Prune old block history
+            let prune_below = block.height.saturating_sub(FINALITY_WINDOW + 6);
+            state.block_history.retain(|h, _| *h >= prune_below);
+
             info!(
                 height = block.height,
                 txs = block.transactions.len(),
                 mempool = state.mempool.len(),
-                "Block confirmed"
+                "Block queued"
             );
-            let finality_events = state.record_confirmed_block(block.height, &confirmed_txids);
-            state.emit_finality_events(&finality_events);
+
+            // Record confirmed txids for finality tracking
+            state.record_confirmed_block(block.height, &confirmed_txids);
+
+            // Finality deadlines are reached by block arrivals, not consensus decisions.
+            // Check immediately so rollback/finalization isn't delayed until the next batch.
+            if state.pending_batches.iter().any(|b| b.deadline <= state.chain_tip) {
+                let replay_up_to = state.last_processed_anchor.saturating_add(1);
+                state.run_finality_checks(replay_up_to);
+            }
         }
         BitcoinEvent::MempoolInsert(tx) => {
             state.mempool.insert(tx.txid.to_byte_array());
@@ -516,6 +702,14 @@ async fn handle_consensus_msg(
                         });
                     }
                     state.record_decided_batch(certificate.height, &proposal.value);
+
+                    // Three-phase processing: blocks → finality check → batch + unbatched
+                    state.process_decided_batch(
+                        proposal.value.anchor_height,
+                        certificate.height,
+                        &proposal.value.txids.clone(),
+                    );
+
                     state
                         .decided
                         .insert(certificate.height, (proposal.value, certificate.clone()));

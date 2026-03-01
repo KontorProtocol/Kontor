@@ -6,13 +6,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
-use consensus_sim::{make_config, mock_bitcoin, run_node};
+use consensus_sim::{allocate_ports, make_config, mock_bitcoin, run_node};
 use indexer::bitcoin_follower::event::BitcoinEvent;
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use malachitebft_app_channel::app::types::core::VotingPower;
-
-const CONSENSUS_BASE_PORT: usize = 27000;
 
 #[derive(Parser)]
 #[command(name = "consensus-sim")]
@@ -70,11 +68,12 @@ async fn main() -> Result<()> {
         }
     });
 
+    let ports = allocate_ports(n)?;
     let mut join_set = tokio::task::JoinSet::new();
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, n, CONSENSUS_BASE_PORT);
+        let config = make_config(i, &ports);
 
         // Per-node: bridge broadcast → mpsc
         let bitcoin_rx = {
@@ -94,7 +93,7 @@ async fn main() -> Result<()> {
         join_set.spawn(
             async move {
                 if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, None, None, cancel).await
+                    run_node(i, private_key, genesis, config, bitcoin_rx, None, None, None, None, cancel).await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
