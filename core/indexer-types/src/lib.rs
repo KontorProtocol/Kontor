@@ -284,11 +284,13 @@ pub enum BlsBulkOp {
         signer: Signer,
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
-        bls_sig: Vec<u8>,
     },
 }
 
 impl BlsBulkOp {
+    /// Domain-separating prefix for BLS proof-of-possession (PoP) messages.
+    pub const KONTOR_POP_PREFIX: &[u8] = b"KONTOR-POP-V1";
+
     /// Build the domain-separated message that signers authorize for this operation.
     ///
     /// Returns `KONTOR-OP-V1 || postcard(self)`.
@@ -299,6 +301,23 @@ impl BlsBulkOp {
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);
         Ok(msg)
+    }
+
+    /// Build the PoP message that also binds the BLS key to a Taproot identity.
+    ///
+    /// Returns `KONTOR-POP-V1 || bls_pubkey || x_only_pubkey`.
+    ///
+    /// Serves dual purpose: rogue-key defense (proves BLS secret key knowledge)
+    /// and BLS→Taproot binding (commits to a specific Taproot identity),
+    /// eliminating the need for a separate BLS binding signature.
+    pub fn pop_message(bls_pubkey: &[u8], x_only_pubkey: &[u8]) -> Vec<u8> {
+        let mut msg = Vec::with_capacity(
+            Self::KONTOR_POP_PREFIX.len() + bls_pubkey.len() + x_only_pubkey.len(),
+        );
+        msg.extend_from_slice(Self::KONTOR_POP_PREFIX);
+        msg.extend_from_slice(bls_pubkey);
+        msg.extend_from_slice(x_only_pubkey);
+        msg
     }
 }
 
@@ -556,4 +575,53 @@ pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {
 
 pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
     bytes_to_json::<OpReturnData>(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signing_message_includes_schnorr_sig_for_register() {
+        let signer = Signer::XOnlyPubKey("ab".repeat(32));
+        let bls_pubkey = vec![0xBBu8; 96];
+
+        let op_a = BlsBulkOp::RegisterBlsKey {
+            signer: signer.clone(),
+            bls_pubkey: bls_pubkey.clone(),
+            schnorr_sig: vec![0u8; 64],
+        };
+        let op_b = BlsBulkOp::RegisterBlsKey {
+            signer,
+            bls_pubkey,
+            schnorr_sig: vec![0xFFu8; 64],
+        };
+
+        let msg_a = op_a.signing_message().unwrap();
+        let msg_b = op_b.signing_message().unwrap();
+        assert_ne!(msg_a, msg_b, "schnorr_sig must affect signing message");
+    }
+
+    #[test]
+    fn signing_message_differs_by_operational_fields() {
+        let signer = Signer::XOnlyPubKey("ab".repeat(32));
+
+        let op_a = BlsBulkOp::RegisterBlsKey {
+            signer: signer.clone(),
+            bls_pubkey: vec![0xAAu8; 96],
+            schnorr_sig: vec![0u8; 64],
+        };
+        let op_b = BlsBulkOp::RegisterBlsKey {
+            signer,
+            bls_pubkey: vec![0xBBu8; 96],
+            schnorr_sig: vec![0u8; 64],
+        };
+
+        let msg_a = op_a.signing_message().unwrap();
+        let msg_b = op_b.signing_message().unwrap();
+        assert_ne!(
+            msg_a, msg_b,
+            "different bls_pubkey must produce different signing message"
+        );
+    }
 }
