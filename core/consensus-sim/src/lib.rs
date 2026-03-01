@@ -21,8 +21,10 @@ use indexer::consensus::{Address, Ctx, Genesis, Height, Validator, ValidatorSet}
 
 pub mod mock_bitcoin;
 pub mod reactor;
+pub mod state_log;
 
 pub use reactor::FinalityEvent;
+pub use reactor::StateEvent;
 
 /// A decided batch observed from a node.
 #[derive(Debug, Clone)]
@@ -58,10 +60,12 @@ impl NodeConfig for SimConfig {
     }
 }
 
-pub fn make_config(index: usize, total: usize, base_port: usize) -> SimConfig {
-    let persistent_peers: Vec<_> = (0..total)
-        .filter(|j| *j != index)
-        .map(|j| TransportProtocol::Tcp.multiaddr("127.0.0.1", base_port + j))
+pub fn make_config(index: usize, ports: &[u16]) -> SimConfig {
+    let persistent_peers: Vec<_> = ports
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != index)
+        .map(|(_, &port)| TransportProtocol::Tcp.multiaddr("127.0.0.1", port as usize))
         .collect();
 
     SimConfig {
@@ -71,7 +75,7 @@ pub fn make_config(index: usize, total: usize, base_port: usize) -> SimConfig {
             value_payload: ValuePayload::ProposalAndParts,
             p2p: P2pConfig {
                 listen_addr: TransportProtocol::Tcp
-                    .multiaddr("127.0.0.1", base_port + index),
+                    .multiaddr("127.0.0.1", ports[index] as usize),
                 persistent_peers,
                 ..Default::default()
             },
@@ -79,6 +83,20 @@ pub fn make_config(index: usize, total: usize, base_port: usize) -> SimConfig {
         },
         value_sync: ValueSyncConfig::default(),
     }
+}
+
+/// Allocate `n` free TCP ports by binding to port 0 and reading the OS-assigned port.
+pub fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
+    let mut ports = Vec::with_capacity(n);
+    let mut listeners = Vec::with_capacity(n);
+    for _ in 0..n {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        ports.push(listener.local_addr()?.port());
+        listeners.push(listener);
+    }
+    // Drop listeners so the ports are available for Malachite to bind
+    drop(listeners);
+    Ok(ports)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -90,6 +108,8 @@ pub async fn run_node(
     mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     finality_tx: Option<mpsc::Sender<FinalityEvent>>,
+    state_tx: Option<mpsc::Sender<StateEvent>>,
+    ready_tx: Option<mpsc::Sender<usize>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let public_key = private_key.public_key();
@@ -121,8 +141,13 @@ pub async fn run_node(
 
     info!(node = index, "Engine started, entering app loop");
 
+    // Signal that this node's engine is up and listening
+    if let Some(tx) = ready_tx {
+        let _ = tx.send(index).await;
+    }
+
     let mut state =
-        reactor::State::new(index, app_provider, genesis, address, decided_tx, finality_tx);
+        reactor::State::new(index, app_provider, genesis, address, decided_tx, finality_tx, state_tx);
     reactor::run(&mut state, &mut channels, &mut bitcoin_rx, cancel)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
@@ -136,12 +161,36 @@ pub struct ClusterHandle {
     pub bitcoin_tx: broadcast::Sender<BitcoinEvent>,
     pub decided_rx: mpsc::Receiver<DecidedBatch>,
     pub finality_rx: mpsc::Receiver<FinalityEvent>,
+    pub state_rx: mpsc::Receiver<StateEvent>,
     pub cancel: CancellationToken,
     join_set: JoinSet<()>,
     node_count: usize,
+    ready_rx: mpsc::Receiver<usize>,
 }
 
 impl ClusterHandle {
+    /// Wait for all nodes to signal readiness (engine started, port bound).
+    pub async fn wait_for_ready(&mut self) {
+        let timeout = Duration::from_secs(30);
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        let mut ready_count = 0;
+        while ready_count < self.node_count {
+            tokio::select! {
+                _ = &mut deadline => {
+                    panic!(
+                        "Cluster readiness timeout: only {}/{} nodes ready after {timeout:?}",
+                        ready_count, self.node_count
+                    );
+                }
+                Some(_node_index) = self.ready_rx.recv() => {
+                    ready_count += 1;
+                }
+            }
+        }
+    }
+
     /// Send a bitcoin event to all nodes.
     pub fn send_bitcoin_event(&self, event: BitcoinEvent) {
         let _ = self.bitcoin_tx.send(event);
@@ -202,6 +251,31 @@ impl ClusterHandle {
         events
     }
 
+    /// Collect state events until we have at least `count`, or timeout.
+    pub async fn wait_for_state_events(
+        &mut self,
+        count: usize,
+        timeout: Duration,
+    ) -> Vec<StateEvent> {
+        let mut events = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            if events.len() >= count {
+                break;
+            }
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(event) = self.state_rx.recv() => {
+                    events.push(event);
+                }
+            }
+        }
+
+        events
+    }
+
     /// Shut down the cluster.
     pub async fn shutdown(mut self) {
         self.cancel.cancel();
@@ -212,7 +286,7 @@ impl ClusterHandle {
 }
 
 /// Spin up a cluster of `n` validators with Malachite consensus.
-pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
+pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     let mut rng = rand::thread_rng();
     let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
 
@@ -224,18 +298,22 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
     let validator_set = ValidatorSet::new(validators);
     let genesis = Genesis { validator_set };
 
+    let ports = allocate_ports(n)?;
+
     let (bitcoin_tx, _) = broadcast::channel::<BitcoinEvent>(256);
     let cancel = CancellationToken::new();
 
     // Single merged channels for observation
     let (decided_tx, decided_rx) = mpsc::channel(1024);
     let (finality_tx, finality_rx) = mpsc::channel(1024);
+    let (state_tx, state_rx) = mpsc::channel(1024);
+    let (ready_tx, ready_rx) = mpsc::channel(n);
 
     let mut join_set = JoinSet::new();
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, n, base_port);
+        let config = make_config(i, &ports);
         let cancel = cancel.clone();
 
         // Per-node: bridge broadcast → mpsc for bitcoin events
@@ -265,11 +343,13 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
 
         let dtx = decided_tx.clone();
         let ftx = finality_tx.clone();
+        let stx = state_tx.clone();
+        let rtx = ready_tx.clone();
 
         join_set.spawn(
             async move {
                 if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, Some(dtx), Some(ftx), cancel).await
+                    run_node(i, private_key, genesis, config, bitcoin_rx, Some(dtx), Some(ftx), Some(stx), Some(rtx), cancel).await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
@@ -282,8 +362,10 @@ pub async fn run_cluster(n: usize, base_port: usize) -> Result<ClusterHandle> {
         bitcoin_tx,
         decided_rx,
         finality_rx,
+        state_rx,
         cancel,
         join_set,
         node_count: n,
+        ready_rx,
     })
 }
