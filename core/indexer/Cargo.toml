@@ -39,12 +39,12 @@ base64 = "=0.22.1"
 deadpool = "=0.12.3"
 reqwest = { version = "=0.13.2", default-features = false, features = ["http2", "json", "rustls"] }
 thiserror = "=2.0.18"
-tokio-util = "=0.7.18"
-tracing-subscriber = { version = "=0.3.22", features = ["json"] }
+tokio-util = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json"] }
 zmq = "=0.10.0"
 scopeguard = "=1.2.0"
 rayon = "=1.11.0"
-clap = { version = "=4.5.58", features = ["derive", "env"] }
+clap = { workspace = true, features = ["env"] }
 axum-server = "=0.8.0"
 futures-util = "=0.3.31"
 hex = "=0.4.3"
@@ -64,6 +64,24 @@ ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"
 
+# Malachite BFT consensus
+malachitebft-app-channel = { workspace = true }
+malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app" }
+malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types", features = ["serde"] }
+malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-engine" }
+malachitebft-config = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-config" }
+malachitebft-signing = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing" }
+malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519", features = ["rand", "serde"] }
+malachitebft-codec = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-codec" }
+malachitebft-core-consensus = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-consensus" }
+malachitebft-proto = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-proto" }
+malachitebft-sync = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-sync" }
+
+async-trait = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+sha3 = { workspace = true }
+
 [dev-dependencies]
 testlib = { path = "../testlib" }
 
@@ -74,3 +92,5 @@ proptest = "=1.10.0"
 [build-dependencies]
 glob = { workspace = true }
 built = { version = "=0.8.0", features = ["git2"] }
+prost-build = "0.13"
+protox = "0.8"
