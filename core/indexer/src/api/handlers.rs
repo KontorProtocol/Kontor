@@ -23,7 +23,10 @@ use crate::{
         },
         types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
-    runtime::{ContractAddress, registry::api::{get_entry, get_entry_by_id}},
+    runtime::{
+        ContractAddress,
+        registry::api::{get_entry, get_entry_by_id},
+    },
 };
 
 use super::{

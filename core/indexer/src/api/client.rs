@@ -148,10 +148,7 @@ impl Client {
         .await
     }
 
-    pub async fn registry_entry(
-        &self,
-        x_only_pubkey: &str,
-    ) -> Result<RegistryEntryResponse> {
+    pub async fn registry_entry(&self, x_only_pubkey: &str) -> Result<RegistryEntryResponse> {
         Self::handle_response(
             self.client
                 .get(format!("{}/registry/entry/{}", &self.url, x_only_pubkey))
@@ -161,16 +158,10 @@ impl Client {
         .await
     }
 
-    pub async fn registry_entry_by_id(
-        &self,
-        signer_id: u64,
-    ) -> Result<RegistryEntryResponse> {
+    pub async fn registry_entry_by_id(&self, signer_id: u64) -> Result<RegistryEntryResponse> {
         Self::handle_response(
             self.client
-                .get(format!(
-                    "{}/registry/entry-by-id/{}",
-                    &self.url, signer_id
-                ))
+                .get(format!("{}/registry/entry-by-id/{}", &self.url, signer_id))
                 .send()
                 .await?,
         )

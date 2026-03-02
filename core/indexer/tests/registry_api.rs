@@ -39,7 +39,12 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
     let signer = Signer::XOnlyPubKey(x_only.to_string());
 
     runtime
-        .register_bls_key(&signer, &proof.bls_pubkey, &proof.schnorr_sig, &proof.bls_sig)
+        .register_bls_key(
+            &signer,
+            &proof.bls_pubkey,
+            &proof.schnorr_sig,
+            &proof.bls_sig,
+        )
         .await?;
 
     Ok(RegisteredUser {
@@ -56,10 +61,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
         &conn,
         BlockRow::builder()
             .height(0)
-            .hash(
-                "0000000000000000000000000000000000000000000000000000000000000000"
-                    .parse()?,
-            )
+            .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
             .build(),
     )
     .await?;
@@ -72,10 +74,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
         &conn,
         BlockRow::builder()
             .height(1)
-            .hash(
-                "0000000000000000000000000000000000000000000000000000000000000001"
-                    .parse()?,
-            )
+            .hash("0000000000000000000000000000000000000000000000000000000000000001".parse()?)
             .build(),
     )
     .await?;
