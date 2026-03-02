@@ -7,8 +7,8 @@ use axum::{
 use bitcoin::consensus::encode;
 use indexer_types::{
     BlockRow, CommitOutputs, ComposeOutputs, ComposeQuery, ContractListRow, ContractResponse, Info,
-    OpWithResult, PaginatedResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex,
-    TransactionRow, ViewExpr, ViewResult,
+    OpWithResult, PaginatedResponse, RegistryEntryResponse, ResultRow, RevealOutputs, RevealQuery,
+    TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
         },
         types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
-    runtime::ContractAddress,
+    runtime::{ContractAddress, registry::api::{get_entry, get_entry_by_id}},
 };
 
 use super::{
@@ -315,4 +315,56 @@ pub async fn get_result(
         .await?
         .map(Into::into)
         .into())
+}
+
+pub async fn get_registry_entry(
+    Path(x_only_pubkey): Path<String>,
+    State(env): State<Env>,
+) -> Result<RegistryEntryResponse> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
+    }
+    let mut runtime = env.runtime_pool.get().await?;
+    let entry = get_entry(&mut runtime, &x_only_pubkey)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    match entry {
+        Some(e) => Ok(RegistryEntryResponse {
+            signer_id: e.signer_id,
+            x_only_pubkey: e.x_only_pubkey,
+            bls_pubkey: e.bls_pubkey,
+        }
+        .into()),
+        None => Err(HttpError::NotFound(format!(
+            "registry entry not found for: {}",
+            x_only_pubkey
+        ))
+        .into()),
+    }
+}
+
+pub async fn get_registry_entry_by_id(
+    Path(signer_id): Path<u64>,
+    State(env): State<Env>,
+) -> Result<RegistryEntryResponse> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
+    }
+    let mut runtime = env.runtime_pool.get().await?;
+    let entry = get_entry_by_id(&mut runtime, signer_id)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    match entry {
+        Some(e) => Ok(RegistryEntryResponse {
+            signer_id: e.signer_id,
+            x_only_pubkey: e.x_only_pubkey,
+            bls_pubkey: e.bls_pubkey,
+        }
+        .into()),
+        None => Err(HttpError::NotFound(format!(
+            "registry entry not found for signer_id: {}",
+            signer_id
+        ))
+        .into()),
+    }
 }

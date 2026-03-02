@@ -156,6 +156,12 @@ export type ParticipantScripts = {
   chained_tap_leaf_script: TapLeafScript | null;
 };
 
+export type RegistryEntryResponse = {
+  signer_id: number;
+  x_only_pubkey: string;
+  bls_pubkey: Array<number>;
+};
+
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {

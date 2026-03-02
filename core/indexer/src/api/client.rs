@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
     ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
-    ResultResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewExpr, ViewResult,
+    RegistryEntryResponse, ResultResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex,
+    ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response};
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,35 @@ impl Client {
         Self::handle_response(
             self.client
                 .get(format!("{}/results/{}", &self.url, id))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn registry_entry(
+        &self,
+        x_only_pubkey: &str,
+    ) -> Result<RegistryEntryResponse> {
+        Self::handle_response(
+            self.client
+                .get(format!("{}/registry/entry/{}", &self.url, x_only_pubkey))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn registry_entry_by_id(
+        &self,
+        signer_id: u64,
+    ) -> Result<RegistryEntryResponse> {
+        Self::handle_response(
+            self.client
+                .get(format!(
+                    "{}/registry/entry-by-id/{}",
+                    &self.url, signer_id
+                ))
                 .send()
                 .await?,
         )
