@@ -64,12 +64,14 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
         signer_id: signer1_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
@@ -191,18 +193,21 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
 
     let op0 = BlsBulkOp::Call {
         signer_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(5, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer_id + 10_000,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(7, arith::Op::Id),
     };
     let op2 = BlsBulkOp::Call {
         signer_id,
+        nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(11, arith::Op::Id),
@@ -275,6 +280,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
 
     let op = BlsBulkOp::Call {
         signer_id: 999_999_999,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract,
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
@@ -345,18 +351,21 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
 
     let op0 = BlsBulkOp::Call {
         signer_id: signer1_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(2, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(3, arith::Op::Id),
     };
     let op1_tampered = BlsBulkOp::Call {
         signer_id: signer2_id,
+        nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(4, arith::Op::Id),

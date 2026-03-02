@@ -64,6 +64,7 @@ fn filter_map_parses_valid_blsbulk_envelope() {
     };
     let op = BlsBulkOp::Call {
         signer_id: 7,
+        nonce: 0,
         gas_limit: 123,
         contract,
         expr: "noop()".to_string(),

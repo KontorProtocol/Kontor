@@ -274,6 +274,8 @@ pub enum BlsBulkOp {
         #[ts(type = "number")]
         signer_id: u64,
         #[ts(type = "number")]
+        nonce: u64,
+        #[ts(type = "number")]
         gas_limit: u64,
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]

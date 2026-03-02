@@ -23,8 +23,8 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, set_block_processed,
+            insert_block, insert_nonce, insert_processed_block, insert_transaction, nonce_exists,
+            rollback_to_height, select_block_at_height, select_block_latest, set_block_processed,
         },
     },
     runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
@@ -175,6 +175,34 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         }
                     };
 
+                    let mut nonce_check_failed = false;
+                    for inner_op in ops.iter() {
+                        if let indexer_types::BlsBulkOp::Call {
+                            signer_id, nonce, ..
+                        } = inner_op
+                        {
+                            match nonce_exists(&runtime.storage.conn, *signer_id, *nonce).await {
+                                Ok(true) => {
+                                    warn!(
+                                        "BlsBulk rejected: nonce {} already used for signer_id {}",
+                                        nonce, signer_id
+                                    );
+                                    nonce_check_failed = true;
+                                    break;
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    warn!("BlsBulk nonce lookup failed: {e}");
+                                    nonce_check_failed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if nonce_check_failed {
+                        continue;
+                    }
+
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
                             .set_context(
@@ -193,21 +221,35 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         match inner_op {
                             indexer_types::BlsBulkOp::Call {
                                 signer_id,
+                                nonce,
                                 gas_limit,
                                 contract,
                                 expr,
                             } => {
+                                if let Err(e) = insert_nonce(
+                                    &runtime.storage.conn,
+                                    *signer_id,
+                                    *nonce,
+                                    block.height as i64,
+                                )
+                                .await
+                                {
+                                    warn!(
+                                        "BlsBulk failed to record nonce {} for signer_id {}: {e}",
+                                        nonce, signer_id
+                                    );
+                                    continue;
+                                }
                                 let x_only = signer_map.get(signer_id).expect(
                                     "signer_id must be in signer_map after verify_bls_bulk succeeds",
                                 );
+
                                 let signer = Signer::XOnlyPubKey(x_only.clone());
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
                                     .execute(Some(&signer), &(contract.into()), expr)
                                     .await;
                                 if result.is_err() {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk call operation failed: {:?}", result);
                                 }
                             }
@@ -226,8 +268,6 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                     )
                                     .await
                                 {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
                                     warn!("BlsBulk RegisterBlsKey failed: {e}");
                                 }
                             }
