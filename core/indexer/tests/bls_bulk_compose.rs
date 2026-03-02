@@ -155,7 +155,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_bulk_unknown_signer_id_is_skipped_regtest() -> Result<()> {
+async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     let mut signer = reg_tester.identity().await?;
     let mut publisher = reg_tester.identity().await?;
     reg_tester.instruction(&mut signer, Inst::Issuance).await?;

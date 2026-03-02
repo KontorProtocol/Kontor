@@ -166,10 +166,14 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    if let Err(e) = verify_bls_bulk(runtime, ops.as_slice(), signature).await {
-                        warn!("BlsBulk aggregate verification failed: {e}");
-                        continue;
-                    }
+                    let signer_map = match verify_bls_bulk(runtime, ops.as_slice(), signature).await
+                    {
+                        Ok(map) => map,
+                        Err(e) => {
+                            warn!("BlsBulk aggregate verification failed: {e}");
+                            continue;
+                        }
+                    };
 
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
@@ -193,28 +197,17 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 contract,
                                 expr,
                             } => {
-                                let entry = match crate::runtime::registry::api::get_entry_by_id(
-                                    runtime, *signer_id,
-                                )
-                                .await
-                                {
-                                    Ok(Some(entry)) => entry,
-                                    Ok(None) => {
+                                let x_only = match signer_map.get(signer_id) {
+                                    Some(x) => x,
+                                    None => {
                                         warn!(
-                                            "BlsBulk call operation failed: unknown signer_id {}",
-                                            signer_id
-                                        );
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "BlsBulk call operation failed: registry lookup error for signer_id {}: {e}",
+                                            "BlsBulk call: signer_id {} not in verified signer map",
                                             signer_id
                                         );
                                         continue;
                                     }
                                 };
-                                let signer = Signer::XOnlyPubKey(entry.x_only_pubkey);
+                                let signer = Signer::XOnlyPubKey(x_only.clone());
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
                                     .execute(Some(&signer), &(contract.into()), expr)

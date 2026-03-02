@@ -152,14 +152,20 @@ enum SignerKey {
     RawPubkey(Vec<u8>),
 }
 
+/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_bls_bulk`]
+/// so the reactor can look up signers without redundant registry calls.
+pub type SignerMap = HashMap<u64, String>;
+
 struct SignerResolver {
-    cache: HashMap<SignerKey, BlsPublicKey>,
+    pk_cache: HashMap<SignerKey, BlsPublicKey>,
+    signer_map: SignerMap,
 }
 
 impl SignerResolver {
     fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            pk_cache: HashMap::new(),
+            signer_map: HashMap::new(),
         }
     }
 
@@ -171,7 +177,7 @@ impl SignerResolver {
             }
         };
 
-        if let Some(pk) = self.cache.get(&key) {
+        if let Some(pk) = self.pk_cache.get(&key) {
             return Ok(*pk);
         }
 
@@ -179,6 +185,7 @@ impl SignerResolver {
             BlsBulkOp::Call { signer_id, .. } => {
                 let entry = get_entry_by_id(runtime, *signer_id).await?;
                 let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                self.signer_map.insert(*signer_id, entry.x_only_pubkey);
                 entry.bls_pubkey
             }
             BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
@@ -186,7 +193,7 @@ impl SignerResolver {
 
         let pk = BlsPublicKey::key_validate(&raw_bytes)
             .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-        self.cache.insert(key, pk);
+        self.pk_cache.insert(key, pk);
         Ok(pk)
     }
 }
@@ -195,7 +202,7 @@ pub async fn verify_bls_bulk(
     runtime: &mut Runtime,
     ops: &[BlsBulkOp],
     signature: &[u8],
-) -> Result<()> {
+) -> Result<SignerMap> {
     // 1) Basic sanity: empty bundles are not meaningful and should be rejected.
     if ops.is_empty() {
         return Err(anyhow!("BlsBulk must contain at least one operation"));
@@ -258,7 +265,7 @@ pub async fn verify_bls_bulk(
         ));
     }
 
-    Ok(())
+    Ok(resolver.signer_map)
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +610,7 @@ mod tests {
         let second = resolver.resolve(&mut runtime, &op).await.unwrap();
 
         assert_eq!(first.to_bytes(), second.to_bytes());
-        assert_eq!(resolver.cache.len(), 1);
+        assert_eq!(resolver.pk_cache.len(), 1);
     }
 
     #[tokio::test]
@@ -617,7 +624,7 @@ mod tests {
         let pk_b = resolver.resolve(&mut runtime, &op_b).await.unwrap();
 
         assert_ne!(pk_a.to_bytes(), pk_b.to_bytes());
-        assert_eq!(resolver.cache.len(), 2);
+        assert_eq!(resolver.pk_cache.len(), 2);
     }
 
     #[tokio::test]
@@ -631,7 +638,7 @@ mod tests {
             .await
             .expect_err("invalid pubkey must be rejected");
         assert!(err.to_string().contains("invalid BLS pubkey"));
-        assert!(resolver.cache.is_empty());
+        assert!(resolver.pk_cache.is_empty());
     }
 
     #[tokio::test]
@@ -644,6 +651,6 @@ mod tests {
             .resolve(&mut runtime, &op)
             .await
             .expect_err("unresolvable signer_id must be rejected");
-        assert!(resolver.cache.is_empty());
+        assert!(resolver.pk_cache.is_empty());
     }
 }
