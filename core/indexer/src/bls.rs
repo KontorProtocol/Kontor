@@ -68,8 +68,6 @@ pub const BLS_BINDING_PREFIX: &[u8] = b"KONTOR_BLS_TO_XONLY_V1";
 ///
 /// Portal / storage node BLS uses *different* DSTs; those are intentionally not compatible.
 pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
-/// Domain-separating prefix for BLS operation signing messages.
-pub const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
 
 /// Compressed BLS12-381 MinSig signature length in bytes.
 pub const BLS_SIGNATURE_BYTES: usize = 48;
@@ -144,59 +142,53 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
     msg
 }
 
-async fn resolve_op_bls_pubkey_index(
-    runtime: &mut Runtime,
-    op: &BlsBulkOp,
-    pubkeys: &mut Vec<BlsPublicKey>,
-    pubkey_index_by_signer_id: &mut HashMap<u64, usize>,
-    pubkey_index_by_raw: &mut HashMap<Vec<u8>, usize>,
-) -> Result<usize> {
-    enum CacheKey {
-        SignerId(u64),
-        RawPubkey(Vec<u8>),
-    }
+// ---------------------------------------------------------------------------
+// SignerResolver — deduplicated BLS pubkey resolution for bundle verification
+// ---------------------------------------------------------------------------
 
-    let (cache_key, pubkey_bytes) = match op {
-        BlsBulkOp::Call { signer_id, .. } => {
-            let signer_id = *signer_id;
-            // Many ops share a signer. Cache `signer_id -> pubkey index` so we don't
-            // repeatedly hit the registry contract or redo subgroup validation.
-            if let Some(&idx) = pubkey_index_by_signer_id.get(&signer_id) {
-                return Ok(idx);
-            }
-            // Resolve the BLS pubkey from the on-chain registry mapping.
-            let entry = get_entry_by_id(runtime, signer_id).await?;
-            let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-            (CacheKey::SignerId(signer_id), entry.bls_pubkey)
-        }
-        BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
-            // Deduplicate by raw pubkey bytes: multiple RegisterBlsKey ops for the same
-            // BLS pubkey reuse the validated key, avoiding redundant subgroup checks.
-            if let Some(&idx) = pubkey_index_by_raw.get(bls_pubkey.as_slice()) {
-                return Ok(idx);
-            }
-            // Register ops carry the raw pubkey being registered, so the aggregate can be
-            // verified without relying on prior registry state.
-            (CacheKey::RawPubkey(bls_pubkey.clone()), bls_pubkey.clone())
-        }
-    };
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum SignerKey {
+    RegistryId(u64),
+    RawPubkey(Vec<u8>),
+}
 
-    // Subgroup validation is mandatory for BLS12-381 (cofactor safety).
-    let pk = BlsPublicKey::key_validate(pubkey_bytes.as_slice())
-        .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-    pubkeys.push(pk);
-    let idx = pubkeys.len() - 1;
+struct SignerResolver {
+    cache: HashMap<SignerKey, BlsPublicKey>,
+}
 
-    match cache_key {
-        CacheKey::SignerId(signer_id) => {
-            pubkey_index_by_signer_id.insert(signer_id, idx);
-        }
-        CacheKey::RawPubkey(raw) => {
-            pubkey_index_by_raw.insert(raw, idx);
+impl SignerResolver {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
         }
     }
 
-    Ok(idx)
+    async fn resolve(&mut self, runtime: &mut Runtime, op: &BlsBulkOp) -> Result<BlsPublicKey> {
+        let key = match op {
+            BlsBulkOp::Call { signer_id, .. } => SignerKey::RegistryId(*signer_id),
+            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
+                SignerKey::RawPubkey(bls_pubkey.clone())
+            }
+        };
+
+        if let Some(pk) = self.cache.get(&key) {
+            return Ok(*pk);
+        }
+
+        let raw_bytes = match op {
+            BlsBulkOp::Call { signer_id, .. } => {
+                let entry = get_entry_by_id(runtime, *signer_id).await?;
+                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                entry.bls_pubkey
+            }
+            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
+        };
+
+        let pk = BlsPublicKey::key_validate(&raw_bytes)
+            .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
+        self.cache.insert(key, pk);
+        Ok(pk)
+    }
 }
 
 pub async fn verify_bls_bulk(
@@ -229,21 +221,18 @@ pub async fn verify_bls_bulk(
     let aggregate_sig = BlsSignature::sig_validate(signature, true)
         .map_err(|e| anyhow!("invalid aggregate signature bytes: {e:?}"))?;
 
-    let mut total_message_bytes: usize = 0;
+    // 5) Build the two parallel vecs that aggregate_verify needs: one message and one
+    // pubkey per op. The resolver deduplicates registry lookups and subgroup checks
+    // across ops that share a signer.
+    let mut resolver = SignerResolver::new();
     let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(ops.len());
-    let mut pk_indices: Vec<usize> = Vec::with_capacity(ops.len());
-    let mut unique_pks: Vec<BlsPublicKey> = Vec::new();
-    let mut signer_pk_index: HashMap<u64, usize> = HashMap::new();
-    let mut register_pk_index: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(ops.len());
+    let mut total_message_bytes: usize = 0;
 
-    let prepared_msgs: Vec<Vec<u8>> = ops
-        .iter()
-        .map(BlsBulkOp::signing_message)
-        .collect::<Result<_>>()?;
-    for (op, msg) in ops.iter().zip(prepared_msgs.into_iter()) {
-        // 5) Reconstruct the exact bytes each signer must have authorized. If the bundler
+    for op in ops {
+        // Reconstruct the exact bytes each signer authorized. If the bundler
         // mutates any op field after signing, this message changes and verification fails.
-        // 6) DoS hardening: cap total signed bytes we will hash-to-curve & verify.
+        let msg = op.signing_message()?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
@@ -251,25 +240,16 @@ pub async fn verify_bls_bulk(
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
+        // Resolve the BLS pubkey for this op (registry lookup for Calls, inline for
+        // RegisterBlsKey). Cached per unique signer to avoid redundant subgroup checks.
+        pks.push(resolver.resolve(runtime, op).await?);
         msgs.push(msg);
-
-        // 7) Resolve the BLS public key for this op (registry lookup for Calls; inline for
-        // Register ops). Both paths deduplicate and cache to avoid redundant subgroup checks.
-        let pk_index = resolve_op_bls_pubkey_index(
-            runtime,
-            op,
-            &mut unique_pks,
-            &mut signer_pk_index,
-            &mut register_pk_index,
-        )
-        .await?;
-        pk_indices.push(pk_index);
     }
 
+    // 6) Aggregate verify: proves every op's message was signed by the corresponding
+    // signer, while only storing a single 48-byte signature on-chain.
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
-    let pk_refs: Vec<&BlsPublicKey> = pk_indices.iter().map(|i| &unique_pks[*i]).collect();
-    // 8) Aggregate verification proves every op's message was signed by the corresponding
-    // signer pubkey, while storing only a single 48-byte signature on-chain.
+    let pk_refs: Vec<&BlsPublicKey> = pks.iter().collect();
     let verify_result =
         aggregate_sig.aggregate_verify(true, msg_refs.as_slice(), KONTOR_BLS_DST, &pk_refs, true);
     if verify_result != blst::BLST_ERROR::BLST_SUCCESS {
@@ -566,5 +546,104 @@ mod tests {
             .await
             .expect_err("invalid pubkey bytes must be rejected");
         assert!(err.to_string().contains("invalid BLS pubkey"));
+    }
+
+    // -----------------------------------------------------------------------
+    // SignerResolver unit tests
+    // -----------------------------------------------------------------------
+
+    fn make_register_op(bls_pubkey: Vec<u8>) -> BlsBulkOp {
+        BlsBulkOp::RegisterBlsKey {
+            signer: Signer::XOnlyPubKey("aa".repeat(32)),
+            bls_pubkey,
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        }
+    }
+
+    fn make_call_op(signer_id: u64) -> BlsBulkOp {
+        BlsBulkOp::Call {
+            signer_id,
+            gas_limit: 50_000,
+            contract: ContractAddress {
+                name: "test".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            expr: String::new(),
+        }
+    }
+
+    fn valid_bls_pubkey(ikm: &[u8; 32]) -> Vec<u8> {
+        let sk = BlsSecretKey::key_gen(ikm, &[]).unwrap();
+        sk.sk_to_pk().to_bytes().to_vec()
+    }
+
+    #[tokio::test]
+    async fn resolver_returns_valid_pubkey_for_register_op() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let pubkey_bytes = valid_bls_pubkey(&[1u8; 32]);
+        let op = make_register_op(pubkey_bytes.clone());
+
+        let mut resolver = SignerResolver::new();
+        let pk = resolver.resolve(&mut runtime, &op).await.unwrap();
+
+        let expected = BlsPublicKey::key_validate(&pubkey_bytes).unwrap();
+        assert_eq!(pk.to_bytes(), expected.to_bytes());
+    }
+
+    #[tokio::test]
+    async fn resolver_caches_register_pubkey() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let pubkey_bytes = valid_bls_pubkey(&[2u8; 32]);
+        let op = make_register_op(pubkey_bytes);
+
+        let mut resolver = SignerResolver::new();
+        let first = resolver.resolve(&mut runtime, &op).await.unwrap();
+        let second = resolver.resolve(&mut runtime, &op).await.unwrap();
+
+        assert_eq!(first.to_bytes(), second.to_bytes());
+        assert_eq!(resolver.cache.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolver_distinguishes_different_register_pubkeys() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let op_a = make_register_op(valid_bls_pubkey(&[3u8; 32]));
+        let op_b = make_register_op(valid_bls_pubkey(&[4u8; 32]));
+
+        let mut resolver = SignerResolver::new();
+        let pk_a = resolver.resolve(&mut runtime, &op_a).await.unwrap();
+        let pk_b = resolver.resolve(&mut runtime, &op_b).await.unwrap();
+
+        assert_ne!(pk_a.to_bytes(), pk_b.to_bytes());
+        assert_eq!(resolver.cache.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn resolver_rejects_invalid_register_pubkey() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let op = make_register_op(vec![0u8; 96]);
+
+        let mut resolver = SignerResolver::new();
+        let err = resolver
+            .resolve(&mut runtime, &op)
+            .await
+            .expect_err("invalid pubkey must be rejected");
+        assert!(err.to_string().contains("invalid BLS pubkey"));
+        assert!(resolver.cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolver_errors_on_unresolvable_call_and_does_not_cache() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let op = make_call_op(999_999);
+
+        let mut resolver = SignerResolver::new();
+        resolver
+            .resolve(&mut runtime, &op)
+            .await
+            .expect_err("unresolvable signer_id must be rejected");
+        assert!(resolver.cache.is_empty());
     }
 }
