@@ -442,7 +442,6 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
-            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -466,7 +465,6 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
-            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -493,10 +491,9 @@ mod tests {
     async fn verify_bls_bulk_enforces_op_count_cap() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let mut ops: Vec<BlsBulkOp> = Vec::with_capacity(MAX_BLS_BULK_OPS + 1);
-        for i in 0..=MAX_BLS_BULK_OPS {
+        for _ in 0..=MAX_BLS_BULK_OPS {
             ops.push(BlsBulkOp::Call {
                 signer_id: 0,
-                nonce: i as u64,
                 gas_limit: 0,
                 contract: ContractAddress {
                     name: String::new(),
@@ -518,7 +515,6 @@ mod tests {
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
-            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -575,7 +571,6 @@ mod tests {
     fn make_call_op(signer_id: u64) -> BlsBulkOp {
         BlsBulkOp::Call {
             signer_id,
-            nonce: 0,
             gas_limit: 50_000,
             contract: ContractAddress {
                 name: "test".into(),
