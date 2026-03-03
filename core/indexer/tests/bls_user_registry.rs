@@ -1,7 +1,8 @@
 use anyhow::Result;
 use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
-use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
+use indexer::bls::KONTOR_BLS_DST;
+use indexer::bls::RegistrationProof;
 use indexer_types::{BlsBulkOp, Inst, Signer};
 use testlib::*;
 
@@ -11,16 +12,6 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/registry/wit",
 );
-
-const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-
-fn build_kontor_op_message(op: &BlsBulkOp) -> Result<Vec<u8>> {
-    let op_bytes = indexer_types::serialize(op)?;
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    Ok(msg)
-}
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_register_direct_regtest() -> Result<()> {
@@ -78,8 +69,8 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
         bls_sig: proof2.bls_sig.to_vec(),
     };
 
-    let msg0 = build_kontor_op_message(&op0)?;
-    let msg1 = build_kontor_op_message(&op1)?;
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&user1.bls_secret_key).unwrap();
     let sk2 = blst::min_sig::SecretKey::from_bytes(&user2.bls_secret_key).unwrap();

@@ -62,8 +62,8 @@ Traverse the path by deriving child keys at each index:
 
 Define binding prefixes:
 
-- `SCHNORR_BINDING_PREFIX = "KONTOR_REG_XONLY_TO_BLS_V1"`
-- `BLS_BINDING_PREFIX     = "KONTOR_REG_BLS_TO_XONLY_V1"`
+- `SCHNORR_BINDING_PREFIX = "KONTOR_XONLY_TO_BLS_V1"`
+- `BLS_BINDING_PREFIX     = "KONTOR_BLS_TO_XONLY_V1"`
 
 Define the BLS domain separation tag (DST) for protocol-level BLS signatures:
 

@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     bitcoin_follower::event::BitcoinEvent,
     block::{filter_map, inspect},
+    bls::verify_bls_bulk,
     database::{
         self,
         queries::{
@@ -165,8 +166,14 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                     signature,
                     ops,
                 } => {
-                    // TODO(blsbulk): Verify BLS aggregate signature + replay protection before executing.
-                    let _sig = signature;
+                    let signer_map = match verify_bls_bulk(runtime, ops.as_slice(), signature).await
+                    {
+                        Ok(map) => map,
+                        Err(e) => {
+                            warn!("BlsBulk aggregate verification failed: {e}");
+                            continue;
+                        }
+                    };
 
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
@@ -190,20 +197,10 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 contract,
                                 expr,
                             } => {
-                                let entry = crate::runtime::registry::api::get_entry_by_id(
-                                    runtime, *signer_id,
-                                )
-                                .await?;
-                                let Some(entry) = entry else {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
-                                    warn!(
-                                        "BlsBulk call operation failed: unknown signer_id {}",
-                                        signer_id
-                                    );
-                                    continue;
-                                };
-                                let signer = Signer::XOnlyPubKey(entry.x_only_pubkey);
+                                let x_only = signer_map.get(signer_id).expect(
+                                    "signer_id must be in signer_map after verify_bls_bulk succeeds",
+                                );
+                                let signer = Signer::XOnlyPubKey(x_only.clone());
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
                                     .execute(Some(&signer), &(contract.into()), expr)
