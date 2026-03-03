@@ -197,16 +197,9 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 contract,
                                 expr,
                             } => {
-                                let x_only = match signer_map.get(signer_id) {
-                                    Some(x) => x,
-                                    None => {
-                                        warn!(
-                                            "BlsBulk call: signer_id {} not in verified signer map",
-                                            signer_id
-                                        );
-                                        continue;
-                                    }
-                                };
+                                let x_only = signer_map.get(signer_id).expect(
+                                    "signer_id must be in signer_map after verify_bls_bulk succeeds",
+                                );
                                 let signer = Signer::XOnlyPubKey(x_only.clone());
                                 runtime.set_gas_limit(*gas_limit);
                                 let result = runtime
