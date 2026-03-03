@@ -133,8 +133,7 @@ pub fn new(context: Env) -> Router {
                 )
                 .nest(
                     "/registry",
-                    Router::new()
-                        .route("/entry/{pubkey_or_id}", get(get_registry_entry)),
+                    Router::new().route("/entry/{pubkey_or_id}", get(get_registry_entry)),
                 ),
         )
         .layer(

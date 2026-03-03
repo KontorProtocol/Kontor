@@ -346,10 +346,8 @@ pub async fn get_registry_entry(
             bls_pubkey: e.bls_pubkey,
         }
         .into()),
-        None => Err(HttpError::NotFound(format!(
-            "registry entry not found for: {}",
-            identifier
-        ))
-        .into()),
+        None => {
+            Err(HttpError::NotFound(format!("registry entry not found for: {}", identifier)).into())
+        }
     }
 }

@@ -4,10 +4,7 @@ use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
 use indexer::{
-    api::{
-        Env,
-        handlers::get_registry_entry,
-    },
+    api::{Env, handlers::get_registry_entry},
     bls::RegistrationProof,
     database::queries::insert_processed_block,
     runtime::{ComponentCache, Runtime, Storage},
