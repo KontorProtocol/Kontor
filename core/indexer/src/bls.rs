@@ -442,6 +442,7 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -465,6 +466,7 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -494,6 +496,7 @@ mod tests {
         for _ in 0..=MAX_BLS_BULK_OPS {
             ops.push(BlsBulkOp::Call {
                 signer_id: 0,
+                nonce: 0,
                 gas_limit: 0,
                 contract: ContractAddress {
                     name: String::new(),
@@ -515,6 +518,7 @@ mod tests {
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
         let ops = vec![BlsBulkOp::Call {
             signer_id: 0,
+            nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
                 name: String::new(),
@@ -571,6 +575,7 @@ mod tests {
     fn make_call_op(signer_id: u64) -> BlsBulkOp {
         BlsBulkOp::Call {
             signer_id,
+            nonce: 0,
             gas_limit: 50_000,
             contract: ContractAddress {
                 name: "test".into(),
@@ -652,5 +657,162 @@ mod tests {
             .await
             .expect_err("unresolvable signer_id must be rejected");
         assert!(resolver.pk_cache.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // reserve_nonces unit tests
+    // -----------------------------------------------------------------------
+
+    use crate::database::queries::{insert_block, nonce_exists};
+    use crate::test_utils::new_mock_block_hash;
+    use indexer_types::BlockRow;
+
+    async fn new_test_runtime_with_block() -> (Runtime, TempDir) {
+        let (mut runtime, tmp) = new_test_runtime().await;
+        insert_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .build(),
+        )
+        .await
+        .expect("insert block at height 0");
+        (runtime, tmp)
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_accepts_empty_ops() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        runtime.reserve_nonces(&[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_skips_register_only_ops() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let ops = vec![make_register_op(valid_bls_pubkey(&[10u8; 32]))];
+        runtime.reserve_nonces(&ops).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_accepts_unique_nonces() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let ops = vec![
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 100,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 101,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+        ];
+        runtime.reserve_nonces(&ops).await.unwrap();
+        assert!(nonce_exists(&runtime.storage.conn, 1, 100).await.unwrap());
+        assert!(nonce_exists(&runtime.storage.conn, 1, 101).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_rejects_duplicate_within_bundle() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let ops = vec![
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 42,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 42,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+        ];
+        let err = runtime
+            .reserve_nonces(&ops)
+            .await
+            .expect_err("duplicate nonce must be rejected");
+        assert!(err.to_string().contains("duplicate nonce"));
+        assert!(
+            !nonce_exists(&runtime.storage.conn, 1, 42).await.unwrap(),
+            "rejected nonce must not be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_rejects_replay_and_rolls_back() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+
+        let first = vec![BlsBulkOp::Call {
+            signer_id: 1,
+            nonce: 99,
+            gas_limit: 50_000,
+            contract: ContractAddress {
+                name: "t".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            expr: String::new(),
+        }];
+        runtime.reserve_nonces(&first).await.unwrap();
+
+        let replay = vec![
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 200,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+            BlsBulkOp::Call {
+                signer_id: 1,
+                nonce: 99,
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "t".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                expr: String::new(),
+            },
+        ];
+        let err = runtime
+            .reserve_nonces(&replay)
+            .await
+            .expect_err("replayed nonce must be rejected");
+        assert!(err.to_string().contains("replay"));
+        assert!(
+            !nonce_exists(&runtime.storage.conn, 1, 200).await.unwrap(),
+            "co-bundled nonce must be rolled back on replay failure"
+        );
     }
 }

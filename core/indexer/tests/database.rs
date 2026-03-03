@@ -10,8 +10,8 @@ use indexer::{
             get_contract_id_from_address, get_contract_result, get_contracts,
             get_latest_contract_state, get_latest_contract_state_value, get_op_result,
             get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_result, insert_contract_state, insert_file_metadata,
-            insert_processed_block, insert_transaction, matching_path,
+            insert_contract_result, insert_contract_state, insert_file_metadata, insert_nonce,
+            insert_processed_block, insert_transaction, matching_path, nonce_exists,
             path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
             select_block_at_height, select_block_latest, select_processed_block_by_height_or_hash,
         },
@@ -737,6 +737,40 @@ async fn test_file_metadata_operations() -> Result<()> {
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, id1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_signer_nonces_rollback_cascade() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height1 = 800000;
+    let hash1 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
+    insert_block(
+        &conn,
+        BlockRow::builder().height(height1).hash(hash1).build(),
+    )
+    .await?;
+
+    let height2 = 800001;
+    let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
+    insert_block(
+        &conn,
+        BlockRow::builder().height(height2).hash(hash2).build(),
+    )
+    .await?;
+
+    insert_nonce(&conn, 1, 42, height1).await?;
+    insert_nonce(&conn, 1, 43, height2).await?;
+    assert!(nonce_exists(&conn, 1, 42).await?);
+    assert!(nonce_exists(&conn, 1, 43).await?);
+
+    rollback_to_height(&conn, height1 as u64).await?;
+
+    assert!(nonce_exists(&conn, 1, 42).await?);
+    assert!(!nonce_exists(&conn, 1, 43).await?);
 
     Ok(())
 }

@@ -60,6 +60,7 @@ use wasmtime::{
 
 use crate::bls::RegistrationProof;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
+use crate::database::queries::insert_nonce;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{
@@ -342,6 +343,41 @@ impl Runtime {
         .await?
         .map(|_entry| ())
         .map_err(|e| anyhow!("registry register-bls-key failed: {e:?}"))
+    }
+
+    /// Validate and atomically reserve nonces for every `BlsBulkOp::Call` in `ops`.
+    ///
+    /// 1. Extracts `(signer_id, nonce)` pairs, rejecting duplicate pairs within the bundle.
+    /// 2. Reserves all pairs in the DB inside a savepoint, rejecting cross-block replays.
+    pub async fn reserve_nonces(&mut self, ops: &[indexer_types::BlsBulkOp]) -> Result<()> {
+        let mut nonces = HashSet::new();
+        if let Some((sid, n)) = ops.iter().find_map(|op| match op {
+            indexer_types::BlsBulkOp::Call {
+                signer_id, nonce, ..
+            } if !nonces.insert((*signer_id, *nonce)) => Some((*signer_id, *nonce)),
+            _ => None,
+        }) {
+            return Err(anyhow!(
+                "duplicate nonce {n} for signer_id {sid} within bundle"
+            ));
+        }
+
+        if nonces.is_empty() {
+            return Ok(());
+        }
+        self.storage.savepoint().await?;
+        for &(signer_id, nonce) in &nonces {
+            if let Err(e) =
+                insert_nonce(&self.storage.conn, signer_id, nonce, self.storage.height).await
+            {
+                self.storage.rollback().await?;
+                return Err(anyhow!(
+                    "nonce {nonce} replay for signer_id {signer_id}: {e}"
+                ));
+            }
+        }
+        self.storage.commit().await?;
+        Ok(())
     }
 
     pub async fn execute(

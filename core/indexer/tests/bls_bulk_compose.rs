@@ -412,3 +412,218 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
     assert_eq!(last_op_after, last_op_before);
     Ok(())
 }
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_duplicate_nonce_within_bundle_rejects_and_does_not_consume_nonce_regtest()
+-> Result<()> {
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+
+    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+
+    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
+        .to_string()
+        .parse()
+        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
+    let last_op_before_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
+
+    let nonce = 777u64;
+    let op0 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(1, arith::Op::Id),
+    };
+    let op1 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(2, arith::Op::Id),
+    };
+    let msg0 = op0.signing_message()?;
+    let msg1 = op1.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
+    let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true)
+        .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
+
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0, op1],
+                signature: aggregate.to_signature().to_bytes().to_vec(),
+            },
+        )
+        .await;
+    assert!(
+        res.is_err(),
+        "expected duplicate nonce within bundle to reject BlsBulk"
+    );
+
+    let last_op_after_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
+    assert_eq!(last_op_after, last_op_before);
+
+    let op2 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract,
+        expr: arith::wave::eval_call_expr(3, arith::Op::Id),
+    };
+    let msg2 = op2.signing_message()?;
+    let sig2 = sk.sign(&msg2, KONTOR_BLS_DST, &[]);
+    let ok = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op2],
+                signature: sig2.to_bytes().to_vec(),
+            },
+        )
+        .await?;
+    let v = ok
+        .result
+        .value
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a return value for op"))?;
+    let decoded = arith::wave::eval_parse_return_expr(v);
+    assert_eq!(decoded.value, 3);
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    let arith_bytes = runtime
+        .contract_reader
+        .read("arith")
+        .await?
+        .expect("arith contract bytes not found");
+    let publish = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::Publish {
+                gas_limit: 50_000,
+                name: "arith".to_string(),
+                bytes: arith_bytes,
+            },
+        )
+        .await?;
+    let arith_contract: IndexerContractAddress = publish.result.contract.parse().map_err(|e| {
+        anyhow!(
+            "invalid contract address {}: {}",
+            publish.result.contract,
+            e
+        )
+    })?;
+
+    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+
+    let nonce = 42u64;
+    let op0 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract.clone(),
+        expr: arith::wave::eval_call_expr(5, arith::Op::Id),
+    };
+    let msg0 = op0.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
+    reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op0],
+                signature: sig0.to_bytes().to_vec(),
+            },
+        )
+        .await?;
+
+    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
+        .to_string()
+        .parse()
+        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
+    let last_op_before_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
+
+    let op1 = BlsBulkOp::Call {
+        signer_id,
+        nonce,
+        gas_limit: 50_000,
+        contract: arith_contract,
+        expr: arith::wave::eval_call_expr(6, arith::Op::Id),
+    };
+    let msg1 = op1.signing_message()?;
+    let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
+    let res = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op1],
+                signature: sig1.to_bytes().to_vec(),
+            },
+        )
+        .await;
+    assert!(res.is_err(), "expected nonce replay to reject BlsBulk");
+
+    let last_op_after_wave = reg_tester
+        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
+        .await?;
+    let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
+    assert_eq!(last_op_after, last_op_before);
+
+    Ok(())
+}
