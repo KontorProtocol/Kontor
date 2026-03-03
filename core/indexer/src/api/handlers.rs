@@ -321,16 +321,24 @@ pub async fn get_result(
 }
 
 pub async fn get_registry_entry(
-    Path(x_only_pubkey): Path<String>,
+    Path(identifier): Path<String>,
     State(env): State<Env>,
 ) -> Result<RegistryEntryResponse> {
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     let mut runtime = env.runtime_pool.get().await?;
-    let entry = get_entry(&mut runtime, &x_only_pubkey)
-        .await
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
+        get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .map_err(|e| HttpError::BadRequest(e.to_string()))?
+    } else {
+        get_entry(&mut runtime, &identifier)
+            .await
+            .map_err(|e| HttpError::BadRequest(e.to_string()))?
+    };
+
     match entry {
         Some(e) => Ok(RegistryEntryResponse {
             signer_id: e.signer_id,
@@ -340,33 +348,7 @@ pub async fn get_registry_entry(
         .into()),
         None => Err(HttpError::NotFound(format!(
             "registry entry not found for: {}",
-            x_only_pubkey
-        ))
-        .into()),
-    }
-}
-
-pub async fn get_registry_entry_by_id(
-    Path(signer_id): Path<u64>,
-    State(env): State<Env>,
-) -> Result<RegistryEntryResponse> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
-    let mut runtime = env.runtime_pool.get().await?;
-    let entry = get_entry_by_id(&mut runtime, signer_id)
-        .await
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    match entry {
-        Some(e) => Ok(RegistryEntryResponse {
-            signer_id: e.signer_id,
-            x_only_pubkey: e.x_only_pubkey,
-            bls_pubkey: e.bls_pubkey,
-        }
-        .into()),
-        None => Err(HttpError::NotFound(format!(
-            "registry entry not found for signer_id: {}",
-            signer_id
+            identifier
         ))
         .into()),
     }

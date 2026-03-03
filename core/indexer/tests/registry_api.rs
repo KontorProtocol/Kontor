@@ -6,7 +6,7 @@ use bitcoin::key::{Keypair, Secp256k1, rand};
 use indexer::{
     api::{
         Env,
-        handlers::{get_registry_entry, get_registry_entry_by_id},
+        handlers::get_registry_entry,
     },
     bls::RegistrationProof,
     database::queries::insert_processed_block,
@@ -87,12 +87,8 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
 
     let app = Router::new()
         .route(
-            "/api/registry/entry/{x_only_pubkey}",
+            "/api/registry/entry/{pubkey_or_id}",
             get(get_registry_entry),
-        )
-        .route(
-            "/api/registry/entry-by-id/{signer_id}",
-            get(get_registry_entry_by_id),
         )
         .with_state(env);
 
@@ -122,7 +118,7 @@ async fn test_get_registry_entry_by_signer_id() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get("/api/registry/entry-by-id/0").await;
+    let response: TestResponse = server.get("/api/registry/entry/0").await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
@@ -155,7 +151,7 @@ async fn test_get_registry_entry_not_found_by_id() -> Result<()> {
     let (app, _, _db) = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get("/api/registry/entry-by-id/999999").await;
+    let response: TestResponse = server.get("/api/registry/entry/999999").await;
     assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
 
     let error_body = response.text();
@@ -172,7 +168,7 @@ async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
     let by_pk: TestResponse = server
         .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
         .await;
-    let by_id: TestResponse = server.get("/api/registry/entry-by-id/0").await;
+    let by_id: TestResponse = server.get("/api/registry/entry/0").await;
 
     assert_eq!(by_pk.status_code(), StatusCode::OK);
     assert_eq!(by_id.status_code(), StatusCode::OK);
@@ -202,7 +198,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[1].bls_pubkey);
 
-    let by_id: TestResponse = server.get("/api/registry/entry-by-id/1").await;
+    let by_id: TestResponse = server.get("/api/registry/entry/1").await;
     assert_eq!(by_id.status_code(), StatusCode::OK);
 
     let by_id_result: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
@@ -217,8 +213,8 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
     let (app, _users, _db) = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let resp0: TestResponse = server.get("/api/registry/entry-by-id/0").await;
-    let resp1: TestResponse = server.get("/api/registry/entry-by-id/1").await;
+    let resp0: TestResponse = server.get("/api/registry/entry/0").await;
+    let resp1: TestResponse = server.get("/api/registry/entry/1").await;
 
     assert_eq!(resp0.status_code(), StatusCode::OK);
     assert_eq!(resp1.status_code(), StatusCode::OK);

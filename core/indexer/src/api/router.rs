@@ -20,9 +20,8 @@ use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contracts, get_index, get_registry_entry,
-    get_registry_entry_by_id, get_result, get_results, get_transaction, get_transaction_inspect,
-    get_transactions, post_compose, post_contract, post_simulate, post_transaction_hex_inspect,
-    stop,
+    get_result, get_results, get_transaction, get_transaction_inspect, get_transactions,
+    post_compose, post_contract, post_simulate, post_transaction_hex_inspect, stop,
 };
 
 use super::{
@@ -135,8 +134,7 @@ pub fn new(context: Env) -> Router {
                 .nest(
                     "/registry",
                     Router::new()
-                        .route("/entry/{x_only_pubkey}", get(get_registry_entry))
-                        .route("/entry-by-id/{signer_id}", get(get_registry_entry_by_id)),
+                        .route("/entry/{pubkey_or_id}", get(get_registry_entry)),
                 ),
         )
         .layer(
