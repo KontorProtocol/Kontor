@@ -406,7 +406,26 @@ impl Reactor {
 
         info!("# Block Kontor Transactions: {}", block.transactions.len());
 
-        block_handler(&mut self.runtime, &block).await?;
+        // TODO: is this necessary?
+        self.runtime.storage.savepoint().await?;
+        match block_handler(&mut self.runtime, &block).await {
+            Ok(()) => {
+                if let Err(commit_err) = self.runtime.storage.commit().await {
+                    let _ = self.runtime.storage.rollback().await;
+                    return Err(anyhow!(
+                        "block commit failed at height {height}: {commit_err}"
+                    ));
+                }
+            }
+            Err(e) => {
+                if let Err(rb_err) = self.runtime.storage.rollback().await {
+                    return Err(anyhow!(
+                        "block processing failed at height {height} ({e}); rollback also failed: {rb_err}"
+                    ));
+                }
+                return Err(e);
+            }
+        }
 
         if let Some(tx) = &self.event_tx {
             let _ = tx

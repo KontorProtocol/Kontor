@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
     ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
-    RegistryEntryResponse, ResultResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex,
-    ViewExpr, ViewResult,
+    RegistryEntryResponse, ResultResponse, ResultRow, RevealOutputs, RevealQuery,
+    SignerNonceResponse, TransactionHex, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response};
 use serde::{Deserialize, Serialize};
@@ -152,6 +152,19 @@ impl Client {
         Self::handle_response(
             self.client
                 .get(format!("{}/registry/entry/{}", &self.url, pubkey_or_id))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn registry_next_nonce(&self, pubkey_or_id: &str) -> Result<SignerNonceResponse> {
+        Self::handle_response(
+            self.client
+                .get(format!(
+                    "{}/registry/next-nonce/{}",
+                    &self.url, pubkey_or_id
+                ))
                 .send()
                 .await?,
         )

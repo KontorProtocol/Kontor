@@ -60,7 +60,6 @@ use wasmtime::{
 
 use crate::bls::RegistrationProof;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
-use crate::database::queries::insert_nonce;
 use crate::runtime::kontor::built_in::context::{OpReturnData, OutPoint};
 use crate::runtime::wit::{CoreContext, FileDescriptor, Transaction};
 use crate::runtime::{
@@ -317,6 +316,12 @@ impl Runtime {
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
+        if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
+            && entry.bls_pubkey == bls_pubkey
+        {
+            return Ok(());
+        }
+
         let bls_pubkey: [u8; 96] = bls_pubkey
             .try_into()
             .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;
@@ -347,37 +352,78 @@ impl Runtime {
 
     /// Validate and atomically reserve nonces for every `BlsBulkOp::Call` in `ops`.
     ///
-    /// 1. Extracts `(signer_id, nonce)` pairs, rejecting duplicate pairs within the bundle.
-    /// 2. Reserves all pairs in the DB inside a savepoint, rejecting cross-block replays.
+    /// Sequential nonce rules (per signer):
+    /// 1. The first nonce seen in this bundle must match the signer's next expected nonce.
+    /// 2. Additional ops for the same signer in the same bundle must increase by exactly 1.
+    /// 3. Nonces are consumed once reserved, even if execution of a later op fails.
     pub async fn reserve_nonces(&mut self, ops: &[indexer_types::BlsBulkOp]) -> Result<()> {
-        let mut nonces = HashSet::new();
-        if let Some((sid, n)) = ops.iter().find_map(|op| match op {
-            indexer_types::BlsBulkOp::Call {
-                signer_id, nonce, ..
-            } if !nonces.insert((*signer_id, *nonce)) => Some((*signer_id, *nonce)),
-            _ => None,
-        }) {
-            return Err(anyhow!(
-                "duplicate nonce {n} for signer_id {sid} within bundle"
-            ));
-        }
+        let mut next_expected_by_signer: HashMap<u64, u64> = HashMap::new();
+        let mut to_advance: Vec<(u64, u64)> = Vec::new();
 
-        if nonces.is_empty() {
-            return Ok(());
-        }
-        self.storage.savepoint().await?;
-        for &(signer_id, nonce) in &nonces {
-            if let Err(e) =
-                insert_nonce(&self.storage.conn, signer_id, nonce, self.storage.height).await
-            {
-                self.storage.rollback().await?;
+        for op in ops {
+            let indexer_types::BlsBulkOp::Call {
+                signer_id, nonce, ..
+            } = op
+            else {
+                continue;
+            };
+
+            let expected = if let Some(next) = next_expected_by_signer.get(signer_id) {
+                *next
+            } else {
+                let entry = registry::api::get_entry_by_id(self, *signer_id)
+                    .await?
+                    .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                let next = entry.next_nonce;
+                next_expected_by_signer.insert(*signer_id, next);
+                next
+            };
+
+            if *nonce != expected {
                 return Err(anyhow!(
-                    "nonce {nonce} replay for signer_id {signer_id}: {e}"
+                    "invalid nonce {nonce} for signer_id {signer_id}: expected {expected}"
                 ));
             }
+
+            let next = expected.checked_add(1).ok_or_else(|| {
+                anyhow!("nonce overflow for signer_id {signer_id}: would exceed u64::MAX")
+            })?;
+            next_expected_by_signer.insert(*signer_id, next);
+            to_advance.push((*signer_id, *nonce));
         }
-        self.storage.commit().await?;
-        Ok(())
+
+        if to_advance.is_empty() {
+            return Ok(());
+        }
+
+        self.storage.savepoint().await?;
+        let advance_result = async {
+            for &(signer_id, nonce) in &to_advance {
+                registry::api::advance_nonce(self, &Signer::Core(Box::new(Signer::Nobody)), signer_id, nonce)
+                    .await?
+                    .map_err(|e| anyhow!("nonce {nonce} replay for signer_id {signer_id}: {e:?}"))?;
+            }
+            Ok(())
+        }
+        .await;
+
+        match advance_result {
+            Ok(()) => {
+                if let Err(commit_err) = self.storage.commit().await {
+                    let _ = self.storage.rollback().await;
+                    return Err(anyhow!("nonce reservation commit failed: {commit_err}"));
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if let Err(rb_err) = self.storage.rollback().await {
+                    return Err(anyhow!(
+                        "nonce reservation failed ({e}); rollback also failed: {rb_err}"
+                    ));
+                }
+                Err(e)
+            }
+        }
     }
 
     pub async fn execute(

@@ -567,4 +567,15 @@ pub struct RegistryEntryResponse {
     pub signer_id: u64,
     pub x_only_pubkey: String,
     pub bls_pubkey: Vec<u8>,
+    #[ts(type = "number")]
+    pub next_nonce: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct SignerNonceResponse {
+    #[ts(type = "number")]
+    pub signer_id: u64,
+    #[ts(type = "number")]
+    pub next_nonce: u64,
 }

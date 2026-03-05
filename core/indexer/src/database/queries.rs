@@ -1048,26 +1048,3 @@ pub async fn insert_file_metadata(
     Ok(conn.last_insert_rowid())
 }
 
-pub async fn nonce_exists(conn: &Connection, signer_id: u64, nonce: u64) -> Result<bool, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM signer_nonces WHERE signer_id = ? AND nonce = ?",
-            params![signer_id as i64, nonce as i64],
-        )
-        .await?;
-    Ok(rows.next().await?.is_some())
-}
-
-pub async fn insert_nonce(
-    conn: &Connection,
-    signer_id: u64,
-    nonce: u64,
-    height: i64,
-) -> Result<(), Error> {
-    conn.execute(
-        "INSERT INTO signer_nonces (signer_id, nonce, height) VALUES (?, ?, ?)",
-        params![signer_id as i64, nonce as i64, height],
-    )
-    .await?;
-    Ok(())
-}

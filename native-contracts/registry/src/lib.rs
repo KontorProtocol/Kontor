@@ -7,6 +7,7 @@ use stdlib::*;
 struct Entry {
     pub signer_id: u64,
     pub bls_pubkey: Vec<u8>,
+    pub next_nonce: u64,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -44,6 +45,7 @@ impl Guest for Registry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
                 bls_pubkey,
+                next_nonce: entry.next_nonce(),
             });
         }
 
@@ -55,6 +57,7 @@ impl Guest for Registry {
             Entry {
                 signer_id,
                 bls_pubkey: bls_pubkey.clone(),
+                next_nonce: 0,
             },
         );
         model.by_id().set(signer_id, x_only_pubkey.clone());
@@ -63,7 +66,43 @@ impl Guest for Registry {
             signer_id,
             x_only_pubkey,
             bls_pubkey,
+            next_nonce: 0,
         })
+    }
+
+    fn advance_nonce(ctx: &CoreContext, signer_id: u64, expected_nonce: u64) -> Result<u64, Error> {
+        let model = ctx.proc_context().model();
+        let x_only_pubkey = model
+            .by_id()
+            .get(signer_id)
+            .ok_or_else(|| Error::Message("unknown signer id".to_string()))?;
+        let entry = model
+            .entries()
+            .get(&x_only_pubkey)
+            .ok_or_else(|| Error::Message("registry entry missing for signer id".to_string()))?;
+
+        let current_nonce = entry.next_nonce();
+        if current_nonce != expected_nonce {
+            return Err(Error::Message(format!(
+                "invalid nonce {} for signer_id {}: expected {}",
+                expected_nonce, signer_id, current_nonce
+            )));
+        }
+
+        let next_nonce = current_nonce
+            .checked_add(1)
+            .ok_or_else(|| Error::Message("nonce overflow".to_string()))?;
+
+        model.entries().set(
+            x_only_pubkey,
+            Entry {
+                signer_id: entry.signer_id(),
+                bls_pubkey: entry.bls_pubkey(),
+                next_nonce,
+            },
+        );
+
+        Ok(next_nonce)
     }
 
     fn get_entry(ctx: &ViewContext, x_only_pubkey: String) -> Option<RegistryEntry> {
@@ -72,6 +111,7 @@ impl Guest for Registry {
             signer_id: entry.signer_id(),
             x_only_pubkey,
             bls_pubkey: entry.bls_pubkey(),
+            next_nonce: entry.next_nonce(),
         })
     }
 
@@ -82,6 +122,7 @@ impl Guest for Registry {
             signer_id: entry.signer_id(),
             x_only_pubkey,
             bls_pubkey: entry.bls_pubkey(),
+            next_nonce: entry.next_nonce(),
         })
     }
 

@@ -106,6 +106,7 @@ async fn test_get_registry_entry_by_pubkey() -> Result<()> {
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -122,6 +123,7 @@ async fn test_get_registry_entry_by_signer_id() -> Result<()> {
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -176,6 +178,7 @@ async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
     assert_eq!(r_pk.result.signer_id, r_id.result.signer_id);
     assert_eq!(r_pk.result.x_only_pubkey, r_id.result.x_only_pubkey);
     assert_eq!(r_pk.result.bls_pubkey, r_id.result.bls_pubkey);
+    assert_eq!(r_pk.result.next_nonce, r_id.result.next_nonce);
 
     Ok(())
 }
@@ -194,6 +197,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     assert_eq!(result.result.signer_id, 1);
     assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[1].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     let by_id: TestResponse = server.get("/api/registry/entry/1").await;
     assert_eq!(by_id.status_code(), StatusCode::OK);
@@ -201,6 +205,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     let by_id_result: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
     assert_eq!(by_id_result.result.signer_id, 1);
     assert_eq!(by_id_result.result.x_only_pubkey, users[1].x_only_pubkey);
+    assert_eq!(by_id_result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -223,6 +228,8 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
     assert_ne!(r0.result.bls_pubkey, r1.result.bls_pubkey);
     assert_eq!(r0.result.signer_id, 0);
     assert_eq!(r1.result.signer_id, 1);
+    assert_eq!(r0.result.next_nonce, 0);
+    assert_eq!(r1.result.next_nonce, 0);
 
     Ok(())
 }

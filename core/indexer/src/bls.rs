@@ -359,10 +359,12 @@ impl RegistrationProof {
 mod tests {
     use super::*;
     use crate::database::connection::new_connection;
-    use crate::runtime::{ComponentCache, Storage};
+    use crate::database::queries::insert_block;
+    use crate::runtime::{registry, ComponentCache, Storage};
+    use crate::test_utils::new_mock_block_hash;
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use indexer_types::{ContractAddress, Signer};
+    use indexer_types::{BlockRow, ContractAddress, Signer};
     use tempfile::TempDir;
 
     async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -659,14 +661,6 @@ mod tests {
         assert!(resolver.pk_cache.is_empty());
     }
 
-    // -----------------------------------------------------------------------
-    // reserve_nonces unit tests
-    // -----------------------------------------------------------------------
-
-    use crate::database::queries::{insert_block, nonce_exists};
-    use crate::test_utils::new_mock_block_hash;
-    use indexer_types::BlockRow;
-
     async fn new_test_runtime_with_block() -> (Runtime, TempDir) {
         let (mut runtime, tmp) = new_test_runtime().await;
         insert_block(
@@ -678,8 +672,46 @@ mod tests {
         )
         .await
         .expect("insert block at height 0");
+        runtime
+            .publish_native_contracts()
+            .await
+            .expect("publish native contracts");
+        insert_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(1)
+                .hash(new_mock_block_hash(1))
+                .build(),
+        )
+        .await
+        .expect("insert block at height 1");
         (runtime, tmp)
     }
+
+    async fn register_test_signer(runtime: &mut Runtime, seed: u8) -> u64 {
+        let secp = Secp256k1::new();
+        let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        let bls_sk = BlsSecretKey::key_gen(&[seed; 32], &[]).expect("BLS key_gen");
+        let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).expect("registration proof");
+        let signer = Signer::XOnlyPubKey(keypair.x_only_public_key().0.to_string());
+        runtime
+            .register_bls_key(
+                &signer,
+                &proof.bls_pubkey,
+                &proof.schnorr_sig,
+                &proof.bls_sig,
+            )
+            .await
+            .expect("register signer");
+        registry::api::get_signer_id(runtime, &keypair.x_only_public_key().0.to_string())
+            .await
+            .expect("registry lookup")
+            .expect("signer id")
+    }
+
+    // -----------------------------------------------------------------------
+    // reserve_nonces unit tests
+    // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn reserve_nonces_accepts_empty_ops() {
@@ -697,10 +729,11 @@ mod tests {
     #[tokio::test]
     async fn reserve_nonces_accepts_unique_nonces() {
         let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let signer_id = register_test_signer(&mut runtime, 11).await;
         let ops = vec![
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 100,
+                signer_id,
+                nonce: 0,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -710,8 +743,8 @@ mod tests {
                 expr: String::new(),
             },
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 101,
+                signer_id,
+                nonce: 1,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -722,17 +755,21 @@ mod tests {
             },
         ];
         runtime.reserve_nonces(&ops).await.unwrap();
-        assert!(nonce_exists(&runtime.storage.conn, 1, 100).await.unwrap());
-        assert!(nonce_exists(&runtime.storage.conn, 1, 101).await.unwrap());
+        let entry = registry::api::get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.next_nonce, 2);
     }
 
     #[tokio::test]
-    async fn reserve_nonces_rejects_duplicate_within_bundle() {
+    async fn reserve_nonces_rejects_non_sequential_within_bundle() {
         let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let signer_id = register_test_signer(&mut runtime, 12).await;
         let ops = vec![
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 42,
+                signer_id,
+                nonce: 0,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -742,8 +779,8 @@ mod tests {
                 expr: String::new(),
             },
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 42,
+                signer_id,
+                nonce: 0,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -756,21 +793,23 @@ mod tests {
         let err = runtime
             .reserve_nonces(&ops)
             .await
-            .expect_err("duplicate nonce must be rejected");
-        assert!(err.to_string().contains("duplicate nonce"));
-        assert!(
-            !nonce_exists(&runtime.storage.conn, 1, 42).await.unwrap(),
-            "rejected nonce must not be persisted"
-        );
+            .expect_err("non-sequential nonce must be rejected");
+        assert!(err.to_string().contains("expected 1"));
+        let entry = registry::api::get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.next_nonce, 0, "rejected nonce must not advance registry state");
     }
 
     #[tokio::test]
     async fn reserve_nonces_rejects_replay_and_rolls_back() {
         let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let signer_id = register_test_signer(&mut runtime, 13).await;
 
         let first = vec![BlsBulkOp::Call {
-            signer_id: 1,
-            nonce: 99,
+            signer_id,
+            nonce: 0,
             gas_limit: 50_000,
             contract: ContractAddress {
                 name: "t".into(),
@@ -783,8 +822,8 @@ mod tests {
 
         let replay = vec![
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 200,
+                signer_id,
+                nonce: 1,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -794,8 +833,8 @@ mod tests {
                 expr: String::new(),
             },
             BlsBulkOp::Call {
-                signer_id: 1,
-                nonce: 99,
+                signer_id,
+                nonce: 0,
                 gas_limit: 50_000,
                 contract: ContractAddress {
                     name: "t".into(),
@@ -808,11 +847,15 @@ mod tests {
         let err = runtime
             .reserve_nonces(&replay)
             .await
-            .expect_err("replayed nonce must be rejected");
-        assert!(err.to_string().contains("replay"));
-        assert!(
-            !nonce_exists(&runtime.storage.conn, 1, 200).await.unwrap(),
-            "co-bundled nonce must be rolled back on replay failure"
+            .expect_err("stale nonce must be rejected");
+        assert!(err.to_string().contains("expected 2"));
+        let entry = registry::api::get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            entry.next_nonce, 1,
+            "co-bundled nonce advancement must be rolled back on sequential nonce failure"
         );
     }
 }
