@@ -609,27 +609,25 @@ impl Guest for Filestorage {
                 .prover_challenges()
                 .set(node_id.clone(), ProverChallenges::default());
         }
-        let prover_challenges =
-            model
-                .prover_challenges()
-                .get(&node_id)
-                .ok_or(Error::Message(format!(
-                    "Failed to initialize prover challenge state for {}",
-                    node_id
-                )))?;
+        let prover_challenges = model
+            .prover_challenges()
+            .get(&node_id)
+            .ok_or(Error::Message(format!(
+                "Failed to initialize prover challenge state for {}",
+                node_id
+            )))?;
         if prover_challenges.shards().get(&shard_id).is_none() {
             prover_challenges
                 .shards()
                 .set(shard_id, ShardChallenges::default());
         }
-        let shard_challenges =
-            prover_challenges
-                .shards()
-                .get(&shard_id)
-                .ok_or(Error::Message(format!(
-                    "Failed to initialize shard challenge state for prover {} shard {}",
-                    node_id, shard_id
-                )))?;
+        let shard_challenges = prover_challenges
+            .shards()
+            .get(&shard_id)
+            .ok_or(Error::Message(format!(
+                "Failed to initialize shard challenge state for prover {} shard {}",
+                node_id, shard_id
+            )))?;
         let shard_seq = shard_challenges.next_seq();
         shard_challenges.update_next_seq(|seq| seq.saturating_add(1));
         shard_challenges
