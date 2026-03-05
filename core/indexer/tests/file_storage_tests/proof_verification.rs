@@ -8,12 +8,6 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
-async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
-    let signer = Signer::XOnlyPubKey(node_id.to_string());
-    runtime.issuance(&signer).await?;
-    Ok(signer)
-}
-
 /// Helper to create an active agreement with challenges
 async fn setup_active_agreement_with_challenge(
     runtime: &mut Runtime,
@@ -35,9 +29,11 @@ async fn setup_active_agreement_with_challenge(
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Activate it with 3 nodes
-    for node_id in ["node_1", "node_2", "node_3"] {
-        let node_signer = named_signer(runtime, node_id).await?;
-        filestorage::join_agreement(runtime, &node_signer, &created.agreement_id, node_id)
+    let node_1_signer = runtime.identity().await?;
+    let node_2_signer = runtime.identity().await?;
+    let node_3_signer = runtime.identity().await?;
+    for node_signer in [&node_1_signer, &node_2_signer, &node_3_signer] {
+        filestorage::join_agreement(runtime, node_signer, &created.agreement_id, &**node_signer)
             .await??;
     }
 
