@@ -22,6 +22,12 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
+async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
+    let signer = Signer::XOnlyPubKey(node_id.to_string());
+    runtime.issuance(&signer).await?;
+    Ok(signer)
+}
+
 /// Create a RawFileDescriptor from kontor-crypto FileMetadata
 fn metadata_to_descriptor(metadata: &api::FileMetadata) -> RawFileDescriptor {
     let root: [u8; 32] = field_element_to_bytes(&metadata.root);
@@ -52,6 +58,8 @@ fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api:
 struct PorProofFixtures {
     invalid_proof_hex: String,
     cross_block_agg_hex: String,
+    cross_block_seed_a: u64,
+    cross_block_seed_b: u64,
 }
 
 fn load_por_fixtures() -> Result<PorProofFixtures> {
@@ -76,9 +84,9 @@ fn decode_fixture_hex(field: &str, value: &str) -> Result<Vec<u8>> {
 
 async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let node_1_signer = runtime.identity().await?;
-    let node_2_signer = runtime.identity().await?;
-    let node_3_signer = runtime.identity().await?;
+    let node_1_signer = named_signer(runtime, "node_1").await?;
+    let node_2_signer = named_signer(runtime, "node_2").await?;
+    let node_3_signer = named_signer(runtime, "node_3").await?;
     let fixtures = load_por_fixtures()?;
 
     // Prepare file
@@ -90,27 +98,12 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let created2 = filestorage::create_agreement(runtime, &signer, descriptor2).await??;
 
     // Activate agreement
-    filestorage::join_agreement(
-        runtime,
-        &node_1_signer,
-        &created2.agreement_id,
-        &node_1_signer,
-    )
-    .await??;
-    filestorage::join_agreement(
-        runtime,
-        &node_2_signer,
-        &created2.agreement_id,
-        &node_2_signer,
-    )
-    .await??;
-    filestorage::join_agreement(
-        runtime,
-        &node_3_signer,
-        &created2.agreement_id,
-        &node_3_signer,
-    )
-    .await??;
+    filestorage::join_agreement(runtime, &node_1_signer, &created2.agreement_id, "node_1")
+        .await??;
+    filestorage::join_agreement(runtime, &node_2_signer, &created2.agreement_id, "node_2")
+        .await??;
+    filestorage::join_agreement(runtime, &node_3_signer, &created2.agreement_id, "node_3")
+        .await??;
 
     let proof_bytes = decode_fixture_hex("invalid_proof_hex", &fixtures.invalid_proof_hex)?;
     let result = filestorage::verify_proof(runtime, &node_1_signer, proof_bytes, 0, 0, 1).await?;
@@ -136,9 +129,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let signer = runtime.identity().await?;
     let core_identity = runtime.identity().await?;
     let core_signer = Signer::Core(Box::new(core_identity));
-    let node_1_signer = runtime.identity().await?;
-    let node_2_signer = runtime.identity().await?;
-    let node_3_signer = runtime.identity().await?;
+    let node_1_signer = named_signer(runtime, "node_1").await?;
+    let node_2_signer = named_signer(runtime, "node_2").await?;
+    let node_3_signer = named_signer(runtime, "node_3").await?;
     let fixtures = load_por_fixtures()?;
 
     // Step 1: Create files A and B (existing before the "middle" agreement)
@@ -156,12 +149,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     // Activate both agreements
     for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
-        filestorage::join_agreement(runtime, &node_1_signer, agreement_id, &node_1_signer)
-            .await??;
-        filestorage::join_agreement(runtime, &node_2_signer, agreement_id, &node_2_signer)
-            .await??;
-        filestorage::join_agreement(runtime, &node_3_signer, agreement_id, &node_3_signer)
-            .await??;
+        filestorage::join_agreement(runtime, &node_1_signer, agreement_id, "node_1").await??;
+        filestorage::join_agreement(runtime, &node_2_signer, agreement_id, "node_2").await??;
+        filestorage::join_agreement(runtime, &node_3_signer, agreement_id, "node_3").await??;
     }
 
     // Step 2: Create challenges for A and B at block N
@@ -171,9 +161,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &core_signer,
         &created_a.agreement_id,
-        &node_1_signer,
+        "node_1",
         block_n,
-        valid_seed_field(200).bytes.to_vec(),
+        valid_seed_field(fixtures.cross_block_seed_a).bytes.to_vec(),
     )
     .await??;
 
@@ -181,9 +171,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &core_signer,
         &created_b.agreement_id,
-        &node_1_signer,
+        "node_1",
         block_n,
-        valid_seed_field(201).bytes.to_vec(),
+        valid_seed_field(fixtures.cross_block_seed_b).bytes.to_vec(),
     )
     .await??;
 
@@ -196,27 +186,12 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let created_c = filestorage::create_agreement(runtime, &signer, descriptor_c).await??;
 
     // Activate file C's agreement
-    filestorage::join_agreement(
-        runtime,
-        &node_1_signer,
-        &created_c.agreement_id,
-        &node_1_signer,
-    )
-    .await??;
-    filestorage::join_agreement(
-        runtime,
-        &node_2_signer,
-        &created_c.agreement_id,
-        &node_2_signer,
-    )
-    .await??;
-    filestorage::join_agreement(
-        runtime,
-        &node_3_signer,
-        &created_c.agreement_id,
-        &node_3_signer,
-    )
-    .await??;
+    filestorage::join_agreement(runtime, &node_1_signer, &created_c.agreement_id, "node_1")
+        .await??;
+    filestorage::join_agreement(runtime, &node_2_signer, &created_c.agreement_id, "node_2")
+        .await??;
+    filestorage::join_agreement(runtime, &node_3_signer, &created_c.agreement_id, "node_3")
+        .await??;
 
     // Step 4: Verify the precomputed proof
     let proof_bytes = decode_fixture_hex("cross_block_agg_hex", &fixtures.cross_block_agg_hex)?;
