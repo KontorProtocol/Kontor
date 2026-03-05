@@ -2,10 +2,10 @@ use stdlib::Store;
 
 #[derive(Store)]
 struct Test {
-    res: anyhow::Result<u64>,
+    res: Result<u64, std::io::Error>,
 }
 
 #[derive(Store)]
 struct Test1 {
-    res: Result<u64, Error>,
+    res: Result<u64, std::io::Error>,
 }
