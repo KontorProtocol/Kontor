@@ -462,25 +462,25 @@ pub fn make_descriptor(
 // Each hash guarantees a challenge when there's 1 eligible file.
 // Stored as hex strings for readability; use `lucky_hash()` to decode.
 
-/// Lucky hash for block height 1000 (roll = 7)
+/// Lucky hash for block height 1000 (roll = 11)
 pub const LUCKY_HASH_1000: &str =
-    "8db6b1269eab0af290543fc6cc3945018ba7332085b18a71170ee234e4f43676";
+    "a679552f73627fa32cb7d981b2e04c3541008f6ec85711186723218fbab7558e";
 
-/// Lucky hash for block height 10000 (roll = 10)
+/// Lucky hash for block height 10000 (roll = 11)
 pub const LUCKY_HASH_10000: &str =
-    "dda7bbc8c286d5f8a390fc7a9918a83eefd7046ad878a8feef7297560929c75d";
+    "06ce1d230c958ab2e973b656b10f4960e29274e289ab40dc079ee791c1854012";
 
-/// Lucky hash for block height 50000 (roll = 1)
+/// Lucky hash for block height 50000 (roll = 0)
 pub const LUCKY_HASH_50000: &str =
-    "d998f2928dab53f43cda61ed3bd6f2ebdbae001df799175ab28601bf16187e52";
+    "5b066cd3a6eacae1f5c7c301e305924891d7f036ddfd248a11a8c989fa00bd42";
 
-/// Lucky hash for block height 100000 (roll = 2)
+/// Lucky hash for block height 100000 (roll = 0)
 pub const LUCKY_HASH_100000: &str =
-    "10adb611e366cab60d827a935bb4ced6431e36bd7576d38eb568084ab39d6bb1";
+    "f7077a3d31d353ef988a13dc091f56a0e288a9b49862c8c99d0d736a1e8fdd50";
 
-/// Lucky hash for block height 500000 (roll = 8)
+/// Lucky hash for block height 500000 (roll = 9)
 pub const LUCKY_HASH_500000: &str =
-    "e68680749dc7fd55901397031d27304d63d4efd3cb67e78a7cdb8e206a17c35b";
+    "20ea916d91a895612595146acc362cba216a91eaa55e627ddb90117950b09716";
 
 /// Decode a hex-encoded lucky hash to a 32-byte array.
 pub fn lucky_hash(hex: &str) -> [u8; 32] {
