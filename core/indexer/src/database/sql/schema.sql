@@ -84,5 +84,4 @@ CREATE TABLE IF NOT EXISTS file_metadata (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
-CREATE INDEX IF NOT EXISTS idx_file_metadata_ledger_index ON file_metadata (ledger_index);
+-- `file_id` and `ledger_index` are already UNIQUE, which creates implicit indexes.

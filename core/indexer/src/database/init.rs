@@ -140,12 +140,54 @@ WHERE ledger_index IS NULL;
         }
     }
 
-    // Enforce uniqueness for upgraded DBs (new DBs get this from schema.sql).
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_file_metadata_ledger_index_unique ON file_metadata (ledger_index);",
-        (),
-    )
-    .await?;
+    // Enforce uniqueness for upgraded DBs. New DBs already have a unique constraint in
+    // `schema.sql` (which creates an implicit unique index).
+    if !has_single_column_unique_index(conn, "file_metadata", "ledger_index").await? {
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_file_metadata_ledger_index_unique ON file_metadata (ledger_index);",
+            (),
+        )
+        .await?;
+    }
 
     Ok(())
+}
+
+async fn has_single_column_unique_index(
+    conn: &libsql::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, Error> {
+    let mut idxs = conn
+        .query(&format!("PRAGMA index_list('{table}');"), ())
+        .await?;
+
+    while let Some(row) = idxs.next().await? {
+        // PRAGMA index_list: seq, name, unique, origin, partial
+        let index_name: String = row.get(1)?;
+        let unique: i64 = row.get(2)?;
+        if unique == 0 {
+            continue;
+        }
+
+        let mut info = conn
+            .query(&format!("PRAGMA index_info('{index_name}');"), ())
+            .await?;
+        let mut count = 0i64;
+        let mut matches = true;
+        while let Some(irow) = info.next().await? {
+            // PRAGMA index_info: seqno, cid, name
+            let col_name: String = irow.get(2)?;
+            count += 1;
+            if col_name != column {
+                matches = false;
+            }
+        }
+
+        if matches && count == 1 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
