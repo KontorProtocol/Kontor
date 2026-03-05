@@ -10,7 +10,7 @@ use indexer::{
 };
 
 #[tokio::test]
-async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
+async fn test_reactor_generate_challenges_deterministic_no_challenge() -> Result<()> {
     let setup_block = Block {
         height: 0,
         hash: BlockHash::from_byte_array([0x00; 32]),
@@ -52,6 +52,8 @@ async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
         "agreement should be active before reactor block handling"
     );
 
+    // Fixed inputs: for this block hash, the deterministic roll yields 0 challenges for a single
+    // eligible agreement under the default parameters. This keeps the reactor test non-flaky.
     let block_height = 100001u64;
     let block = Block {
         height: block_height,
@@ -62,14 +64,7 @@ async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
     reactor::block_handler(&mut runtime, &block).await?;
 
     let after = filestorage::api::get_active_challenges(&mut runtime).await?;
-    assert!(
-        after.len() <= 1,
-        "reactor should create at most one challenge for a single eligible agreement"
-    );
-    if let Some(challenge) = after.first() {
-        assert_eq!(challenge.agreement_id, created.agreement_id);
-        assert_eq!(challenge.block_height, block_height);
-    }
+    assert_eq!(after.len(), 0, "fixed hash should generate no challenges");
 
     Ok(())
 }

@@ -125,6 +125,8 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
 ///    (also exercises multi-file aggregated proof in a single run)
 async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let core_identity = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(core_identity));
     let node_1_signer = named_signer(runtime, "node_1").await?;
     let node_2_signer = named_signer(runtime, "node_2").await?;
     let node_3_signer = named_signer(runtime, "node_3").await?;
@@ -155,7 +157,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     let challenge_a = filestorage::create_challenge_for_agreement(
         runtime,
-        &signer,
+        &core_signer,
         &created_a.agreement_id,
         "node_1",
         block_n,
@@ -165,7 +167,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     let challenge_b = filestorage::create_challenge_for_agreement(
         runtime,
-        &signer,
+        &core_signer,
         &created_b.agreement_id,
         "node_1",
         block_n,

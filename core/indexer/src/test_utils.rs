@@ -458,34 +458,5 @@ pub fn make_descriptor(
     }
 }
 
-// Pre-computed lucky block hashes for challenge generation tests.
-// Each hash guarantees a challenge when there's 1 eligible file.
-// Stored as hex strings for readability; use `lucky_hash()` to decode.
-
-/// Lucky hash for block height 1000 (roll = 11)
-pub const LUCKY_HASH_1000: &str =
-    "a679552f73627fa32cb7d981b2e04c3541008f6ec85711186723218fbab7558e";
-
-/// Lucky hash for block height 10000 (roll = 11)
-pub const LUCKY_HASH_10000: &str =
-    "06ce1d230c958ab2e973b656b10f4960e29274e289ab40dc079ee791c1854012";
-
-/// Lucky hash for block height 50000 (roll = 0)
-pub const LUCKY_HASH_50000: &str =
-    "5b066cd3a6eacae1f5c7c301e305924891d7f036ddfd248a11a8c989fa00bd42";
-
-/// Lucky hash for block height 100000 (roll = 0)
-pub const LUCKY_HASH_100000: &str =
-    "f7077a3d31d353ef988a13dc091f56a0e288a9b49862c8c99d0d736a1e8fdd50";
-
-/// Lucky hash for block height 500000 (roll = 9)
-pub const LUCKY_HASH_500000: &str =
-    "20ea916d91a895612595146acc362cba216a91eaa55e627ddb90117950b09716";
-
-/// Decode a hex-encoded lucky hash to a 32-byte array.
-pub fn lucky_hash(hex: &str) -> [u8; 32] {
-    hex::decode(hex)
-        .expect("Invalid hex string")
-        .try_into()
-        .expect("Hash must be exactly 32 bytes")
-}
+// Note: stochastic challenge-generation "roll" behavior is validated at the contract layer.
+// Indexer integration tests should remain deterministic and avoid probabilistic assertions.

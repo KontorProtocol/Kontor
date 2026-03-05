@@ -46,6 +46,7 @@ struct ShardChallenges {
 
 #[derive(Clone, Default, Storage)]
 struct ProverChallenges {
+    pub initialized: bool,
     pub shards: Map<u64, ShardChallenges>,
 }
 
@@ -326,6 +327,109 @@ impl Guest for Filestorage {
             .collect()
     }
 
+    fn get_prover_shard_next_seq(
+        ctx: &ViewContext,
+        prover_id: String,
+        shard_id: u64,
+    ) -> Option<u64> {
+        let model = ctx.model();
+        if shard_id >= NUM_CHALLENGES_SHARDS {
+            return None;
+        }
+        let prover_challenges = model.prover_challenges().get(&prover_id)?;
+        let shard = prover_challenges.shards().get(shard_id)?;
+        Some(shard.next_seq())
+    }
+
+    fn get_prover_shard_challenge_ids(
+        ctx: &ViewContext,
+        prover_id: String,
+        shard_id: u64,
+        start_seq: u64,
+        end_seq: u64,
+    ) -> Result<Vec<String>, Error> {
+        let model = ctx.model();
+        if shard_id >= NUM_CHALLENGES_SHARDS {
+            return Err(Error::Message(format!(
+                "shard_id {} out of range (max {})",
+                shard_id,
+                NUM_CHALLENGES_SHARDS - 1
+            )));
+        }
+        if end_seq <= start_seq {
+            return Err(Error::Message(
+                "end_seq must be greater than start_seq".to_string(),
+            ));
+        }
+        let range_len = end_seq.saturating_sub(start_seq);
+        if range_len > MAX_CHALLENGES_PER_PROOF {
+            return Err(Error::Message(format!(
+                "challenge range {} exceeds MAX_CHALLENGES_PER_PROOF {}",
+                range_len, MAX_CHALLENGES_PER_PROOF
+            )));
+        }
+
+        let prover_challenges = model
+            .prover_challenges()
+            .get(&prover_id)
+            .ok_or(Error::Message(format!(
+                "No challenges indexed for prover {}",
+                prover_id
+            )))?;
+        let shard_challenges = prover_challenges
+            .shards()
+            .get(shard_id)
+            .ok_or(Error::Message(format!(
+                "No challenges indexed for prover {} shard {}",
+                prover_id, shard_id
+            )))?;
+
+        let mut out = Vec::with_capacity(range_len as usize);
+        for seq in start_seq..end_seq {
+            let cid = shard_challenges
+                .by_seq()
+                .get(seq)
+                .ok_or(Error::Message(format!(
+                    "Challenge sequence {} not found in shard {}",
+                    seq, shard_id
+                )))?;
+            out.push(cid);
+        }
+        Ok(out)
+    }
+
+    fn get_active_challenges_for_prover_shard(
+        ctx: &ViewContext,
+        prover_id: String,
+        shard_id: u64,
+        start_seq: u64,
+        end_seq: u64,
+    ) -> Result<Vec<ChallengeData>, Error> {
+        let model = ctx.model();
+        let challenge_ids = Self::get_prover_shard_challenge_ids(
+            ctx,
+            prover_id.clone(),
+            shard_id,
+            start_seq,
+            end_seq,
+        )?;
+
+        let mut out = Vec::new();
+        for cid in challenge_ids {
+            let c = model
+                .challenges()
+                .get(&cid)
+                .ok_or(Error::Message(format!("Challenge not found: {}", cid)))?;
+            if c.status().load() == ChallengeStatus::Active
+                && c.prover_id() == prover_id
+                && c.shard_id() == shard_id
+            {
+                out.push(c.load());
+            }
+        }
+        Ok(out)
+    }
+
     fn expire_challenges(ctx: &CoreContext, current_height: u64) -> u64 {
         let model = ctx.proc_context().model();
         let mut expired = 0u64;
@@ -361,7 +465,7 @@ impl Guest for Filestorage {
         // Exclude any agreement_id that already has an active challenge.
         //
         // TODO maybe: we could change this filter to filter by active challenges by file + node
-        let challenged_agreement_ids: Vec<String> = model
+        let challenged_agreement_ids: BTreeSet<String> = model
             .challenges()
             .keys()
             .filter_map(|cid: String| {
@@ -486,20 +590,24 @@ impl Guest for Filestorage {
                 Err(_) => continue,
             };
             if model.prover_challenges().get(&prover_id).is_none() {
-                model
-                    .prover_challenges()
-                    .set(prover_id.clone(), ProverChallenges::default());
+                model.prover_challenges().set(
+                    prover_id.clone(),
+                    ProverChallenges {
+                        initialized: true,
+                        ..ProverChallenges::default()
+                    },
+                );
             }
             let prover_challenges = match model.prover_challenges().get(&prover_id) {
                 Some(value) => value,
                 None => continue,
             };
-            if prover_challenges.shards().get(&shard_id).is_none() {
+            if prover_challenges.shards().get(shard_id).is_none() {
                 prover_challenges
                     .shards()
                     .set(shard_id, ShardChallenges::default());
             }
-            let shard_challenges = match prover_challenges.shards().get(&shard_id) {
+            let shard_challenges = match prover_challenges.shards().get(shard_id) {
                 Some(value) => value,
                 None => continue,
             };
@@ -534,13 +642,13 @@ impl Guest for Filestorage {
     /// Create a challenge for a specific agreement and node.
     /// This is primarily for testing to avoid probabilistic challenge generation.
     fn create_challenge_for_agreement(
-        ctx: &ProcContext,
+        ctx: &CoreContext,
         agreement_id: String,
         node_id: String,
         block_height: u64,
         seed: Vec<u8>,
     ) -> Result<ChallengeData, Error> {
-        let model = ctx.model();
+        let model = ctx.proc_context().model();
 
         // Validate agreement exists and is active
         let agreement = model
@@ -605,9 +713,13 @@ impl Guest for Filestorage {
             descriptor.compute_challenge_id(block_height, s_chal, &seed, &node_id)?;
         let shard_id = challenge_shard_id(&challenge_id)?;
         if model.prover_challenges().get(&node_id).is_none() {
-            model
-                .prover_challenges()
-                .set(node_id.clone(), ProverChallenges::default());
+            model.prover_challenges().set(
+                node_id.clone(),
+                ProverChallenges {
+                    initialized: true,
+                    ..ProverChallenges::default()
+                },
+            );
         }
         let prover_challenges = model
             .prover_challenges()
@@ -616,14 +728,14 @@ impl Guest for Filestorage {
                 "Failed to initialize prover challenge state for {}",
                 node_id
             )))?;
-        if prover_challenges.shards().get(&shard_id).is_none() {
+        if prover_challenges.shards().get(shard_id).is_none() {
             prover_challenges
                 .shards()
                 .set(shard_id, ShardChallenges::default());
         }
         let shard_challenges = prover_challenges
             .shards()
-            .get(&shard_id)
+            .get(shard_id)
             .ok_or(Error::Message(format!(
                 "Failed to initialize shard challenge state for prover {} shard {}",
                 node_id, shard_id
@@ -712,7 +824,7 @@ impl Guest for Filestorage {
             )))?;
         let shard_challenges = prover_challenges
             .shards()
-            .get(&shard_id)
+            .get(shard_id)
             .ok_or(Error::Message(format!(
                 "No challenges indexed for prover {} shard {}",
                 prover_id, shard_id
@@ -724,7 +836,7 @@ impl Guest for Filestorage {
         for seq in start_seq..end_seq {
             let cid = shard_challenges
                 .by_seq()
-                .get(&seq)
+                .get(seq)
                 .ok_or(Error::Message(format!(
                     "Challenge sequence {} not found in shard {}",
                     seq, shard_id
@@ -784,12 +896,12 @@ impl Guest for Filestorage {
 
         let mut verified_count = 0u64;
         for cid in &challenge_ids {
-            if let Some(c) = model.challenges().get(cid) {
-                if c.status().load() == ChallengeStatus::Active {
-                    c.set_status(new_status);
-                    verified_count = verified_count.saturating_add(1);
-                }
-            }
+            if let Some(c) = model.challenges().get(cid)
+                && c.status().load() == ChallengeStatus::Active
+            {
+                c.set_status(new_status);
+                verified_count = verified_count.saturating_add(1);
+            };
         }
 
         Ok(VerifyProofResult { verified_count })

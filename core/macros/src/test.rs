@@ -30,6 +30,21 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
 
     let body = if mode == "regtest" {
         quote! {
+            // Skip regtest tests unless `bitcoind` is available locally.
+            //
+            // This keeps `cargo test` green for developers/CI environments that don't ship
+            // Bitcoin Core, while still running the suite automatically when `bitcoind` exists.
+            let bitcoind_ok = tokio::process::Command::new("which")
+                .arg("bitcoind")
+                .output()
+                .await
+                .map(|out| out.status.success())
+                .unwrap_or(false);
+            if !bitcoind_ok {
+                eprintln!("skipping regtest test (bitcoind not found in PATH)");
+                return Ok(());
+            }
+
             let (
                 _bitcoin_data_dir,
                 bitcoin_child,

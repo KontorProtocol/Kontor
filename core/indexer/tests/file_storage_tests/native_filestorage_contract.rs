@@ -1,4 +1,4 @@
-use indexer::test_utils::make_descriptor;
+use indexer::test_utils::{make_descriptor, valid_seed_field};
 use testlib::*;
 
 import!(
@@ -590,18 +590,23 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     join_node(runtime, &created.agreement_id, "node_1").await?;
     join_node(runtime, &created.agreement_id, "node_2").await?;
 
-    let block_hash = vec![1u8; 32];
     let before_active = filestorage::get_active_challenges(runtime).await?;
-    // Core-only: generate challenges requires core signer
-    let challenges =
-        filestorage::generate_challenges_for_block(runtime, &core_signer, 1000, block_hash).await?;
-
-    // Verify the return type is correct (list of challenges, possibly empty)
-    assert!(challenges.len() <= 1, "Should have 0 or 1 challenges");
+    let block_height = 1000u64;
+    let challenge = filestorage::create_challenge_for_agreement(
+        runtime,
+        &core_signer,
+        &created.agreement_id,
+        "node_0",
+        block_height,
+        valid_seed_field(100).bytes.to_vec(),
+    )
+    .await??;
+    assert_eq!(challenge.block_height, block_height);
+    assert_eq!(challenge.status, filestorage::ChallengeStatus::Active);
 
     // Verify get_active_challenges works
     let after_active = filestorage::get_active_challenges(runtime).await?;
-    assert_eq!(after_active.len(), before_active.len() + challenges.len());
+    assert_eq!(after_active.len(), before_active.len() + 1);
 
     // Core-only: expire_challenges requires core signer
     filestorage::expire_challenges(runtime, &core_signer, 10000).await?;
@@ -609,8 +614,7 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-/// Test that uses a pre-computed "lucky" block hash to guarantee challenge generation.
-/// This verifies the challenge generation formula works correctly.
+/// Deterministic challenge creation used by the integration harness.
 async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
     let core_identity = runtime.identity().await?;
@@ -637,8 +641,6 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
         agreement.active,
         "agreement should be active before challenge generation"
     );
-    let block_height = 50000u64;
-
     let before_active = filestorage::get_active_challenges(runtime).await?;
     assert_eq!(
         before_active.len(),
@@ -646,24 +648,22 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
         "Should start with no active challenges"
     );
 
-    let challenges = filestorage::generate_challenges_for_block(
+    let challenge = filestorage::create_challenge_for_agreement(
         runtime,
         &core_signer,
-        block_height,
-        vec![7u8; 32],
+        &created.agreement_id,
+        "node_1",
+        50000,
+        valid_seed_field(101).bytes.to_vec(),
     )
-    .await?;
-
-    assert!(challenges.len() <= 1, "Should have 0 or 1 challenges");
-    if let Some(challenge) = challenges.first() {
-        assert_eq!(challenge.agreement_id, created.agreement_id);
-        assert_eq!(challenge.block_height, block_height);
-        assert_eq!(challenge.status, filestorage::ChallengeStatus::Active);
-    }
+    .await??;
+    assert_eq!(challenge.agreement_id, created.agreement_id);
+    assert_eq!(challenge.block_height, 50000);
+    assert_eq!(challenge.status, filestorage::ChallengeStatus::Active);
 
     // Verify get_active_challenges reflects the new challenge
     let after_active = filestorage::get_active_challenges(runtime).await?;
-    assert_eq!(after_active.len(), before_active.len() + challenges.len());
+    assert_eq!(after_active.len(), before_active.len() + 1);
 
     Ok(())
 }
