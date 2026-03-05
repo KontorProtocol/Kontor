@@ -59,7 +59,7 @@ strum = { version = "=0.27.2", features = ["derive"] }
 tokio-tungstenite = { version = "=0.28.0", features = ["rustls-tls-webpki-roots"] }
 tracing-stackdriver = "=0.10.0"
 regex = "=1.12.3"
-kontor-crypto = { git = "https://github.com/KontorProtocol/Kontor-Crypto", branch = "adam/constant-size-proof" }
+kontor-crypto = { git = "https://github.com/KontorProtocol/Kontor-Crypto", rev = "028f9e6eec9eb8de38046d5de8e1326161251547" }
 ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"

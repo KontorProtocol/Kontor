@@ -832,7 +832,7 @@ impl Guest for Filestorage {
 
         // 2. Build challenge inputs from deterministic shard range.
         let mut challenge_inputs = Vec::new();
-        let mut challenge_ids = Vec::new();
+        let mut has_active_challenge = false;
         for seq in start_seq..end_seq {
             let cid = shard_challenges
                 .by_seq()
@@ -863,6 +863,10 @@ impl Guest for Filestorage {
                 )));
             }
 
+            if challenge.status().load() == ChallengeStatus::Active {
+                has_active_challenge = true;
+            }
+
             // Get file_id from agreement
             let agreement =
                 model
@@ -881,7 +885,12 @@ impl Guest for Filestorage {
                 seed: challenge.seed(),
                 prover_id: challenge.prover_id(),
             });
-            challenge_ids.push(cid);
+        }
+
+        if !has_active_challenge {
+            return Err(Error::Message(
+                "No active challenges in requested range".to_string(),
+            ));
         }
 
         // 3. Verify the proof
@@ -895,13 +904,14 @@ impl Guest for Filestorage {
         };
 
         let mut verified_count = 0u64;
-        for cid in &challenge_ids {
+        for input in &challenge_inputs {
+            let cid = &input.challenge_id;
             if let Some(c) = model.challenges().get(cid)
                 && c.status().load() == ChallengeStatus::Active
             {
                 c.set_status(new_status);
                 verified_count = verified_count.saturating_add(1);
-            };
+            }
         }
 
         Ok(VerifyProofResult { verified_count })
