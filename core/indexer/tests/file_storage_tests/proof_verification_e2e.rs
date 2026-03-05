@@ -22,6 +22,12 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
+async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
+    let signer = Signer::XOnlyPubKey(node_id.to_string());
+    runtime.issuance(&signer).await?;
+    Ok(signer)
+}
+
 /// Create a RawFileDescriptor from kontor-crypto FileMetadata
 fn metadata_to_descriptor(metadata: &api::FileMetadata) -> RawFileDescriptor {
     let root: [u8; 32] = field_element_to_bytes(&metadata.root);
@@ -76,6 +82,9 @@ fn decode_fixture_hex(field: &str, value: &str) -> Result<Vec<u8>> {
 
 async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let node_1_signer = named_signer(runtime, "node_1").await?;
+    let node_2_signer = named_signer(runtime, "node_2").await?;
+    let node_3_signer = named_signer(runtime, "node_3").await?;
     let fixtures = load_por_fixtures()?;
 
     // Prepare file
@@ -87,12 +96,15 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let created2 = filestorage::create_agreement(runtime, &signer, descriptor2).await??;
 
     // Activate agreement
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_3").await??;
+    filestorage::join_agreement(runtime, &node_1_signer, &created2.agreement_id, "node_1")
+        .await??;
+    filestorage::join_agreement(runtime, &node_2_signer, &created2.agreement_id, "node_2")
+        .await??;
+    filestorage::join_agreement(runtime, &node_3_signer, &created2.agreement_id, "node_3")
+        .await??;
 
     let proof_bytes = decode_fixture_hex("invalid_proof_hex", &fixtures.invalid_proof_hex)?;
-    let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await?;
+    let result = filestorage::verify_proof(runtime, &node_1_signer, proof_bytes, 0, 0, 1).await?;
     assert!(result.is_err(), "Invalid proof should be rejected");
 
     Ok(())
@@ -113,6 +125,9 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
 ///    (also exercises multi-file aggregated proof in a single run)
 async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
+    let node_1_signer = named_signer(runtime, "node_1").await?;
+    let node_2_signer = named_signer(runtime, "node_2").await?;
+    let node_3_signer = named_signer(runtime, "node_3").await?;
     let fixtures = load_por_fixtures()?;
 
     // Step 1: Create files A and B (existing before the "middle" agreement)
@@ -130,9 +145,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     // Activate both agreements
     for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_1").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_2").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_3").await??;
+        filestorage::join_agreement(runtime, &node_1_signer, agreement_id, "node_1").await??;
+        filestorage::join_agreement(runtime, &node_2_signer, agreement_id, "node_2").await??;
+        filestorage::join_agreement(runtime, &node_3_signer, agreement_id, "node_3").await??;
     }
 
     // Step 2: Create challenges for A and B at block N
@@ -167,13 +182,30 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let created_c = filestorage::create_agreement(runtime, &signer, descriptor_c).await??;
 
     // Activate file C's agreement
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_3").await??;
+    filestorage::join_agreement(runtime, &node_1_signer, &created_c.agreement_id, "node_1")
+        .await??;
+    filestorage::join_agreement(runtime, &node_2_signer, &created_c.agreement_id, "node_2")
+        .await??;
+    filestorage::join_agreement(runtime, &node_3_signer, &created_c.agreement_id, "node_3")
+        .await??;
 
     // Step 4: Verify the precomputed proof
     let proof_bytes = decode_fixture_hex("cross_block_agg_hex", &fixtures.cross_block_agg_hex)?;
-    let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await??;
+    assert_eq!(
+        challenge_a.shard_id, challenge_b.shard_id,
+        "Fixture proof expects challenges from a single shard"
+    );
+    let start_seq = challenge_a.shard_seq.min(challenge_b.shard_seq);
+    let end_seq = challenge_a.shard_seq.max(challenge_b.shard_seq) + 1;
+    let result = filestorage::verify_proof(
+        runtime,
+        &node_1_signer,
+        proof_bytes,
+        challenge_a.shard_id,
+        start_seq,
+        end_seq,
+    )
+    .await??;
 
     assert_eq!(
         result.verified_count, 2,

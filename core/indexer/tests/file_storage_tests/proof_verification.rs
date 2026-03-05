@@ -8,6 +8,12 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
+async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
+    let signer = Signer::XOnlyPubKey(node_id.to_string());
+    runtime.issuance(&signer).await?;
+    Ok(signer)
+}
+
 /// Helper to create an active agreement with challenges
 async fn setup_active_agreement_with_challenge(
     runtime: &mut Runtime,
@@ -29,9 +35,11 @@ async fn setup_active_agreement_with_challenge(
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Activate it with 3 nodes
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    for node_id in ["node_1", "node_2", "node_3"] {
+        let node_signer = named_signer(runtime, node_id).await?;
+        filestorage::join_agreement(runtime, &node_signer, &created.agreement_id, node_id)
+            .await??;
+    }
 
     // Generate a challenge (core-only)
     let block_hash = vec![42u8; 32];
@@ -51,7 +59,7 @@ async fn verify_proof_invalid_proof_bytes_fails(runtime: &mut Runtime) -> Result
 
     // Try to verify with invalid proof bytes (random garbage)
     let invalid_bytes = vec![0u8; 100];
-    let result = filestorage::verify_proof(runtime, &signer, invalid_bytes).await?;
+    let result = filestorage::verify_proof(runtime, &signer, invalid_bytes, 0, 0, 1).await?;
 
     // Should return an error (deserialization failure)
     assert!(
@@ -67,7 +75,7 @@ async fn verify_proof_empty_proof_bytes_fails(runtime: &mut Runtime) -> Result<(
     let signer = runtime.identity().await?;
 
     // Try to verify with empty proof bytes
-    let result = filestorage::verify_proof(runtime, &signer, vec![]).await?;
+    let result = filestorage::verify_proof(runtime, &signer, vec![], 0, 0, 1).await?;
 
     // Should return an error
     assert!(
@@ -84,7 +92,7 @@ async fn verify_proof_truncated_header_fails(runtime: &mut Runtime) -> Result<()
 
     // Try to verify with bytes too short to be a valid proof header
     let short_bytes = vec![0u8; 5];
-    let result = filestorage::verify_proof(runtime, &signer, short_bytes).await?;
+    let result = filestorage::verify_proof(runtime, &signer, short_bytes, 0, 0, 1).await?;
 
     assert!(
         matches!(result, Err(Error::Validation(_))),
@@ -102,7 +110,7 @@ async fn verify_proof_wrong_magic_bytes_fails(runtime: &mut Runtime) -> Result<(
     let mut wrong_magic = vec![0u8; 20];
     wrong_magic[0..4].copy_from_slice(b"XXXX");
 
-    let result = filestorage::verify_proof(runtime, &signer, wrong_magic).await?;
+    let result = filestorage::verify_proof(runtime, &signer, wrong_magic, 0, 0, 1).await?;
 
     assert!(
         matches!(result, Err(Error::Validation(_))),
@@ -126,7 +134,7 @@ async fn verify_proof_result_has_verified_count(runtime: &mut Runtime) -> Result
 
     // Attempt verification with invalid proof - this should error
     // but confirms the function signature is correct
-    let result = filestorage::verify_proof(runtime, &signer, vec![0u8; 50]).await?;
+    let result = filestorage::verify_proof(runtime, &signer, vec![0u8; 50], 0, 0, 1).await?;
 
     // We expect an error, but the type system confirms VerifyProofResult exists
     assert!(result.is_err(), "Invalid proof should error");

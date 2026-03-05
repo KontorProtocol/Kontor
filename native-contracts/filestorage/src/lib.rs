@@ -22,6 +22,10 @@ const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
 
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
+/// Number of deterministic challenge shards.
+const NUM_CHALLENGES_SHARDS: u64 = 256;
+/// Maximum number of challenges consumed by one proof submission.
+const MAX_CHALLENGES_PER_PROOF: u64 = 1024;
 
 // ─────────────────────────────────────────────────────────────────
 // State Types
@@ -32,6 +36,17 @@ struct AgreementNodes {
     /// node_id -> is_active (true means active, false means left)
     pub nodes: Map<String, bool>,
     pub node_count: u64,
+}
+
+#[derive(Clone, Default, Storage)]
+struct ShardChallenges {
+    pub next_seq: u64,
+    pub by_seq: Map<u64, String>,
+}
+
+#[derive(Clone, Default, Storage)]
+struct ProverChallenges {
+    pub shards: Map<u64, ShardChallenges>,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -45,6 +60,7 @@ struct ProtocolState {
     pub agreement_nodes: Map<String, AgreementNodes>,
     pub agreement_count: u64,
     pub challenges: Map<String, ChallengeData>,
+    pub prover_challenges: Map<String, ProverChallenges>,
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -63,6 +79,7 @@ impl Guest for Filestorage {
             agreement_nodes: Map::default(),
             agreement_count: 0,
             challenges: Map::default(),
+            prover_challenges: Map::default(),
         }
         .init(ctx);
     }
@@ -146,6 +163,13 @@ impl Guest for Filestorage {
         node_id: String,
     ) -> Result<JoinAgreementResult, Error> {
         let model = ctx.model();
+        let signer_id = ctx.signer().to_string();
+
+        if node_id != signer_id {
+            return Err(Error::Message(
+                "node_id must match transaction signer".to_string(),
+            ));
+        }
 
         // Validate agreement exists
         let agreement = model
@@ -199,6 +223,13 @@ impl Guest for Filestorage {
         node_id: String,
     ) -> Result<LeaveAgreementResult, Error> {
         let model = ctx.model();
+        let signer_id = ctx.signer().to_string();
+
+        if node_id != signer_id {
+            return Err(Error::Message(
+                "node_id must match transaction signer".to_string(),
+            ));
+        }
 
         // Validate agreement exists
         let _agreement = model
@@ -450,8 +481,38 @@ impl Guest for Filestorage {
                     Err(_) => continue,
                 };
 
+            let shard_id = match challenge_shard_id(&challenge_id) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if model.prover_challenges().get(&prover_id).is_none() {
+                model
+                    .prover_challenges()
+                    .set(prover_id.clone(), ProverChallenges::default());
+            }
+            let prover_challenges = match model.prover_challenges().get(&prover_id) {
+                Some(value) => value,
+                None => continue,
+            };
+            if prover_challenges.shards().get(&shard_id).is_none() {
+                prover_challenges
+                    .shards()
+                    .set(shard_id, ShardChallenges::default());
+            }
+            let shard_challenges = match prover_challenges.shards().get(&shard_id) {
+                Some(value) => value,
+                None => continue,
+            };
+            let shard_seq = shard_challenges.next_seq();
+            shard_challenges.update_next_seq(|seq| seq.saturating_add(1));
+            shard_challenges
+                .by_seq()
+                .set(shard_seq, challenge_id.clone());
+
             let challenge = ChallengeData {
                 challenge_id,
+                shard_id,
+                shard_seq,
                 agreement_id: agreement_id.clone(),
                 block_height,
                 num_challenges: s_chal,
@@ -542,9 +603,43 @@ impl Guest for Filestorage {
 
         let challenge_id =
             descriptor.compute_challenge_id(block_height, s_chal, &seed, &node_id)?;
+        let shard_id = challenge_shard_id(&challenge_id)?;
+        if model.prover_challenges().get(&node_id).is_none() {
+            model
+                .prover_challenges()
+                .set(node_id.clone(), ProverChallenges::default());
+        }
+        let prover_challenges =
+            model
+                .prover_challenges()
+                .get(&node_id)
+                .ok_or(Error::Message(format!(
+                    "Failed to initialize prover challenge state for {}",
+                    node_id
+                )))?;
+        if prover_challenges.shards().get(&shard_id).is_none() {
+            prover_challenges
+                .shards()
+                .set(shard_id, ShardChallenges::default());
+        }
+        let shard_challenges =
+            prover_challenges
+                .shards()
+                .get(&shard_id)
+                .ok_or(Error::Message(format!(
+                    "Failed to initialize shard challenge state for prover {} shard {}",
+                    node_id, shard_id
+                )))?;
+        let shard_seq = shard_challenges.next_seq();
+        shard_challenges.update_next_seq(|seq| seq.saturating_add(1));
+        shard_challenges
+            .by_seq()
+            .set(shard_seq, challenge_id.clone());
 
         let challenge = ChallengeData {
             challenge_id,
+            shard_id,
+            shard_seq,
             agreement_id,
             block_height,
             num_challenges: s_chal,
@@ -577,32 +672,84 @@ impl Guest for Filestorage {
     // Proof Verification
     // ─────────────────────────────────────────────────────────────────
 
-    fn verify_proof(ctx: &ProcContext, proof_bytes: Vec<u8>) -> Result<VerifyProofResult, Error> {
+    fn verify_proof(
+        ctx: &ProcContext,
+        proof_bytes: Vec<u8>,
+        shard_id: u64,
+        start_seq: u64,
+        end_seq: u64,
+    ) -> Result<VerifyProofResult, Error> {
         let model = ctx.model();
+        let prover_id = ctx.signer().to_string();
+
+        if shard_id >= NUM_CHALLENGES_SHARDS {
+            return Err(Error::Message(format!(
+                "shard_id {} out of range (max {})",
+                shard_id,
+                NUM_CHALLENGES_SHARDS - 1
+            )));
+        }
+        if end_seq <= start_seq {
+            return Err(Error::Message(
+                "end_seq must be greater than start_seq".to_string(),
+            ));
+        }
+        let range_len = end_seq.saturating_sub(start_seq);
+        if range_len > MAX_CHALLENGES_PER_PROOF {
+            return Err(Error::Message(format!(
+                "challenge range {} exceeds MAX_CHALLENGES_PER_PROOF {}",
+                range_len, MAX_CHALLENGES_PER_PROOF
+            )));
+        }
 
         // 1. Deserialize proof (single deserialization via host resource)
         let proof = file_registry::Proof::from_bytes(&proof_bytes)?;
 
-        // 2. Get challenge IDs from proof
-        let challenge_ids = proof.challenge_ids();
-        if challenge_ids.is_empty() {
-            return Err(Error::Message("Proof contains no challenges".to_string()));
-        }
+        let prover_challenges = model
+            .prover_challenges()
+            .get(&prover_id)
+            .ok_or(Error::Message(format!(
+                "No challenges indexed for prover {}",
+                prover_id
+            )))?;
+        let shard_challenges = prover_challenges
+            .shards()
+            .get(&shard_id)
+            .ok_or(Error::Message(format!(
+                "No challenges indexed for prover {} shard {}",
+                prover_id, shard_id
+            )))?;
 
-        // 3. Build challenge inputs from contract storage
+        // 2. Build challenge inputs from deterministic shard range.
         let mut challenge_inputs = Vec::new();
-        for cid in &challenge_ids {
+        let mut challenge_ids = Vec::new();
+        for seq in start_seq..end_seq {
+            let cid = shard_challenges
+                .by_seq()
+                .get(&seq)
+                .ok_or(Error::Message(format!(
+                    "Challenge sequence {} not found in shard {}",
+                    seq, shard_id
+                )))?;
             let challenge = model
                 .challenges()
-                .get(cid)
+                .get(&cid)
                 .ok_or(Error::Message(format!("Challenge not found: {}", cid)))?;
 
-            // Only accept proofs for active challenges
-            if challenge.status().load() != ChallengeStatus::Active {
+            if challenge.prover_id() != prover_id {
                 return Err(Error::Message(format!(
-                    "Challenge {} is not active (status: {:?})",
+                    "Challenge {} belongs to prover {}, expected {}",
                     cid,
-                    challenge.status().load()
+                    challenge.prover_id(),
+                    prover_id
+                )));
+            }
+            if challenge.shard_id() != shard_id || challenge.shard_seq() != seq {
+                return Err(Error::Message(format!(
+                    "Challenge {} shard mapping mismatch (got shard={}, seq={})",
+                    cid,
+                    challenge.shard_id(),
+                    challenge.shard_seq()
                 )));
             }
 
@@ -624,33 +771,60 @@ impl Guest for Filestorage {
                 seed: challenge.seed(),
                 prover_id: challenge.prover_id(),
             });
+            challenge_ids.push(cid);
         }
 
-        // 4. Verify the proof
+        // 3. Verify the proof
         let result = proof.verify(&challenge_inputs)?;
 
-        // 5. Update challenge statuses based on result
+        // 4. Update challenge statuses for currently active challenges only.
         let new_status = match result {
             file_registry::VerifyResult::Verified => ChallengeStatus::Proven,
             file_registry::VerifyResult::Rejected => ChallengeStatus::Failed,
             file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
+        let mut verified_count = 0u64;
         for cid in &challenge_ids {
             if let Some(c) = model.challenges().get(cid) {
-                c.set_status(new_status);
+                if c.status().load() == ChallengeStatus::Active {
+                    c.set_status(new_status);
+                    verified_count = verified_count.saturating_add(1);
+                }
             }
         }
 
-        Ok(VerifyProofResult {
-            verified_count: challenge_ids.len() as u64,
-        })
+        Ok(VerifyProofResult { verified_count })
     }
 }
 
 // ─────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Deterministically maps a challenge ID (hex string) to one of NUM_CHALLENGES_SHARDS shards.
+fn challenge_shard_id(challenge_id: &str) -> Result<u64, Error> {
+    let bytes = challenge_id.as_bytes();
+    if bytes.len() < 2 {
+        return Err(Error::Message("challenge_id hex too short".to_string()));
+    }
+    let hi = decode_hex_nibble(bytes[0]).ok_or(Error::Message(
+        "challenge_id contains invalid hex nibble".to_string(),
+    ))?;
+    let lo = decode_hex_nibble(bytes[1]).ok_or(Error::Message(
+        "challenge_id contains invalid hex nibble".to_string(),
+    ))?;
+    Ok(((hi << 4) | lo) as u64)
+}
 
 /// Compute the number of agreements to challenge for this block using:
 ///   θ(t) = (C_target * |F|) / B

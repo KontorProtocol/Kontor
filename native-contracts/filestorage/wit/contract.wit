@@ -47,6 +47,8 @@ world root {
 
   record challenge-data {
     challenge-id: string,
+    shard-id: u64,
+    shard-seq: u64,
     agreement-id: string,
     block-height: u64,
     num-challenges: u64,
@@ -153,7 +155,10 @@ world root {
 
   export verify-proof: async func(
     ctx: borrow<proc-context>,
-    proof-bytes: list<u8>
+    proof-bytes: list<u8>,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
   ) -> result<verify-proof-result, error>;
 
 }

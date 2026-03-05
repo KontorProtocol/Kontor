@@ -14,6 +14,30 @@ fn has_node(nodes: &[filestorage::NodeInfo], node_id: &str, active: bool) -> boo
         .any(|n| n.node_id == node_id && n.active == active)
 }
 
+async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
+    let signer = Signer::XOnlyPubKey(node_id.to_string());
+    runtime.issuance(&signer).await?;
+    Ok(signer)
+}
+
+async fn join_node(
+    runtime: &mut Runtime,
+    agreement_id: &str,
+    node_id: &str,
+) -> Result<filestorage::JoinAgreementResult> {
+    let signer = named_signer(runtime, node_id).await?;
+    Ok(filestorage::join_agreement(runtime, &signer, agreement_id, node_id).await??)
+}
+
+async fn leave_node(
+    runtime: &mut Runtime,
+    agreement_id: &str,
+    node_id: &str,
+) -> Result<filestorage::LeaveAgreementResult> {
+    let signer = named_signer(runtime, node_id).await?;
+    Ok(filestorage::leave_agreement(runtime, &signer, agreement_id, node_id).await??)
+}
+
 async fn prepare_real_descriptor() -> Result<RawFileDescriptor> {
     let root: Vec<u8> = [0u8; 32].to_vec();
     let padded_len: u64 = 16; // 2^4
@@ -92,9 +116,9 @@ async fn filestorage_get_all_active_agreements(runtime: &mut Runtime) -> Result<
     assert!(!active.iter().any(|a| a.agreement_id == a1.agreement_id));
 
     // Activate it by reaching min_nodes
-    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &a1.agreement_id, "node_3").await??;
+    join_node(runtime, &a1.agreement_id, "node_1").await?;
+    join_node(runtime, &a1.agreement_id, "node_2").await?;
+    join_node(runtime, &a1.agreement_id, "node_3").await?;
     let active = filestorage::get_all_active_agreements(runtime).await?;
     assert!(
         active
@@ -247,8 +271,7 @@ async fn filestorage_join_agreement(runtime: &mut Runtime) -> Result<()> {
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Join with first node
-    let result =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    let result = join_node(runtime, &created.agreement_id, "node_1").await?;
     assert_eq!(result.agreement_id, created.agreement_id);
     assert_eq!(result.node_id, "node_1");
     assert!(!result.activated); // Not activated yet (need 3 nodes by default)
@@ -283,16 +306,13 @@ async fn filestorage_join_activates_at_min_nodes(runtime: &mut Runtime) -> Resul
     assert_eq!(min_nodes, 3); // Default
 
     // Join with nodes until activation
-    let result1 =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    let result1 = join_node(runtime, &created.agreement_id, "node_1").await?;
     assert!(!result1.activated);
 
-    let result2 =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    let result2 = join_node(runtime, &created.agreement_id, "node_2").await?;
     assert!(!result2.activated);
 
-    let result3 =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    let result3 = join_node(runtime, &created.agreement_id, "node_3").await?;
     assert!(result3.activated); // Should activate now!
 
     // Verify agreement is active
@@ -321,18 +341,19 @@ async fn filestorage_double_join_fails(runtime: &mut Runtime) -> Result<()> {
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    let node_1_signer = named_signer(runtime, "node_1").await?;
+    filestorage::join_agreement(runtime, &node_1_signer, &created.agreement_id, "node_1").await??;
 
     // Try to join again with same node
-    let err =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await?;
+    let err = filestorage::join_agreement(runtime, &node_1_signer, &created.agreement_id, "node_1")
+        .await?;
     assert!(matches!(err, Err(Error::Message(_))));
 
     Ok(())
 }
 
 async fn filestorage_join_nonexistent_agreement_fails(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = named_signer(runtime, "node_1").await?;
 
     let err = filestorage::join_agreement(runtime, &signer, "nonexistent", "node_1").await?;
     assert!(matches!(err, Err(Error::Message(_))));
@@ -352,12 +373,11 @@ async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
+    join_node(runtime, &created.agreement_id, "node_2").await?;
 
     // Leave with node_1
-    let result =
-        filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    let result = leave_node(runtime, &created.agreement_id, "node_1").await?;
     assert_eq!(result.agreement_id, created.agreement_id);
     assert_eq!(result.node_id, "node_1");
 
@@ -371,7 +391,7 @@ async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn filestorage_leave_nonmember_fails(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = named_signer(runtime, "node_1").await?;
     let descriptor = make_descriptor(
         "leave_nonmember_test".to_string(),
         vec![6u8; 32],
@@ -392,7 +412,7 @@ async fn filestorage_leave_nonmember_fails(runtime: &mut Runtime) -> Result<()> 
 }
 
 async fn filestorage_leave_nonexistent_agreement_fails(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = named_signer(runtime, "node_1").await?;
 
     let err = filestorage::leave_agreement(runtime, &signer, "nonexistent", "node_1").await?;
     assert!(matches!(err, Err(Error::Message(_))));
@@ -412,17 +432,17 @@ async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<
 
     // Create agreement and activate it
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
+    join_node(runtime, &created.agreement_id, "node_2").await?;
+    join_node(runtime, &created.agreement_id, "node_3").await?;
 
     // Verify active
     let agreement = filestorage::get_agreement(runtime, &created.agreement_id).await?;
     assert!(agreement.expect("exists").active);
 
     // Leave nodes until below min_nodes
-    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    leave_node(runtime, &created.agreement_id, "node_1").await?;
+    leave_node(runtime, &created.agreement_id, "node_2").await?;
 
     // Agreement should still be active (no deactivation)
     let agreement = filestorage::get_agreement(runtime, &created.agreement_id).await?;
@@ -456,14 +476,14 @@ async fn filestorage_is_node_in_agreement(runtime: &mut Runtime) -> Result<()> {
     assert!(!is_in);
 
     // Join node
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
 
     // Node should be in agreement
     let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
     assert!(is_in);
 
     // Leave node
-    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    leave_node(runtime, &created.agreement_id, "node_1").await?;
 
     // Node should no longer be in agreement
     let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
@@ -492,22 +512,21 @@ async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
 
     // Create agreement and join
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
 
     // Verify node is in
     let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
     assert!(is_in);
 
     // Leave
-    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    leave_node(runtime, &created.agreement_id, "node_1").await?;
 
     // Verify node is out
     let is_in = filestorage::is_node_in_agreement(runtime, &created.agreement_id, "node_1").await?;
     assert!(!is_in);
 
     // Rejoin - should succeed
-    let result =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    let result = join_node(runtime, &created.agreement_id, "node_1").await?;
     assert_eq!(result.node_id, "node_1");
 
     // Verify node is back in
@@ -532,15 +551,13 @@ async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime
 
     // Create and activate agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
-    let result3 =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
+    join_node(runtime, &created.agreement_id, "node_2").await?;
+    let result3 = join_node(runtime, &created.agreement_id, "node_3").await?;
     assert!(result3.activated); // Third node activates
 
     // Fourth join should NOT report activated (already active)
-    let result4 =
-        filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_4").await??;
+    let result4 = join_node(runtime, &created.agreement_id, "node_4").await?;
     assert!(!result4.activated); // Already active, so activated=false
 
     // Agreement should still be active
@@ -569,9 +586,9 @@ async fn challenge_gen_smoke_test(runtime: &mut Runtime) -> Result<()> {
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Activate it
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_0").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    join_node(runtime, &created.agreement_id, "node_0").await?;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
+    join_node(runtime, &created.agreement_id, "node_2").await?;
 
     let block_hash = vec![1u8; 32];
     let before_active = filestorage::get_active_challenges(runtime).await?;
@@ -610,9 +627,9 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Activate it with min_nodes (3)
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_0").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    join_node(runtime, &created.agreement_id, "node_0").await?;
+    join_node(runtime, &created.agreement_id, "node_1").await?;
+    join_node(runtime, &created.agreement_id, "node_2").await?;
 
     // Use a pre-computed block hash that will definitely generate a challenge for 1 file
     // With 1 eligible file and c_target=12, blocks_per_year=52560:

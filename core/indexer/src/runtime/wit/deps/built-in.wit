@@ -222,7 +222,6 @@ interface file-registry {
 
     resource proof {
         from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
-        challenge-ids: async func() -> list<string>;
         verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
     }
 }
