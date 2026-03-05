@@ -290,6 +290,13 @@ impl RuntimeRegtest {
             identities,
         }
     }
+
+    fn identity_key(signer: &Signer) -> &Signer {
+        match signer {
+            Signer::Core(inner) => inner.as_ref(),
+            _ => signer,
+        }
+    }
 }
 
 #[async_trait]
@@ -308,11 +315,12 @@ impl RuntimeImpl for RuntimeRegtest {
         name: &str,
         contract: &[u8],
     ) -> Result<ContractAddress> {
-        let identity = self
-            .identities
-            .get_mut(signer)
+        let (reg_tester, identities) = (&mut self.reg_tester, &mut self.identities);
+        let key = Self::identity_key(signer);
+        let identity = identities
+            .get_mut(key)
             .ok_or_else(|| anyhow!("Identity not found"))?;
-        self.reg_tester
+        reg_tester
             .instruction(
                 identity,
                 Inst::Publish {
@@ -342,11 +350,12 @@ impl RuntimeImpl for RuntimeRegtest {
         expr: &str,
     ) -> Result<String> {
         if let Some(signer) = signer {
-            let identity = self
-                .identities
-                .get_mut(signer)
+            let (reg_tester, identities) = (&mut self.reg_tester, &mut self.identities);
+            let key = Self::identity_key(signer);
+            let identity = identities
+                .get_mut(key)
                 .ok_or_else(|| anyhow!("Identity not found"))?;
-            self.reg_tester
+            reg_tester
                 .instruction(
                     identity,
                     Inst::Call {
@@ -367,13 +376,12 @@ impl RuntimeImpl for RuntimeRegtest {
     }
 
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        let identity = self
-            .identities
-            .get_mut(signer)
+        let (reg_tester, identities) = (&mut self.reg_tester, &mut self.identities);
+        let key = Self::identity_key(signer);
+        let identity = identities
+            .get_mut(key)
             .ok_or_else(|| anyhow!("Identity not found"))?;
-        self.reg_tester
-            .instruction(identity, Inst::Issuance)
-            .await?;
+        reg_tester.instruction(identity, Inst::Issuance).await?;
         Ok(())
     }
 
