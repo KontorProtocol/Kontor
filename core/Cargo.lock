@@ -2876,6 +2876,7 @@ dependencies = [
 [[package]]
 name = "kontor-crypto"
 version = "0.1.6"
+source = "git+https://github.com/KontorProtocol/Kontor-Crypto?branch=adam%2Fconstant-size-proof#7f5fcfa1f0d5c535741b6274861796ee161c132e"
 dependencies = [
  "bincode",
  "clap",
