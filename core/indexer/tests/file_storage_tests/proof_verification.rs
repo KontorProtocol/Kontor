@@ -33,7 +33,7 @@ async fn setup_active_agreement_with_challenge(
     let node_2_signer = runtime.identity().await?;
     let node_3_signer = runtime.identity().await?;
     for node_signer in [&node_1_signer, &node_2_signer, &node_3_signer] {
-        filestorage::join_agreement(runtime, node_signer, &created.agreement_id, &**node_signer)
+        filestorage::join_agreement(runtime, node_signer, &created.agreement_id, node_signer)
             .await??;
     }
 

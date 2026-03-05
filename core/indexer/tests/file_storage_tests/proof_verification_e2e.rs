@@ -94,21 +94,21 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
         runtime,
         &node_1_signer,
         &created2.agreement_id,
-        &*node_1_signer,
+        &node_1_signer,
     )
     .await??;
     filestorage::join_agreement(
         runtime,
         &node_2_signer,
         &created2.agreement_id,
-        &*node_2_signer,
+        &node_2_signer,
     )
     .await??;
     filestorage::join_agreement(
         runtime,
         &node_3_signer,
         &created2.agreement_id,
-        &*node_3_signer,
+        &node_3_signer,
     )
     .await??;
 
@@ -156,11 +156,11 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     // Activate both agreements
     for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
-        filestorage::join_agreement(runtime, &node_1_signer, agreement_id, &*node_1_signer)
+        filestorage::join_agreement(runtime, &node_1_signer, agreement_id, &node_1_signer)
             .await??;
-        filestorage::join_agreement(runtime, &node_2_signer, agreement_id, &*node_2_signer)
+        filestorage::join_agreement(runtime, &node_2_signer, agreement_id, &node_2_signer)
             .await??;
-        filestorage::join_agreement(runtime, &node_3_signer, agreement_id, &*node_3_signer)
+        filestorage::join_agreement(runtime, &node_3_signer, agreement_id, &node_3_signer)
             .await??;
     }
 
@@ -171,7 +171,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &core_signer,
         &created_a.agreement_id,
-        &*node_1_signer,
+        &node_1_signer,
         block_n,
         valid_seed_field(200).bytes.to_vec(),
     )
@@ -181,7 +181,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &core_signer,
         &created_b.agreement_id,
-        &*node_1_signer,
+        &node_1_signer,
         block_n,
         valid_seed_field(201).bytes.to_vec(),
     )
@@ -200,21 +200,21 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &node_1_signer,
         &created_c.agreement_id,
-        &*node_1_signer,
+        &node_1_signer,
     )
     .await??;
     filestorage::join_agreement(
         runtime,
         &node_2_signer,
         &created_c.agreement_id,
-        &*node_2_signer,
+        &node_2_signer,
     )
     .await??;
     filestorage::join_agreement(
         runtime,
         &node_3_signer,
         &created_c.agreement_id,
-        &*node_3_signer,
+        &node_3_signer,
     )
     .await??;
 
