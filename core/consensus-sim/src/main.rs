@@ -92,8 +92,19 @@ async fn main() -> Result<()> {
         let cancel = cancel_token.clone();
         join_set.spawn(
             async move {
-                if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, None, None, None, None, cancel).await
+                if let Err(e) = run_node(
+                    i,
+                    private_key,
+                    genesis,
+                    config,
+                    bitcoin_rx,
+                    None,
+                    None,
+                    None,
+                    None,
+                    cancel,
+                )
+                .await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }

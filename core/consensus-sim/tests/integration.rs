@@ -210,10 +210,13 @@ async fn happy_path_finalization() {
     );
 
     // At least one should be a BatchFinalized for anchor 0
-    let has_finalized = finality_events.iter().any(|e| {
-        matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0)
-    });
-    assert!(has_finalized, "Expected BatchFinalized at anchor 0, got: {finality_events:?}");
+    let has_finalized = finality_events.iter().any(
+        |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
+    );
+    assert!(
+        has_finalized,
+        "Expected BatchFinalized at anchor 0, got: {finality_events:?}"
+    );
 
     cluster.shutdown().await;
 }
@@ -239,7 +242,10 @@ async fn missing_tx_invalidation() {
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
     let decided_txids = decided.value.txids.clone();
-    assert!(decided_txids.len() >= 3, "Expected at least 3 txids in decided batch");
+    assert!(
+        decided_txids.len() >= 3,
+        "Expected at least 3 txids in decided batch"
+    );
 
     // Confirm only the first 2 txids — the 3rd will be missing
     let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2]
@@ -268,10 +274,13 @@ async fn missing_tx_invalidation() {
         "Expected at least one finality event"
     );
 
-    let has_rollback = finality_events.iter().any(|e| {
-        matches!(e, FinalityEvent::Rollback { missing_txids, .. } if !missing_txids.is_empty())
-    });
-    assert!(has_rollback, "Expected Rollback with missing txids, got: {finality_events:?}");
+    let has_rollback = finality_events.iter().any(
+        |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if !missing_txids.is_empty()),
+    );
+    assert!(
+        has_rollback,
+        "Expected Rollback with missing txids, got: {finality_events:?}"
+    );
 
     cluster.shutdown().await;
 }
@@ -324,10 +333,19 @@ async fn cascade_invalidation() {
     );
 
     // Should be a Rollback that invalidated multiple batches
-    let rollback = finality_events.iter().find(|e| matches!(e, FinalityEvent::Rollback { .. }));
-    assert!(rollback.is_some(), "Expected Rollback event, got: {finality_events:?}");
+    let rollback = finality_events
+        .iter()
+        .find(|e| matches!(e, FinalityEvent::Rollback { .. }));
+    assert!(
+        rollback.is_some(),
+        "Expected Rollback event, got: {finality_events:?}"
+    );
 
-    if let Some(FinalityEvent::Rollback { invalidated_batches, .. }) = rollback {
+    if let Some(FinalityEvent::Rollback {
+        invalidated_batches,
+        ..
+    }) = rollback
+    {
         assert!(
             invalidated_batches.len() >= 2,
             "Expected cascade to invalidate >= 2 batches, got {}",
@@ -417,11 +435,16 @@ async fn unbatched_txs_skip_batched_duplicates() {
         .await;
 
     // Find the BatchApplied event
-    let batch_applied = state_events.iter().find(|e| matches!(e, StateEvent::BatchApplied { .. }));
+    let batch_applied = state_events
+        .iter()
+        .find(|e| matches!(e, StateEvent::BatchApplied { .. }));
     assert!(batch_applied.is_some(), "Expected BatchApplied event");
 
     if let Some(StateEvent::BatchApplied { txid_count, .. }) = batch_applied {
-        assert_eq!(*txid_count, batch_txid_count, "Batch should contain all mempool txids");
+        assert_eq!(
+            *txid_count, batch_txid_count,
+            "Batch should contain all mempool txids"
+        );
     }
 
     // If there's a BlockProcessed at the same anchor, unbatched_count should be 0
@@ -430,7 +453,10 @@ async fn unbatched_txs_skip_batched_duplicates() {
         matches!(e, StateEvent::BlockProcessed { height, .. } if *height == decided.value.anchor_height)
     });
     // Either no BlockProcessed (because 0 unbatched) or unbatched_count == 0
-    if let Some(StateEvent::BlockProcessed { unbatched_count, .. }) = block_at_anchor {
+    if let Some(StateEvent::BlockProcessed {
+        unbatched_count, ..
+    }) = block_at_anchor
+    {
         assert_eq!(
             *unbatched_count, 0,
             "Expected 0 unbatched txs since all were in the batch"
@@ -479,17 +505,19 @@ async fn rollback_truncates_and_replays() {
         .wait_for_state_events(20, Duration::from_secs(15))
         .await;
 
-    let rollback_event = state_events.iter().find(|e| matches!(e, StateEvent::RollbackExecuted { .. }));
+    let rollback_event = state_events
+        .iter()
+        .find(|e| matches!(e, StateEvent::RollbackExecuted { .. }));
     assert!(
         rollback_event.is_some(),
         "Expected RollbackExecuted state event, got: {state_events:?}"
     );
 
-    if let Some(StateEvent::RollbackExecuted { entries_removed, .. }) = rollback_event {
-        assert!(
-            *entries_removed > 0,
-            "Rollback should have removed entries"
-        );
+    if let Some(StateEvent::RollbackExecuted {
+        entries_removed, ..
+    }) = rollback_event
+    {
+        assert!(*entries_removed > 0, "Rollback should have removed entries");
     }
 
     cluster.shutdown().await;
@@ -547,7 +575,10 @@ async fn rollback_preserves_pre_anchor_state() {
     if let Some(post) = post_rollback_checkpoint {
         // Batch 1 at anchor 0 survives the rollback (only anchor 1+ is truncated),
         // so checkpoint should not be empty
-        assert_ne!(post, [0u8; 32], "Post-rollback checkpoint should not be empty");
+        assert_ne!(
+            post, [0u8; 32],
+            "Post-rollback checkpoint should not be empty"
+        );
     }
     // If no rollback occurred, that's also valid — means no batches had unconfirmed txids
 
@@ -582,15 +613,20 @@ async fn all_nodes_reach_same_checkpoint() {
 
     // Filter to only the first consensus height's BatchApplied events
     let first_height = state_events.iter().find_map(|e| match e {
-        StateEvent::BatchApplied { consensus_height, .. } => Some(*consensus_height),
+        StateEvent::BatchApplied {
+            consensus_height, ..
+        } => Some(*consensus_height),
         _ => None,
     });
 
     let batch_checkpoints: Vec<[u8; 32]> = state_events
         .iter()
         .filter_map(|e| match e {
-            StateEvent::BatchApplied { consensus_height, checkpoint, .. }
-                if Some(*consensus_height) == first_height => Some(*checkpoint),
+            StateEvent::BatchApplied {
+                consensus_height,
+                checkpoint,
+                ..
+            } if Some(*consensus_height) == first_height => Some(*checkpoint),
             _ => None,
         })
         .collect();

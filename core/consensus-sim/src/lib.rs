@@ -74,8 +74,7 @@ pub fn make_config(index: usize, ports: &[u16]) -> SimConfig {
             enabled: true,
             value_payload: ValuePayload::ProposalAndParts,
             p2p: P2pConfig {
-                listen_addr: TransportProtocol::Tcp
-                    .multiaddr("127.0.0.1", ports[index] as usize),
+                listen_addr: TransportProtocol::Tcp.multiaddr("127.0.0.1", ports[index] as usize),
                 persistent_peers,
                 ..Default::default()
             },
@@ -122,8 +121,7 @@ pub async fn run_node(
     let wal_dir = tempfile::tempdir()?;
     let wal_path = wal_dir.path().join("consensus.wal");
 
-    let identity =
-        NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
+    let identity = NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
 
     let engine_provider = Ed25519Provider::new(private_key.clone());
     let app_provider = Ed25519Provider::new(private_key);
@@ -146,8 +144,15 @@ pub async fn run_node(
         let _ = tx.send(index).await;
     }
 
-    let mut state =
-        reactor::State::new(index, app_provider, genesis, address, decided_tx, finality_tx, state_tx);
+    let mut state = reactor::State::new(
+        index,
+        app_provider,
+        genesis,
+        address,
+        decided_tx,
+        finality_tx,
+        state_tx,
+    );
     reactor::run(&mut state, &mut channels, &mut bitcoin_rx, cancel)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
@@ -203,7 +208,8 @@ impl ClusterHandle {
         count: usize,
         timeout: Duration,
     ) -> Vec<Vec<DecidedBatch>> {
-        let mut results: Vec<Vec<DecidedBatch>> = (0..self.node_count).map(|_| Vec::new()).collect();
+        let mut results: Vec<Vec<DecidedBatch>> =
+            (0..self.node_count).map(|_| Vec::new()).collect();
 
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -348,8 +354,19 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
 
         join_set.spawn(
             async move {
-                if let Err(e) =
-                    run_node(i, private_key, genesis, config, bitcoin_rx, Some(dtx), Some(ftx), Some(stx), Some(rtx), cancel).await
+                if let Err(e) = run_node(
+                    i,
+                    private_key,
+                    genesis,
+                    config,
+                    bitcoin_rx,
+                    Some(dtx),
+                    Some(ftx),
+                    Some(stx),
+                    Some(rtx),
+                    cancel,
+                )
+                .await
                 {
                     tracing::error!(node = i, error = %e, "Node exited with error");
                 }
