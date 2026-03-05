@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS contract_results (
 
 CREATE TABLE IF NOT EXISTS file_metadata (
   id INTEGER PRIMARY KEY,
+  ledger_index INTEGER NOT NULL UNIQUE,
   file_id TEXT NOT NULL UNIQUE,
   object_id TEXT NOT NULL,
   nonce BLOB NOT NULL,
@@ -83,4 +84,4 @@ CREATE TABLE IF NOT EXISTS file_metadata (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+-- `file_id` and `ledger_index` are already UNIQUE, which creates implicit indexes.

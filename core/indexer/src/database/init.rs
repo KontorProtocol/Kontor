@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use libsql::Error;
+use libsql::params;
 use tokio::fs;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -41,6 +42,7 @@ pub const CREATE_CONTRACT_STATE_TRIGGER: &str = include_str!("sql/checkpoint_tri
 pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> Result<(), Error> {
     conn.query("PRAGMA foreign_keys = ON;", ()).await?;
     conn.execute_batch(CREATE_SCHEMA).await?;
+    ensure_file_metadata_ledger_index(conn).await?;
     conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
     conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
@@ -61,4 +63,131 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
         conn.load_extension(extension_path, None)?;
     }
     Ok(())
+}
+
+async fn ensure_file_metadata_ledger_index(conn: &libsql::Connection) -> Result<(), Error> {
+    // Detect whether `file_metadata` exists and whether it already has a `ledger_index` column.
+    let mut pragma = conn.query("PRAGMA table_info(file_metadata);", ()).await?;
+    let mut saw_any = false;
+    let mut has_ledger_index = false;
+    while let Some(row) = pragma.next().await? {
+        saw_any = true;
+        let name: String = row.get(1)?;
+        if name == "ledger_index" {
+            has_ledger_index = true;
+            break;
+        }
+    }
+
+    // Older DBs may not have the filestorage tables at all.
+    if !saw_any {
+        return Ok(());
+    }
+
+    if !has_ledger_index {
+        // SQLite can't add a NOT NULL column without a default; add it nullable and backfill.
+        conn.execute(
+            "ALTER TABLE file_metadata ADD COLUMN ledger_index INTEGER;",
+            (),
+        )
+        .await?;
+    }
+
+    // Backfill any NULL ledger_index values deterministically.
+    let null_count: i64 = conn
+        .query(
+            "SELECT COUNT(*) FROM file_metadata WHERE ledger_index IS NULL",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .map(|r| r.get(0))
+        .transpose()?
+        .unwrap_or(0);
+
+    if null_count > 0 {
+        // Prefer a single-statement backfill (fast). Fall back to a row-by-row update if the
+        // bundled SQLite does not support window functions.
+        let backfill = r#"
+WITH ordered AS (
+  SELECT
+    id,
+    (ROW_NUMBER() OVER (ORDER BY height ASC, id ASC) - 1) AS idx
+  FROM file_metadata
+)
+UPDATE file_metadata
+SET ledger_index = (SELECT idx FROM ordered WHERE ordered.id = file_metadata.id)
+WHERE ledger_index IS NULL;
+"#;
+        if let Err(_err) = conn.execute_batch(backfill).await {
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM file_metadata ORDER BY height ASC, id ASC",
+                    (),
+                )
+                .await?;
+            let mut idx: i64 = 0;
+            while let Some(row) = rows.next().await? {
+                let id: i64 = row.get(0)?;
+                conn.execute(
+                    "UPDATE file_metadata SET ledger_index = ? WHERE id = ?",
+                    params![idx, id],
+                )
+                .await?;
+                idx += 1;
+            }
+        }
+    }
+
+    // Enforce uniqueness for upgraded DBs. New DBs already have a unique constraint in
+    // `schema.sql` (which creates an implicit unique index).
+    if !has_single_column_unique_index(conn, "file_metadata", "ledger_index").await? {
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_file_metadata_ledger_index_unique ON file_metadata (ledger_index);",
+            (),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn has_single_column_unique_index(
+    conn: &libsql::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, Error> {
+    let mut idxs = conn
+        .query(&format!("PRAGMA index_list('{table}');"), ())
+        .await?;
+
+    while let Some(row) = idxs.next().await? {
+        // PRAGMA index_list: seq, name, unique, origin, partial
+        let index_name: String = row.get(1)?;
+        let unique: i64 = row.get(2)?;
+        if unique == 0 {
+            continue;
+        }
+
+        let mut info = conn
+            .query(&format!("PRAGMA index_info('{index_name}');"), ())
+            .await?;
+        let mut count = 0i64;
+        let mut matches = true;
+        while let Some(irow) = info.next().await? {
+            // PRAGMA index_info: seqno, cid, name
+            let col_name: String = irow.get(2)?;
+            count += 1;
+            if col_name != column {
+                matches = false;
+            }
+        }
+
+        if matches && count == 1 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }

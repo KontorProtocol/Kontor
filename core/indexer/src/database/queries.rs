@@ -960,6 +960,7 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
         .query(
             r#"SELECT
             id,
+            ledger_index,
             file_id,
             object_id,
             nonce,
@@ -970,7 +971,7 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
             height,
             historical_root
             FROM file_metadata
-            ORDER BY id ASC"#,
+            ORDER BY ledger_index ASC"#,
             params![],
         )
         .await?;
@@ -990,6 +991,7 @@ pub async fn select_file_metadata_by_file_id(
         .query(
             r#"SELECT
             id,
+            ledger_index,
             file_id,
             object_id,
             nonce,
@@ -1022,7 +1024,8 @@ pub async fn insert_file_metadata(
     conn.execute(
         r#"INSERT INTO
         file_metadata
-        (file_id,
+        (ledger_index,
+        file_id,
         object_id,
         nonce,
         root,
@@ -1031,8 +1034,9 @@ pub async fn insert_file_metadata(
         filename,
         height,
         historical_root)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         params![
+            entry.ledger_index,
             entry.file_id.clone(),
             entry.object_id.clone(),
             entry.nonce.clone(),

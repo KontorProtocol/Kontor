@@ -110,13 +110,20 @@ impl FileLedger {
     pub async fn add_file(&self, conn: &Connection, metadata: &FileMetadataRow) -> Result<()> {
         let mut inner = self.inner.write().await;
 
+        let next_ledger_index = inner.ledger.next_ledger_index() as u64;
+
+        let metadata_with_index = FileMetadataRow {
+            ledger_index: next_ledger_index,
+            ..metadata.clone()
+        };
+
         // Capture the number of historical roots before adding
         let historical_roots_count_before = inner.ledger.historical_roots.len();
 
         // Add to inner FileLedger (this may push a historical root)
         inner
             .ledger
-            .add_file(metadata)
+            .add_file(&metadata_with_index)
             .map_err(|e| anyhow!("Failed to add file to ledger: {:?}", e))?;
 
         // Check if a new historical root was pushed
@@ -132,7 +139,7 @@ impl FileLedger {
         // Create metadata with the historical root for persistence
         let metadata_with_historical = FileMetadataRow {
             historical_root,
-            ..metadata.clone()
+            ..metadata_with_index
         };
 
         // Persist to database

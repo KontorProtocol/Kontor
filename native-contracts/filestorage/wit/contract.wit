@@ -47,6 +47,8 @@ world root {
 
   record challenge-data {
     challenge-id: string,
+    shard-id: u64,
+    shard-seq: u64,
     agreement-id: string,
     block-height: u64,
     num-challenges: u64,
@@ -127,6 +129,40 @@ world root {
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 
+  // Shard-indexed challenge views (for provers/indexers).
+  //
+  // Challenges are deterministically assigned to a shard by `challenge_id` and then
+  // indexed per prover by monotonically increasing `shard-seq` within that shard.
+  //
+  // These APIs allow clients to fetch challenges for a specific prover+shard without
+  // scanning and filtering the full global challenge set.
+
+  // Returns the next sequence number for (prover-id, shard-id), or `none` if the prover
+  // has never been assigned any challenges.
+  export get-prover-shard-next-seq: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64
+  ) -> option<u64>;
+
+  // Returns challenge IDs for a specific prover+shard sequence range.
+  export get-prover-shard-challenge-ids: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
+  ) -> result<list<string>, error>;
+
+  // Returns only ACTIVE challenges for a specific prover+shard sequence range.
+  export get-active-challenges-for-prover-shard: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
+  ) -> result<list<challenge-data>, error>;
+
   export expire-challenges: async func(
     ctx: borrow<core-context>,
     current-height: u64
@@ -138,9 +174,9 @@ world root {
     block-hash: list<u8>
   ) -> list<challenge-data>;
 
-  // Create a challenge for a specific agreement and node (deterministic, for testing)
+  // Create a challenge for a specific agreement and node (deterministic; core-only; used in tests).
   export create-challenge-for-agreement: async func(
-    ctx: borrow<proc-context>,
+    ctx: borrow<core-context>,
     agreement-id: string,
     node-id: string,
     block-height: u64,
@@ -153,7 +189,10 @@ world root {
 
   export verify-proof: async func(
     ctx: borrow<proc-context>,
-    proof-bytes: list<u8>
+    proof-bytes: list<u8>,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
   ) -> result<verify-proof-result, error>;
 
 }

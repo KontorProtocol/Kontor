@@ -915,20 +915,6 @@ impl Runtime {
         })
     }
 
-    async fn _proof_challenge_ids<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        Fuel::ProofChallengeIds
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-
-        let table = self.table.lock().await;
-        let proof = table.get(&rep)?;
-        Ok(proof.challenge_ids())
-    }
-
     async fn _proof_verify<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -1505,16 +1491,6 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._proof_from_bytes(accessor, bytes)
-            .await
-    }
-
-    async fn challenge_ids<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._proof_challenge_ids(accessor, rep)
             .await
     }
 

@@ -312,6 +312,8 @@ impl std::str::FromStr for OpResultId {
 pub struct FileMetadataRow {
     #[builder(default = 0)]
     pub id: i64,
+    #[builder(default = 0)]
+    pub ledger_index: u64,
     pub file_id: String,
     pub object_id: String,
     pub nonce: Vec<u8>,
@@ -339,5 +341,9 @@ impl FileDescriptor for FileMetadataRow {
         } else {
             padded_len.trailing_zeros() as usize
         }
+    }
+
+    fn ledger_index(&self) -> Option<usize> {
+        usize::try_from(self.ledger_index).ok()
     }
 }

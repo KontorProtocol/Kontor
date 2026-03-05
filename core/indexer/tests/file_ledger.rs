@@ -481,21 +481,23 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
         original_ledger.add_file(&storage.conn, metadata).await?;
     }
 
-    // Build a reference CryptoFileLedger in parallel to capture expected state
-    let mut reference_crypto_ledger = CryptoFileLedger::new();
-    for metadata in &all_metadata {
-        reference_crypto_ledger
-            .add_file(metadata)
-            .expect("Failed to add file to reference ledger");
-    }
-
-    // Capture the original ledger's tree root by building a reference from the same files
-    let original_tree_root: [u8; 32] = reference_crypto_ledger.root().to_repr().into();
-    let original_historical_roots = reference_crypto_ledger.historical_roots.clone();
-
     // Get the database entries to verify historical roots were stored correctly
     let db_entries = select_all_file_metadata(&conn).await?;
     assert_eq!(db_entries.len(), 10, "Should have 10 files total");
+
+    // Build a reference CryptoFileLedger from persisted entries so stable ledger_index
+    // assignments match runtime behavior exactly.
+    let mut reference_crypto_ledger = CryptoFileLedger::new();
+    reference_crypto_ledger
+        .add_files(&db_entries)
+        .expect("Failed to add persisted files to reference ledger");
+
+    // Capture the original ledger's tree root and historical roots.
+    let original_historical_roots: Vec<[u8; 32]> = db_entries
+        .iter()
+        .filter_map(|row| row.historical_root)
+        .collect();
+    let original_tree_root: [u8; 32] = reference_crypto_ledger.root().to_repr().into();
 
     // All files should have historical roots (each snapshots ledger state before add)
     for (i, entry) in db_entries.iter().enumerate() {
@@ -518,10 +520,7 @@ async fn test_file_ledger_resync_produces_identical_tree_and_historical_ledger()
         .expect("Failed to add files to rebuilt reference");
 
     // Restore historical roots from database (as rebuild_from_db does)
-    let stored_historical_roots: Vec<[u8; 32]> = db_entries
-        .iter()
-        .filter_map(|row| row.historical_root)
-        .collect();
+    let stored_historical_roots = original_historical_roots.clone();
     rebuilt_reference.set_historical_roots(stored_historical_roots.clone());
 
     // Verify the rebuilt ledger has the same tree root
