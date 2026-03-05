@@ -2876,19 +2876,18 @@ dependencies = [
 [[package]]
 name = "kontor-crypto"
 version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fdfb2e1147b046fedecd240907ba0b7526d2bec3344f6ac830dcad910e59278"
 dependencies = [
  "bincode",
  "clap",
  "ff",
  "generic-array 0.14.7",
- "libc",
  "nova-snark",
- "num-bigint 0.4.6",
  "once_cell",
  "rand 0.8.5",
  "reed-solomon-erasure",
  "serde",
- "serde_json",
  "sha2",
  "thiserror 1.0.69",
  "tracing",
