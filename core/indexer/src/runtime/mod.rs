@@ -9,6 +9,7 @@ pub mod numerics;
 pub mod pool;
 pub mod registry;
 mod stack;
+pub mod staking;
 mod storage;
 pub mod token;
 mod types;
@@ -55,7 +56,7 @@ use wasmtime::{
 };
 
 use crate::bls::RegistrationProof;
-use crate::database::native_contracts::{FILESTORAGE, REGISTRY, TOKEN};
+use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
@@ -237,6 +238,12 @@ impl Runtime {
             &Signer::Core(Box::new(Signer::Nobody)),
             "registry",
             REGISTRY,
+        )
+        .await?;
+        self.publish(
+            &Signer::Core(Box::new(Signer::Nobody)),
+            "staking",
+            STAKING,
         )
         .await?;
         Ok(())
