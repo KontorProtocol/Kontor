@@ -8,7 +8,7 @@ use bitcoin::consensus::encode;
 use indexer_types::{
     BlockRow, CommitOutputs, ComposeOutputs, ComposeQuery, ContractListRow, ContractResponse, Info,
     OpWithResult, PaginatedResponse, RegistryEntryResponse, ResultRow, RevealOutputs, RevealQuery,
-    SignerNonceResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 
 use crate::{
@@ -351,31 +351,4 @@ pub async fn get_registry_entry(
             Err(HttpError::NotFound(format!("registry entry not found for: {}", identifier)).into())
         }
     }
-}
-
-pub async fn get_registry_next_nonce(
-    Path(identifier): Path<String>,
-    State(env): State<Env>,
-) -> Result<SignerNonceResponse> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
-    let mut runtime = env.runtime_pool.get().await?;
-    let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
-        get_entry_by_id(&mut runtime, signer_id)
-            .await
-            .map_err(|e| HttpError::BadRequest(e.to_string()))?
-    } else {
-        get_entry(&mut runtime, &identifier)
-            .await
-            .map_err(|e| HttpError::BadRequest(e.to_string()))?
-    };
-    let entry = entry.ok_or_else(|| {
-        HttpError::NotFound(format!("registry entry not found for: {}", identifier))
-    })?;
-    Ok(SignerNonceResponse {
-        signer_id: entry.signer_id,
-        next_nonce: entry.next_nonce,
-    }
-    .into())
 }

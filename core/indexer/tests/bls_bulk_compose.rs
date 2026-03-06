@@ -143,14 +143,14 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     assert_eq!(decoded1.value, 18);
     assert_eq!(
         client
-            .registry_next_nonce(&signer1_id.to_string())
+            .registry_entry(&signer1_id.to_string())
             .await?
             .next_nonce,
         1
     );
     assert_eq!(
         client
-            .registry_next_nonce(&signer2_id.to_string())
+            .registry_entry(&signer2_id.to_string())
             .await?
             .next_nonce,
         1
@@ -516,7 +516,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     let client = reg_tester.kontor_client().await;
     assert_eq!(
         client
-            .registry_next_nonce(&signer_id.to_string())
+            .registry_entry(&signer_id.to_string())
             .await?
             .next_nonce,
         1
@@ -649,7 +649,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     let client = reg_tester.kontor_client().await;
     assert_eq!(
         client
-            .registry_next_nonce(&signer_id.to_string())
+            .registry_entry(&signer_id.to_string())
             .await?
             .next_nonce,
         1
@@ -700,7 +700,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     let client = reg_tester.kontor_client().await;
     assert_eq!(
         client
-            .registry_next_nonce(&signer_id.to_string())
+            .registry_entry(&signer_id.to_string())
             .await?
             .next_nonce,
         1
@@ -756,7 +756,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     assert_eq!(decoded.value, 12);
     assert_eq!(
         client
-            .registry_next_nonce(&signer_id.to_string())
+            .registry_entry(&signer_id.to_string())
             .await?
             .next_nonce,
         2
@@ -878,14 +878,14 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
     assert_eq!(decoded3.value, 11);
     assert_eq!(
         client
-            .registry_next_nonce(&signer1_id.to_string())
+            .registry_entry(&signer1_id.to_string())
             .await?
             .next_nonce,
         2
     );
     assert_eq!(
         client
-            .registry_next_nonce(&signer2_id.to_string())
+            .registry_entry(&signer2_id.to_string())
             .await?
             .next_nonce,
         2

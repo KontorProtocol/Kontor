@@ -3,28 +3,21 @@ use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
+use indexer::runtime::registry::api::{advance_nonce, get_entry, get_entry_by_id};
 use indexer::{
-    api::{
-        Env,
-        handlers::{get_registry_entry, get_registry_next_nonce},
-    },
+    api::{Env, handlers::get_registry_entry},
     bls::RegistrationProof,
-    database::queries::insert_processed_block,
+    database::queries::{insert_processed_block, rollback_to_height},
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
-use indexer_types::{BlockRow, RegistryEntryResponse, Signer, SignerNonceResponse};
+use indexer_types::{BlockRow, RegistryEntryResponse, Signer};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RegistryResponse {
     result: RegistryEntryResponse,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct NonceResponse {
-    result: SignerNonceResponse,
 }
 
 struct RegisteredUser {
@@ -53,7 +46,7 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
         )
         .await?;
 
-    let entry = indexer::runtime::registry::api::get_entry(&mut *runtime, &x_only.to_string())
+    let entry = get_entry(&mut *runtime, &x_only.to_string())
         .await?
         .expect("registry entry must exist after registration");
 
@@ -101,26 +94,9 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
             "/api/registry/entry/{pubkey_or_id}",
             get(get_registry_entry),
         )
-        .route(
-            "/api/registry/next-nonce/{pubkey_or_id}",
-            get(get_registry_next_nonce),
-        )
         .with_state(env);
 
     Ok((app, vec![user0, user1], db_dir))
-}
-
-async fn advance_nonce(runtime: &mut Runtime, signer_id: u64, nonce: u64) -> Result<()> {
-    use indexer::runtime::registry;
-    registry::api::advance_nonce(
-        runtime,
-        &Signer::Core(Box::new(Signer::Nobody)),
-        signer_id,
-        nonce,
-    )
-    .await?
-    .map(|_| ())
-    .map_err(|e| anyhow!("{e:?}"))
 }
 
 #[tokio::test]
@@ -266,43 +242,8 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_registry_next_nonce_by_pubkey() -> Result<()> {
-    let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
-
-    let response: TestResponse = server
-        .get(&format!(
-            "/api/registry/next-nonce/{}",
-            users[0].x_only_pubkey
-        ))
-        .await;
-    assert_eq!(response.status_code(), StatusCode::OK);
-
-    let result: NonceResponse = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.signer_id, users[0].signer_id);
-    assert_eq!(result.result.next_nonce, 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_get_registry_next_nonce_by_signer_id() -> Result<()> {
-    let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
-
-    let response: TestResponse = server
-        .get(&format!("/api/registry/next-nonce/{}", users[0].signer_id))
-        .await;
-    assert_eq!(response.status_code(), StatusCode::OK);
-
-    let result: NonceResponse = serde_json::from_slice(response.as_bytes())?;
-    assert_eq!(result.result.signer_id, users[0].signer_id);
-    assert_eq!(result.result.next_nonce, 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_registry_next_nonce_advances_after_reservation() -> Result<()> {
-    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
+    let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
     insert_processed_block(
@@ -326,35 +267,73 @@ async fn test_registry_next_nonce_advances_after_reservation() -> Result<()> {
             .build(),
     )
     .await?;
-
     runtime.storage.height = 1;
+
     let user = register_user(&mut runtime).await?;
-    advance_nonce(&mut runtime, user.signer_id, 0).await?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist");
+    assert_eq!(entry.next_nonce, 0);
 
-    let env = Env::new_test(reader, db_dir.path(), db_name).await?;
-    let app = Router::new()
-        .route(
-            "/api/registry/next-nonce/{pubkey_or_id}",
-            get(get_registry_next_nonce),
-        )
-        .with_state(env);
-    let server = TestServer::new(app)?;
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash("0000000000000000000000000000000000000000000000000000000000000002".parse()?)
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
 
-    let by_pk: TestResponse = server
-        .get(&format!("/api/registry/next-nonce/{}", user.x_only_pubkey))
-        .await;
-    let by_id: TestResponse = server
-        .get(&format!("/api/registry/next-nonce/{}", user.signer_id))
-        .await;
-    assert_eq!(by_pk.status_code(), StatusCode::OK);
-    assert_eq!(by_id.status_code(), StatusCode::OK);
+    advance_nonce(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        user.signer_id,
+        0,
+    )
+    .await?
+    .map_err(|e| anyhow!("{e:?}"))?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist after advance");
+    assert_eq!(entry.next_nonce, 1, "nonce must be 1 after advance");
 
-    let r_pk: NonceResponse = serde_json::from_slice(by_pk.as_bytes())?;
-    let r_id: NonceResponse = serde_json::from_slice(by_id.as_bytes())?;
-    assert_eq!(r_pk.result.signer_id, user.signer_id);
-    assert_eq!(r_pk.result.next_nonce, 1);
-    assert_eq!(r_id.result.signer_id, user.signer_id);
-    assert_eq!(r_id.result.next_nonce, 1);
+    rollback_to_height(&conn, 1).await?;
+    runtime.storage.height = 1;
+
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must survive rollback (registered at height 1)");
+    assert_eq!(
+        entry.next_nonce, 0,
+        "nonce must revert to 0 after rolling back height 2"
+    );
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash("0000000000000000000000000000000000000000000000000000000000000099".parse()?)
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
+
+    advance_nonce(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        user.signer_id,
+        0,
+    )
+    .await?
+    .map_err(|e| anyhow!("{e:?}"))?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist after re-advance");
+    assert_eq!(
+        entry.next_nonce, 1,
+        "nonce must advance again from 0 after reorg"
+    );
 
     Ok(())
 }
