@@ -4,13 +4,13 @@ use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
 use indexer::{
-    api::{Env, handlers::get_registry_entry},
+    api::{Env, handlers::{get_registry_entry, get_registry_next_nonce}},
     bls::RegistrationProof,
     database::queries::insert_processed_block,
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
-use indexer_types::{BlockRow, RegistryEntryResponse, Signer};
+use indexer_types::{BlockRow, BlsBulkOp, ContractAddress, RegistryEntryResponse, Signer, SignerNonceResponse};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -19,7 +19,13 @@ struct RegistryResponse {
     result: RegistryEntryResponse,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct NonceResponse {
+    result: SignerNonceResponse,
+}
+
 struct RegisteredUser {
+    signer_id: u64,
     x_only_pubkey: String,
     bls_pubkey: Vec<u8>,
 }
@@ -44,7 +50,12 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
         )
         .await?;
 
+    let entry = indexer::runtime::registry::api::get_entry(&mut *runtime, &x_only.to_string())
+        .await?
+        .expect("registry entry must exist after registration");
+
     Ok(RegisteredUser {
+        signer_id: entry.signer_id,
         x_only_pubkey: x_only.to_string(),
         bls_pubkey: proof.bls_pubkey.to_vec(),
     })
@@ -87,9 +98,29 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
             "/api/registry/entry/{pubkey_or_id}",
             get(get_registry_entry),
         )
+        .route(
+            "/api/registry/next-nonce/{pubkey_or_id}",
+            get(get_registry_next_nonce),
+        )
         .with_state(env);
 
     Ok((app, vec![user0, user1], db_dir))
+}
+
+async fn advance_nonce(runtime: &mut Runtime, signer_id: u64, nonce: u64) -> Result<()> {
+    runtime
+        .reserve_nonces(&[BlsBulkOp::Call {
+            signer_id,
+            nonce,
+            gas_limit: 50_000,
+            contract: ContractAddress {
+                name: "noop".to_string(),
+                height: 0,
+                tx_index: 0,
+            },
+            expr: String::new(),
+        }])
+        .await
 }
 
 #[tokio::test]
@@ -230,6 +261,95 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
     assert_eq!(r1.result.signer_id, 1);
     assert_eq!(r0.result.next_nonce, 0);
     assert_eq!(r1.result.next_nonce, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_registry_next_nonce_by_pubkey() -> Result<()> {
+    let (app, users, _db) = create_test_app().await?;
+    let server = TestServer::new(app)?;
+
+    let response: TestResponse = server
+        .get(&format!("/api/registry/next-nonce/{}", users[0].x_only_pubkey))
+        .await;
+    assert_eq!(response.status_code(), StatusCode::OK);
+
+    let result: NonceResponse = serde_json::from_slice(response.as_bytes())?;
+    assert_eq!(result.result.signer_id, users[0].signer_id);
+    assert_eq!(result.result.next_nonce, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_registry_next_nonce_by_signer_id() -> Result<()> {
+    let (app, users, _db) = create_test_app().await?;
+    let server = TestServer::new(app)?;
+
+    let response: TestResponse = server.get(&format!("/api/registry/next-nonce/{}", users[0].signer_id)).await;
+    assert_eq!(response.status_code(), StatusCode::OK);
+
+    let result: NonceResponse = serde_json::from_slice(response.as_bytes())?;
+    assert_eq!(result.result.signer_id, users[0].signer_id);
+    assert_eq!(result.result.next_nonce, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_registry_next_nonce_advances_after_reservation() -> Result<()> {
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
+            .build(),
+    )
+    .await?;
+
+    let storage = Storage::builder().height(0).conn(conn.clone()).build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime.publish_native_contracts().await?;
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash("0000000000000000000000000000000000000000000000000000000000000001".parse()?)
+            .build(),
+    )
+    .await?;
+
+    runtime.storage.height = 1;
+    let user = register_user(&mut runtime).await?;
+    advance_nonce(&mut runtime, user.signer_id, 0).await?;
+
+    let env = Env::new_test(reader, db_dir.path(), db_name).await?;
+    let app = Router::new()
+        .route(
+            "/api/registry/next-nonce/{pubkey_or_id}",
+            get(get_registry_next_nonce),
+        )
+        .with_state(env);
+    let server = TestServer::new(app)?;
+
+    let by_pk: TestResponse = server
+        .get(&format!("/api/registry/next-nonce/{}", user.x_only_pubkey))
+        .await;
+    let by_id: TestResponse = server
+        .get(&format!("/api/registry/next-nonce/{}", user.signer_id))
+        .await;
+    assert_eq!(by_pk.status_code(), StatusCode::OK);
+    assert_eq!(by_id.status_code(), StatusCode::OK);
+
+    let r_pk: NonceResponse = serde_json::from_slice(by_pk.as_bytes())?;
+    let r_id: NonceResponse = serde_json::from_slice(by_id.as_bytes())?;
+    assert_eq!(r_pk.result.signer_id, user.signer_id);
+    assert_eq!(r_pk.result.next_nonce, 1);
+    assert_eq!(r_id.result.signer_id, user.signer_id);
+    assert_eq!(r_id.result.next_nonce, 1);
 
     Ok(())
 }

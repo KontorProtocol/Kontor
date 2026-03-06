@@ -359,6 +359,7 @@ impl RegistrationProof {
 mod tests {
     use super::*;
     use crate::database::connection::new_connection;
+    use crate::database::queries::rollback_to_height;
     use crate::database::queries::insert_block;
     use crate::runtime::{registry, ComponentCache, Storage};
     use crate::test_utils::new_mock_block_hash;
@@ -857,5 +858,48 @@ mod tests {
             entry.next_nonce, 1,
             "co-bundled nonce advancement must be rolled back on sequential nonce failure"
         );
+    }
+
+    #[tokio::test]
+    async fn reserve_nonces_rollback_to_previous_block_restores_next_nonce() {
+        let (mut runtime, _tmp) = new_test_runtime_with_block().await;
+        let signer_id = register_test_signer(&mut runtime, 14).await;
+        insert_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(2)
+                .hash(new_mock_block_hash(2))
+                .build(),
+        )
+        .await
+        .expect("insert block at height 2");
+        runtime.storage.height = 2;
+
+        let ops = vec![BlsBulkOp::Call {
+            signer_id,
+            nonce: 0,
+            gas_limit: 50_000,
+            contract: ContractAddress {
+                name: "t".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            expr: String::new(),
+        }];
+        runtime.reserve_nonces(&ops).await.unwrap();
+
+        let entry_before = registry::api::get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry_before.next_nonce, 1);
+
+        rollback_to_height(&runtime.storage.conn, 1).await.unwrap();
+
+        let entry_after = registry::api::get_entry_by_id(&mut runtime, signer_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry_after.next_nonce, 0);
     }
 }
