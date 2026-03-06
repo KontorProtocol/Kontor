@@ -1,8 +1,9 @@
+pub mod block_handler;
 pub mod types;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use futures_util::future::pending;
-use indexer_types::{Block, BlockRow, Event, Op, OpWithResult, TransactionRow};
+use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use tokio::{
     select,
     sync::{
@@ -13,23 +14,22 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::BlockHash;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::event::BitcoinEvent,
-    block::{filter_map, inspect},
-    bls::verify_bls_bulk,
     database::{
         self,
         queries::{
-            insert_block, insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, set_block_processed,
+            insert_processed_block, rollback_to_height, select_block_at_height, select_block_latest,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
+    runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
+
+pub use block_handler::{block_handler, simulate_handler};
 
 pub type Simulation = (
     bitcoin::Transaction,
@@ -47,224 +47,6 @@ struct Reactor {
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
-}
-
-pub async fn simulate_handler(
-    runtime: &mut Runtime,
-    btx: bitcoin::Transaction,
-) -> Result<Vec<OpWithResult>> {
-    let tx = filter_map((0, btx.clone())).ok_or(anyhow!("Invalid transaction"))?;
-    runtime.storage.savepoint().await?;
-    let block_row = select_block_latest(&runtime.storage.conn).await?;
-    let height = block_row.as_ref().map_or(1, |row| row.height as u64 + 1);
-    block_handler(
-        runtime,
-        &Block {
-            height,
-            hash: new_mock_block_hash(height as u32),
-            prev_hash: block_row
-                .as_ref()
-                .map_or(new_mock_block_hash(0), |row| row.hash),
-            transactions: vec![tx],
-        },
-    )
-    .await?;
-    let result = inspect(&runtime.storage.conn, btx).await;
-    runtime
-        .storage
-        .rollback()
-        .await
-        .expect("Failed to rollback");
-    result
-}
-
-pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
-    insert_block(&runtime.storage.conn, block.into()).await?;
-
-    for t in &block.transactions {
-        insert_transaction(
-            &runtime.storage.conn,
-            TransactionRow::builder()
-                .height(block.height as i64)
-                .tx_index(t.index)
-                .txid(t.txid.to_string())
-                .build(),
-        )
-        .await?;
-        for op in &t.ops {
-            let metadata = op.metadata();
-            let input_index = metadata.input_index;
-            let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
-            info!("Op return data: {:#?}", op_return_data);
-            runtime
-                .set_context(
-                    block.height as i64,
-                    Some(TransactionContext {
-                        tx_index: t.index,
-                        input_index,
-                        op_index: 0,
-                        txid: t.txid,
-                    }),
-                    Some(metadata.previous_output),
-                    op_return_data.clone().map(Into::into),
-                )
-                .await;
-
-            match op {
-                Op::Publish {
-                    metadata,
-                    gas_limit,
-                    name,
-                    bytes,
-                } => {
-                    runtime.set_gas_limit(*gas_limit);
-                    let result = runtime.publish(&metadata.signer, name, bytes).await;
-                    if result.is_err() {
-                        warn!("Publish operation failed: {:?}", result);
-                    }
-                }
-                Op::Call {
-                    metadata,
-                    gas_limit,
-                    contract,
-                    expr,
-                } => {
-                    runtime.set_gas_limit(*gas_limit);
-                    let result = runtime
-                        .execute(Some(&metadata.signer), &(contract.into()), expr)
-                        .await;
-                    if result.is_err() {
-                        warn!("Call operation failed: {:?}", result);
-                    }
-                }
-                Op::Issuance { metadata, .. } => {
-                    let result = runtime.issuance(&metadata.signer).await;
-                    if result.is_err() {
-                        warn!("Issuance operation failed: {:?}", result);
-                    }
-                }
-                Op::RegisterBlsKey {
-                    metadata,
-                    bls_pubkey,
-                    schnorr_sig,
-                    bls_sig,
-                } => {
-                    if let Err(e) = runtime
-                        .register_bls_key(
-                            &metadata.signer,
-                            bls_pubkey.as_slice(),
-                            schnorr_sig.as_slice(),
-                            bls_sig.as_slice(),
-                        )
-                        .await
-                    {
-                        warn!("RegisterBlsKey failed: {e}");
-                    }
-                }
-                Op::BlsBulk {
-                    metadata,
-                    signature,
-                    ops,
-                } => {
-                    let signer_map = match verify_bls_bulk(runtime, ops.as_slice(), signature).await
-                    {
-                        Ok(map) => map,
-                        Err(e) => {
-                            warn!("BlsBulk aggregate verification failed: {e}");
-                            continue;
-                        }
-                    };
-
-                    for (inner_index, inner_op) in ops.iter().enumerate() {
-                        runtime
-                            .set_context(
-                                block.height as i64,
-                                Some(TransactionContext {
-                                    tx_index: t.index,
-                                    input_index,
-                                    op_index: inner_index as i64,
-                                    txid: t.txid,
-                                }),
-                                Some(metadata.previous_output),
-                                op_return_data.clone().map(Into::into),
-                            )
-                            .await;
-
-                        match inner_op {
-                            indexer_types::BlsBulkOp::Call {
-                                signer_id,
-                                gas_limit,
-                                contract,
-                                expr,
-                            } => {
-                                let x_only = signer_map.get(signer_id).expect(
-                                    "signer_id must be in signer_map after verify_bls_bulk succeeds",
-                                );
-                                let signer = Signer::XOnlyPubKey(x_only.clone());
-                                runtime.set_gas_limit(*gas_limit);
-                                let result = runtime
-                                    .execute(Some(&signer), &(contract.into()), expr)
-                                    .await;
-                                if result.is_err() {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
-                                    warn!("BlsBulk call operation failed: {:?}", result);
-                                }
-                            }
-                            indexer_types::BlsBulkOp::RegisterBlsKey {
-                                signer,
-                                bls_pubkey,
-                                schnorr_sig,
-                                bls_sig,
-                            } => {
-                                if let Err(e) = runtime
-                                    .register_bls_key(
-                                        signer,
-                                        bls_pubkey.as_slice(),
-                                        schnorr_sig.as_slice(),
-                                        bls_sig.as_slice(),
-                                    )
-                                    .await
-                                {
-                                    // TODO(blsbulk): decide how to expose inner-op failures
-                                    // to clients without failing the entire BlsBulk.
-                                    warn!("BlsBulk RegisterBlsKey failed: {e}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let core_signer = Signer::Core(Box::new(Signer::Nobody));
-    let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-    runtime
-        .set_context(block.height as i64, None, None, None)
-        .await;
-    filestorage::api::expire_challenges(runtime, &core_signer, block.height)
-        .await
-        .expect("Failed to expire challenges");
-    let challenges = filestorage::api::generate_challenges_for_block(
-        runtime,
-        &core_signer,
-        block.height,
-        block_hash,
-    )
-    .await
-    .expect("Failed to generate challenges");
-    if !challenges.is_empty() {
-        info!(
-            "Generated {} challenges at block height {}",
-            challenges.len(),
-            block.height
-        );
-    }
-
-    set_block_processed(&runtime.storage.conn, block.height as i64).await?;
-
-    Ok(())
 }
 
 impl Reactor {
