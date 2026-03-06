@@ -3,6 +3,13 @@ contract!(name = "staking");
 
 use stdlib::*;
 
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../token/wit"
+);
+
 const DEFAULT_EPOCH_LENGTH: u64 = 10;
 
 #[derive(Clone, Default, Storage)]
@@ -13,12 +20,6 @@ struct ValidatorEntry {
     pub ed25519_pubkey: Vec<u8>,
 }
 
-#[derive(Clone, Default, Storage)]
-struct ActiveEntry {
-    pub stake: Decimal,
-    pub ed25519_pubkey: Vec<u8>,
-}
-
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
     pub current_epoch: u64,
@@ -26,11 +27,8 @@ struct StakingStorage {
     pub next_epoch_height: u64,
     pub min_stake: Decimal,
     pub validators: Map<String, ValidatorEntry>,
-    pub active_set: Map<String, ActiveEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
-    pub pending_joins: Map<String, bool>,
-    pub pending_exits: Map<String, bool>,
 }
 
 #[allow(dead_code)]
@@ -69,43 +67,203 @@ impl Guest for Staking {
     }
 
     fn register_validator(
-        _ctx: &ProcContext,
-        _ed25519_pubkey: Vec<u8>,
-        _stake_amount: Decimal,
+        ctx: &ProcContext,
+        ed25519_pubkey: Vec<u8>,
+        stake_amount: Decimal,
     ) -> Result<ValidatorInfo, Error> {
-        Err(Error::Message("not yet implemented".to_string()))
+        if ed25519_pubkey.len() != 32 {
+            return Err(Error::Message(
+                "expected 32-byte ed25519 pubkey".to_string(),
+            ));
+        }
+
+        let model = ctx.model();
+        let signer_key = ctx.signer().to_string();
+
+        if model
+            .validators()
+            .get(&signer_key)
+            .is_some_and(|e| e.status() != STATUS_INACTIVE)
+        {
+            return Err(Error::Message("already registered".to_string()));
+        }
+
+        if stake_amount < model.min_stake() {
+            return Err(Error::Message("stake below minimum".to_string()));
+        }
+
+        token::transfer(
+            ctx.signer(),
+            &ctx.contract_signer().to_string(),
+            stake_amount,
+        )?;
+
+        model.validators().set(
+            signer_key.clone(),
+            ValidatorEntry {
+                stake: stake_amount,
+                status: STATUS_PENDING_JOIN,
+                joined_epoch: 0,
+                ed25519_pubkey: ed25519_pubkey.clone(),
+            },
+        );
+
+        Ok(ValidatorInfo {
+            x_only_pubkey: signer_key,
+            stake: stake_amount,
+            status: ValidatorStatus::PendingJoin,
+            joined_epoch: 0,
+            ed25519_pubkey,
+        })
     }
 
-    fn add_stake(_ctx: &ProcContext, _amount: Decimal) -> Result<ValidatorInfo, Error> {
-        Err(Error::Message("not yet implemented".to_string()))
+    fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<ValidatorInfo, Error> {
+        let model = ctx.model();
+        let signer_key = ctx.signer().to_string();
+
+        let entry = model
+            .validators()
+            .get(&signer_key)
+            .ok_or(Error::Message("not registered".to_string()))?;
+
+        let status = entry.status();
+        if status == STATUS_INACTIVE {
+            return Err(Error::Message("validator is inactive".to_string()));
+        }
+
+        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;
+
+        let new_stake = entry.stake().add(amount)?;
+        entry.set_stake(new_stake);
+
+        if status == STATUS_ACTIVE {
+            model.try_update_total_active_stake(|s| s.add(amount))?;
+        }
+
+        Ok(make_validator_info(signer_key, &entry))
     }
 
-    fn begin_unstake(_ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
-        Err(Error::Message("not yet implemented".to_string()))
+    fn begin_unstake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
+        let model = ctx.model();
+        let signer_key = ctx.signer().to_string();
+
+        let entry = model
+            .validators()
+            .get(&signer_key)
+            .ok_or(Error::Message("not registered".to_string()))?;
+
+        match entry.status() {
+            STATUS_ACTIVE => {
+                entry.set_status(STATUS_PENDING_EXIT);
+            }
+            // Not yet activated — go straight to inactive
+            STATUS_PENDING_JOIN => {
+                entry.set_status(STATUS_INACTIVE);
+            }
+            _ => return Err(Error::Message("invalid status for unstaking".to_string())),
+        }
+
+        Ok(make_validator_info(signer_key, &entry))
     }
 
-    fn withdraw_stake(_ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
-        Err(Error::Message("not yet implemented".to_string()))
+    fn withdraw_stake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
+        let model = ctx.model();
+        let signer_key = ctx.signer().to_string();
+
+        let entry = model
+            .validators()
+            .get(&signer_key)
+            .ok_or(Error::Message("not registered".to_string()))?;
+
+        if entry.status() != STATUS_INACTIVE {
+            return Err(Error::Message(
+                "validator must be inactive to withdraw".to_string(),
+            ));
+        }
+
+        let stake = entry.stake();
+        if stake <= 0.into() {
+            return Err(Error::Message("no stake to withdraw".to_string()));
+        }
+
+        token::transfer(ctx.contract_signer(), &signer_key, stake)?;
+
+        entry.set_stake(0.into());
+
+        Ok(ValidatorInfo {
+            x_only_pubkey: signer_key,
+            stake: 0.into(),
+            status: ValidatorStatus::Inactive,
+            joined_epoch: entry.joined_epoch(),
+            ed25519_pubkey: entry.ed25519_pubkey(),
+        })
     }
 
     fn transition_epoch(
-        _ctx: &CoreContext,
-        _block_height: u64,
+        ctx: &CoreContext,
+        block_height: u64,
     ) -> Result<EpochTransitionResult, Error> {
-        Err(Error::Message("not yet implemented".to_string()))
+        let model = ctx.proc_context().model();
+
+        if block_height < model.next_epoch_height() {
+            return Ok(EpochTransitionResult {
+                new_epoch: model.current_epoch(),
+                activated: 0,
+                deactivated: 0,
+            });
+        }
+
+        let mut activated = 0u64;
+        let mut deactivated = 0u64;
+
+        let keys: Vec<String> = model.validators().keys().collect();
+        for key in keys {
+            if let Some(entry) = model.validators().get(&key) {
+                match entry.status() {
+                    STATUS_PENDING_JOIN => {
+                        entry.set_status(STATUS_ACTIVE);
+                        entry.set_joined_epoch(model.current_epoch() + 1);
+                        model.try_update_total_active_stake(|s| s.add(entry.stake()))?;
+                        model.update_active_count(|c| c + 1);
+                        activated += 1;
+                    }
+                    STATUS_PENDING_EXIT => {
+                        entry.set_status(STATUS_INACTIVE);
+                        model.try_update_total_active_stake(|s| s.sub(entry.stake()))?;
+                        model.update_active_count(|c| c - 1);
+                        deactivated += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let new_epoch = model.current_epoch() + 1;
+        model.set_current_epoch(new_epoch);
+        model.set_next_epoch_height(block_height + model.epoch_length());
+
+        Ok(EpochTransitionResult {
+            new_epoch,
+            activated,
+            deactivated,
+        })
     }
 
     fn get_active_set(ctx: &ViewContext) -> Vec<ActiveValidatorInfo> {
         ctx.model()
-            .active_set()
+            .validators()
             .keys()
             .filter_map(|key| {
-                let entry = ctx.model().active_set().get(&key)?;
-                Some(ActiveValidatorInfo {
-                    x_only_pubkey: key,
-                    stake: entry.stake(),
-                    ed25519_pubkey: entry.ed25519_pubkey(),
-                })
+                let entry = ctx.model().validators().get(&key)?;
+                if entry.status() == STATUS_ACTIVE {
+                    Some(ActiveValidatorInfo {
+                        x_only_pubkey: key,
+                        stake: entry.stake(),
+                        ed25519_pubkey: entry.ed25519_pubkey(),
+                    })
+                } else {
+                    None
+                }
             })
             .collect()
     }

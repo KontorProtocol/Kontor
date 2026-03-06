@@ -240,12 +240,8 @@ impl Runtime {
             REGISTRY,
         )
         .await?;
-        self.publish(
-            &Signer::Core(Box::new(Signer::Nobody)),
-            "staking",
-            STAKING,
-        )
-        .await?;
+        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
+            .await?;
         Ok(())
     }
 
