@@ -1047,4 +1047,3 @@ pub async fn insert_file_metadata(
     .await?;
     Ok(conn.last_insert_rowid())
 }
-

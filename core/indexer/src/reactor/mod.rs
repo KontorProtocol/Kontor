@@ -27,7 +27,9 @@ use crate::{
             select_block_at_height, select_block_latest, set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage, TransactionContext, filestorage, wit::Signer},
+    runtime::{
+        ComponentCache, Runtime, Storage, TransactionContext, filestorage, registry, wit::Signer,
+    },
     test_utils::new_mock_block_hash,
 };
 
@@ -175,11 +177,6 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                         }
                     };
 
-                    if let Err(e) = runtime.reserve_nonces(ops).await {
-                        warn!("BlsBulk rejected: {e}");
-                        continue;
-                    }
-
                     for (inner_index, inner_op) in ops.iter().enumerate() {
                         runtime
                             .set_context(
@@ -206,6 +203,22 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
                                 let x_only = signer_map.get(signer_id).expect(
                                     "signer_id must be in signer_map after verify_bls_bulk succeeds",
                                 );
+
+                                if let Err(e) = registry::api::advance_nonce(
+                                    runtime,
+                                    &Signer::Core(Box::new(Signer::Nobody)),
+                                    *signer_id,
+                                    *nonce,
+                                )
+                                .await
+                                .and_then(|r| r.map_err(|e| anyhow::anyhow!("{e:?}")))
+                                {
+                                    warn!(
+                                        "BlsBulk nonce check failed (signer_id={}, nonce={}): {e}",
+                                        signer_id, nonce
+                                    );
+                                    continue;
+                                }
 
                                 let signer = Signer::XOnlyPubKey(x_only.clone());
                                 runtime.set_gas_limit(*gas_limit);

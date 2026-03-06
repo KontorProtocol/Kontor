@@ -370,8 +370,9 @@ pub async fn get_registry_next_nonce(
             .await
             .map_err(|e| HttpError::BadRequest(e.to_string()))?
     };
-    let entry =
-        entry.ok_or_else(|| HttpError::NotFound(format!("registry entry not found for: {}", identifier)))?;
+    let entry = entry.ok_or_else(|| {
+        HttpError::NotFound(format!("registry entry not found for: {}", identifier))
+    })?;
     Ok(SignerNonceResponse {
         signer_id: entry.signer_id,
         next_nonce: entry.next_nonce,

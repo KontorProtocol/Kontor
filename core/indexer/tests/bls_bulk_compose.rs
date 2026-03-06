@@ -141,8 +141,20 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("expected a return value for inner op 1"))?;
     let decoded1 = arith::wave::eval_parse_return_expr(v1);
     assert_eq!(decoded1.value, 18);
-    assert_eq!(client.registry_next_nonce(&signer1_id.to_string()).await?.next_nonce, 1);
-    assert_eq!(client.registry_next_nonce(&signer2_id.to_string()).await?.next_nonce, 1);
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer1_id.to_string())
+            .await?
+            .next_nonce,
+        1
+    );
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer2_id.to_string())
+            .await?
+            .next_nonce,
+        1
+    );
 
     // The contract's last_op should reflect the *second* inner call.
     let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
@@ -238,7 +250,10 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     assert!(res.is_err(), "expected unknown signer_id to reject bundle");
     let entry = registry::get_entry_by_id(runtime, signer_id).await?;
     let entry = entry.ok_or_else(|| anyhow!("missing registry entry after rejection"))?;
-    assert_eq!(entry.next_nonce, 0, "unknown signer rejection must not advance nonce");
+    assert_eq!(
+        entry.next_nonce, 0,
+        "unknown signer rejection must not advance nonce"
+    );
     Ok(())
 }
 
@@ -419,8 +434,7 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_bulk_duplicate_nonce_within_bundle_rejects_and_does_not_consume_nonce_regtest()
--> Result<()> {
+async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()> {
     let mut signer = reg_tester.identity().await?;
     let mut publisher = reg_tester.identity().await?;
     reg_tester.instruction(&mut signer, Inst::Issuance).await?;
@@ -455,15 +469,6 @@ async fn bls_bulk_duplicate_nonce_within_bundle_rejects_and_does_not_consume_non
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
-    let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
-        .to_string()
-        .parse()
-        .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let last_op_before_wave = reg_tester
-        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
-        .await?;
-    let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
-
     let nonce = 0u64;
     let op0 = BlsBulkOp::Call {
         signer_id,
@@ -496,21 +501,31 @@ async fn bls_bulk_duplicate_nonce_within_bundle_rejects_and_does_not_consume_non
                 signature: aggregate.to_signature().to_bytes().to_vec(),
             },
         )
-        .await;
-    assert!(
-        res.is_err(),
-        "expected duplicate nonce within bundle to reject BlsBulk"
+        .await?;
+
+    // Op0 (nonce=0) executes successfully.
+    let v0 = res
+        .result
+        .value
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a return value for op0"))?;
+    let decoded0 = arith::wave::eval_parse_return_expr(v0);
+    assert_eq!(decoded0.value, 1);
+
+    // Op1 (duplicate nonce=0) was skipped; nonce advanced to 1 from op0 only.
+    let client = reg_tester.kontor_client().await;
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer_id.to_string())
+            .await?
+            .next_nonce,
+        1
     );
 
-    let last_op_after_wave = reg_tester
-        .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
-        .await?;
-    let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
-    assert_eq!(last_op_after, last_op_before);
-
+    // Follow-up op must use nonce=1 (op0 consumed nonce=0).
     let op2 = BlsBulkOp::Call {
         signer_id,
-        nonce,
+        nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract,
         expr: arith::wave::eval_call_expr(3, arith::Op::Id),
@@ -613,7 +628,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     };
     let msg1 = op1.signing_message()?;
     let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
-    let res = reg_tester
+    let _replay = reg_tester
         .instruction(
             &mut publisher,
             Inst::BlsBulk {
@@ -622,13 +637,23 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
             },
         )
         .await;
-    assert!(res.is_err(), "expected nonce replay to reject BlsBulk");
 
+    // Replay op was skipped (nonce mismatch); contract state unchanged.
     let last_op_after_wave = reg_tester
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
     assert_eq!(last_op_after, last_op_before);
+
+    // Nonce stays at 1 (only the first bundle's op consumed it).
+    let client = reg_tester.kontor_client().await;
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer_id.to_string())
+            .await?
+            .next_nonce,
+        1
+    );
 
     Ok(())
 }
@@ -673,7 +698,13 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .await;
 
     let client = reg_tester.kontor_client().await;
-    assert_eq!(client.registry_next_nonce(&signer_id.to_string()).await?.next_nonce, 1);
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer_id.to_string())
+            .await?
+            .next_nonce,
+        1
+    );
 
     let arith_bytes = runtime
         .contract_reader
@@ -723,7 +754,13 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .ok_or_else(|| anyhow!("expected a return value for recovery op"))?;
     let decoded = arith::wave::eval_parse_return_expr(v);
     assert_eq!(decoded.value, 12);
-    assert_eq!(client.registry_next_nonce(&signer_id.to_string()).await?.next_nonce, 2);
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer_id.to_string())
+            .await?
+            .next_nonce,
+        2
+    );
 
     Ok(())
 }
@@ -839,9 +876,20 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .ok_or_else(|| anyhow!("expected a return value for inner op 3"))?;
     let decoded3 = arith::wave::eval_parse_return_expr(v3);
     assert_eq!(decoded3.value, 11);
-    assert_eq!(client.registry_next_nonce(&signer1_id.to_string()).await?.next_nonce, 2);
-    assert_eq!(client.registry_next_nonce(&signer2_id.to_string()).await?.next_nonce, 2);
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer1_id.to_string())
+            .await?
+            .next_nonce,
+        2
+    );
+    assert_eq!(
+        client
+            .registry_next_nonce(&signer2_id.to_string())
+            .await?
+            .next_nonce,
+        2
+    );
 
     Ok(())
 }
-

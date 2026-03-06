@@ -1,16 +1,19 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
 use indexer::{
-    api::{Env, handlers::{get_registry_entry, get_registry_next_nonce}},
+    api::{
+        Env,
+        handlers::{get_registry_entry, get_registry_next_nonce},
+    },
     bls::RegistrationProof,
     database::queries::insert_processed_block,
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
-use indexer_types::{BlockRow, BlsBulkOp, ContractAddress, RegistryEntryResponse, Signer, SignerNonceResponse};
+use indexer_types::{BlockRow, RegistryEntryResponse, Signer, SignerNonceResponse};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -108,19 +111,16 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
 }
 
 async fn advance_nonce(runtime: &mut Runtime, signer_id: u64, nonce: u64) -> Result<()> {
-    runtime
-        .reserve_nonces(&[BlsBulkOp::Call {
-            signer_id,
-            nonce,
-            gas_limit: 50_000,
-            contract: ContractAddress {
-                name: "noop".to_string(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr: String::new(),
-        }])
-        .await
+    use indexer::runtime::registry;
+    registry::api::advance_nonce(
+        runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        signer_id,
+        nonce,
+    )
+    .await?
+    .map(|_| ())
+    .map_err(|e| anyhow!("{e:?}"))
 }
 
 #[tokio::test]
@@ -271,7 +271,10 @@ async fn test_get_registry_next_nonce_by_pubkey() -> Result<()> {
     let server = TestServer::new(app)?;
 
     let response: TestResponse = server
-        .get(&format!("/api/registry/next-nonce/{}", users[0].x_only_pubkey))
+        .get(&format!(
+            "/api/registry/next-nonce/{}",
+            users[0].x_only_pubkey
+        ))
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -286,7 +289,9 @@ async fn test_get_registry_next_nonce_by_signer_id() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
     let server = TestServer::new(app)?;
 
-    let response: TestResponse = server.get(&format!("/api/registry/next-nonce/{}", users[0].signer_id)).await;
+    let response: TestResponse = server
+        .get(&format!("/api/registry/next-nonce/{}", users[0].signer_id))
+        .await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
     let result: NonceResponse = serde_json::from_slice(response.as_bytes())?;
