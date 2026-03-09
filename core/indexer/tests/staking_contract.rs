@@ -138,3 +138,76 @@ async fn test_multiple_validators() -> Result<()> {
 
     Ok(())
 }
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn test_register_and_activate_regtest() -> Result<()> {
+    let validator = runtime.identity().await?;
+    let ed25519_key = vec![1u8; 32];
+
+    staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
+
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
+
+    // Mine blocks past epoch boundary (epoch_length = 10)
+    for _ in 0..12 {
+        runtime.issuance(&validator).await?;
+    }
+
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.status, staking::ValidatorStatus::Active);
+
+    let active_set = staking::get_active_set(runtime).await?;
+    assert_eq!(active_set.len(), 1);
+    assert_eq!(active_set[0].x_only_pubkey, validator.to_string());
+
+    let epoch = staking::get_epoch_info(runtime).await?;
+    assert!(epoch.epoch >= 1);
+    assert_eq!(epoch.active_count, 1);
+    assert_eq!(epoch.total_stake, Decimal::from(5));
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn test_full_lifecycle_regtest() -> Result<()> {
+    let validator = runtime.identity().await?;
+    let ed25519_key = vec![1u8; 32];
+
+    // Register
+    staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
+
+    // Mine to activation
+    for _ in 0..12 {
+        runtime.issuance(&validator).await?;
+    }
+    assert_eq!(
+        staking::get_validator(runtime, &validator)
+            .await?
+            .unwrap()
+            .status,
+        staking::ValidatorStatus::Active
+    );
+
+    // Begin unstake
+    staking::begin_unstake(runtime, &validator).await??;
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.status, staking::ValidatorStatus::PendingExit);
+
+    // Mine to next epoch
+    for _ in 0..12 {
+        runtime.issuance(&validator).await?;
+    }
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.status, staking::ValidatorStatus::Inactive);
+
+    // Withdraw
+    let result = staking::withdraw_stake(runtime, &validator).await??;
+    assert_eq!(result.stake, Decimal::from(0));
+
+    // Tokens returned (minus gas)
+    let balance = token::balance(runtime, &validator).await?.unwrap();
+    assert!(balance > Decimal::from(9));
+
+    Ok(())
+}
