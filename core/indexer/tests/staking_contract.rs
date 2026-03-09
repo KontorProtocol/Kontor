@@ -243,7 +243,7 @@ async fn test_add_stake_rejected_during_pending_exit_regtest() -> Result<()> {
         staking::ValidatorStatus::Active
     );
 
-    // Begin unstake → pending_exit
+    // Begin unstake → pending_exit, but still in active set
     staking::begin_unstake(runtime, &validator).await??;
     assert_eq!(
         staking::get_validator(runtime, &validator)
@@ -252,6 +252,8 @@ async fn test_add_stake_rejected_during_pending_exit_regtest() -> Result<()> {
             .status,
         staking::ValidatorStatus::PendingExit
     );
+    assert_eq!(staking::get_active_set(runtime).await?.len(), 1);
+    assert_eq!(staking::get_active_count(runtime).await?, 1);
 
     // add_stake should be rejected
     let result = staking::add_stake(runtime, &validator, 3.into()).await?;

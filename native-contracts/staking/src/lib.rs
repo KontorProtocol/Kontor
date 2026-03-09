@@ -264,7 +264,7 @@ impl Guest for Staking {
             .keys()
             .filter_map(|key| {
                 let entry = ctx.model().validators().get(&key)?;
-                if entry.status() == STATUS_ACTIVE {
+                if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {
                     Some(ActiveValidatorInfo {
                         x_only_pubkey: key,
                         stake: entry.stake(),
