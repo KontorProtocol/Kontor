@@ -63,6 +63,23 @@ async fn test_register_validator_errors() -> Result<()> {
         Err(Error::Message("already registered".to_string()))
     );
 
+    // Go inactive, try re-register without withdrawing
+    staking::begin_unstake(runtime, &validator).await??;
+    let result = staking::register_validator(runtime, &validator, vec![3u8; 32], 2.into()).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message(
+            "withdraw existing stake before re-registering".to_string()
+        ))
+    );
+
+    // Withdraw, then re-register succeeds
+    staking::withdraw_stake(runtime, &validator).await??;
+    let result =
+        staking::register_validator(runtime, &validator, vec![3u8; 32], 2.into()).await??;
+    assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
+    assert_eq!(result.stake, Decimal::from(2));
+
     Ok(())
 }
 

@@ -80,12 +80,15 @@ impl Guest for Staking {
         let model = ctx.model();
         let signer_key = ctx.signer().to_string();
 
-        if model
-            .validators()
-            .get(&signer_key)
-            .is_some_and(|e| e.status() != STATUS_INACTIVE)
-        {
-            return Err(Error::Message("already registered".to_string()));
+        if let Some(existing) = model.validators().get(&signer_key) {
+            if existing.status() != STATUS_INACTIVE {
+                return Err(Error::Message("already registered".to_string()));
+            }
+            if existing.stake() > 0.into() {
+                return Err(Error::Message(
+                    "withdraw existing stake before re-registering".to_string(),
+                ));
+            }
         }
 
         if stake_amount < model.min_stake() {
