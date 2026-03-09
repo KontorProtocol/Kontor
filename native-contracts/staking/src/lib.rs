@@ -129,6 +129,10 @@ impl Guest for Staking {
             .get(&signer_key)
             .ok_or(Error::Message("not registered".to_string()))?;
 
+        if amount <= 0.into() {
+            return Err(Error::Message("amount must be positive".to_string()));
+        }
+
         let status = entry.status();
         if status == STATUS_INACTIVE || status == STATUS_PENDING_EXIT {
             return Err(Error::Message(

@@ -96,6 +96,18 @@ async fn test_add_stake() -> Result<()> {
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.stake, Decimal::from(5));
 
+    // Negative and zero amounts rejected
+    let result = staking::add_stake(runtime, &validator, Decimal::from(-1)).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message("amount must be positive".to_string()))
+    );
+    let result = staking::add_stake(runtime, &validator, Decimal::from(0)).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message("amount must be positive".to_string()))
+    );
+
     Ok(())
 }
 
