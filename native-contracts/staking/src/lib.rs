@@ -130,8 +130,10 @@ impl Guest for Staking {
             .ok_or(Error::Message("not registered".to_string()))?;
 
         let status = entry.status();
-        if status == STATUS_INACTIVE {
-            return Err(Error::Message("validator is inactive".to_string()));
+        if status == STATUS_INACTIVE || status == STATUS_PENDING_EXIT {
+            return Err(Error::Message(
+                "cannot add stake while inactive or pending exit".to_string(),
+            ));
         }
 
         token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;

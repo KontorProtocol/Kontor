@@ -100,6 +100,33 @@ async fn test_add_stake() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
+    let validator = runtime.identity().await?;
+
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 3.into()).await??;
+
+    // add_stake while pending_join is fine
+    staking::add_stake(runtime, &validator, 1.into()).await??;
+
+    // Simulate activation + begin unstake to get to pending_exit
+    // (use begin_unstake from pending_join which goes straight to inactive,
+    //  then re-register and go through regtest activation path isn't needed —
+    //  just test the error directly via local mode workaround)
+    // In local mode we can't reach PENDING_EXIT without epoch transitions,
+    // so test that add_stake is rejected for inactive validators instead
+    staking::begin_unstake(runtime, &validator).await??;
+    let result = staking::add_stake(runtime, &validator, 1.into()).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message(
+            "cannot add stake while inactive or pending exit".to_string()
+        ))
+    );
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_begin_unstake_from_pending() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -182,6 +209,46 @@ async fn test_register_and_activate_regtest() -> Result<()> {
     assert!(epoch.epoch >= 1);
     assert_eq!(epoch.active_count, 1);
     assert_eq!(epoch.total_stake, Decimal::from(5));
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn test_add_stake_rejected_during_pending_exit_regtest() -> Result<()> {
+    let validator = runtime.identity().await?;
+
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+
+    // Activate
+    for _ in 0..12 {
+        runtime.issuance(&validator).await?;
+    }
+    assert_eq!(
+        staking::get_validator(runtime, &validator)
+            .await?
+            .unwrap()
+            .status,
+        staking::ValidatorStatus::Active
+    );
+
+    // Begin unstake → pending_exit
+    staking::begin_unstake(runtime, &validator).await??;
+    assert_eq!(
+        staking::get_validator(runtime, &validator)
+            .await?
+            .unwrap()
+            .status,
+        staking::ValidatorStatus::PendingExit
+    );
+
+    // add_stake should be rejected
+    let result = staking::add_stake(runtime, &validator, 3.into()).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message(
+            "cannot add stake while inactive or pending exit".to_string()
+        ))
+    );
 
     Ok(())
 }
