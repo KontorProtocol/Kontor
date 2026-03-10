@@ -28,17 +28,10 @@ impl State {
         self.pending_batches.push(pending);
     }
 
-    /// Record txids confirmed in a block for finality tracking.
-    pub(super) fn record_confirmed_block(&mut self, height: u64, txids: &[Txid]) {
-        for txid in txids {
-            self.confirmed_txids.entry(*txid).or_insert(height);
-        }
-    }
-
     /// Check all pending batches whose deadline <= chain_tip.
     pub(super) fn check_finality(&mut self) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
-        let tip = self.chain_tip;
+        let tip = self.bitcoin_state.chain_tip;
 
         // Partition: batches that have reached their deadline vs still pending
         let mut still_pending = Vec::new();
@@ -59,7 +52,7 @@ impl State {
             let missing: Vec<Txid> = batch
                 .txids
                 .iter()
-                .filter(|txid| !self.confirmed_txids.contains_key(*txid))
+                .filter(|txid| !self.bitcoin_state.confirmed_txids.contains_key(*txid))
                 .copied()
                 .collect();
 
@@ -147,13 +140,14 @@ impl State {
                 });
 
                 let replay_heights: Vec<u64> = self
+                    .bitcoin_state
                     .block_history
                     .range(*from_anchor..)
                     .map(|(h, _)| *h)
                     .filter(|h| *h < replay_up_to)
                     .collect();
                 for h in replay_heights {
-                    if let Some(txids) = self.block_history.get(&h).cloned() {
+                    if let Some(txids) = self.bitcoin_state.block_history.get(&h).cloned() {
                         for txid in &txids {
                             if self.validate_transaction(txid) {
                                 self.execute_transaction(h, *txid, TxStatus::Confirmed);
@@ -204,13 +198,13 @@ impl State {
         batch_txids: &[Txid],
     ) {
         // Phase 1: process queued blocks before this anchor
-        while let Some(&next) = self.pending_blocks.front() {
+        while let Some(&next) = self.bitcoin_state.pending_blocks.front() {
             if next >= anchor_height {
                 break;
             }
-            self.pending_blocks.pop_front();
+            self.bitcoin_state.pending_blocks.pop_front();
             let mut unbatched_count = 0;
-            if let Some(block_txids) = self.block_history.get(&next).cloned() {
+            if let Some(block_txids) = self.bitcoin_state.block_history.get(&next).cloned() {
                 for txid in &block_txids {
                     if self.validate_transaction(txid) {
                         self.execute_transaction(next, *txid, TxStatus::Confirmed);
@@ -235,7 +229,7 @@ impl State {
         // Phase 2b: apply unbatched txs from the anchor block (deduplicating against batch)
         let batch_set: HashSet<Txid> = batch_txids.iter().copied().collect();
         let mut unbatched_at_anchor = 0;
-        if let Some(block_txids) = self.block_history.get(&anchor_height).cloned() {
+        if let Some(block_txids) = self.bitcoin_state.block_history.get(&anchor_height).cloned() {
             for txid in &block_txids {
                 if !batch_set.contains(txid) && self.validate_transaction(txid) {
                     self.execute_transaction(anchor_height, *txid, TxStatus::Confirmed);
@@ -245,7 +239,9 @@ impl State {
         }
 
         // Remove anchor from pending_blocks if present
-        self.pending_blocks.retain(|h| *h != anchor_height);
+        self.bitcoin_state
+            .pending_blocks
+            .retain(|h| *h != anchor_height);
         self.last_processed_anchor = anchor_height;
 
         self.emit_state_event(StateEvent::BatchApplied {

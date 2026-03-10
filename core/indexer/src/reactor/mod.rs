@@ -1,3 +1,4 @@
+pub mod bitcoin_state;
 pub mod block_handler;
 pub mod types;
 
@@ -44,6 +45,7 @@ struct Reactor {
     event_tx: Option<mpsc::Sender<Event>>,
     runtime: Runtime,
     simulate_rx: Option<Receiver<Simulation>>,
+    bitcoin_state: bitcoin_state::BitcoinState,
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
@@ -115,6 +117,7 @@ impl Reactor {
             cancel_token,
             bitcoin_event_rx,
             simulate_rx,
+            bitcoin_state: bitcoin_state::BitcoinState::new(12),
             last_height,
             option_last_hash,
             init_tx,
@@ -218,6 +221,8 @@ impl Reactor {
                         Some(event) => {
                             match event {
                                 BitcoinEvent::BlockInsert { target_height, block } => {
+                                    let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                                    self.bitcoin_state.track_block(block.height, &txids);
                                     info!("Block {}/{} {}", block.height,
                                           target_height, block.hash);
                                     self.handle_block(block).await?;
@@ -226,12 +231,15 @@ impl Reactor {
                                     self.rollback(to_height).await?;
                                 },
                                 BitcoinEvent::MempoolSync(txs) => {
+                                    self.bitcoin_state.track_mempool_sync(txs.iter().map(|tx| tx.txid));
                                     info!("MempoolSync {}", txs.len());
                                 },
                                 BitcoinEvent::MempoolInsert(tx) => {
+                                    self.bitcoin_state.track_mempool_insert(tx.txid);
                                     debug!("MempoolInsert {}", tx.txid);
                                 },
                                 BitcoinEvent::MempoolRemove(txid) => {
+                                    self.bitcoin_state.track_mempool_remove(&txid);
                                     debug!("MempoolRemove {}", txid);
                                 },
                             }

@@ -22,8 +22,8 @@ impl State {
     }
 
     pub(super) fn make_value(&mut self) -> Value {
-        let txids: Vec<_> = self.mempool.iter().copied().collect();
-        Value::new(self.chain_tip, txids)
+        let txids: Vec<_> = self.bitcoin_state.mempool.iter().copied().collect();
+        Value::new(self.bitcoin_state.chain_tip, txids)
     }
 
     pub(super) fn height_params(&self) -> HeightParams<Ctx> {

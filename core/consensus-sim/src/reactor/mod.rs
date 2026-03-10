@@ -3,10 +3,9 @@ mod consensus;
 mod finality;
 pub mod types;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::BTreeMap;
 
 use anyhow::anyhow;
-use ::bitcoin::Txid;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -21,6 +20,7 @@ use crate::state_log::StateLog;
 
 use indexer::consensus::signing::Ed25519Provider;
 use indexer::consensus::{Address, Ctx, Genesis, Height, Value};
+use indexer::reactor::bitcoin_state::BitcoinState;
 
 pub use types::{FinalityEvent, PendingBatch, StateEvent};
 
@@ -35,17 +35,13 @@ pub struct State {
     pub(super) undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
 
     // Bitcoin state
-    pub(super) mempool: HashSet<Txid>,
-    pub(super) chain_tip: u64,
+    pub(super) bitcoin_state: BitcoinState,
 
     // Finality tracking
     pub(super) pending_batches: Vec<PendingBatch>,
-    pub(super) confirmed_txids: HashMap<Txid, u64>,
 
     // State machine replication
     pub(super) state_log: StateLog,
-    pub(super) block_history: BTreeMap<u64, Vec<Txid>>,
-    pub(super) pending_blocks: VecDeque<u64>,
     pub(super) last_processed_anchor: u64,
 
     // Observation channels
@@ -73,13 +69,9 @@ impl State {
             current_round: Round::new(0),
             decided: BTreeMap::new(),
             undecided: BTreeMap::new(),
-            mempool: HashSet::new(),
-            chain_tip: 0,
+            bitcoin_state: BitcoinState::new(types::FINALITY_WINDOW + 6),
             pending_batches: Vec::new(),
-            confirmed_txids: HashMap::new(),
             state_log: StateLog::new(),
-            block_history: BTreeMap::new(),
-            pending_blocks: VecDeque::new(),
             last_processed_anchor: 0,
             decided_tx,
             finality_tx,
