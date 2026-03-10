@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
 use indexer::consensus::Height;
@@ -23,7 +25,7 @@ impl TxStatus {
 pub struct StateEntry {
     pub anchor_height: u64,
     pub batch_height: Option<Height>, // None = unbatched (from bitcoin block directly)
-    pub txid: [u8; 32],
+    pub txid: Txid,
     pub status: TxStatus,
 }
 
@@ -54,7 +56,7 @@ impl StateLog {
         &self.entries
     }
 
-    pub fn status_of(&self, txid: &[u8; 32]) -> Option<&TxStatus> {
+    pub fn status_of(&self, txid: &Txid) -> Option<&TxStatus> {
         self.entries
             .iter()
             .rev()
@@ -62,7 +64,7 @@ impl StateLog {
             .map(|e| &e.status)
     }
 
-    pub fn batched_txids(&self) -> HashSet<[u8; 32]> {
+    pub fn batched_txids(&self) -> HashSet<Txid> {
         self.entries
             .iter()
             .filter(|e| e.status == TxStatus::Batched)
@@ -78,7 +80,7 @@ impl StateLog {
     }
 
     /// Low-level append: add a single entry and update checkpoint.
-    pub fn append_entry(&mut self, anchor_height: u64, txid: [u8; 32], status: TxStatus) {
+    pub fn append_entry(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
         let entry = StateEntry {
             anchor_height,
             batch_height: None,
@@ -94,7 +96,7 @@ impl StateLog {
         &mut self,
         anchor_height: u64,
         consensus_height: Height,
-        txids: &[[u8; 32]],
+        txids: &[Txid],
     ) {
         for txid in txids {
             let entry = StateEntry {
@@ -110,7 +112,7 @@ impl StateLog {
 
     /// Append entries for a bitcoin block's transactions. Skips txids already in `Batched` status
     /// (deduplication — batched txs take priority).
-    pub fn apply_block(&mut self, height: u64, txids: &[[u8; 32]]) {
+    pub fn apply_block(&mut self, height: u64, txids: &[Txid]) {
         let batched = self.batched_txids();
         for txid in txids {
             if batched.contains(txid) {
@@ -139,7 +141,7 @@ impl StateLog {
     fn update_checkpoint(&mut self, entry: &StateEntry) {
         let mut hasher = Keccak256::new();
         hasher.update(self.checkpoint);
-        hasher.update(entry.txid);
+        hasher.update(entry.txid.to_byte_array());
         hasher.update([entry.status.as_byte()]);
         self.checkpoint = hasher.finalize().into();
     }
@@ -147,11 +149,11 @@ impl StateLog {
     fn recompute_checkpoint(&mut self) {
         self.checkpoint = [0u8; 32];
         for i in 0..self.entries.len() {
-            let txid = self.entries[i].txid;
+            let txid_bytes = self.entries[i].txid.to_byte_array();
             let status_byte = self.entries[i].status.as_byte();
             let mut hasher = Keccak256::new();
             hasher.update(self.checkpoint);
-            hasher.update(txid);
+            hasher.update(txid_bytes);
             hasher.update([status_byte]);
             self.checkpoint = hasher.finalize().into();
         }
@@ -162,10 +164,10 @@ impl StateLog {
 mod tests {
     use super::*;
 
-    fn make_txid(n: u8) -> [u8; 32] {
-        let mut txid = [0u8; 32];
-        txid[0] = n;
-        txid
+    fn make_txid(n: u8) -> Txid {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        Txid::from_byte_array(bytes)
     }
 
     #[test]

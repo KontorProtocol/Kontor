@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use bitcoin::hashes::Hash;
 use consensus_sim::mock_bitcoin::MockBitcoin;
 use consensus_sim::reactor::FinalityEvent;
 use consensus_sim::reactor::StateEvent;
@@ -67,10 +66,10 @@ async fn decided_values_contain_mempool_txids() {
 
     let mut mock = MockBitcoin::new(0);
     let events = mock.generate_mempool_txs(3);
-    let expected_txids: Vec<[u8; 32]> = mock
+    let expected_txids: Vec<bitcoin::Txid> = mock
         .mempool()
         .iter()
-        .map(|tx| tx.txid.to_byte_array())
+        .map(|tx| tx.txid)
         .collect();
 
     for event in events {
@@ -248,10 +247,7 @@ async fn missing_tx_invalidation() {
     );
 
     // Confirm only the first 2 txids — the 3rd will be missing
-    let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2]
-        .iter()
-        .map(|bytes| bitcoin::Txid::from_slice(bytes).unwrap())
-        .collect();
+    let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2].to_vec();
 
     // Mine block 1 with only 2 of the 3 txids
     for event in mock.mine_block(&confirm_txids) {
@@ -544,11 +540,7 @@ async fn rollback_preserves_pre_anchor_state() {
     let batch1_txids = results[0][0].value.txids.clone();
 
     // Mine block 1 confirming batch 1's txids — batch 1 will finalize
-    let confirm_txids: Vec<bitcoin::Txid> = batch1_txids
-        .iter()
-        .map(|bytes| bitcoin::Txid::from_slice(bytes).unwrap())
-        .collect();
-    for event in mock.mine_block(&confirm_txids) {
+    for event in mock.mine_block(&batch1_txids) {
         cluster.send_bitcoin_event(event);
     }
 

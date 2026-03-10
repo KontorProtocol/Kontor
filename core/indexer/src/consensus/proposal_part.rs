@@ -1,3 +1,5 @@
+use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
 use serde::{Deserialize, Serialize};
@@ -11,11 +13,11 @@ use crate::consensus::{Address, Ctx, Height};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalData {
     pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+    pub txids: Vec<Txid>,
 }
 
 impl ProposalData {
-    pub fn new(anchor_height: u64, txids: Vec<[u8; 32]>) -> Self {
+    pub fn new(anchor_height: u64, txids: Vec<Txid>) -> Self {
         Self {
             anchor_height,
             txids,
@@ -122,18 +124,19 @@ impl Protobuf for ProposalPart {
                     .and_then(Address::from_proto)?,
             })),
             Part::Data(data) => {
-                let txids: Vec<[u8; 32]> = data
+                let txids: Vec<Txid> = data
                     .txids
                     .iter()
                     .map(|b| {
-                        <[u8; 32]>::try_from(b.as_ref()).map_err(|_| {
+                        let arr = <[u8; 32]>::try_from(b.as_ref()).map_err(|_| {
                             ProtoError::Other(format!(
                                 "Invalid txid length: expected 32, got {}",
                                 b.len()
                             ))
-                        })
+                        })?;
+                        Ok(Txid::from_byte_array(arr))
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, ProtoError>>()?;
                 Ok(Self::Data(ProposalData::new(data.anchor_height, txids)))
             }
             Part::Fin(fin) => Ok(Self::Fin(ProposalFin {
@@ -164,7 +167,7 @@ impl Protobuf for ProposalPart {
                     txids: data
                         .txids
                         .iter()
-                        .map(|t| Bytes::copy_from_slice(t))
+                        .map(|t| Bytes::copy_from_slice(&t.to_byte_array()))
                         .collect(),
                 })),
             }),
