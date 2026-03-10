@@ -291,6 +291,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "staking"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+]
+
+[[package]]
 name = "stdlib"
 version = "0.1.0"
 dependencies = [

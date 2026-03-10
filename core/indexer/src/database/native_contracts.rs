@@ -3,3 +3,4 @@ pub const FILESTORAGE: &[u8] =
     include_bytes!("../../../../native-contracts/binaries/filestorage.wasm.br");
 pub const REGISTRY: &[u8] =
     include_bytes!("../../../../native-contracts/binaries/registry.wasm.br");
+pub const STAKING: &[u8] = include_bytes!("../../../../native-contracts/binaries/staking.wasm.br");

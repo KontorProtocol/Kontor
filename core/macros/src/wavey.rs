@@ -31,7 +31,7 @@ pub fn generate_enum_wave_type_impl(data: &DataEnum) -> Result<TokenStream> {
         .variants
         .iter()
         .map(|variant| {
-            let variant_name = variant.ident.to_string().to_lowercase();
+            let variant_name = variant.ident.to_string().to_kebab_case();
             match &variant.fields {
                 Fields::Unit => Ok(quote! { (#variant_name, None) }),
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -75,7 +75,7 @@ pub fn generate_struct_to_value(data: &DataStruct, name: &Ident) -> Result<Token
 pub fn generate_enum_to_value(data: &DataEnum, name: &Ident) -> Result<TokenStream> {
     let arms = data.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
-        let variant_name = variant_ident.to_string().to_lowercase();
+        let variant_name = variant_ident.to_string().to_kebab_case();
         match &variant.fields {
             Fields::Unit => Ok(quote! {
                 #name::#variant_ident => <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(&stdlib::wave_type::<#name>(), #variant_name, None)
@@ -135,7 +135,7 @@ pub fn generate_enum_from_wave_value(data: &DataEnum, name: &Ident) -> Result<To
         .iter()
         .map(|variant| {
             let variant_ident = &variant.ident;
-            let variant_name = variant_ident.to_string().to_lowercase();
+            let variant_name = variant_ident.to_string().to_kebab_case();
             match &variant.fields {
                 Fields::Unit => Ok(quote! {
                     key_ if key_.eq(#variant_name) => #name::#variant_ident,
