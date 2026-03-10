@@ -9,7 +9,7 @@ use crate::{
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -230,7 +230,7 @@ async fn execute_op(
                             "signer_id must be in signer_map after verify_bls_bulk succeeds",
                         );
 
-                        let nonce_result = crate::runtime::registry::api::advance_nonce(
+                        let nonce_result = registry::api::advance_nonce(
                             runtime,
                             &Signer::Core(Box::new(Signer::Nobody)),
                             *signer_id,
