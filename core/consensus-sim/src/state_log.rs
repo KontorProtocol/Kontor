@@ -92,12 +92,7 @@ impl StateLog {
     }
 
     /// Append entries for a decided batch. All txids get `Batched` status.
-    pub fn apply_batch(
-        &mut self,
-        anchor_height: u64,
-        consensus_height: Height,
-        txids: &[Txid],
-    ) {
+    pub fn apply_batch(&mut self, anchor_height: u64, consensus_height: Height, txids: &[Txid]) {
         for txid in txids {
             let entry = StateEntry {
                 anchor_height,

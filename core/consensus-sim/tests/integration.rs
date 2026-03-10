@@ -66,11 +66,7 @@ async fn decided_values_contain_mempool_txids() {
 
     let mut mock = MockBitcoin::new(0);
     let events = mock.generate_mempool_txs(3);
-    let expected_txids: Vec<bitcoin::Txid> = mock
-        .mempool()
-        .iter()
-        .map(|tx| tx.txid)
-        .collect();
+    let expected_txids: Vec<bitcoin::Txid> = mock.mempool().iter().map(|tx| tx.txid).collect();
 
     for event in events {
         cluster.send_bitcoin_event(event);
