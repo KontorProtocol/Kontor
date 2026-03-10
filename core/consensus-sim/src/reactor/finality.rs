@@ -170,12 +170,7 @@ impl State {
     }
 
     /// Simulator: append to state log. Production: run WASM contract, write to DB.
-    pub(super) fn execute_transaction(
-        &mut self,
-        anchor_height: u64,
-        txid: Txid,
-        status: TxStatus,
-    ) {
+    pub(super) fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
         self.state_log.append_entry(anchor_height, txid, status);
     }
 
@@ -229,7 +224,12 @@ impl State {
         // Phase 2b: apply unbatched txs from the anchor block (deduplicating against batch)
         let batch_set: HashSet<Txid> = batch_txids.iter().copied().collect();
         let mut unbatched_at_anchor = 0;
-        if let Some(block_txids) = self.bitcoin_state.block_history.get(&anchor_height).cloned() {
+        if let Some(block_txids) = self
+            .bitcoin_state
+            .block_history
+            .get(&anchor_height)
+            .cloned()
+        {
             for txid in &block_txids {
                 if !batch_set.contains(txid) && self.validate_transaction(txid) {
                     self.execute_transaction(anchor_height, *txid, TxStatus::Confirmed);

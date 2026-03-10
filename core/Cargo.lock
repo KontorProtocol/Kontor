@@ -217,6 +217,296 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "arc-malachitebft-app"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-codec",
+ "arc-malachitebft-config",
+ "arc-malachitebft-core-consensus",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-engine",
+ "arc-malachitebft-metrics",
+ "arc-malachitebft-network",
+ "arc-malachitebft-peer",
+ "arc-malachitebft-signing",
+ "arc-malachitebft-sync",
+ "arc-malachitebft-wal",
+ "async-trait",
+ "derive-where",
+ "eyre",
+ "libp2p",
+ "libp2p-identity",
+ "ractor",
+ "rand 0.8.5",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-app-channel"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-app",
+ "arc-malachitebft-config",
+ "arc-malachitebft-engine",
+ "arc-malachitebft-signing",
+ "bytes",
+ "derive-where",
+ "eyre",
+ "ractor",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-codec"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
+name = "arc-malachitebft-config"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "bytesize 1.3.3",
+ "config",
+ "humantime-serde",
+ "multiaddr",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-core-consensus"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-driver",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-core-votekeeper",
+ "arc-malachitebft-metrics",
+ "arc-malachitebft-peer",
+ "async-recursion",
+ "derive-where",
+ "futures",
+ "genawaiter",
+ "multiaddr",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-core-driver"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-state-machine",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-core-votekeeper",
+ "derive-where",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-core-state-machine"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "derive-where",
+ "displaydoc",
+]
+
+[[package]]
+name = "arc-malachitebft-core-types"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-peer",
+ "async-trait",
+ "bytes",
+ "derive-where",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "arc-malachitebft-core-votekeeper"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "derive-where",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-discovery"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-metrics",
+ "either",
+ "eyre",
+ "libp2p",
+ "rand 0.8.5",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-engine"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-codec",
+ "arc-malachitebft-config",
+ "arc-malachitebft-core-consensus",
+ "arc-malachitebft-core-driver",
+ "arc-malachitebft-core-state-machine",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-core-votekeeper",
+ "arc-malachitebft-metrics",
+ "arc-malachitebft-network",
+ "arc-malachitebft-signing",
+ "arc-malachitebft-sync",
+ "arc-malachitebft-wal",
+ "async-recursion",
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "bytesize 1.3.3",
+ "derive-where",
+ "eyre",
+ "hex",
+ "libp2p",
+ "ractor",
+ "rand 0.8.5",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-metrics"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-state-machine",
+ "prometheus-client",
+]
+
+[[package]]
+name = "arc-malachitebft-network"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-discovery",
+ "arc-malachitebft-metrics",
+ "arc-malachitebft-peer",
+ "arc-malachitebft-sync",
+ "bytes",
+ "either",
+ "eyre",
+ "futures",
+ "libp2p",
+ "libp2p-gossipsub",
+ "libp2p-scatter",
+ "seahash",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-peer"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "bs58",
+ "multihash",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "arc-malachitebft-proto"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "prost 0.13.5",
+ "prost-types",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "arc-malachitebft-signing"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "async-trait",
+ "signature",
+]
+
+[[package]]
+name = "arc-malachitebft-signing-ed25519"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "base64 0.22.1",
+ "ed25519-consensus",
+ "rand 0.8.5",
+ "serde",
+ "signature",
+]
+
+[[package]]
+name = "arc-malachitebft-sync"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-metrics",
+ "arc-malachitebft-peer",
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "derive-where",
+ "displaydoc",
+ "eyre",
+ "genawaiter",
+ "libp2p",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "arc-malachitebft-wal"
+version = "0.7.0-pre"
+source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+dependencies = [
+ "advisory-lock",
+ "bytes",
+ "cfg-if",
+ "crc32fast",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1265,14 +1555,14 @@ name = "consensus-sim"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-malachitebft-app-channel",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-engine",
  "bitcoin",
  "clap",
  "eyre",
  "indexer",
  "indexer-types",
- "informalsystems-malachitebft-app-channel",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-engine",
  "rand 0.8.5",
  "serial_test",
  "sha3",
@@ -2229,7 +2519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3430,6 +3720,17 @@ name = "indexer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "arc-malachitebft-app",
+ "arc-malachitebft-app-channel",
+ "arc-malachitebft-codec",
+ "arc-malachitebft-config",
+ "arc-malachitebft-core-consensus",
+ "arc-malachitebft-core-types",
+ "arc-malachitebft-engine",
+ "arc-malachitebft-proto",
+ "arc-malachitebft-signing",
+ "arc-malachitebft-signing-ed25519",
+ "arc-malachitebft-sync",
  "async-trait",
  "axum 0.8.8",
  "axum-server",
@@ -3452,17 +3753,6 @@ dependencies = [
  "hkdf",
  "indexer-types",
  "indexmap 2.13.0",
- "informalsystems-malachitebft-app",
- "informalsystems-malachitebft-app-channel",
- "informalsystems-malachitebft-codec",
- "informalsystems-malachitebft-config",
- "informalsystems-malachitebft-core-consensus",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-engine",
- "informalsystems-malachitebft-proto",
- "informalsystems-malachitebft-signing",
- "informalsystems-malachitebft-signing-ed25519",
- "informalsystems-malachitebft-sync",
  "kontor-crypto",
  "libsql",
  "macros",
@@ -3541,295 +3831,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-app"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-trait",
- "derive-where",
- "eyre",
- "informalsystems-malachitebft-codec",
- "informalsystems-malachitebft-config",
- "informalsystems-malachitebft-core-consensus",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-engine",
- "informalsystems-malachitebft-metrics",
- "informalsystems-malachitebft-network",
- "informalsystems-malachitebft-peer",
- "informalsystems-malachitebft-signing",
- "informalsystems-malachitebft-sync",
- "informalsystems-malachitebft-wal",
- "libp2p",
- "libp2p-identity",
- "ractor",
- "rand 0.8.5",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-app-channel"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "bytes",
- "derive-where",
- "eyre",
- "informalsystems-malachitebft-app",
- "informalsystems-malachitebft-config",
- "informalsystems-malachitebft-engine",
- "informalsystems-malachitebft-signing",
- "ractor",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-codec"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "bytes",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-config"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "bytesize 1.3.3",
- "config",
- "humantime-serde",
- "informalsystems-malachitebft-core-types",
- "multiaddr",
- "serde",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-core-consensus"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-recursion",
- "derive-where",
- "futures",
- "genawaiter",
- "informalsystems-malachitebft-core-driver",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-core-votekeeper",
- "informalsystems-malachitebft-metrics",
- "informalsystems-malachitebft-peer",
- "multiaddr",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-core-driver"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "derive-where",
- "informalsystems-malachitebft-core-state-machine",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-core-votekeeper",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-core-state-machine"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "derive-where",
- "displaydoc",
- "informalsystems-malachitebft-core-types",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-core-types"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-trait",
- "bytes",
- "derive-where",
- "informalsystems-malachitebft-peer",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-core-votekeeper"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "derive-where",
- "informalsystems-malachitebft-core-types",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-discovery"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "either",
- "eyre",
- "informalsystems-malachitebft-metrics",
- "libp2p",
- "rand 0.8.5",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-engine"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-recursion",
- "async-trait",
- "byteorder",
- "bytes",
- "bytesize 1.3.3",
- "derive-where",
- "eyre",
- "hex",
- "informalsystems-malachitebft-codec",
- "informalsystems-malachitebft-config",
- "informalsystems-malachitebft-core-consensus",
- "informalsystems-malachitebft-core-driver",
- "informalsystems-malachitebft-core-state-machine",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-core-votekeeper",
- "informalsystems-malachitebft-metrics",
- "informalsystems-malachitebft-network",
- "informalsystems-malachitebft-signing",
- "informalsystems-malachitebft-sync",
- "informalsystems-malachitebft-wal",
- "libp2p",
- "ractor",
- "rand 0.8.5",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-metrics"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "informalsystems-malachitebft-core-state-machine",
- "prometheus-client",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-network"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "bytes",
- "either",
- "eyre",
- "futures",
- "informalsystems-malachitebft-discovery",
- "informalsystems-malachitebft-metrics",
- "informalsystems-malachitebft-peer",
- "informalsystems-malachitebft-sync",
- "libp2p",
- "libp2p-gossipsub",
- "libp2p-scatter",
- "seahash",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-peer"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "bs58",
- "multihash",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-proto"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "prost 0.13.5",
- "prost-types",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-signing"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-trait",
- "informalsystems-malachitebft-core-types",
- "signature",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-signing-ed25519"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "base64 0.22.1",
- "ed25519-consensus",
- "informalsystems-malachitebft-core-types",
- "rand 0.8.5",
- "serde",
- "signature",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-sync"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "async-trait",
- "bytes",
- "dashmap",
- "derive-where",
- "displaydoc",
- "eyre",
- "genawaiter",
- "informalsystems-malachitebft-core-types",
- "informalsystems-malachitebft-metrics",
- "informalsystems-malachitebft-peer",
- "libp2p",
- "rand 0.8.5",
- "serde",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "informalsystems-malachitebft-wal"
-version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#86f82fa55fb5a531f5d438e6ef1c1f0642508485"
-dependencies = [
- "advisory-lock",
- "bytes",
- "cfg-if",
- "crc32fast",
 ]
 
 [[package]]
@@ -5155,7 +5156,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5739,7 +5740,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -5772,7 +5773,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.115",
@@ -5941,7 +5942,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.1",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6377,7 +6378,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6471,7 +6472,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7383,7 +7384,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8917,7 +8918,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
