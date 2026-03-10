@@ -1,3 +1,4 @@
+use ::bitcoin::Txid;
 use indexer::consensus::Height;
 
 pub const FINALITY_WINDOW: u64 = 6;
@@ -6,7 +7,7 @@ pub const FINALITY_WINDOW: u64 = 6;
 pub struct PendingBatch {
     pub consensus_height: Height,
     pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+    pub txids: Vec<Txid>,
     pub deadline: u64, // anchor_height + FINALITY_WINDOW
 }
 
@@ -19,7 +20,7 @@ pub enum FinalityEvent {
     Rollback {
         from_anchor: u64,
         invalidated_batches: Vec<Height>,
-        missing_txids: Vec<[u8; 32]>,
+        missing_txids: Vec<Txid>,
     },
 }
 

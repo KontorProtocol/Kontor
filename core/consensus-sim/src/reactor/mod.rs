@@ -6,6 +6,7 @@ pub mod types;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::anyhow;
+use ::bitcoin::Txid;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -34,16 +35,16 @@ pub struct State {
     pub(super) undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
 
     // Bitcoin state
-    pub(super) mempool: HashSet<[u8; 32]>,
+    pub(super) mempool: HashSet<Txid>,
     pub(super) chain_tip: u64,
 
     // Finality tracking
     pub(super) pending_batches: Vec<PendingBatch>,
-    pub(super) confirmed_txids: HashMap<[u8; 32], u64>,
+    pub(super) confirmed_txids: HashMap<Txid, u64>,
 
     // State machine replication
     pub(super) state_log: StateLog,
-    pub(super) block_history: BTreeMap<u64, Vec<[u8; 32]>>,
+    pub(super) block_history: BTreeMap<u64, Vec<Txid>>,
     pub(super) pending_blocks: VecDeque<u64>,
     pub(super) last_processed_anchor: u64,
 

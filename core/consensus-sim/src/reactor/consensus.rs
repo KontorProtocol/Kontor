@@ -22,7 +22,7 @@ impl State {
     }
 
     pub(super) fn make_value(&mut self) -> Value {
-        let txids: Vec<[u8; 32]> = self.mempool.iter().copied().collect();
+        let txids: Vec<_> = self.mempool.iter().copied().collect();
         Value::new(self.chain_tip, txids)
     }
 
@@ -253,11 +253,11 @@ pub async fn handle_consensus_msg(
                 }
                 state.record_decided_batch(certificate.height, &proposal.value);
 
-                // Three-phase processing: blocks -> finality check -> batch + unbatched
+                // Three-phase processing: blocks -> batch + unbatched
                 state.process_decided_batch(
                     proposal.value.anchor_height,
                     certificate.height,
-                    &proposal.value.txids.clone(),
+                    &proposal.value.txids,
                 );
 
                 state

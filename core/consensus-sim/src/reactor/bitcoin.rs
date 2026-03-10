@@ -1,4 +1,3 @@
-use bitcoin::hashes::Hash;
 use tracing::{debug, info};
 
 use indexer::bitcoin_follower::event::BitcoinEvent;
@@ -10,10 +9,10 @@ pub fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
     match event {
         BitcoinEvent::BlockInsert { block, .. } => {
             state.chain_tip = block.height;
-            let confirmed_txids: Vec<[u8; 32]> = block
+            let confirmed_txids: Vec<_> = block
                 .transactions
                 .iter()
-                .map(|tx| tx.txid.to_byte_array())
+                .map(|tx| tx.txid)
                 .collect();
             for txid in &confirmed_txids {
                 state.mempool.remove(txid);
@@ -51,17 +50,17 @@ pub fn handle_bitcoin_event(state: &mut State, event: BitcoinEvent) {
             }
         }
         BitcoinEvent::MempoolInsert(tx) => {
-            state.mempool.insert(tx.txid.to_byte_array());
+            state.mempool.insert(tx.txid);
             debug!(txid = %tx.txid, mempool = state.mempool.len(), "Mempool insert");
         }
         BitcoinEvent::MempoolRemove(txid) => {
-            state.mempool.remove(&txid.to_byte_array());
+            state.mempool.remove(&txid);
             debug!(%txid, mempool = state.mempool.len(), "Mempool remove");
         }
         BitcoinEvent::MempoolSync(txs) => {
             state.mempool.clear();
             for tx in txs {
-                state.mempool.insert(tx.txid.to_byte_array());
+                state.mempool.insert(tx.txid);
             }
             info!(mempool = state.mempool.len(), "Mempool sync");
         }

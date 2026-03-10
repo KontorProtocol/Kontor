@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use ::bitcoin::Txid;
 use tracing::{info, warn};
 
 use crate::state_log::TxStatus;
@@ -28,7 +29,7 @@ impl State {
     }
 
     /// Record txids confirmed in a block for finality tracking.
-    pub(super) fn record_confirmed_block(&mut self, height: u64, txids: &[[u8; 32]]) {
+    pub(super) fn record_confirmed_block(&mut self, height: u64, txids: &[Txid]) {
         for txid in txids {
             self.confirmed_txids.entry(*txid).or_insert(height);
         }
@@ -55,7 +56,7 @@ impl State {
         at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
 
         for batch in &at_deadline {
-            let missing: Vec<[u8; 32]> = batch
+            let missing: Vec<Txid> = batch
                 .txids
                 .iter()
                 .filter(|txid| !self.confirmed_txids.contains_key(*txid))
@@ -170,7 +171,7 @@ impl State {
     // --- Extension points: replace with real implementations in production ---
 
     /// Simulator: always true. Production: validate signatures, check WASM preconditions.
-    pub(super) fn validate_transaction(&self, _txid: &[u8; 32]) -> bool {
+    pub(super) fn validate_transaction(&self, _txid: &Txid) -> bool {
         true
     }
 
@@ -178,7 +179,7 @@ impl State {
     pub(super) fn execute_transaction(
         &mut self,
         anchor_height: u64,
-        txid: [u8; 32],
+        txid: Txid,
         status: TxStatus,
     ) {
         self.state_log.append_entry(anchor_height, txid, status);
@@ -200,7 +201,7 @@ impl State {
         &mut self,
         anchor_height: u64,
         consensus_height: Height,
-        batch_txids: &[[u8; 32]],
+        batch_txids: &[Txid],
     ) {
         // Phase 1: process queued blocks before this anchor
         while let Some(&next) = self.pending_blocks.front() {
@@ -232,7 +233,7 @@ impl State {
         }
 
         // Phase 2b: apply unbatched txs from the anchor block (deduplicating against batch)
-        let batch_set: HashSet<[u8; 32]> = batch_txids.iter().copied().collect();
+        let batch_set: HashSet<Txid> = batch_txids.iter().copied().collect();
         let mut unbatched_at_anchor = 0;
         if let Some(block_txids) = self.block_history.get(&anchor_height).cloned() {
             for txid in &block_txids {

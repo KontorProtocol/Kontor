@@ -1,5 +1,7 @@
 use core::fmt;
 
+use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_proto::{Error as ProtoError, Protobuf};
 use serde::{Deserialize, Serialize};
@@ -51,11 +53,11 @@ impl Protobuf for ValueId {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Value {
     pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+    pub txids: Vec<Txid>,
 }
 
 impl Value {
-    pub fn new(anchor_height: u64, txids: Vec<[u8; 32]>) -> Self {
+    pub fn new(anchor_height: u64, txids: Vec<Txid>) -> Self {
         Self {
             anchor_height,
             txids,
@@ -66,7 +68,7 @@ impl Value {
         let mut hasher = Sha256::new();
         hasher.update(self.anchor_height.to_be_bytes());
         for txid in &self.txids {
-            hasher.update(txid);
+            hasher.update(txid.to_byte_array());
         }
         ValueId(hasher.finalize().into())
     }
@@ -109,12 +111,12 @@ impl Protobuf for Value {
             )));
         }
 
-        let txids: Vec<[u8; 32]> = rest
+        let txids: Vec<Txid> = rest
             .chunks_exact(32)
             .map(|chunk| {
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(chunk);
-                arr
+                Txid::from_byte_array(arr)
             })
             .collect();
 
@@ -128,7 +130,7 @@ impl Protobuf for Value {
         let mut buf = Vec::with_capacity(8 + self.txids.len() * 32);
         buf.extend_from_slice(&self.anchor_height.to_be_bytes());
         for txid in &self.txids {
-            buf.extend_from_slice(txid);
+            buf.extend_from_slice(&txid.to_byte_array());
         }
         Ok(proto::Value {
             value: Some(Bytes::from(buf)),
