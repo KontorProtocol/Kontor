@@ -70,7 +70,7 @@ impl Guest for Registry {
         })
     }
 
-    fn advance_nonce(ctx: &CoreContext, signer_id: u64, expected_nonce: u64) -> Result<u64, Error> {
+    fn advance_nonce(ctx: &CoreContext, signer_id: u64, caller_nonce: u64) -> Result<u64, Error> {
         let model = ctx.proc_context().model();
         let x_only_pubkey = model
             .by_id()
@@ -81,15 +81,15 @@ impl Guest for Registry {
             .get(&x_only_pubkey)
             .ok_or_else(|| Error::Message("registry entry missing for signer id".to_string()))?;
 
-        let current_nonce = entry.next_nonce();
-        if current_nonce != expected_nonce {
+        let stored_nonce = entry.next_nonce();
+        if stored_nonce != caller_nonce {
             return Err(Error::Message(format!(
-                "invalid nonce {} for signer_id {}: expected {}",
-                expected_nonce, signer_id, current_nonce
+                "nonce mismatch for signer_id {}: got {}, expected {}",
+                signer_id, caller_nonce, stored_nonce
             )));
         }
 
-        let next_nonce = current_nonce
+        let next_nonce = stored_nonce
             .checked_add(1)
             .ok_or_else(|| Error::Message("nonce overflow".to_string()))?;
 

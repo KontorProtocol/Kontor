@@ -23,7 +23,7 @@ world root {
   export advance-nonce: async func(
     ctx: borrow<core-context>,
     signer-id: u64,
-    expected-nonce: u64
+    caller-nonce: u64
   ) -> result<u64, error>;
 
   export get-entry: async func(
