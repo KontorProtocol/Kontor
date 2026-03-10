@@ -9,7 +9,7 @@ use crate::{
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -70,6 +70,17 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
             "Generated {} challenges at block height {}",
             challenges.len(),
             block.height
+        );
+    }
+
+    let epoch_result = staking::api::transition_epoch(runtime, &core_signer, block.height)
+        .await
+        .expect("Failed to call transition_epoch")
+        .expect("transition_epoch returned error");
+    if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
+        info!(
+            "Epoch {} transition: {} activated, {} deactivated",
+            epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
         );
     }
 

@@ -171,25 +171,30 @@ pub async fn handle_consensus_msg(
             let height = state.current_height;
             let round = state.current_round;
 
-            let proposed = match &part.content {
-                StreamContent::Data(ProposalPart::Data(data)) => {
-                    if !state.undecided.contains_key(&(height, round)) {
-                        let value = Value::new(data.anchor_height, data.txids.clone());
-                        let proposed = ProposedValue {
-                            height,
-                            round,
-                            valid_round: Round::Nil,
-                            proposer: state.address,
-                            value,
-                            validity: Validity::Valid,
-                        };
-                        state.undecided.insert((height, round), proposed.clone());
-                        Some(proposed)
-                    } else {
-                        None
+            // Between decisions, current_round is Nil — ignore stale proposal parts
+            let proposed = if round == Round::Nil {
+                None
+            } else {
+                match &part.content {
+                    StreamContent::Data(ProposalPart::Data(data)) => {
+                        if !state.undecided.contains_key(&(height, round)) {
+                            let value = Value::new(data.anchor_height, data.txids.clone());
+                            let proposed = ProposedValue {
+                                height,
+                                round,
+                                valid_round: Round::Nil,
+                                proposer: state.address,
+                                value,
+                                validity: Validity::Valid,
+                            };
+                            state.undecided.insert((height, round), proposed.clone());
+                            Some(proposed)
+                        } else {
+                            None
+                        }
                     }
+                    _ => None,
                 }
-                _ => None,
             };
 
             if reply.send(proposed).is_err() {
