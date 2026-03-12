@@ -175,3 +175,4 @@ fn bls_bulk_message_changes_when_signer_id_changes() {
     let msg2 = op2.signing_message().unwrap();
     assert_ne!(msg1, msg2, "signer_id must affect signed bytes");
 }
+

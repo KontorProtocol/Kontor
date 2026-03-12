@@ -218,3 +218,4 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     assert_eq!(pk_after, Some(original.bls_pubkey.to_vec()));
     Ok(())
 }
+
