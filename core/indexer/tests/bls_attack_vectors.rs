@@ -20,10 +20,10 @@ use indexer::bls::{
     bls_derivation_path, derive_bls_secret_key_eip2333, taproot_derivation_path,
 };
 use indexer::reg_tester::{Identity, RegTester, derive_taproot_keypair_from_seed};
-use indexer_types::Inst;
+use indexer_types::{BlsBulkOp, Inst, Signer};
 use testlib::{
     AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, Runtime,
-    RuntimeConfig, Signer, import, serial_test,
+    RuntimeConfig, import, serial_test,
 };
 
 import!(
@@ -367,6 +367,244 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
         registry::get_bls_pubkey(runtime, &alice_xonly).await?,
         Some(alice_proof.bls_pubkey.to_vec()),
         "Alice's registered key must be unchanged"
+    );
+
+    Ok(())
+}
+
+/// Identity hijack via BlsBulk: Eve tries to register her own BLS key under
+/// Alice's Taproot identity. Eve CAN produce the BLS binding proof (she signs
+/// `BLS_BINDING_PREFIX || alice_xonly` with `eve_bls_sk`), but CANNOT produce
+/// the Schnorr proof (needs Alice's Taproot secret key to sign over
+/// `SCHNORR_BINDING_PREFIX || eve_bls_pk`).
+///
+/// | Proof half | Blocks Eve? | Why                                          |
+/// |------------|-------------|----------------------------------------------|
+/// | Schnorr    | **Yes**     | Needs Alice's Taproot sk                     |
+/// | BLS        | No          | Eve can sign alice_xonly with her own BLS key |
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Result<()> {
+    let alice = unregistered_identity(&mut reg_tester).await?;
+    let eve = unregistered_identity(&mut reg_tester).await?;
+    let mut publisher = unregistered_identity(&mut reg_tester).await?;
+
+    let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
+    let eve_bls_pk = eve_bls_sk.sk_to_pk();
+    let alice_xonly = alice.keypair.x_only_public_key().0;
+    let secp = Secp256k1::new();
+
+    // Schnorr half: Eve signs with her OWN Taproot key, but the indexer will
+    // verify against alice_xonly — mismatch.
+    let schnorr_msg = {
+        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+        preimage.extend_from_slice(&eve_bls_pk.to_bytes());
+        let digest = sha256::Hash::hash(&preimage).to_byte_array();
+        Message::from_digest_slice(&digest).expect("32-byte digest")
+    };
+    let eve_schnorr_sig = secp
+        .sign_schnorr(&schnorr_msg, &eve.keypair)
+        .serialize();
+
+    // BLS half: Eve CAN produce this — she signs alice_xonly with eve_bls_sk.
+    let bls_binding_msg = {
+        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+        msg.extend_from_slice(BLS_BINDING_PREFIX);
+        msg.extend_from_slice(&alice_xonly.serialize());
+        msg
+    };
+    let eve_bls_binding_sig = eve_bls_sk
+        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
+        .to_bytes();
+
+    // Submit via BlsBulk: Eve targets alice_xonly as the signer.
+    let op = BlsBulkOp::RegisterBlsKey {
+        signer: Signer::XOnlyPubKey(alice_xonly.to_string()),
+        bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+        schnorr_sig: eve_schnorr_sig.to_vec(),
+        bls_sig: eve_bls_binding_sig.to_vec(),
+    };
+
+    let msg = op.signing_message()?;
+    let sig = eve_bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
+    let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
+    let agg_sig = agg.to_signature();
+
+    let _ = reg_tester
+        .instruction(
+            &mut publisher,
+            Inst::BlsBulk {
+                ops: vec![op],
+                signature: agg_sig.to_bytes().to_vec(),
+            },
+        )
+        .await;
+
+    let alice_xonly_str = alice_xonly.to_string();
+    assert_eq!(
+        registry::get_signer_id(runtime, &alice_xonly_str).await?,
+        None,
+        "Eve must not be able to register under Alice's identity"
+    );
+
+    Ok(())
+}
+
+/// Valid Schnorr, forged BLS binding: Eve controls her Taproot key so she can
+/// produce a valid Schnorr signature over `SCHNORR_BINDING_PREFIX || bls_pk`,
+/// but submits a BLS binding proof signed by a *different* BLS key than the one
+/// being registered. The indexer must reject registration even though the
+/// Schnorr half passes.
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
+    let mut eve = unregistered_identity(&mut reg_tester).await?;
+
+    let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
+    let eve_bls_pk = eve_bls_sk.sk_to_pk();
+
+    // A second, unrelated BLS key that Eve also controls.
+    let mut alt_ikm = [0u8; 32];
+    alt_ikm[0] = 0xAB;
+    let alt_bls_sk = BlsSecretKey::key_gen(&alt_ikm, &[]).expect("alt key_gen");
+
+    // Schnorr half: valid — Eve signs over her real BLS pubkey with her
+    // Taproot key. This will pass verification.
+    let secp = Secp256k1::new();
+    let schnorr_msg = {
+        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+        preimage.extend_from_slice(&eve_bls_pk.to_bytes());
+        let digest = sha256::Hash::hash(&preimage).to_byte_array();
+        Message::from_digest_slice(&digest).expect("32-byte digest")
+    };
+    let schnorr_sig = secp
+        .sign_schnorr(&schnorr_msg, &eve.keypair)
+        .serialize();
+
+    // BLS half: forged — signed with alt_bls_sk instead of eve_bls_sk.
+    // The binding message is correct (`BLS_BINDING_PREFIX || eve_xonly`), but
+    // it was signed by the wrong key. Verification against eve_bls_pk fails:
+    // e(alt_sk·H(msg), G2) ≠ e(H(msg), eve_bls_pk).
+    let bls_binding_msg = {
+        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+        msg.extend_from_slice(BLS_BINDING_PREFIX);
+        msg.extend_from_slice(&eve.keypair.x_only_public_key().0.serialize());
+        msg
+    };
+    let forged_bls_sig = alt_bls_sk
+        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
+        .to_bytes();
+
+    let _ = reg_tester
+        .instruction(
+            &mut eve,
+            Inst::RegisterBlsKey {
+                bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+                schnorr_sig: schnorr_sig.to_vec(),
+                bls_sig: forged_bls_sig.to_vec(),
+            },
+        )
+        .await;
+
+    let eve_xonly = eve.x_only_public_key().to_string();
+    assert_eq!(
+        registry::get_signer_id(runtime, &eve_xonly).await?,
+        None,
+        "forged BLS binding must prevent registration"
+    );
+
+    Ok(())
+}
+
+/// Submits a BLS public key that lies on the E2 curve but outside the G2
+/// prime-order subgroup. `key_validate` (which checks subgroup membership)
+/// must reject it. This exercises a different code path than zeroed-bytes
+/// tests — the point is a valid curve point, just not in the correct subgroup.
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_attack_non_subgroup_pubkey_rejected_regtest() -> Result<()> {
+    let mut eve = unregistered_identity(&mut reg_tester).await?;
+
+    // Construct a point on E2 that is NOT in G2.
+    // blst_map_to_g2 applies the SSWU isogeny map WITHOUT cofactor clearing,
+    // producing a valid curve point that (with overwhelming probability) lies
+    // outside the prime-order subgroup.
+    let non_subgroup_pk = unsafe {
+        let mut u = blst::blst_fp2::default();
+        let mut v = blst::blst_fp2::default();
+        let mut u_bytes = [0u8; 48];
+        let mut v_bytes = [0u8; 48];
+        u_bytes[0] = 1;
+        v_bytes[0] = 2;
+        blst::blst_fp_from_lendian(&mut u.fp[0], u_bytes.as_ptr());
+        blst::blst_fp_from_lendian(&mut v.fp[0], v_bytes.as_ptr());
+
+        let mut p = blst::blst_p2::default();
+        blst::blst_map_to_g2(&mut p, &u, &v);
+
+        let mut p_aff = blst::blst_p2_affine::default();
+        blst::blst_p2_to_affine(&mut p_aff, &p);
+
+        assert!(
+            blst::blst_p2_affine_on_curve(&p_aff),
+            "mapped point must be on E2"
+        );
+        assert!(
+            !blst::blst_p2_affine_in_g2(&p_aff),
+            "mapped point must NOT be in the G2 subgroup"
+        );
+
+        let mut out = [0u8; 96];
+        blst::blst_p2_affine_compress(out.as_mut_ptr(), &p_aff);
+        out
+    };
+
+    assert!(
+        blst::min_sig::PublicKey::key_validate(&non_subgroup_pk).is_err(),
+        "key_validate must reject non-subgroup point"
+    );
+
+    // Build a registration with valid Schnorr and BLS binding proofs.
+    // The rejection must come from key_validate, not from proof verification.
+    let secp = Secp256k1::new();
+    let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
+
+    let schnorr_msg = {
+        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+        preimage.extend_from_slice(&non_subgroup_pk);
+        let digest = sha256::Hash::hash(&preimage).to_byte_array();
+        Message::from_digest_slice(&digest).expect("32-byte digest")
+    };
+    let schnorr_sig = secp
+        .sign_schnorr(&schnorr_msg, &eve.keypair)
+        .serialize();
+
+    let bls_binding_msg = {
+        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+        msg.extend_from_slice(BLS_BINDING_PREFIX);
+        msg.extend_from_slice(&eve.keypair.x_only_public_key().0.serialize());
+        msg
+    };
+    let bls_sig = eve_bls_sk
+        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
+        .to_bytes();
+
+    let _ = reg_tester
+        .instruction(
+            &mut eve,
+            Inst::RegisterBlsKey {
+                bls_pubkey: non_subgroup_pk.to_vec(),
+                schnorr_sig: schnorr_sig.to_vec(),
+                bls_sig: bls_sig.to_vec(),
+            },
+        )
+        .await;
+
+    let eve_xonly = eve.x_only_public_key().to_string();
+    assert_eq!(
+        registry::get_signer_id(runtime, &eve_xonly).await?,
+        None,
+        "non-subgroup public key must not be registered"
     );
 
     Ok(())
