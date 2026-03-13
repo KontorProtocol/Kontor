@@ -16,13 +16,13 @@ use malachitebft_engine::host::Next;
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
-use crate::consensus::state_log::{StateLog, TxStatus};
 use crate::consensus::{
     Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     ValidatorSet, Value,
 };
 
 use super::bitcoin_state::BitcoinState;
+use super::executor::{Executor, TxStatus};
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
@@ -36,7 +36,6 @@ pub struct ConsensusState {
 
     // Finality tracking
     pub pending_batches: Vec<PendingBatch>,
-    pub state_log: StateLog,
     pub last_processed_anchor: u64,
 
     // Observation channels (optional, for testing)
@@ -46,11 +45,7 @@ pub struct ConsensusState {
 }
 
 impl ConsensusState {
-    pub fn new(
-        signing_provider: Ed25519Provider,
-        genesis: Genesis,
-        address: Address,
-    ) -> Self {
+    pub fn new(signing_provider: Ed25519Provider, genesis: Genesis, address: Address) -> Self {
         Self {
             signing_provider,
             genesis,
@@ -60,7 +55,6 @@ impl ConsensusState {
             decided: BTreeMap::new(),
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
-            state_log: StateLog::new(),
             last_processed_anchor: 0,
             decided_tx: None,
             finality_tx: None,
@@ -243,20 +237,22 @@ impl ConsensusState {
     }
 
     /// Run finality checks and execute any rollbacks.
-    pub fn run_finality_checks(&mut self, bitcoin_state: &BitcoinState, replay_up_to: u64) {
+    pub fn run_finality_checks(
+        &mut self,
+        executor: &mut impl Executor,
+        bitcoin_state: &BitcoinState,
+        replay_up_to: u64,
+    ) {
         let finality_events = self.check_finality(bitcoin_state);
         for event in &finality_events {
             if let FinalityEvent::Rollback { from_anchor, .. } = event {
-                let removed = self.state_log.rollback_to(*from_anchor);
-                info!(
-                    from_anchor,
-                    removed, "Rollback executed: truncated state log"
-                );
+                let removed = executor.rollback_state(*from_anchor);
+                info!(from_anchor, removed, "Rollback executed");
 
                 self.emit_state_event(StateEvent::RollbackExecuted {
                     to_anchor: *from_anchor,
                     entries_removed: removed,
-                    checkpoint: self.state_log.checkpoint(),
+                    checkpoint: executor.checkpoint(),
                 });
 
                 let replay_heights: Vec<u64> = bitcoin_state
@@ -268,8 +264,7 @@ impl ConsensusState {
                 for h in replay_heights {
                     if let Some(txids) = bitcoin_state.block_history.get(&h).cloned() {
                         for txid in &txids {
-                            self.state_log
-                                .append_entry(h, *txid, TxStatus::Confirmed);
+                            executor.execute_transaction(h, *txid, TxStatus::Confirmed);
                         }
                     }
                 }
@@ -283,6 +278,7 @@ impl ConsensusState {
     /// Two-phase processing triggered when a batch is decided at anchor A.
     pub fn process_decided_batch(
         &mut self,
+        executor: &mut impl Executor,
         bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
         consensus_height: Height,
@@ -297,66 +293,56 @@ impl ConsensusState {
             let mut unbatched_count = 0;
             if let Some(block_txids) = bitcoin_state.block_history.get(&next).cloned() {
                 for txid in &block_txids {
-                    self.state_log
-                        .append_entry(next, *txid, TxStatus::Confirmed);
+                    executor.execute_transaction(next, *txid, TxStatus::Confirmed);
                     unbatched_count += 1;
                 }
             }
             self.emit_state_event(StateEvent::BlockProcessed {
                 height: next,
                 unbatched_count,
-                checkpoint: self.state_log.checkpoint(),
+                checkpoint: executor.checkpoint(),
             });
         }
 
         // Phase 2: apply batch txs
         for txid in batch_txids {
-            self.state_log
-                .append_entry(anchor_height, *txid, TxStatus::Batched);
+            executor.execute_transaction(anchor_height, *txid, TxStatus::Batched);
         }
 
         // Phase 2b: apply unbatched txs from the anchor block (deduplicating)
         let batch_set: HashSet<bitcoin::Txid> = batch_txids.iter().copied().collect();
         let mut unbatched_at_anchor = 0;
-        if let Some(block_txids) = bitcoin_state
-            .block_history
-            .get(&anchor_height)
-            .cloned()
-        {
+        if let Some(block_txids) = bitcoin_state.block_history.get(&anchor_height).cloned() {
             for txid in &block_txids {
                 if !batch_set.contains(txid) {
-                    self.state_log
-                        .append_entry(anchor_height, *txid, TxStatus::Confirmed);
+                    executor.execute_transaction(anchor_height, *txid, TxStatus::Confirmed);
                     unbatched_at_anchor += 1;
                 }
             }
         }
 
-        bitcoin_state
-            .pending_blocks
-            .retain(|h| *h != anchor_height);
+        bitcoin_state.pending_blocks.retain(|h| *h != anchor_height);
         self.last_processed_anchor = anchor_height;
 
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
             txid_count: batch_txids.len(),
-            checkpoint: self.state_log.checkpoint(),
+            checkpoint: executor.checkpoint(),
         });
 
         if unbatched_at_anchor > 0 {
             self.emit_state_event(StateEvent::BlockProcessed {
                 height: anchor_height,
                 unbatched_count: unbatched_at_anchor,
-                checkpoint: self.state_log.checkpoint(),
+                checkpoint: executor.checkpoint(),
             });
         }
 
         info!(
             anchor = anchor_height,
             consensus_height = %consensus_height,
-            checkpoint = ?&self.state_log.checkpoint()[..4],
-            "Three-phase processing complete"
+            "Batch processing complete"
         );
     }
 }
@@ -364,6 +350,7 @@ impl ConsensusState {
 /// Handle a consensus message from the Malachite engine.
 pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
+    executor: &mut impl Executor,
     bitcoin_state: &mut BitcoinState,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
@@ -528,6 +515,7 @@ pub async fn handle_consensus_msg(
                 state.record_decided_batch(certificate.height, &proposal.value);
 
                 state.process_decided_batch(
+                    executor,
                     bitcoin_state,
                     proposal.value.anchor_height,
                     certificate.height,

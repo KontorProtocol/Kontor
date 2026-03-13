@@ -556,7 +556,7 @@ async fn rollback_preserves_pre_anchor_state() {
         .await;
 
     let post_rollback_checkpoint = state_events.iter().find_map(|e| match e {
-        StateEvent::RollbackExecuted { checkpoint, .. } => Some(*checkpoint),
+        StateEvent::RollbackExecuted { checkpoint, .. } => *checkpoint,
         _ => None,
     });
 
@@ -614,7 +614,7 @@ async fn all_nodes_reach_same_checkpoint() {
                 consensus_height,
                 checkpoint,
                 ..
-            } if Some(*consensus_height) == first_height => Some(*checkpoint),
+            } if Some(*consensus_height) == first_height => *checkpoint,
             _ => None,
         })
         .collect();

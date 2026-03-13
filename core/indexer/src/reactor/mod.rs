@@ -2,6 +2,7 @@ pub mod bitcoin_state;
 pub mod block_handler;
 pub mod consensus;
 pub mod engine;
+pub mod executor;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -44,6 +45,7 @@ pub type Simulation = (
 /// Handle to the Malachite engine + consensus state, present only when consensus is configured.
 struct ConsensusHandle {
     state: consensus::ConsensusState,
+    executor: executor::NoopExecutor,
     channels: Channels<Ctx>,
     _engine_handle: malachitebft_app_channel::EngineHandle,
     _wal_dir: tempfile::TempDir,
@@ -142,6 +144,7 @@ impl Reactor {
                     genesis,
                     engine_output.address,
                 ),
+                executor: executor::NoopExecutor,
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
                 _wal_dir: engine_output._wal_dir,
@@ -287,7 +290,7 @@ impl Reactor {
                                         })
                                     {
                                         let replay_up_to = handle.state.last_processed_anchor.saturating_add(1);
-                                        handle.state.run_finality_checks(&self.bitcoin_state, replay_up_to);
+                                        handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state, replay_up_to);
                                     }
 
                                     // In follower mode (no consensus), execute blocks immediately
@@ -323,6 +326,7 @@ impl Reactor {
                     let node_index = handle.node_index;
                     consensus::handle_consensus_msg(
                         &mut handle.state,
+                        &mut handle.executor,
                         &mut self.bitcoin_state,
                         &mut handle.channels,
                         msg,
@@ -346,8 +350,8 @@ impl Reactor {
 
 /// Build a Genesis from the staking contract's active validator set.
 async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::consensus::Genesis> {
-    use crate::consensus::{Validator, ValidatorSet};
     use crate::consensus::signing::PublicKey;
+    use crate::consensus::{Validator, ValidatorSet};
     use malachitebft_app_channel::app::types::core::VotingPower;
 
     let active_set = crate::runtime::staking::api::get_active_set(runtime).await?;

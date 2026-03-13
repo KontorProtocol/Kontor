@@ -84,8 +84,11 @@ pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOut
     let wal_dir = tempfile::tempdir()?;
     let wal_path = wal_dir.path().join("consensus.wal");
 
-    let identity =
-        NetworkIdentity::new(node_config.moniker.clone(), keypair, Some(address.to_string()));
+    let identity = NetworkIdentity::new(
+        node_config.moniker.clone(),
+        keypair,
+        Some(address.to_string()),
+    );
 
     let engine_provider = Ed25519Provider::new(config.private_key.clone());
     let app_provider = Ed25519Provider::new(config.private_key);

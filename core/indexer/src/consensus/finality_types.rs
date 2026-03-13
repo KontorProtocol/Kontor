@@ -30,18 +30,18 @@ pub enum StateEvent {
     BlockProcessed {
         height: u64,
         unbatched_count: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
     BatchApplied {
         consensus_height: Height,
         anchor_height: u64,
         txid_count: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
     RollbackExecuted {
         to_anchor: u64,
         entries_removed: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
 }
 

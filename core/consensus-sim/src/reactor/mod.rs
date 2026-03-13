@@ -11,12 +11,14 @@ use indexer::bitcoin_follower::event::BitcoinEvent;
 use indexer::consensus::Ctx;
 use indexer::reactor::bitcoin_state::BitcoinState;
 use indexer::reactor::consensus::{ConsensusState, handle_consensus_msg};
+use indexer::reactor::executor::Executor;
 
 pub use types::{FinalityEvent, StateEvent};
 
 /// Run the reactor loop, handling both consensus messages and bitcoin events.
 pub async fn run(
     consensus_state: &mut ConsensusState,
+    executor: &mut impl Executor,
     bitcoin_state: &mut BitcoinState,
     node_index: usize,
     channels: &mut Channels<Ctx>,
@@ -48,7 +50,7 @@ pub async fn run(
                             .any(|b| b.deadline <= bitcoin_state.chain_tip)
                         {
                             let replay_up_to = consensus_state.last_processed_anchor.saturating_add(1);
-                            consensus_state.run_finality_checks(bitcoin_state, replay_up_to);
+                            consensus_state.run_finality_checks(executor, bitcoin_state, replay_up_to);
                         }
                     }
                     BitcoinEvent::MempoolInsert(tx) => {
@@ -70,7 +72,7 @@ pub async fn run(
                 }
             }
             Some(msg) = channels.consensus.recv() => {
-                handle_consensus_msg(consensus_state, bitcoin_state, channels, msg, node_index).await?;
+                handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
             }
             else => break,
         }
