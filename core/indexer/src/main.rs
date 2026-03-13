@@ -85,6 +85,23 @@ async fn main() -> Result<()> {
     .await;
     handles.push(follower_handle);
 
+    // Build consensus engine config if a private key is provided
+    let engine_config = config.consensus_private_key.as_ref().map(|key_hex| {
+        let key_bytes = hex::decode(key_hex).expect("Invalid consensus private key hex");
+        let key_array: [u8; 32] = key_bytes
+            .try_into()
+            .expect("Ed25519 private key must be 32 bytes");
+        let private_key = indexer::consensus::signing::PrivateKey::from(key_array);
+        reactor::engine::EngineConfig {
+            private_key,
+            listen_addr: config
+                .consensus_listen_addr
+                .clone()
+                .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
+            persistent_peers: config.consensus_peers.clone(),
+        }
+    });
+
     let (init_tx, init_rx) = oneshot::channel();
     handles.push(reactor::run(
         config.starting_block_height,
@@ -94,6 +111,7 @@ async fn main() -> Result<()> {
         Some(init_tx),
         Some(event_tx),
         Some(simulate_rx),
+        engine_config,
     ));
     init_rx.await?;
     {

@@ -77,6 +77,29 @@ pub struct Config {
         default_value = "bitcoin"
     )]
     pub network: bitcoin::Network,
+
+    // --- Consensus (optional — omit to run as follower) ---
+    #[clap(
+        long,
+        env = "CONSENSUS_PRIVATE_KEY",
+        help = "Hex-encoded Ed25519 private key for consensus participation"
+    )]
+    pub consensus_private_key: Option<String>,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_LISTEN_ADDR",
+        help = "Multiaddr for consensus P2P (e.g. /ip4/127.0.0.1/tcp/26656)"
+    )]
+    pub consensus_listen_addr: Option<String>,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_PEERS",
+        help = "Comma-separated multiaddrs of persistent consensus peers",
+        value_delimiter = ','
+    )]
+    pub consensus_peers: Vec<String>,
 }
 
 impl Config {
@@ -92,6 +115,9 @@ impl Config {
             api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
+            consensus_private_key: None,
+            consensus_listen_addr: None,
+            consensus_peers: Vec::new(),
         }
     }
 }
