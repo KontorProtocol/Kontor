@@ -9,6 +9,7 @@ world root {
     signer-id: u64,
     x-only-pubkey: string,
     bls-pubkey: list<u8>,
+    next-nonce: u64,
   }
 
   export init: async func(ctx: borrow<proc-context>);
@@ -18,6 +19,12 @@ world root {
     ctx: borrow<core-context>,
     bls-pubkey: list<u8>
   ) -> result<registry-entry, error>;
+
+  export advance-nonce: async func(
+    ctx: borrow<core-context>,
+    signer-id: u64,
+    caller-nonce: u64
+  ) -> result<u64, error>;
 
   export get-entry: async func(
     ctx: borrow<view-context>,

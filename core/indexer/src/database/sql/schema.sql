@@ -84,3 +84,4 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+

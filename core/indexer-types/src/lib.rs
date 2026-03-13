@@ -274,6 +274,8 @@ pub enum BlsBulkOp {
         #[ts(type = "number")]
         signer_id: u64,
         #[ts(type = "number")]
+        nonce: u64,
+        #[ts(type = "number")]
         gas_limit: u64,
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]
@@ -565,4 +567,6 @@ pub struct RegistryEntryResponse {
     pub signer_id: u64,
     pub x_only_pubkey: String,
     pub bls_pubkey: Vec<u8>,
+    #[ts(type = "number")]
+    pub next_nonce: u64,
 }

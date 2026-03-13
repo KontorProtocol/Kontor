@@ -12,6 +12,7 @@ export type BlockRow = { height: number; hash: string; relevant: boolean };
 export type BlsBulkOp = {
   "Call": {
     signer_id: number;
+    nonce: number;
     gas_limit: number;
     contract: string;
     expr: string;
@@ -160,6 +161,7 @@ export type RegistryEntryResponse = {
   signer_id: number;
   x_only_pubkey: string;
   bls_pubkey: Array<number>;
+  next_nonce: number;
 };
 
 export type ResultResponse<T> = { result: T };

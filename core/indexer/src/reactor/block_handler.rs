@@ -9,7 +9,7 @@ use crate::{
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -221,6 +221,7 @@ async fn execute_op(
                 match inner_op {
                     indexer_types::BlsBulkOp::Call {
                         signer_id,
+                        nonce,
                         gas_limit,
                         contract,
                         expr,
@@ -228,6 +229,26 @@ async fn execute_op(
                         let x_only = signer_map.get(signer_id).expect(
                             "signer_id must be in signer_map after verify_bls_bulk succeeds",
                         );
+
+                        let nonce_result = registry::api::advance_nonce(
+                            runtime,
+                            &Signer::Core(Box::new(Signer::Nobody)),
+                            *signer_id,
+                            *nonce,
+                        )
+                        .await;
+                        match nonce_result {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                warn!("BlsBulk nonce check failed for signer {signer_id}: {e:?}");
+                                continue;
+                            }
+                            Err(e) => {
+                                warn!("BlsBulk nonce advance error for signer {signer_id}: {e}");
+                                continue;
+                            }
+                        }
+
                         let signer = Signer::XOnlyPubKey(x_only.clone());
                         runtime.set_gas_limit(*gas_limit);
                         let result = runtime

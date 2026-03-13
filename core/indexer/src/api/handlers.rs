@@ -344,6 +344,7 @@ pub async fn get_registry_entry(
             signer_id: e.signer_id,
             x_only_pubkey: e.x_only_pubkey,
             bls_pubkey: e.bls_pubkey,
+            next_nonce: e.next_nonce,
         }
         .into()),
         None => {

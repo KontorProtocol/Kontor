@@ -26,12 +26,14 @@ fn bls_bulk_aggregate_signature_roundtrip() {
 
     let op1 = BlsBulkOp::Call {
         signer_id: 1,
+        nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
         signer_id: 2,
+        nonce: 0,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, sum({y: 8}))".to_string(),
@@ -73,12 +75,14 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
 
     let op1 = BlsBulkOp::Call {
         signer_id: 1,
+        nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
         signer_id: 2,
+        nonce: 0,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, sum({y: 8}))".to_string(),
@@ -96,6 +100,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     // Mutate op1 after signing (e.g. bundler changes gas_limit). Verification must fail.
     let BlsBulkOp::Call {
         signer_id,
+        nonce,
         gas_limit: _,
         contract,
         expr,
@@ -105,6 +110,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     };
     let op1_mutated = BlsBulkOp::Call {
         signer_id: *signer_id,
+        nonce: *nonce,
         gas_limit: 60_000,
         contract: contract.clone(),
         expr: expr.clone(),
@@ -132,6 +138,7 @@ fn bls_bulk_call_roundtrip_serialization_preserves_signer_id() {
     };
     let op = BlsBulkOp::Call {
         signer_id: 42,
+        nonce: 7,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, id)".to_string(),
@@ -151,12 +158,14 @@ fn bls_bulk_message_changes_when_signer_id_changes() {
     };
     let op1 = BlsBulkOp::Call {
         signer_id: 1,
+        nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
         signer_id: 2,
+        nonce: 0,
         gas_limit: 50_000,
         contract,
         expr: "eval(10, id)".to_string(),

@@ -306,6 +306,12 @@ impl Runtime {
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
+        if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
+            && entry.bls_pubkey == bls_pubkey
+        {
+            return Ok(());
+        }
+
         let bls_pubkey: [u8; 96] = bls_pubkey
             .try_into()
             .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;

@@ -1,12 +1,13 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
+use indexer::runtime::registry::api::{advance_nonce, get_entry, get_entry_by_id};
 use indexer::{
     api::{Env, handlers::get_registry_entry},
     bls::RegistrationProof,
-    database::queries::insert_processed_block,
+    database::queries::{insert_processed_block, rollback_to_height},
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
@@ -20,6 +21,7 @@ struct RegistryResponse {
 }
 
 struct RegisteredUser {
+    signer_id: u64,
     x_only_pubkey: String,
     bls_pubkey: Vec<u8>,
 }
@@ -44,7 +46,12 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
         )
         .await?;
 
+    let entry = get_entry(&mut *runtime, &x_only.to_string())
+        .await?
+        .expect("registry entry must exist after registration");
+
     Ok(RegisteredUser {
+        signer_id: entry.signer_id,
         x_only_pubkey: x_only.to_string(),
         bls_pubkey: proof.bls_pubkey.to_vec(),
     })
@@ -106,6 +113,7 @@ async fn test_get_registry_entry_by_pubkey() -> Result<()> {
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -122,6 +130,7 @@ async fn test_get_registry_entry_by_signer_id() -> Result<()> {
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -176,6 +185,7 @@ async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
     assert_eq!(r_pk.result.signer_id, r_id.result.signer_id);
     assert_eq!(r_pk.result.x_only_pubkey, r_id.result.x_only_pubkey);
     assert_eq!(r_pk.result.bls_pubkey, r_id.result.bls_pubkey);
+    assert_eq!(r_pk.result.next_nonce, r_id.result.next_nonce);
 
     Ok(())
 }
@@ -194,6 +204,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     assert_eq!(result.result.signer_id, 1);
     assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
     assert_eq!(result.result.bls_pubkey, users[1].bls_pubkey);
+    assert_eq!(result.result.next_nonce, 0);
 
     let by_id: TestResponse = server.get("/api/registry/entry/1").await;
     assert_eq!(by_id.status_code(), StatusCode::OK);
@@ -201,6 +212,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     let by_id_result: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
     assert_eq!(by_id_result.result.signer_id, 1);
     assert_eq!(by_id_result.result.x_only_pubkey, users[1].x_only_pubkey);
+    assert_eq!(by_id_result.result.next_nonce, 0);
 
     Ok(())
 }
@@ -223,6 +235,105 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
     assert_ne!(r0.result.bls_pubkey, r1.result.bls_pubkey);
     assert_eq!(r0.result.signer_id, 0);
     assert_eq!(r1.result.signer_id, 1);
+    assert_eq!(r0.result.next_nonce, 0);
+    assert_eq!(r1.result.next_nonce, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
+    let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
+            .build(),
+    )
+    .await?;
+
+    let storage = Storage::builder().height(0).conn(conn.clone()).build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime.publish_native_contracts().await?;
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash("0000000000000000000000000000000000000000000000000000000000000001".parse()?)
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 1;
+
+    let user = register_user(&mut runtime).await?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist");
+    assert_eq!(entry.next_nonce, 0);
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash("0000000000000000000000000000000000000000000000000000000000000002".parse()?)
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
+
+    advance_nonce(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        user.signer_id,
+        0,
+    )
+    .await?
+    .map_err(|e| anyhow!("{e:?}"))?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist after advance");
+    assert_eq!(entry.next_nonce, 1, "nonce must be 1 after advance");
+
+    rollback_to_height(&conn, 1).await?;
+    runtime.storage.height = 1;
+
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must survive rollback (registered at height 1)");
+    assert_eq!(
+        entry.next_nonce, 0,
+        "nonce must revert to 0 after rolling back height 2"
+    );
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash("0000000000000000000000000000000000000000000000000000000000000099".parse()?)
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
+
+    advance_nonce(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        user.signer_id,
+        0,
+    )
+    .await?
+    .map_err(|e| anyhow!("{e:?}"))?;
+    let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        .await?
+        .expect("entry must exist after re-advance");
+    assert_eq!(
+        entry.next_nonce, 1,
+        "nonce must advance again from 0 after reorg"
+    );
 
     Ok(())
 }
