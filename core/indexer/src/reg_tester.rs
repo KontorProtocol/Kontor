@@ -360,7 +360,7 @@ impl RegTesterInner {
     /// Create a new randomly-keyed identity with both Taproot and BLS keys, funded on-chain.
     ///
     /// Derivation paths are selected automatically based on the network (regtest → coin_type 1).
-    pub async fn identity(&mut self) -> Result<Identity> {
+    pub async fn unregistered_identity(&mut self) -> Result<Identity> {
         let mut seed = [0u8; 64];
         rand::thread_rng().fill_bytes(&mut seed);
 
@@ -402,7 +402,6 @@ impl RegTesterInner {
         let txid = txids[0];
         self.mine(1).await?;
 
-        // Refresh self.identity's funding UTXO from the newly matured coinbase
         let block_hash = self
             .bitcoin_client
             .get_block_hash((self.height - 100) as u64)
@@ -417,14 +416,18 @@ impl RegTesterInner {
         );
 
         let next_funding_utxo = (OutPoint { txid, vout: 0 }, tx.output[0].clone());
-        let proof = RegistrationProof::new(&keypair, &bls_secret_key)?;
-        let mut identity = Identity {
+        Ok(Identity {
             address,
             keypair,
             next_funding_utxo,
             bls_secret_key,
             bls_pubkey,
-        };
+        })
+    }
+
+    pub async fn identity(&mut self) -> Result<Identity> {
+        let mut identity = self.unregistered_identity().await?;
+        let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
         self.instruction(
             &mut identity,
             Inst::RegisterBlsKey {
@@ -735,6 +738,10 @@ impl RegTester {
         inst: Inst,
     ) -> Result<InstructionResult> {
         self.inner.lock().await.instruction(ident, inst).await
+    }
+
+    pub async fn unregistered_identity(&mut self) -> Result<Identity> {
+        self.inner.lock().await.unregistered_identity().await
     }
 
     pub async fn identity(&mut self) -> Result<Identity> {

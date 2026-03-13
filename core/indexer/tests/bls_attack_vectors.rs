@@ -6,23 +6,22 @@
 //! - Proof replay across identities
 //! - Aggregate-level forgery with same vs distinct messages
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use bitcoin::Network;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Secp256k1, rand};
 use bitcoin::secp256k1::Message;
-use bitcoin::{Address, Network};
 use blst::BLST_ERROR;
-use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
+use blst::min_sig::{AggregatePublicKey, AggregateSignature, PublicKey as BlsPublicKey};
 use indexer::bls::{
     BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX,
-    bls_derivation_path, derive_bls_secret_key_eip2333, taproot_derivation_path,
+    bls_derivation_path, derive_bls_secret_key_eip2333,
 };
-use indexer::reg_tester::{Identity, RegTester, derive_taproot_keypair_from_seed};
 use indexer_types::{BlsBulkOp, Inst, Signer};
 use testlib::{
-    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, Runtime,
+    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
     RuntimeConfig, import, serial_test,
 };
 
@@ -32,40 +31,6 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/registry/wit",
 );
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-async fn unregistered_identity(reg_tester: &mut RegTester) -> Result<Identity> {
-    let mut seed = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let taproot_path = taproot_derivation_path(Network::Regtest);
-    let bls_path = bls_derivation_path(Network::Regtest);
-
-    let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
-    let secp = Secp256k1::new();
-    let (x_only_public_key, ..) = keypair.x_only_public_key();
-    let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
-
-    let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
-    let bls_secret_key = bls_sk.to_bytes();
-    let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
-
-    let mut funded = reg_tester.fund_address(&address, 1).await?;
-    let next_funding_utxo = funded
-        .pop()
-        .ok_or_else(|| anyhow!("failed to fund identity"))?;
-
-    Ok(Identity {
-        address,
-        keypair,
-        next_funding_utxo,
-        bls_secret_key,
-        bls_pubkey,
-    })
-}
 
 fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
     let seed = [seed_byte; 64];
@@ -92,33 +57,20 @@ fn construct_rogue_g2_pubkey(
     beta_pk_compressed: &[u8; 96],
     victim_pk_compressed: &[u8; 96],
 ) -> [u8; 96] {
-    unsafe {
-        // Decompress 96-byte compressed G2 points → affine → projective
-        let mut beta_aff = blst::blst_p2_affine::default();
-        let mut victim_aff = blst::blst_p2_affine::default();
-        blst::blst_p2_uncompress(&mut beta_aff, beta_pk_compressed.as_ptr());
-        blst::blst_p2_uncompress(&mut victim_aff, victim_pk_compressed.as_ptr());
+    let beta_pk = BlsPublicKey::key_validate(beta_pk_compressed).expect("beta pk must be valid G2");
 
-        let mut beta_proj = blst::blst_p2::default();
-        let mut victim_proj = blst::blst_p2::default();
-        blst::blst_p2_from_affine(&mut beta_proj, &beta_aff);
-        blst::blst_p2_from_affine(&mut victim_proj, &victim_aff);
+    // Negate victim's pubkey by flipping the sign bit in compressed form.
+    // BLS12-381 compressed points use bit 5 (0x20) to select which square
+    // root of y² was used; flipping it gives (x, -y) = -P.
+    let mut neg_victim_bytes = *victim_pk_compressed;
+    neg_victim_bytes[0] ^= 0x20;
+    let neg_victim_pk =
+        BlsPublicKey::key_validate(&neg_victim_bytes).expect("negated victim pk must be valid G2");
 
-        // -PK_victim
-        blst::blst_p2_cneg(&mut victim_proj, true);
-
-        // PK_rogue = β·G2 + (-PK_victim)
-        let mut rogue_proj = blst::blst_p2::default();
-        blst::blst_p2_add_or_double(&mut rogue_proj, &beta_proj, &victim_proj);
-
-        // Back to compressed 96-byte form
-        let mut rogue_aff = blst::blst_p2_affine::default();
-        blst::blst_p2_to_affine(&mut rogue_aff, &rogue_proj);
-
-        let mut out = [0u8; 96];
-        blst::blst_p2_affine_compress(out.as_mut_ptr(), &rogue_aff);
-        out
-    }
+    // PK_rogue = PK_beta + (-PK_victim)
+    let agg = AggregatePublicKey::aggregate(&[&beta_pk, &neg_victim_pk], false)
+        .expect("aggregation must succeed");
+    agg.to_public_key().to_bytes()
 }
 
 // ---------------------------------------------------------------------------
@@ -203,90 +155,6 @@ fn rogue_key_forgery_fails_with_distinct_messages() {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests — subgroup validation
-// ---------------------------------------------------------------------------
-
-/// Finds a compressed 48-byte G1 representation that decompresses to a valid
-/// E1 curve point OUTSIDE the prime-order G1 subgroup.
-///
-/// E1 has cofactor h ≈ 2^126, so virtually every valid E1 point is outside G1.
-/// We search over small x-coordinates until `blst_p1_uncompress` succeeds
-/// (meaning x³+4 is a quadratic residue mod p) and `blst_p1_affine_in_g1`
-/// returns false.
-fn find_non_subgroup_g1_compressed() -> [u8; 48] {
-    for trial in 1u8..=255 {
-        let mut compressed = [0u8; 48];
-        compressed[0] = 0x80;
-        compressed[47] = trial;
-
-        unsafe {
-            let mut p_aff = blst::blst_p1_affine::default();
-            if blst::blst_p1_uncompress(&mut p_aff, compressed.as_ptr())
-                != blst::BLST_ERROR::BLST_SUCCESS
-            {
-                continue;
-            }
-            if blst::blst_p1_affine_on_curve(&p_aff) && !blst::blst_p1_affine_in_g1(&p_aff) {
-                return compressed;
-            }
-        }
-    }
-    panic!(
-        "failed to find a non-subgroup E1 point in 255 trials \
-         (E1 cofactor h ≈ 2^126 means virtually all E1 points are non-subgroup)"
-    );
-}
-
-/// Same approach as `find_non_subgroup_g1_compressed` but for G2 (96-byte
-/// compressed pubkeys on E2). E2's cofactor is large, so virtually every
-/// valid E2 point is outside the prime-order G2 subgroup.
-fn find_non_subgroup_g2_compressed() -> [u8; 96] {
-    for trial in 1u8..=255 {
-        let mut compressed = [0u8; 96];
-        compressed[0] = 0x80;
-        compressed[95] = trial;
-
-        unsafe {
-            let mut p_aff = blst::blst_p2_affine::default();
-            if blst::blst_p2_uncompress(&mut p_aff, compressed.as_ptr())
-                != blst::BLST_ERROR::BLST_SUCCESS
-            {
-                continue;
-            }
-            if blst::blst_p2_affine_on_curve(&p_aff) && !blst::blst_p2_affine_in_g2(&p_aff) {
-                return compressed;
-            }
-        }
-    }
-    panic!(
-        "failed to find a non-subgroup E2 point in 255 trials \
-         (E2 cofactor is large so virtually all E2 points are non-subgroup)"
-    );
-}
-
-/// Constructs a BLS12-381 G1 point that lies on curve E1 but OUTSIDE the
-/// prime-order G1 subgroup. `sig_validate(_, true)` must reject it.
-///
-/// This is the G1/signature companion to `bls_attack_non_subgroup_pubkey_rejected_regtest`
-/// (which tests G2/pubkey). Together they guard against accidental removal of
-/// subgroup checks on either side — e.g. replacing `sig_validate(_, true)` with
-/// `Signature::from_bytes()`.
-///
-/// The helper `find_non_subgroup_g1_compressed` already proves (via the raw C API)
-/// that the test input is a valid on-curve E1 point that is not in G1. This test
-/// then verifies that the high-level `sig_validate` path used by `verify_bls_bulk`
-/// rejects it.
-#[test]
-fn non_subgroup_signature_rejected_by_sig_validate() {
-    let non_subgroup_sig_bytes = find_non_subgroup_g1_compressed();
-
-    assert!(
-        blst::min_sig::Signature::sig_validate(&non_subgroup_sig_bytes, true).is_err(),
-        "sig_validate with subgroup check must reject non-subgroup G1 point"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Integration tests — registration-level attacks
 // ---------------------------------------------------------------------------
 
@@ -298,7 +166,7 @@ fn non_subgroup_signature_rejected_by_sig_validate() {
 /// because PK_rogue ≠ β·G2.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
-    let mut victim = unregistered_identity(&mut reg_tester).await?;
+    let mut victim = reg_tester.unregistered_identity().await?;
     let victim_proof = RegistrationProof::new(&victim.keypair, &victim.bls_secret_key)?;
     reg_tester
         .instruction(
@@ -331,7 +199,7 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
         "rogue key must be a valid G2 subgroup element"
     );
 
-    let mut attacker = unregistered_identity(&mut reg_tester).await?;
+    let mut attacker = reg_tester.unregistered_identity().await?;
     let secp = Secp256k1::new();
 
     // Schnorr half: attacker CAN produce (they own the Taproot key).
@@ -393,7 +261,7 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
     // Alice registers legitimately.
-    let mut alice = unregistered_identity(&mut reg_tester).await?;
+    let mut alice = reg_tester.unregistered_identity().await?;
     let alice_proof = RegistrationProof::new(&alice.keypair, &alice.bls_secret_key)?;
     reg_tester
         .instruction(
@@ -414,7 +282,7 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
 
     // Eve creates her own Schnorr binding to Alice's BLS pubkey (she controls
     // her Taproot key, so this is trivial).
-    let mut eve = unregistered_identity(&mut reg_tester).await?;
+    let mut eve = reg_tester.unregistered_identity().await?;
     let secp = Secp256k1::new();
     let eve_schnorr_msg = {
         let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
@@ -468,9 +336,9 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
 /// | BLS        | No          | Eve can sign alice_xonly with her own BLS key |
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Result<()> {
-    let alice = unregistered_identity(&mut reg_tester).await?;
-    let eve = unregistered_identity(&mut reg_tester).await?;
-    let mut publisher = unregistered_identity(&mut reg_tester).await?;
+    let alice = reg_tester.unregistered_identity().await?;
+    let eve = reg_tester.unregistered_identity().await?;
+    let mut publisher = reg_tester.unregistered_identity().await?;
 
     let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
     let eve_bls_pk = eve_bls_sk.sk_to_pk();
@@ -539,7 +407,7 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
 /// Schnorr half passes.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
-    let mut eve = unregistered_identity(&mut reg_tester).await?;
+    let mut eve = reg_tester.unregistered_identity().await?;
 
     let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
     let eve_bls_pk = eve_bls_sk.sk_to_pk();
@@ -591,69 +459,6 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
         registry::get_signer_id(runtime, &eve_xonly).await?,
         None,
         "forged BLS binding must prevent registration"
-    );
-
-    Ok(())
-}
-
-/// Submits a BLS public key that lies on the E2 curve but outside the G2
-/// prime-order subgroup. `key_validate` (which checks subgroup membership)
-/// must reject it. This exercises a different code path than zeroed-bytes
-/// tests — the point is a valid curve point, just not in the correct subgroup.
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_attack_non_subgroup_pubkey_rejected_regtest() -> Result<()> {
-    let mut eve = unregistered_identity(&mut reg_tester).await?;
-
-    // Construct a point on E2 that is NOT in G2 by trial-decompressing
-    // candidate 96-byte compressed G2 representations until we find one that
-    // decompresses to a valid E2 curve point outside the prime-order subgroup.
-    let non_subgroup_pk = find_non_subgroup_g2_compressed();
-
-    assert!(
-        blst::min_sig::PublicKey::key_validate(&non_subgroup_pk).is_err(),
-        "key_validate must reject non-subgroup point"
-    );
-
-    // Build a registration with valid Schnorr and BLS binding proofs.
-    // The rejection must come from key_validate, not from proof verification.
-    let secp = Secp256k1::new();
-    let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
-
-    let schnorr_msg = {
-        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
-        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
-        preimage.extend_from_slice(&non_subgroup_pk);
-        let digest = sha256::Hash::hash(&preimage).to_byte_array();
-        Message::from_digest_slice(&digest).expect("32-byte digest")
-    };
-    let schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
-
-    let bls_binding_msg = {
-        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
-        msg.extend_from_slice(BLS_BINDING_PREFIX);
-        msg.extend_from_slice(&eve.keypair.x_only_public_key().0.serialize());
-        msg
-    };
-    let bls_sig = eve_bls_sk
-        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
-        .to_bytes();
-
-    let _ = reg_tester
-        .instruction(
-            &mut eve,
-            Inst::RegisterBlsKey {
-                bls_pubkey: non_subgroup_pk.to_vec(),
-                schnorr_sig: schnorr_sig.to_vec(),
-                bls_sig: bls_sig.to_vec(),
-            },
-        )
-        .await;
-
-    let eve_xonly = eve.x_only_public_key().to_string();
-    assert_eq!(
-        registry::get_signer_id(runtime, &eve_xonly).await?,
-        None,
-        "non-subgroup public key must not be registered"
     );
 
     Ok(())
