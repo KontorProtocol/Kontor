@@ -12,11 +12,12 @@ pub enum TxStatus {
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 /// This allows different backends: `StateLogExecutor` (mock, used by consensus-sim)
 /// and `RuntimeExecutor` (production, WASM execution + DB).
+#[allow(async_fn_in_trait)]
 pub trait Executor {
-    fn validate_transaction(&self, txid: &Txid) -> bool;
-    fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus);
-    fn rollback_state(&mut self, to_anchor: u64) -> usize;
-    fn checkpoint(&self) -> Option<[u8; 32]>;
+    async fn validate_transaction(&self, txid: &Txid) -> bool;
+    async fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus);
+    async fn rollback_state(&mut self, to_anchor: u64) -> usize;
+    async fn checkpoint(&self) -> Option<[u8; 32]>;
 }
 
 /// Placeholder executor that does nothing. Used by the production reactor until
@@ -24,14 +25,14 @@ pub trait Executor {
 pub struct NoopExecutor;
 
 impl Executor for NoopExecutor {
-    fn validate_transaction(&self, _txid: &Txid) -> bool {
+    async fn validate_transaction(&self, _txid: &Txid) -> bool {
         true
     }
-    fn execute_transaction(&mut self, _anchor_height: u64, _txid: Txid, _status: TxStatus) {}
-    fn rollback_state(&mut self, _to_anchor: u64) -> usize {
+    async fn execute_transaction(&mut self, _anchor_height: u64, _txid: Txid, _status: TxStatus) {}
+    async fn rollback_state(&mut self, _to_anchor: u64) -> usize {
         0
     }
-    fn checkpoint(&self) -> Option<[u8; 32]> {
+    async fn checkpoint(&self) -> Option<[u8; 32]> {
         None
     }
 }
