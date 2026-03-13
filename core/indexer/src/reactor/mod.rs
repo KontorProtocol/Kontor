@@ -1,5 +1,7 @@
 pub mod bitcoin_state;
 pub mod block_handler;
+pub mod consensus;
+pub mod engine;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -16,10 +18,12 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
+use malachitebft_app_channel::Channels;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::event::BitcoinEvent,
+    consensus::Ctx,
     database::{
         self,
         queries::{
@@ -37,6 +41,15 @@ pub type Simulation = (
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
 
+/// Handle to the Malachite engine + consensus state, present only when consensus is configured.
+struct ConsensusHandle {
+    state: consensus::ConsensusState,
+    channels: Channels<Ctx>,
+    _engine_handle: malachitebft_app_channel::EngineHandle,
+    _wal_dir: tempfile::TempDir,
+    node_index: usize,
+}
+
 struct Reactor {
     writer: database::Writer,
     cancel_token: CancellationToken,
@@ -46,6 +59,7 @@ struct Reactor {
     runtime: Runtime,
     simulate_rx: Option<Receiver<Simulation>>,
     bitcoin_state: bitcoin_state::BitcoinState,
+    consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
@@ -60,6 +74,7 @@ impl Reactor {
         init_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
+        engine_config: Option<engine::EngineConfig>,
     ) -> Result<Self> {
         let conn = &writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(conn).await? {
@@ -112,17 +127,48 @@ impl Reactor {
 
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         runtime.publish_native_contracts().await?;
+
+        // Start consensus engine if configured
+        let consensus_handle = if let Some(engine_cfg) = engine_config {
+            // Build genesis from staking contract's active validator set
+            let genesis = build_genesis_from_staking(&mut runtime).await?;
+
+            let engine_output = engine::start(engine_cfg, &genesis).await?;
+            info!(address = %engine_output.address, "Consensus engine started");
+
+            Some(ConsensusHandle {
+                state: consensus::ConsensusState::new(
+                    engine_output.signing_provider,
+                    genesis,
+                    engine_output.address,
+                ),
+                channels: engine_output.channels,
+                _engine_handle: engine_output._handle,
+                _wal_dir: engine_output._wal_dir,
+                node_index: 0,
+            })
+        } else {
+            None
+        };
+
+        let history_window = if consensus_handle.is_some() {
+            crate::consensus::finality_types::FINALITY_WINDOW + 6
+        } else {
+            12
+        };
+
         Ok(Self {
             writer,
             cancel_token,
             bitcoin_event_rx,
             simulate_rx,
-            bitcoin_state: bitcoin_state::BitcoinState::new(12),
+            bitcoin_state: bitcoin_state::BitcoinState::new(history_window),
             last_height,
             option_last_hash,
             init_tx,
             event_tx,
             runtime,
+            consensus_handle,
         })
     }
 
@@ -211,6 +257,14 @@ impl Reactor {
                 }
             };
 
+            let consensus_rx = async {
+                if let Some(handle) = self.consensus_handle.as_mut() {
+                    handle.channels.consensus.recv().await
+                } else {
+                    pending().await
+                }
+            };
+
             select! {
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
@@ -225,7 +279,21 @@ impl Reactor {
                                     self.bitcoin_state.track_block(block.height, &txids);
                                     info!("Block {}/{} {}", block.height,
                                           target_height, block.hash);
-                                    self.handle_block(block).await?;
+
+                                    // When consensus is active, check finality deadlines on new blocks
+                                    if let Some(handle) = &mut self.consensus_handle
+                                        && handle.state.pending_batches.iter().any(|b| {
+                                            b.deadline <= self.bitcoin_state.chain_tip
+                                        })
+                                    {
+                                        let replay_up_to = handle.state.last_processed_anchor.saturating_add(1);
+                                        handle.state.run_finality_checks(&self.bitcoin_state, replay_up_to);
+                                    }
+
+                                    // In follower mode (no consensus), execute blocks immediately
+                                    if self.consensus_handle.is_none() {
+                                        self.handle_block(block).await?;
+                                    }
                                 },
                                 BitcoinEvent::Rollback { to_height } => {
                                     self.rollback(to_height).await?;
@@ -250,6 +318,17 @@ impl Reactor {
                         },
                     }
                 }
+                Some(msg) = consensus_rx => {
+                    let handle = self.consensus_handle.as_mut().unwrap();
+                    let node_index = handle.node_index;
+                    consensus::handle_consensus_msg(
+                        &mut handle.state,
+                        &mut self.bitcoin_state,
+                        &mut handle.channels,
+                        msg,
+                        node_index,
+                    ).await?;
+                }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
                         let _ = ret_tx.send(simulate_handler(&mut self.runtime, btx).await);
@@ -265,6 +344,37 @@ impl Reactor {
     }
 }
 
+/// Build a Genesis from the staking contract's active validator set.
+async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::consensus::Genesis> {
+    use crate::consensus::{Validator, ValidatorSet};
+    use crate::consensus::signing::PublicKey;
+    use malachitebft_app_channel::app::types::core::VotingPower;
+
+    let active_set = crate::runtime::staking::api::get_active_set(runtime).await?;
+
+    let validators: Vec<Validator> = active_set
+        .into_iter()
+        .filter_map(|v| {
+            if v.ed25519_pubkey.len() != 32 {
+                warn!(
+                    xonly = v.x_only_pubkey,
+                    "Skipping validator with invalid ed25519 pubkey length"
+                );
+                return None;
+            }
+            let mut key_bytes = [0u8; 32];
+            key_bytes.copy_from_slice(&v.ed25519_pubkey);
+            let public_key = PublicKey::from_bytes(key_bytes);
+            // Convert stake to voting power (use 1 for now, refine later)
+            let voting_power = 1 as VotingPower;
+            Some(Validator::new(public_key, voting_power))
+        })
+        .collect();
+
+    let validator_set = ValidatorSet::new(validators);
+    Ok(crate::consensus::Genesis { validator_set })
+}
+
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
@@ -273,6 +383,7 @@ pub fn run(
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    engine_config: Option<engine::EngineConfig>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -284,6 +395,7 @@ pub fn run(
                 init_tx,
                 event_tx,
                 simulate_rx,
+                engine_config,
             )
             .await
             {
