@@ -50,7 +50,7 @@ pub async fn run(
                             .any(|b| b.deadline <= bitcoin_state.chain_tip)
                         {
                             let replay_up_to = consensus_state.last_processed_anchor.saturating_add(1);
-                            consensus_state.run_finality_checks(executor, bitcoin_state, replay_up_to);
+                            consensus_state.run_finality_checks(executor, bitcoin_state, replay_up_to).await;
                         }
                     }
                     BitcoinEvent::MempoolInsert(tx) => {

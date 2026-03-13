@@ -150,19 +150,19 @@ impl StateLog {
 
 /// Executor implementation backed by StateLog — used by consensus-sim for testing.
 impl Executor for StateLog {
-    fn validate_transaction(&self, _txid: &Txid) -> bool {
+    async fn validate_transaction(&self, _txid: &Txid) -> bool {
         true
     }
 
-    fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
+    async fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
         self.append_entry(anchor_height, txid, status);
     }
 
-    fn rollback_state(&mut self, to_anchor: u64) -> usize {
+    async fn rollback_state(&mut self, to_anchor: u64) -> usize {
         self.rollback_to(to_anchor)
     }
 
-    fn checkpoint(&self) -> Option<[u8; 32]> {
+    async fn checkpoint(&self) -> Option<[u8; 32]> {
         Some(self.checkpoint)
     }
 }
