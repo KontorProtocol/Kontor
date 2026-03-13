@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
-use consensus_sim::{allocate_ports, make_config, mock_bitcoin, run_node};
+use consensus_sim::{allocate_ports, make_engine_config, mock_bitcoin, run_node};
 use indexer::bitcoin_follower::event::BitcoinEvent;
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, &ports);
+        let engine_config = make_engine_config(i, &ports, private_key);
 
         // Per-node: bridge broadcast → mpsc
         let bitcoin_rx = {
@@ -94,9 +94,8 @@ async fn main() -> Result<()> {
             async move {
                 if let Err(e) = run_node(
                     i,
-                    private_key,
+                    engine_config,
                     genesis,
-                    config,
                     bitcoin_rx,
                     None,
                     None,
