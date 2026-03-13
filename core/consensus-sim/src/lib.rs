@@ -86,11 +86,13 @@ pub async fn run_node(
     consensus_state.finality_tx = finality_tx;
     consensus_state.state_tx = state_tx;
 
+    let mut executor = state_log::StateLog::new();
     let mut bitcoin_state = BitcoinState::new(FINALITY_WINDOW + 6);
     let mut channels = engine_output.channels;
 
     reactor::run(
         &mut consensus_state,
+        &mut executor,
         &mut bitcoin_state,
         index,
         &mut channels,

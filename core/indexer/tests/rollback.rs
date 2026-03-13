@@ -58,7 +58,16 @@ async fn test_reactor_fetching() -> Result<()> {
     let blocks = new_random_blockchain(5);
 
     let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None, None);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let target = 5;
     for block in &blocks {
@@ -86,7 +95,16 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     let blocks = new_random_blockchain(3);
 
     let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None, None);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        None,
+        None,
+        None,
+    );
 
     // Insert blocks 1-3
     let target = 3;
@@ -134,7 +152,16 @@ async fn test_reactor_deep_rollback() -> Result<()> {
     let blocks = new_random_blockchain(4);
 
     let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None, None);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        None,
+        None,
+        None,
+    );
 
     // Insert blocks 1-4
     let target = 4;
@@ -180,7 +207,16 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
     let blocks = new_random_blockchain(2);
 
     let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None, None);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        None,
+        None,
+        None,
+    );
 
     // Insert blocks 1-2
     let target = 2;
