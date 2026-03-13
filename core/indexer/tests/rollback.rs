@@ -1,15 +1,24 @@
 use anyhow::Result;
-use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Network, OutPoint, Txid};
+use indexmap::IndexMap;
+use libsql::params;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use indexer::{
     bitcoin_follower::event::BitcoinEvent,
+    bls::{
+        KONTOR_BLS_DST, RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
+        taproot_derivation_path,
+    },
     database::queries,
     reactor,
-    test_utils::{gen_random_blocks, new_random_blockchain, new_test_db},
+    reg_tester::derive_taproot_keypair_from_seed,
+    test_utils::{gen_random_blocks, new_mock_block_hash, new_random_blockchain, new_test_db},
 };
+use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
 
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
@@ -213,6 +222,420 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         .await?
         .unwrap();
     assert_eq!(block.hash, new_blocks[2].hash);
+
+    cancel_token.cancel();
+    let _ = handle.await;
+    Ok(())
+}
+
+/// Sends a block through the reactor's event channel and waits for the
+/// `Event::Processed` acknowledgement on the output channel. Unlike the
+/// DB-polling `send_block_and_wait`, this uses the reactor's own event
+/// stream so we know the block has been fully processed (including all
+/// WASM contract execution) before continuing.
+async fn send_block_and_await_event(
+    event_tx: &mpsc::Sender<BitcoinEvent>,
+    output_rx: &mut mpsc::Receiver<Event>,
+    block: indexer_types::Block,
+    target_height: u64,
+) {
+    let expected_height = block.height as i64;
+    event_tx
+        .send(BitcoinEvent::BlockInsert {
+            target_height,
+            block,
+        })
+        .await
+        .unwrap();
+    match output_rx.recv().await.unwrap() {
+        Event::Processed { block } => assert_eq!(block.height, expected_height),
+        other => panic!("expected Processed at height {expected_height}, got {other:?}"),
+    }
+}
+
+/// Proves that rolling back a block containing a BLS key registration
+/// reverts the registry contract_state created by that registration.
+///
+/// This exercises the full pipeline: reactor → block_handler →
+/// process_transaction → WASM runtime (registry contract execution) →
+/// contract_state write, then rollback → CASCADE delete → state gone.
+#[tokio::test]
+async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
+    let cancel_token = CancellationToken::new();
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = &writer.connection();
+
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let (output_tx, mut output_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        Some(output_tx),
+        None,
+    );
+
+    let seed = [42u8; 64];
+    let keypair =
+        derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
+    let (x_only_public_key, _) = keypair.x_only_public_key();
+    let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
+    let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
+
+    let block1_hash = new_mock_block_hash(11);
+    let block1 = indexer_types::Block {
+        height: 1,
+        hash: block1_hash,
+        prev_hash: new_mock_block_hash(0),
+        transactions: vec![Transaction {
+            txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
+            index: 0,
+            ops: vec![Op::RegisterBlsKey {
+                metadata: OpMetadata {
+                    previous_output: OutPoint::null(),
+                    input_index: 0,
+                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+                },
+                bls_pubkey: proof.bls_pubkey.to_vec(),
+                schnorr_sig: proof.schnorr_sig.to_vec(),
+                bls_sig: proof.bls_sig.to_vec(),
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    send_block_and_await_event(&event_tx, &mut output_rx, block1, 2).await;
+
+    let state_count: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(
+        state_count > 0,
+        "registration must write contract_state at height 1"
+    );
+
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 0 })
+        .await?;
+    match output_rx.recv().await.unwrap() {
+        Event::Rolledback { height } => assert_eq!(height, 0),
+        other => panic!("expected Rolledback, got {other:?}"),
+    }
+
+    let state_count_after: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert_eq!(
+        state_count_after, 0,
+        "rollback must remove all contract_state from deleted block"
+    );
+
+    cancel_token.cancel();
+    let _ = handle.await;
+    Ok(())
+}
+
+/// End-to-end nonce rollback: register a key (nonce=0 at height 1),
+/// advance the nonce via BlsBulk (nonce→1 at height 2), roll back
+/// height 2, and verify the nonce reverts to 0.
+#[tokio::test]
+async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
+    let cancel_token = CancellationToken::new();
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = &writer.connection();
+
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let (output_tx, mut output_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        Some(output_tx),
+        None,
+    );
+
+    let seed = [42u8; 64];
+    let keypair =
+        derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
+    let (x_only_public_key, _) = keypair.x_only_public_key();
+    let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
+    let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
+
+    // -- Block 1: register the BLS key (creates signer_id=0, next_nonce=0) --
+    let block1_hash = new_mock_block_hash(11);
+    let block1 = indexer_types::Block {
+        height: 1,
+        hash: block1_hash,
+        prev_hash: new_mock_block_hash(0),
+        transactions: vec![Transaction {
+            txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
+            index: 0,
+            ops: vec![Op::RegisterBlsKey {
+                metadata: OpMetadata {
+                    previous_output: OutPoint::null(),
+                    input_index: 0,
+                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+                },
+                bls_pubkey: proof.bls_pubkey.to_vec(),
+                schnorr_sig: proof.schnorr_sig.to_vec(),
+                bls_sig: proof.bls_sig.to_vec(),
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    send_block_and_await_event(&event_tx, &mut output_rx, block1, 3).await;
+
+    let state_at_h1: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(state_at_h1 > 0, "registration must write state at height 1");
+
+    // -- Block 2: BlsBulk Call that advances the nonce --
+    let call_op = BlsBulkOp::Call {
+        signer_id: 0,
+        nonce: 0,
+        gas_limit: 100_000,
+        contract: indexer_types::ContractAddress {
+            name: "registry".to_string(),
+            height: 0,
+            tx_index: 0,
+        },
+        expr: "get-signer-count()".to_string(),
+    };
+    let msg = call_op.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
+    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
+    let block2_hash = new_mock_block_hash(22);
+    let block2 = indexer_types::Block {
+        height: 2,
+        hash: block2_hash,
+        prev_hash: block1_hash,
+        transactions: vec![Transaction {
+            txid: Txid::from_slice(&[0xBB; 32]).unwrap(),
+            index: 0,
+            ops: vec![Op::BlsBulk {
+                metadata: OpMetadata {
+                    previous_output: OutPoint::null(),
+                    input_index: 0,
+                    signer: Signer::Nobody,
+                },
+                ops: vec![call_op],
+                signature: sig.to_bytes().to_vec(),
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    send_block_and_await_event(&event_tx, &mut output_rx, block2, 3).await;
+
+    let state_at_h2: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 2",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(
+        state_at_h2 > 0,
+        "nonce advance must write contract_state at height 2"
+    );
+
+    // -- Rollback to height 1: block 2 is deleted, nonce reverts --
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 1 })
+        .await?;
+    match output_rx.recv().await.unwrap() {
+        Event::Rolledback { height } => assert_eq!(height, 1),
+        other => panic!("expected Rolledback, got {other:?}"),
+    }
+
+    let state_at_h2_after: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 2",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert_eq!(
+        state_at_h2_after, 0,
+        "rollback must remove all contract_state from height 2 (including nonce advance)"
+    );
+
+    let state_at_h1_after: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(
+        state_at_h1_after > 0,
+        "registration state at height 1 must survive rollback to height 1"
+    );
+
+    cancel_token.cancel();
+    let _ = handle.await;
+    Ok(())
+}
+
+/// Rollback of a BLS key registration performed inside a `BlsBulk` bundle.
+///
+/// The existing `test_reactor_rollback_reverts_registration_state` covers
+/// the direct `Op::RegisterBlsKey` path. This test exercises the distinct
+/// `Op::BlsBulk → BlsBulkOp::RegisterBlsKey` path in block_handler, which
+/// first runs `verify_bls_bulk` (aggregate sig check) and then calls
+/// `register_bls_key` per-op. On rollback, the CASCADE delete must also
+/// remove the contract_state written through this path.
+///
+/// Additionally, after the rollback we re-insert the same block to prove
+/// that the registry state was fully reverted (the key can be registered
+/// again from scratch).
+#[tokio::test]
+async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
+    let cancel_token = CancellationToken::new();
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = &writer.connection();
+
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let (output_tx, mut output_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        event_rx,
+        None,
+        Some(output_tx),
+        None,
+    );
+
+    let seed = [55u8; 64];
+    let keypair =
+        derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
+    let (x_only_public_key, _) = keypair.x_only_public_key();
+    let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
+    let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
+
+    let register_op = BlsBulkOp::RegisterBlsKey {
+        signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+        bls_pubkey: proof.bls_pubkey.to_vec(),
+        schnorr_sig: proof.schnorr_sig.to_vec(),
+        bls_sig: proof.bls_sig.to_vec(),
+    };
+    let msg = register_op.signing_message()?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
+    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
+    let block1_hash = new_mock_block_hash(33);
+    let block1 = indexer_types::Block {
+        height: 1,
+        hash: block1_hash,
+        prev_hash: new_mock_block_hash(0),
+        transactions: vec![Transaction {
+            txid: Txid::from_slice(&[0xCC; 32]).unwrap(),
+            index: 0,
+            ops: vec![Op::BlsBulk {
+                metadata: OpMetadata {
+                    previous_output: OutPoint::null(),
+                    input_index: 0,
+                    signer: Signer::Nobody,
+                },
+                ops: vec![register_op.clone()],
+                signature: sig.to_bytes().to_vec(),
+            }],
+            op_return_data: IndexMap::new(),
+        }],
+    };
+    send_block_and_await_event(&event_tx, &mut output_rx, block1.clone(), 2).await;
+
+    let state_count: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(
+        state_count > 0,
+        "BlsBulk registration must write contract_state at height 1"
+    );
+
+    // -- Rollback to height 0: block 1 is deleted --
+    event_tx
+        .send(BitcoinEvent::Rollback { to_height: 0 })
+        .await?;
+    match output_rx.recv().await.unwrap() {
+        Event::Rolledback { height } => assert_eq!(height, 0),
+        other => panic!("expected Rolledback, got {other:?}"),
+    }
+
+    let state_after_rollback: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert_eq!(
+        state_after_rollback, 0,
+        "rollback must remove contract_state from BlsBulk registration"
+    );
+
+    // -- Re-insert the same block: registration must succeed again --
+    send_block_and_await_event(&event_tx, &mut output_rx, block1, 2).await;
+
+    let state_reinserted: u64 = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_state WHERE height = 1",
+            params![],
+        )
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert!(
+        state_reinserted > 0,
+        "re-inserted BlsBulk registration must recreate contract_state (proves full revert)"
+    );
 
     cancel_token.cancel();
     let _ = handle.await;
