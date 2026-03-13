@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 use indexer::bitcoin_follower::event::BitcoinEvent;
-use indexer::consensus::Value;
 use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::app::types::core::VotingPower;
@@ -17,7 +16,7 @@ use malachitebft_app_channel::{
 
 use indexer::consensus::codec::ProtobufCodec;
 use indexer::consensus::signing::{Ed25519Provider, PrivateKey};
-use indexer::consensus::{Address, Ctx, Genesis, Height, Validator, ValidatorSet};
+use indexer::consensus::{Address, Ctx, Genesis, Validator, ValidatorSet};
 
 pub mod mock_bitcoin;
 pub mod reactor;
@@ -26,13 +25,7 @@ pub mod state_log;
 pub use reactor::FinalityEvent;
 pub use reactor::StateEvent;
 
-/// A decided batch observed from a node.
-#[derive(Debug, Clone)]
-pub struct DecidedBatch {
-    pub node_index: usize,
-    pub consensus_height: Height,
-    pub value: Value,
-}
+pub use indexer::consensus::finality_types::DecidedBatch;
 
 /// Minimal config implementing NodeConfig for start_engine.
 #[derive(Clone, Debug, Default)]

@@ -1,11 +1,13 @@
 mod address;
 pub mod codec;
 mod context;
+pub mod finality_types;
 mod genesis;
 mod height;
 mod proposal;
 mod proposal_part;
 pub mod signing;
+pub mod state_log;
 mod validator_set;
 mod value;
 mod vote;
