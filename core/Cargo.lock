@@ -1556,8 +1556,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-malachitebft-app-channel",
- "arc-malachitebft-core-types",
- "arc-malachitebft-engine",
  "bitcoin",
  "clap",
  "eyre",
@@ -1565,7 +1563,6 @@ dependencies = [
  "indexer-types",
  "rand 0.8.5",
  "serial_test",
- "sha3",
  "tempfile",
  "tokio",
  "tokio-util",

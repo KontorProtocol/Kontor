@@ -7,16 +7,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 use indexer::bitcoin_follower::event::BitcoinEvent;
-use malachitebft_app_channel::app::config::*;
-use malachitebft_app_channel::app::types::Keypair;
+use indexer::consensus::finality_types::FINALITY_WINDOW;
+use indexer::consensus::signing::PrivateKey;
+use indexer::consensus::{Genesis, Validator, ValidatorSet};
+use indexer::reactor::bitcoin_state::BitcoinState;
+use indexer::reactor::consensus::ConsensusState;
+use indexer::reactor::engine::{EngineConfig, start as start_engine};
 use malachitebft_app_channel::app::types::core::VotingPower;
-use malachitebft_app_channel::{
-    ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
-};
-
-use indexer::consensus::codec::ProtobufCodec;
-use indexer::consensus::signing::{Ed25519Provider, PrivateKey};
-use indexer::consensus::{Address, Ctx, Genesis, Validator, ValidatorSet};
 
 pub mod mock_bitcoin;
 pub mod reactor;
@@ -27,53 +24,19 @@ pub use reactor::StateEvent;
 
 pub use indexer::consensus::finality_types::DecidedBatch;
 
-/// Minimal config implementing NodeConfig for start_engine.
-#[derive(Clone, Debug, Default)]
-pub struct SimConfig {
-    pub moniker: String,
-    pub consensus: ConsensusConfig,
-    pub value_sync: ValueSyncConfig,
-}
-
-impl NodeConfig for SimConfig {
-    fn moniker(&self) -> &str {
-        &self.moniker
-    }
-    fn consensus(&self) -> &ConsensusConfig {
-        &self.consensus
-    }
-    fn consensus_mut(&mut self) -> &mut ConsensusConfig {
-        &mut self.consensus
-    }
-    fn value_sync(&self) -> &ValueSyncConfig {
-        &self.value_sync
-    }
-    fn value_sync_mut(&mut self) -> &mut ValueSyncConfig {
-        &mut self.value_sync
-    }
-}
-
-pub fn make_config(index: usize, ports: &[u16]) -> SimConfig {
-    let persistent_peers: Vec<_> = ports
+pub fn make_engine_config(index: usize, ports: &[u16], private_key: PrivateKey) -> EngineConfig {
+    let listen_addr = format!("/ip4/127.0.0.1/tcp/{}", ports[index]);
+    let persistent_peers: Vec<String> = ports
         .iter()
         .enumerate()
         .filter(|(j, _)| *j != index)
-        .map(|(_, &port)| TransportProtocol::Tcp.multiaddr("127.0.0.1", port as usize))
+        .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
         .collect();
 
-    SimConfig {
-        moniker: format!("sim-node-{index}"),
-        consensus: ConsensusConfig {
-            enabled: true,
-            value_payload: ValuePayload::ProposalAndParts,
-            p2p: P2pConfig {
-                listen_addr: TransportProtocol::Tcp.multiaddr("127.0.0.1", ports[index] as usize),
-                persistent_peers,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        value_sync: ValueSyncConfig::default(),
+    EngineConfig {
+        private_key,
+        listen_addr,
+        persistent_peers,
     }
 }
 
@@ -94,9 +57,8 @@ pub fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
 #[allow(clippy::too_many_arguments)]
 pub async fn run_node(
     index: usize,
-    private_key: PrivateKey,
+    engine_config: EngineConfig,
     genesis: Genesis,
-    config: SimConfig,
     mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     finality_tx: Option<mpsc::Sender<FinalityEvent>>,
@@ -104,53 +66,40 @@ pub async fn run_node(
     ready_tx: Option<mpsc::Sender<usize>>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let public_key = private_key.public_key();
-    let address = Address::from_public_key(&public_key);
-    let keypair = Keypair::ed25519_from_bytes(private_key.inner().to_bytes())?;
+    let engine_output = start_engine(engine_config, &genesis)
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
 
-    info!(%address, "Starting validator");
-
-    let ctx = Ctx::new();
-    let wal_dir = tempfile::tempdir()?;
-    let wal_path = wal_dir.path().join("consensus.wal");
-
-    let identity = NetworkIdentity::new(config.moniker.clone(), keypair, Some(address.to_string()));
-
-    let engine_provider = Ed25519Provider::new(private_key.clone());
-    let app_provider = Ed25519Provider::new(private_key);
-
-    let (mut channels, _engine_handle) = malachitebft_app_channel::start_engine(
-        ctx,
-        config,
-        WalContext::new(wal_path, ProtobufCodec),
-        NetworkContext::new(identity, ProtobufCodec),
-        ConsensusContext::new(address, engine_provider),
-        SyncContext::new(ProtobufCodec),
-        RequestContext::new(100),
-    )
-    .await?;
-
-    info!(node = index, "Engine started, entering app loop");
+    info!(address = %engine_output.address, node = index, "Engine started, entering app loop");
 
     // Signal that this node's engine is up and listening
     if let Some(tx) = ready_tx {
         let _ = tx.send(index).await;
     }
 
-    let mut state = reactor::State::new(
-        index,
-        app_provider,
+    let mut consensus_state = ConsensusState::new(
+        engine_output.signing_provider,
         genesis,
-        address,
-        decided_tx,
-        finality_tx,
-        state_tx,
+        engine_output.address,
     );
-    reactor::run(&mut state, &mut channels, &mut bitcoin_rx, cancel)
-        .await
-        .map_err(|e| eyre::eyre!("{e}"))?;
+    consensus_state.decided_tx = decided_tx;
+    consensus_state.finality_tx = finality_tx;
+    consensus_state.state_tx = state_tx;
 
-    drop(wal_dir);
+    let mut bitcoin_state = BitcoinState::new(FINALITY_WINDOW + 6);
+    let mut channels = engine_output.channels;
+
+    reactor::run(
+        &mut consensus_state,
+        &mut bitcoin_state,
+        index,
+        &mut channels,
+        &mut bitcoin_rx,
+        cancel,
+    )
+    .await
+    .map_err(|e| eyre::eyre!("{e}"))?;
+
     Ok(())
 }
 
@@ -312,7 +261,7 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, &ports);
+        let engine_config = make_engine_config(i, &ports, private_key);
         let cancel = cancel.clone();
 
         // Per-node: bridge broadcast → mpsc for bitcoin events
@@ -349,9 +298,8 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
             async move {
                 if let Err(e) = run_node(
                     i,
-                    private_key,
+                    engine_config,
                     genesis,
-                    config,
                     bitcoin_rx,
                     Some(dtx),
                     Some(ftx),
