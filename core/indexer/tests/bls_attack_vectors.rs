@@ -226,9 +226,7 @@ fn find_non_subgroup_g1_compressed() -> [u8; 48] {
             {
                 continue;
             }
-            if blst::blst_p1_affine_on_curve(&p_aff)
-                && !blst::blst_p1_affine_in_g1(&p_aff)
-            {
+            if blst::blst_p1_affine_on_curve(&p_aff) && !blst::blst_p1_affine_in_g1(&p_aff) {
                 return compressed;
             }
         }
@@ -255,9 +253,7 @@ fn find_non_subgroup_g2_compressed() -> [u8; 96] {
             {
                 continue;
             }
-            if blst::blst_p2_affine_on_curve(&p_aff)
-                && !blst::blst_p2_affine_in_g2(&p_aff)
-            {
+            if blst::blst_p2_affine_on_curve(&p_aff) && !blst::blst_p2_affine_in_g2(&p_aff) {
                 return compressed;
             }
         }
@@ -490,9 +486,7 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
         let digest = sha256::Hash::hash(&preimage).to_byte_array();
         Message::from_digest_slice(&digest).expect("32-byte digest")
     };
-    let eve_schnorr_sig = secp
-        .sign_schnorr(&schnorr_msg, &eve.keypair)
-        .serialize();
+    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
 
     // BLS half: Eve CAN produce this — she signs alice_xonly with eve_bls_sk.
     let bls_binding_msg = {
@@ -565,9 +559,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
         let digest = sha256::Hash::hash(&preimage).to_byte_array();
         Message::from_digest_slice(&digest).expect("32-byte digest")
     };
-    let schnorr_sig = secp
-        .sign_schnorr(&schnorr_msg, &eve.keypair)
-        .serialize();
+    let schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
 
     // BLS half: forged — signed with alt_bls_sk instead of eve_bls_sk.
     // The binding message is correct (`BLS_BINDING_PREFIX || eve_xonly`), but
@@ -634,9 +626,7 @@ async fn bls_attack_non_subgroup_pubkey_rejected_regtest() -> Result<()> {
         let digest = sha256::Hash::hash(&preimage).to_byte_array();
         Message::from_digest_slice(&digest).expect("32-byte digest")
     };
-    let schnorr_sig = secp
-        .sign_schnorr(&schnorr_msg, &eve.keypair)
-        .serialize();
+    let schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
 
     let bls_binding_msg = {
         let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);

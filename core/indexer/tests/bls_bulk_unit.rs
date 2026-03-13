@@ -374,13 +374,7 @@ fn bls_bulk_wrong_signer_key_fails_single_op() {
     let sig_by_b = sk_b.sign(&msg, KONTOR_BLS_DST, &[]);
 
     // Verifier has A's pubkey (from registry). Verification must fail.
-    let result = sig_by_b.aggregate_verify(
-        true,
-        &[msg.as_slice()],
-        KONTOR_BLS_DST,
-        &[&pk_a],
-        true,
-    );
+    let result = sig_by_b.aggregate_verify(true, &[msg.as_slice()], KONTOR_BLS_DST, &[&pk_a], true);
     assert_ne!(
         result,
         BLST_ERROR::BLST_SUCCESS,
@@ -543,4 +537,3 @@ proptest! {
         prop_assert!(!msg.is_empty(), "signing_message must produce non-empty output");
     }
 }
-
