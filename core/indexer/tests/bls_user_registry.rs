@@ -219,3 +219,54 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     Ok(())
 }
 
+/// Wrong-length `schnorr_sig` and `bls_sig` in a `BlsBulkOp::RegisterBlsKey`
+/// pass aggregate verification (those fields aren't used for BLS pubkey
+/// resolution) but must be rejected by `register_bls_key`'s length checks
+/// with no registry entry created.
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() -> Result<()> {
+    let user = unregistered_identity(&mut reg_tester).await?;
+    let mut publisher = unregistered_identity(&mut reg_tester).await?;
+
+    let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
+    let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
+    let user_xonly = user.x_only_public_key().to_string();
+
+    let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
+        ("short schnorr_sig", vec![0u8; 32], vec![0u8; 48]),
+        ("long schnorr_sig", vec![0u8; 128], vec![0u8; 48]),
+        ("short bls_sig", vec![0u8; 64], vec![0u8; 24]),
+        ("long bls_sig", vec![0u8; 64], vec![0u8; 96]),
+    ];
+
+    for (label, schnorr_sig, bls_sig) in cases {
+        let op = BlsBulkOp::RegisterBlsKey {
+            signer: Signer::XOnlyPubKey(user_xonly.clone()),
+            bls_pubkey: bls_pk_bytes.clone(),
+            schnorr_sig,
+            bls_sig,
+        };
+        let msg = op.signing_message()?;
+        let sig = bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
+        let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
+
+        let _ = reg_tester
+            .instruction(
+                &mut publisher,
+                Inst::BlsBulk {
+                    ops: vec![op],
+                    signature: agg.to_signature().to_bytes().to_vec(),
+                },
+            )
+            .await;
+
+        assert_eq!(
+            registry::get_signer_id(runtime, &user_xonly).await?,
+            None,
+            "{label}: malformed field must prevent registration"
+        );
+    }
+
+    Ok(())
+}
+

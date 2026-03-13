@@ -10,6 +10,7 @@ use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, W
 use indexer::block::filter_map;
 use indexer::test_utils::{PublicKey as TestPublicKey, build_inscription};
 use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, Signer, serialize};
+use proptest::prelude::*;
 
 fn tx_with_taproot_script_witness(
     tap_script: ScriptBuf,
@@ -230,4 +231,41 @@ fn filter_map_rejects_invalid_xonly_pubkey_bytes() {
 
     let tx = tx_with_taproot_script_witness(tap_script, internal_key);
     assert!(filter_map((0, tx)).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Property tests — no panics / no pathological allocations on arbitrary input
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// Arbitrary payload bytes inside a structurally valid Kontor envelope must
+    /// never panic. The postcard `deserialize::<Inst>` call should return Err
+    /// for most random bytes; on the rare occasion it decodes successfully,
+    /// `filter_map` returns Some — both outcomes are fine.
+    #[test]
+    fn filter_map_no_panic_on_random_payload(payload in proptest::collection::vec(any::<u8>(), 0..520)) {
+        let xonly = random_xonly();
+        let Ok(push_buf) = PushBytesBuf::try_from(payload) else { return Ok(()); };
+        let tap_script = Builder::new()
+            .push_slice(xonly.serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(b"kon")
+            .push_opcode(OP_0)
+            .push_slice(push_buf)
+            .push_opcode(OP_ENDIF)
+            .into_script();
+
+        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let _ = filter_map((0, tx));
+    }
+
+    /// Raw postcard deserialization of arbitrary bytes as `Inst` must never panic.
+    /// This is the exact code path inside `filter_map` after payload bytes are
+    /// extracted from the witness envelope.
+    #[test]
+    fn inst_deserialize_no_panic_on_arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+        let _ = indexer_types::deserialize::<Inst>(&data);
+    }
 }

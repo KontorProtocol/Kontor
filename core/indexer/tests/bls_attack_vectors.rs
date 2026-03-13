@@ -203,6 +203,94 @@ fn rogue_key_forgery_fails_with_distinct_messages() {
 }
 
 // ---------------------------------------------------------------------------
+// Unit tests — subgroup validation
+// ---------------------------------------------------------------------------
+
+/// Finds a compressed 48-byte G1 representation that decompresses to a valid
+/// E1 curve point OUTSIDE the prime-order G1 subgroup.
+///
+/// E1 has cofactor h ≈ 2^126, so virtually every valid E1 point is outside G1.
+/// We search over small x-coordinates until `blst_p1_uncompress` succeeds
+/// (meaning x³+4 is a quadratic residue mod p) and `blst_p1_affine_in_g1`
+/// returns false.
+fn find_non_subgroup_g1_compressed() -> [u8; 48] {
+    for trial in 1u8..=255 {
+        let mut compressed = [0u8; 48];
+        compressed[0] = 0x80;
+        compressed[47] = trial;
+
+        unsafe {
+            let mut p_aff = blst::blst_p1_affine::default();
+            if blst::blst_p1_uncompress(&mut p_aff, compressed.as_ptr())
+                != blst::BLST_ERROR::BLST_SUCCESS
+            {
+                continue;
+            }
+            if blst::blst_p1_affine_on_curve(&p_aff)
+                && !blst::blst_p1_affine_in_g1(&p_aff)
+            {
+                return compressed;
+            }
+        }
+    }
+    panic!(
+        "failed to find a non-subgroup E1 point in 255 trials \
+         (E1 cofactor h ≈ 2^126 means virtually all E1 points are non-subgroup)"
+    );
+}
+
+/// Same approach as `find_non_subgroup_g1_compressed` but for G2 (96-byte
+/// compressed pubkeys on E2). E2's cofactor is large, so virtually every
+/// valid E2 point is outside the prime-order G2 subgroup.
+fn find_non_subgroup_g2_compressed() -> [u8; 96] {
+    for trial in 1u8..=255 {
+        let mut compressed = [0u8; 96];
+        compressed[0] = 0x80;
+        compressed[95] = trial;
+
+        unsafe {
+            let mut p_aff = blst::blst_p2_affine::default();
+            if blst::blst_p2_uncompress(&mut p_aff, compressed.as_ptr())
+                != blst::BLST_ERROR::BLST_SUCCESS
+            {
+                continue;
+            }
+            if blst::blst_p2_affine_on_curve(&p_aff)
+                && !blst::blst_p2_affine_in_g2(&p_aff)
+            {
+                return compressed;
+            }
+        }
+    }
+    panic!(
+        "failed to find a non-subgroup E2 point in 255 trials \
+         (E2 cofactor is large so virtually all E2 points are non-subgroup)"
+    );
+}
+
+/// Constructs a BLS12-381 G1 point that lies on curve E1 but OUTSIDE the
+/// prime-order G1 subgroup. `sig_validate(_, true)` must reject it.
+///
+/// This is the G1/signature companion to `bls_attack_non_subgroup_pubkey_rejected_regtest`
+/// (which tests G2/pubkey). Together they guard against accidental removal of
+/// subgroup checks on either side — e.g. replacing `sig_validate(_, true)` with
+/// `Signature::from_bytes()`.
+///
+/// The helper `find_non_subgroup_g1_compressed` already proves (via the raw C API)
+/// that the test input is a valid on-curve E1 point that is not in G1. This test
+/// then verifies that the high-level `sig_validate` path used by `verify_bls_bulk`
+/// rejects it.
+#[test]
+fn non_subgroup_signature_rejected_by_sig_validate() {
+    let non_subgroup_sig_bytes = find_non_subgroup_g1_compressed();
+
+    assert!(
+        blst::min_sig::Signature::sig_validate(&non_subgroup_sig_bytes, true).is_err(),
+        "sig_validate with subgroup check must reject non-subgroup G1 point"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Integration tests — registration-level attacks
 // ---------------------------------------------------------------------------
 
@@ -524,39 +612,10 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
 async fn bls_attack_non_subgroup_pubkey_rejected_regtest() -> Result<()> {
     let mut eve = unregistered_identity(&mut reg_tester).await?;
 
-    // Construct a point on E2 that is NOT in G2.
-    // blst_map_to_g2 applies the SSWU isogeny map WITHOUT cofactor clearing,
-    // producing a valid curve point that (with overwhelming probability) lies
-    // outside the prime-order subgroup.
-    let non_subgroup_pk = unsafe {
-        let mut u = blst::blst_fp2::default();
-        let mut v = blst::blst_fp2::default();
-        let mut u_bytes = [0u8; 48];
-        let mut v_bytes = [0u8; 48];
-        u_bytes[0] = 1;
-        v_bytes[0] = 2;
-        blst::blst_fp_from_lendian(&mut u.fp[0], u_bytes.as_ptr());
-        blst::blst_fp_from_lendian(&mut v.fp[0], v_bytes.as_ptr());
-
-        let mut p = blst::blst_p2::default();
-        blst::blst_map_to_g2(&mut p, &u, &v);
-
-        let mut p_aff = blst::blst_p2_affine::default();
-        blst::blst_p2_to_affine(&mut p_aff, &p);
-
-        assert!(
-            blst::blst_p2_affine_on_curve(&p_aff),
-            "mapped point must be on E2"
-        );
-        assert!(
-            !blst::blst_p2_affine_in_g2(&p_aff),
-            "mapped point must NOT be in the G2 subgroup"
-        );
-
-        let mut out = [0u8; 96];
-        blst::blst_p2_affine_compress(out.as_mut_ptr(), &p_aff);
-        out
-    };
+    // Construct a point on E2 that is NOT in G2 by trial-decompressing
+    // candidate 96-byte compressed G2 representations until we find one that
+    // decompresses to a valid E2 curve point outside the prime-order subgroup.
+    let non_subgroup_pk = find_non_subgroup_g2_compressed();
 
     assert!(
         blst::min_sig::PublicKey::key_validate(&non_subgroup_pk).is_err(),
