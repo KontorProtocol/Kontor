@@ -289,8 +289,7 @@ impl Reactor {
                                             b.deadline <= self.bitcoin_state.chain_tip
                                         })
                                     {
-                                        let replay_up_to = handle.state.last_processed_anchor.saturating_add(1);
-                                        handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state, replay_up_to).await;
+                                        handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state).await;
                                     }
 
                                     // In follower mode (no consensus), execute blocks immediately

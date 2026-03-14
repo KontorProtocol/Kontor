@@ -2,8 +2,9 @@ pub mod types;
 
 use anyhow::anyhow;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use malachitebft_app_channel::Channels;
 
@@ -15,6 +16,9 @@ use indexer::reactor::executor::Executor;
 
 pub use types::{FinalityEvent, StateEvent};
 
+/// How long to wait for a batch to be decided before executing a buffered block.
+const PENDING_BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Run the reactor loop, handling both consensus messages and bitcoin events.
 pub async fn run(
     consensus_state: &mut ConsensusState,
@@ -25,6 +29,8 @@ pub async fn run(
     bitcoin_rx: &mut mpsc::Receiver<BitcoinEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let mut pending_deadline: Option<Instant> = None;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -41,16 +47,20 @@ pub async fn run(
                             height = block.height,
                             txs = block.transactions.len(),
                             mempool = bitcoin_state.mempool.len(),
-                            "Block queued"
+                            "Block received"
                         );
+
+                        // Buffer the block until the next batch is decided.
+                        // process_decided_batch will flush it after executing the batch.
+                        bitcoin_state.pending_block = Some(block);
+                        pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
 
                         if consensus_state
                             .pending_batches
                             .iter()
                             .any(|b| b.deadline <= bitcoin_state.chain_tip)
                         {
-                            let replay_up_to = consensus_state.last_processed_anchor.saturating_add(1);
-                            consensus_state.run_finality_checks(executor, bitcoin_state, replay_up_to).await;
+                            consensus_state.run_finality_checks(executor, bitcoin_state).await;
                         }
                     }
                     BitcoinEvent::MempoolInsert(tx) => {
@@ -73,6 +83,16 @@ pub async fn run(
             }
             Some(msg) = channels.consensus.recv() => {
                 handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
+                if bitcoin_state.pending_block.is_none() {
+                    pending_deadline = None;
+                }
+            }
+            _ = tokio::time::sleep_until(pending_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if pending_deadline.is_some() => {
+                if let Some(block) = bitcoin_state.pending_block.take() {
+                    warn!(height = block.height, "Pending block timeout — executing without waiting for batch");
+                    executor.execute_block(&block).await;
+                    pending_deadline = None;
+                }
             }
             else => break,
         }

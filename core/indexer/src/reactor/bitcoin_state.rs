@@ -1,42 +1,37 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::HashMap;
 
 use bitcoin::Txid;
 
 pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
-    pub block_history: BTreeMap<u64, Vec<Txid>>,
-    pub pending_blocks: VecDeque<u64>,
+    pub pending_block: Option<indexer_types::Block>,
     pub confirmed_txids: HashMap<Txid, u64>,
-    history_window: u64,
+    confirmed_txids_window: u64,
 }
 
 impl BitcoinState {
-    pub fn new(history_window: u64) -> Self {
+    pub fn new(confirmed_txids_window: u64) -> Self {
         Self {
             mempool: HashMap::new(),
             chain_tip: 0,
-            block_history: BTreeMap::new(),
-            pending_blocks: VecDeque::new(),
+            pending_block: None,
             confirmed_txids: HashMap::new(),
-            history_window,
+            confirmed_txids_window,
         }
     }
 
     /// Track a new block: update chain tip, remove txids from mempool,
-    /// record in block history and pending queue, record confirmations,
-    /// and prune old history.
+    /// and record confirmations.
     pub fn track_block(&mut self, height: u64, txids: &[Txid]) {
         self.chain_tip = height;
         for txid in txids {
             self.mempool.remove(txid);
             self.confirmed_txids.entry(*txid).or_insert(height);
         }
-        self.block_history.insert(height, txids.to_vec());
-        self.pending_blocks.push_back(height);
 
-        let prune_below = height.saturating_sub(self.history_window);
-        self.block_history.retain(|h, _| *h >= prune_below);
+        let prune_below = height.saturating_sub(self.confirmed_txids_window);
+        self.confirmed_txids.retain(|_, h| *h >= prune_below);
     }
 
     pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
