@@ -23,7 +23,7 @@ use malachitebft_app_channel::Channels;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::event::BitcoinEvent,
+    bitcoin_follower::event::{BlockEvent, MempoolEvent},
     consensus::Ctx,
     database::{
         self,
@@ -55,7 +55,8 @@ struct ConsensusHandle {
 struct Reactor {
     writer: database::Writer,
     cancel_token: CancellationToken,
-    bitcoin_event_rx: Receiver<BitcoinEvent>,
+    block_rx: Receiver<BlockEvent>,
+    mempool_rx: Receiver<MempoolEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     runtime: Runtime,
@@ -71,7 +72,8 @@ impl Reactor {
     pub async fn new(
         starting_block_height: u64,
         writer: database::Writer,
-        bitcoin_event_rx: Receiver<BitcoinEvent>,
+        block_rx: Receiver<BlockEvent>,
+        mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
@@ -163,7 +165,8 @@ impl Reactor {
         Ok(Self {
             writer,
             cancel_token,
-            bitcoin_event_rx,
+            block_rx,
+            mempool_rx,
             simulate_rx,
             bitcoin_state: bitcoin_state::BitcoinState::new(history_window),
             last_height,
@@ -273,52 +276,48 @@ impl Reactor {
                     info!("Cancelled");
                     break;
                 }
-                option_event = self.bitcoin_event_rx.recv() => {
-                    match option_event {
-                        Some(event) => {
-                            match event {
-                                BitcoinEvent::BlockInsert { target_height, block } => {
-                                    let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                                    self.bitcoin_state.track_block(block.height, &txids);
-                                    info!("Block {}/{} {}", block.height,
-                                          target_height, block.hash);
+                Some(event) = self.block_rx.recv() => {
+                    match event {
+                        BlockEvent::BlockInsert { target_height, block } => {
+                            let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                            self.bitcoin_state.track_block(block.height, &txids);
+                            info!("Block {}/{} {}", block.height,
+                                  target_height, block.hash);
 
-                                    // When consensus is active, check finality deadlines on new blocks
-                                    if let Some(handle) = &mut self.consensus_handle
-                                        && handle.state.pending_batches.iter().any(|b| {
-                                            b.deadline <= self.bitcoin_state.chain_tip
-                                        })
-                                    {
-                                        handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state).await;
-                                    }
+                            // When consensus is active, check finality deadlines on new blocks
+                            if let Some(handle) = &mut self.consensus_handle
+                                && handle.state.pending_batches.iter().any(|b| {
+                                    b.deadline <= self.bitcoin_state.chain_tip
+                                })
+                            {
+                                handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state).await;
+                            }
 
-                                    // In follower mode (no consensus), execute blocks immediately
-                                    if self.consensus_handle.is_none() {
-                                        self.handle_block(block).await?;
-                                    }
-                                },
-                                BitcoinEvent::Rollback { to_height } => {
-                                    self.rollback(to_height).await?;
-                                },
-                                BitcoinEvent::MempoolSync(txs) => {
-                                    let count = txs.len();
-                                    self.bitcoin_state.track_mempool_sync(txs.into_iter());
-                                    info!("MempoolSync {}", count);
-                                },
-                                BitcoinEvent::MempoolInsert(tx) => {
-                                    let txid = tx.compute_txid();
-                                    self.bitcoin_state.track_mempool_insert(tx);
-                                    debug!("MempoolInsert {}", txid);
-                                },
-                                BitcoinEvent::MempoolRemove(txid) => {
-                                    self.bitcoin_state.track_mempool_remove(&txid);
-                                    debug!("MempoolRemove {}", txid);
-                                },
+                            // In follower mode (no consensus), execute blocks immediately
+                            if self.consensus_handle.is_none() {
+                                self.handle_block(block).await?;
                             }
                         },
-                        None => {
-                            info!("Received None event, exiting");
-                            break;
+                        BlockEvent::Rollback { to_height } => {
+                            self.rollback(to_height).await?;
+                        },
+                    }
+                }
+                Some(event) = self.mempool_rx.recv() => {
+                    match event {
+                        MempoolEvent::Sync(txs) => {
+                            let count = txs.len();
+                            self.bitcoin_state.track_mempool_sync(txs.into_iter());
+                            info!("MempoolSync {}", count);
+                        },
+                        MempoolEvent::Insert(tx) => {
+                            let txid = tx.compute_txid();
+                            self.bitcoin_state.track_mempool_insert(tx);
+                            debug!("MempoolInsert {}", txid);
+                        },
+                        MempoolEvent::Remove(txid) => {
+                            self.bitcoin_state.track_mempool_remove(&txid);
+                            debug!("MempoolRemove {}", txid);
                         },
                     }
                 }
@@ -384,7 +383,8 @@ pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
     writer: database::Writer,
-    bitcoin_event_rx: Receiver<BitcoinEvent>,
+    block_rx: Receiver<BlockEvent>,
+    mempool_rx: Receiver<MempoolEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
@@ -395,7 +395,8 @@ pub fn run(
             let mut reactor = match Reactor::new(
                 starting_block_height,
                 writer,
-                bitcoin_event_rx,
+                block_rx,
+                mempool_rx,
                 cancel_token.clone(),
                 init_tx,
                 event_tx,

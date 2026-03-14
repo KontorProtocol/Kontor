@@ -19,7 +19,7 @@ async fn validators_agree_on_values() {
     // Feed some mempool txs so proposals have content
     let mut mock = MockBitcoin::new(0);
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
@@ -69,7 +69,7 @@ async fn decided_values_contain_mempool_txids() {
     let expected_txids: Vec<bitcoin::Txid> = mock.mempool_txids();
 
     for event in events {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
@@ -104,7 +104,7 @@ async fn block_updates_chain_tip() {
 
     // Insert some mempool txs
     for event in mock.generate_mempool_txs(2) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     // Wait for at least 1 decision at anchor 0
@@ -112,13 +112,19 @@ async fn block_updates_chain_tip() {
     assert_eq!(results[0][0].value.anchor_height, 0);
 
     // Mine a block — this advances the chain tip to 1
-    for event in mock.mine_block_all() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block_all();
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Add new mempool txs so the next batch has content
     for event in mock.generate_mempool_txs(2) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     // Wait for another decision — anchor should now be 1
@@ -176,7 +182,7 @@ async fn happy_path_finalization() {
 
     // Insert mempool txs and let consensus decide a batch at anchor 0
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
@@ -185,14 +191,23 @@ async fn happy_path_finalization() {
 
     // Mine blocks confirming all the batched txids, then mine through the finality window.
     // Block 1: confirm all mempool txs
-    for event in mock.mine_block_all() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block_all();
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Blocks 2-6: empty blocks to reach deadline (anchor 0 + 6 = 6)
     for _ in 0..5 {
-        for event in mock.mine_empty_block() {
-            cluster.send_bitcoin_event(event);
+        {
+            let (blk_events, _) = mock.mine_empty_block();
+            for event in blk_events {
+                cluster.send_block_event(event);
+            }
         }
     }
 
@@ -232,7 +247,7 @@ async fn missing_tx_invalidation() {
 
     // Insert 3 mempool txs
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
@@ -247,14 +262,23 @@ async fn missing_tx_invalidation() {
     let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2].to_vec();
 
     // Mine block 1 with only 2 of the 3 txids
-    for event in mock.mine_block(&confirm_txids) {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block(&confirm_txids);
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Mine blocks 2-6 (empty) to reach the deadline
     for _ in 0..5 {
-        for event in mock.mine_empty_block() {
-            cluster.send_bitcoin_event(event);
+        {
+            let (blk_events, _) = mock.mine_empty_block();
+            for event in blk_events {
+                cluster.send_block_event(event);
+            }
         }
     }
 
@@ -293,26 +317,32 @@ async fn cascade_invalidation() {
 
     // Decide batch 1 at anchor 0
     for event in mock.generate_mempool_txs(2) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     assert_eq!(results[0][0].value.anchor_height, 0);
 
     // Mine block 1 (confirm nothing — intentionally leave batch 1 txids unconfirmed)
-    for event in mock.mine_empty_block() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, _) = mock.mine_empty_block();
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Add more txs and let consensus decide batch 2 at anchor 1
     for event in mock.generate_mempool_txs(2) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
     let _results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
 
     // Mine blocks 2-6 (empty) to hit the deadline for anchor 0 (0 + 6 = 6)
     for _ in 0..5 {
-        for event in mock.mine_empty_block() {
-            cluster.send_bitcoin_event(event);
+        {
+            let (blk_events, _) = mock.mine_empty_block();
+            for event in blk_events {
+                cluster.send_block_event(event);
+            }
         }
     }
 
@@ -365,13 +395,19 @@ async fn batch_before_unbatched_at_same_anchor() {
 
     // Insert mempool txs
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     // Mine a block that confirms some txs — this creates both batched and unbatched txs
     // at anchor 0 (the block has txs, the batch also has txs)
-    for event in mock.mine_block_all() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block_all();
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Wait for consensus to decide at least 1 batch, then collect state events
@@ -409,7 +445,7 @@ async fn unbatched_txs_skip_batched_duplicates() {
 
     // Insert mempool txs — these will be in the batch
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     // Wait for consensus to decide a batch containing these txids
@@ -418,8 +454,14 @@ async fn unbatched_txs_skip_batched_duplicates() {
     let batch_txid_count = decided.value.transactions.len();
 
     // Mine a block that confirms the same txids — they overlap with the batch
-    for event in mock.mine_block_all() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block_all();
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Collect state events
@@ -474,20 +516,26 @@ async fn rollback_truncates_and_replays() {
 
     // Decide batch 1 at anchor 0
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     assert_eq!(results[0][0].value.anchor_height, 0);
 
     // Mine block 1 (confirm nothing — leave batch 1 txids unconfirmed)
-    for event in mock.mine_empty_block() {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, _) = mock.mine_empty_block();
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Mine blocks 2-6 (empty) to hit the deadline for anchor 0 (0 + 6 = 6)
     for _ in 0..5 {
-        for event in mock.mine_empty_block() {
-            cluster.send_bitcoin_event(event);
+        {
+            let (blk_events, _) = mock.mine_empty_block();
+            for event in blk_events {
+                cluster.send_block_event(event);
+            }
         }
     }
 
@@ -531,21 +579,30 @@ async fn rollback_preserves_pre_anchor_state() {
 
     // Decide batch 1 at anchor 0
     for event in mock.generate_mempool_txs(2) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let batch1_txids = results[0][0].value.txids();
 
     // Mine block 1 confirming batch 1's txids — batch 1 will finalize
-    for event in mock.mine_block(&batch1_txids) {
-        cluster.send_bitcoin_event(event);
+    {
+        let (blk_events, mem_events) = mock.mine_block(&batch1_txids);
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
     }
 
     // Mine blocks 2-7 (empty) — this reaches deadline for anchor 0 (finalized)
     // and also for anchor 1 (if a batch 2 was decided with unconfirmed txids)
     for _ in 0..6 {
-        for event in mock.mine_empty_block() {
-            cluster.send_bitcoin_event(event);
+        {
+            let (blk_events, _) = mock.mine_empty_block();
+            for event in blk_events {
+                cluster.send_block_event(event);
+            }
         }
     }
 
@@ -589,7 +646,7 @@ async fn all_nodes_reach_same_checkpoint() {
 
     // Insert mempool txs and let consensus decide
     for event in mock.generate_mempool_txs(3) {
-        cluster.send_bitcoin_event(event);
+        cluster.send_mempool_event(event);
     }
 
     let _results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
