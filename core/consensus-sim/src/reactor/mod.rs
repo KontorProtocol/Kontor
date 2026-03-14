@@ -52,8 +52,10 @@ pub async fn run(
                             "Block received"
                         );
 
-                        bitcoin_state.pending_block = Some(block);
-                        pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
+                        bitcoin_state.pending_blocks.push_back(block);
+                        if pending_deadline.is_none() {
+                            pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
+                        }
 
                         if consensus_state
                             .pending_batches
@@ -87,16 +89,20 @@ pub async fn run(
             }
             Some(msg) = channels.consensus.recv() => {
                 handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
-                if bitcoin_state.pending_block.is_none() {
+                if bitcoin_state.pending_blocks.is_empty() {
                     pending_deadline = None;
                 }
             }
             _ = tokio::time::sleep_until(pending_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if pending_deadline.is_some() => {
-                if let Some(block) = bitcoin_state.pending_block.take() {
+                let count = bitcoin_state.pending_blocks.len();
+                while let Some(block) = bitcoin_state.pending_blocks.pop_front() {
                     warn!(height = block.height, "Pending block timeout — executing without waiting for batch");
                     executor.execute_block(&block).await;
-                    pending_deadline = None;
                 }
+                if count > 0 {
+                    info!(count, "Drained pending blocks on timeout");
+                }
+                pending_deadline = None;
             }
             else => break,
         }

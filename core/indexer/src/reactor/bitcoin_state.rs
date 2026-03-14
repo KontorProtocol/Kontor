@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use bitcoin::Txid;
 
 pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
-    pub pending_block: Option<indexer_types::Block>,
+    pub pending_blocks: VecDeque<indexer_types::Block>,
     pub confirmed_txids: HashMap<Txid, u64>,
     confirmed_txids_window: u64,
 }
@@ -15,7 +15,7 @@ impl BitcoinState {
         Self {
             mempool: HashMap::new(),
             chain_tip: 0,
-            pending_block: None,
+            pending_blocks: VecDeque::new(),
             confirmed_txids: HashMap::new(),
             confirmed_txids_window,
         }
