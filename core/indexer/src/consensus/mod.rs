@@ -1,6 +1,7 @@
 mod address;
 pub mod codec;
 mod context;
+pub mod finality_types;
 mod genesis;
 mod height;
 mod proposal;

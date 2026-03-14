@@ -1,4 +1,9 @@
-use tracing::{error, info};
+use std::collections::BTreeMap;
+
+use anyhow::Result;
+use bitcoin::hashes::Hash;
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -6,38 +11,74 @@ use malachitebft_app_channel::app::types::core::{Round, Validity};
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
-use malachitebft_core_types::{HeightParams, LinearTimeouts};
+use malachitebft_core_types::{CommitCertificate, HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
-use indexer::consensus::codec::ProtobufCodec;
-use indexer::consensus::{
-    Ctx, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart, ValidatorSet, Value,
+use crate::consensus::codec::ProtobufCodec;
+use crate::consensus::finality_types::*;
+use crate::consensus::signing::Ed25519Provider;
+use crate::consensus::{
+    Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
+    ValidatorSet, Value,
 };
 
-use super::State;
+use super::bitcoin_state::BitcoinState;
+use super::executor::Executor;
 
-impl State {
-    pub(super) fn validator_set(&self) -> ValidatorSet {
+/// All consensus-related state for the reactor.
+pub struct ConsensusState {
+    pub signing_provider: Ed25519Provider,
+    pub genesis: Genesis,
+    pub address: Address,
+    pub current_height: Height,
+    pub current_round: Round,
+    pub decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
+    pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
+
+    // Finality tracking
+    pub pending_batches: Vec<PendingBatch>,
+    pub last_processed_anchor: u64,
+
+    // Observation channels (optional, for testing)
+    pub decided_tx: Option<mpsc::Sender<DecidedBatch>>,
+    pub finality_tx: Option<mpsc::Sender<FinalityEvent>>,
+    pub state_tx: Option<mpsc::Sender<StateEvent>>,
+}
+
+impl ConsensusState {
+    pub fn new(signing_provider: Ed25519Provider, genesis: Genesis, address: Address) -> Self {
+        Self {
+            signing_provider,
+            genesis,
+            address,
+            current_height: Height::new(1),
+            current_round: Round::new(0),
+            decided: BTreeMap::new(),
+            undecided: BTreeMap::new(),
+            pending_batches: Vec::new(),
+            last_processed_anchor: 0,
+            decided_tx: None,
+            finality_tx: None,
+            state_tx: None,
+        }
+    }
+
+    fn validator_set(&self) -> ValidatorSet {
         self.genesis.validator_set.clone()
     }
 
-    pub(super) fn make_value(&mut self) -> Value {
-        let txids: Vec<[u8; 32]> = self.mempool.iter().copied().collect();
-        Value::new(self.chain_tip, txids)
-    }
-
-    pub(super) fn height_params(&self) -> HeightParams<Ctx> {
+    fn height_params(&self) -> HeightParams<Ctx> {
         HeightParams::new(self.validator_set(), LinearTimeouts::default(), None)
     }
 
-    pub(super) fn stream_id(&self) -> StreamId {
+    fn stream_id(&self) -> StreamId {
         let mut bytes = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.current_height.as_u64().to_be_bytes());
         bytes.extend_from_slice(&self.current_round.as_u32().unwrap().to_be_bytes());
         StreamId::new(bytes.into())
     }
 
-    pub(super) fn stream_proposal(
+    fn stream_proposal(
         &self,
         value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
@@ -48,8 +89,8 @@ impl State {
         hasher.update(value.height.as_u64().to_be_bytes());
         hasher.update(value.round.as_i64().to_be_bytes());
         hasher.update(value.value.anchor_height.to_be_bytes());
-        for txid in &value.value.txids {
-            hasher.update(txid);
+        for tx in &value.value.transactions {
+            hasher.update(tx.compute_txid().to_byte_array());
         }
 
         let hash = hasher.finalize();
@@ -64,7 +105,7 @@ impl State {
             )),
             ProposalPart::Data(ProposalData::new(
                 value.value.anchor_height,
-                value.value.txids.clone(),
+                value.value.transactions.clone(),
             )),
             ProposalPart::Fin(ProposalFin::new(signature)),
         ];
@@ -87,13 +128,209 @@ impl State {
 
         msgs
     }
+
+    fn make_value(&self, bitcoin_state: &BitcoinState) -> Value {
+        let transactions: Vec<_> = bitcoin_state.mempool.values().cloned().collect();
+        Value::new(bitcoin_state.chain_tip, transactions)
+    }
+
+    // --- Finality tracking ---
+
+    pub fn record_decided_batch(&mut self, consensus_height: Height, value: &Value) {
+        let pending = PendingBatch {
+            consensus_height,
+            anchor_height: value.anchor_height,
+            transactions: value.transactions.clone(),
+            deadline: value.anchor_height + FINALITY_WINDOW,
+        };
+        info!(
+            consensus_height = %consensus_height,
+            anchor = value.anchor_height,
+            deadline = pending.deadline,
+            txs = value.transactions.len(),
+            "Tracking batch for finality"
+        );
+        self.pending_batches.push(pending);
+    }
+
+    pub async fn check_finality(
+        &mut self,
+        executor: &impl Executor,
+        bitcoin_state: &BitcoinState,
+    ) -> Vec<FinalityEvent> {
+        let mut events = Vec::new();
+        let tip = bitcoin_state.chain_tip;
+
+        let mut still_pending = Vec::new();
+        let mut at_deadline = Vec::new();
+
+        for batch in self.pending_batches.drain(..) {
+            if batch.deadline <= tip {
+                at_deadline.push(batch);
+            } else {
+                still_pending.push(batch);
+            }
+        }
+
+        at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+        for batch in &at_deadline {
+            let mut missing = Vec::new();
+            for tx in &batch.transactions {
+                let txid = tx.compute_txid();
+                if !executor.is_confirmed_on_chain(&txid).await {
+                    missing.push(txid);
+                }
+            }
+
+            if missing.is_empty() {
+                info!(
+                    consensus_height = %batch.consensus_height,
+                    anchor = batch.anchor_height,
+                    "Batch finalized"
+                );
+                events.push(FinalityEvent::BatchFinalized {
+                    consensus_height: batch.consensus_height,
+                    anchor_height: batch.anchor_height,
+                });
+            } else {
+                let from_anchor = batch.anchor_height;
+                let mut invalidated = vec![batch.consensus_height];
+
+                let mut surviving = Vec::new();
+                for pending in still_pending.drain(..) {
+                    if pending.anchor_height >= from_anchor {
+                        invalidated.push(pending.consensus_height);
+                    } else {
+                        surviving.push(pending);
+                    }
+                }
+                still_pending = surviving;
+
+                warn!(
+                    from_anchor,
+                    invalidated = ?invalidated,
+                    missing = missing.len(),
+                    "Cascade invalidation triggered"
+                );
+
+                events.push(FinalityEvent::Rollback {
+                    from_anchor,
+                    invalidated_batches: invalidated,
+                    missing_txids: missing,
+                });
+
+                break;
+            }
+        }
+
+        self.pending_batches = still_pending;
+        events
+    }
+
+    fn emit_finality_events(&self, events: &[FinalityEvent]) {
+        if let Some(tx) = &self.finality_tx {
+            for event in events {
+                let _ = tx.try_send(event.clone());
+            }
+        }
+    }
+
+    pub fn emit_state_event(&self, event: StateEvent) {
+        if let Some(tx) = &self.state_tx {
+            let _ = tx.try_send(event);
+        }
+    }
+
+    /// Run finality checks and execute any rollbacks.
+    pub async fn run_finality_checks(
+        &mut self,
+        executor: &mut impl Executor,
+        bitcoin_state: &BitcoinState,
+    ) {
+        let finality_events = self.check_finality(executor, bitcoin_state).await;
+        for event in &finality_events {
+            if let FinalityEvent::Rollback { from_anchor, .. } = event {
+                let removed = executor.rollback_state(*from_anchor).await;
+                info!(from_anchor, removed, "Rollback executed");
+
+                self.emit_state_event(StateEvent::RollbackExecuted {
+                    to_anchor: *from_anchor,
+                    entries_removed: removed,
+                    checkpoint: executor.checkpoint().await,
+                });
+
+                self.last_processed_anchor = from_anchor.saturating_sub(1);
+            }
+        }
+        self.emit_finality_events(&finality_events);
+    }
+
+    /// Execute a decided batch, then flush all pending blocks.
+    ///
+    /// If blocks at or above the anchor height were already executed (e.g. by a
+    /// pending-block timeout), rolls back the executor and resets bitcoin state
+    /// so that blocks are re-processed in correct order (batch first, then block).
+    pub async fn process_decided_batch(
+        &mut self,
+        executor: &mut impl Executor,
+        bitcoin_state: &mut BitcoinState,
+        anchor_height: u64,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+    ) {
+        // Detect timeout race: blocks executed before this batch was decided
+        if let Some(last_block) = executor.last_executed_block_height().await
+            && last_block >= anchor_height
+        {
+            warn!(
+                anchor_height,
+                last_block, "Timeout race detected — rolling back to re-apply batch before blocks"
+            );
+            let removed = executor.rollback_state(anchor_height).await;
+            bitcoin_state.reset();
+
+            self.emit_state_event(StateEvent::RollbackExecuted {
+                to_anchor: anchor_height,
+                entries_removed: removed,
+                checkpoint: executor.checkpoint().await,
+            });
+        }
+
+        executor
+            .execute_batch(anchor_height, consensus_height, batch_txs)
+            .await;
+
+        while let Some(block) = bitcoin_state.pending_blocks.pop_front() {
+            executor.execute_block(&block).await;
+        }
+
+        self.last_processed_anchor = anchor_height;
+
+        self.emit_state_event(StateEvent::BatchApplied {
+            consensus_height,
+            anchor_height,
+            txid_count: batch_txs.len(),
+            checkpoint: executor.checkpoint().await,
+        });
+
+        info!(
+            anchor = anchor_height,
+            consensus_height = %consensus_height,
+            "Batch processing complete"
+        );
+    }
 }
 
+/// Handle a consensus message from the Malachite engine.
 pub async fn handle_consensus_msg(
-    state: &mut State,
+    state: &mut ConsensusState,
+    executor: &mut impl Executor,
+    bitcoin_state: &mut BitcoinState,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
-) -> anyhow::Result<()> {
+    node_index: usize,
+) -> Result<()> {
     match msg {
         AppMsg::ConsensusReady { reply } => {
             let start_height = state.current_height;
@@ -138,7 +375,7 @@ pub async fn handle_consensus_msg(
             let proposal = if let Some(existing) = state.undecided.get(&(height, round)) {
                 LocallyProposedValue::new(existing.height, existing.round, existing.value.clone())
             } else {
-                let value = state.make_value();
+                let value = state.make_value(bitcoin_state);
                 let proposed = ProposedValue {
                     height,
                     round,
@@ -171,14 +408,13 @@ pub async fn handle_consensus_msg(
             let height = state.current_height;
             let round = state.current_round;
 
-            // Between decisions, current_round is Nil — ignore stale proposal parts
             let proposed = if round == Round::Nil {
                 None
             } else {
                 match &part.content {
                     StreamContent::Data(ProposalPart::Data(data)) => {
                         if !state.undecided.contains_key(&(height, round)) {
-                            let value = Value::new(data.anchor_height, data.txids.clone());
+                            let value = Value::new(data.anchor_height, data.transactions.clone());
                             let proposed = ProposedValue {
                                 height,
                                 round,
@@ -245,20 +481,23 @@ pub async fn handle_consensus_msg(
                 .remove(&(certificate.height, certificate.round))
             {
                 if let Some(tx) = &state.decided_tx {
-                    let _ = tx.try_send(crate::DecidedBatch {
-                        node_index: state.node_index,
+                    let _ = tx.try_send(DecidedBatch {
+                        node_index,
                         consensus_height: certificate.height,
                         value: proposal.value.clone(),
                     });
                 }
                 state.record_decided_batch(certificate.height, &proposal.value);
 
-                // Three-phase processing: blocks -> finality check -> batch + unbatched
-                state.process_decided_batch(
-                    proposal.value.anchor_height,
-                    certificate.height,
-                    &proposal.value.txids.clone(),
-                );
+                state
+                    .process_decided_batch(
+                        executor,
+                        bitcoin_state,
+                        proposal.value.anchor_height,
+                        certificate.height,
+                        &proposal.value.transactions,
+                    )
+                    .await;
 
                 state
                     .decided

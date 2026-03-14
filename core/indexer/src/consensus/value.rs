@@ -1,5 +1,7 @@
 use core::fmt;
 
+use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_proto::{Error as ProtoError, Protobuf};
 use serde::{Deserialize, Serialize};
@@ -47,32 +49,45 @@ impl Protobuf for ValueId {
     }
 }
 
-/// The value to decide on: an anchor bitcoin block height + set of txids.
+/// The value to decide on: an anchor bitcoin block height + set of transactions.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Value {
     pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+    pub transactions: Vec<bitcoin::Transaction>,
 }
 
 impl Value {
-    pub fn new(anchor_height: u64, txids: Vec<[u8; 32]>) -> Self {
+    pub fn new(anchor_height: u64, transactions: Vec<bitcoin::Transaction>) -> Self {
         Self {
             anchor_height,
-            txids,
+            transactions,
         }
     }
 
+    /// Stable identity hash: anchor_height + sorted txids.
     pub fn id(&self) -> ValueId {
         let mut hasher = Sha256::new();
         hasher.update(self.anchor_height.to_be_bytes());
-        for txid in &self.txids {
-            hasher.update(txid);
+        for tx in &self.transactions {
+            hasher.update(tx.compute_txid().to_byte_array());
         }
         ValueId(hasher.finalize().into())
     }
 
+    pub fn txids(&self) -> Vec<bitcoin::Txid> {
+        self.transactions
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect()
+    }
+
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() + self.txids.len() * 32
+        std::mem::size_of::<u64>()
+            + self
+                .transactions
+                .iter()
+                .map(|tx| bitcoin::consensus::serialize(tx).len())
+                .sum::<usize>()
     }
 }
 
@@ -100,35 +115,27 @@ impl Protobuf for Value {
         }
 
         let anchor_height = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-        let rest = &bytes[8..];
+        let mut cursor = std::io::Cursor::new(&bytes[8..]);
+        let mut transactions = Vec::new();
 
-        if rest.len() % 32 != 0 {
-            return Err(ProtoError::Other(format!(
-                "Invalid txids length: {} is not a multiple of 32",
-                rest.len()
-            )));
+        while cursor.position() < (bytes.len() - 8) as u64 {
+            let tx = bitcoin::Transaction::consensus_decode(&mut cursor)
+                .map_err(|e| ProtoError::Other(format!("Failed to decode transaction: {e}")))?;
+            transactions.push(tx);
         }
-
-        let txids: Vec<[u8; 32]> = rest
-            .chunks_exact(32)
-            .map(|chunk| {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(chunk);
-                arr
-            })
-            .collect();
 
         Ok(Value {
             anchor_height,
-            txids,
+            transactions,
         })
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
-        let mut buf = Vec::with_capacity(8 + self.txids.len() * 32);
+        let mut buf = Vec::new();
         buf.extend_from_slice(&self.anchor_height.to_be_bytes());
-        for txid in &self.txids {
-            buf.extend_from_slice(txid);
+        for tx in &self.transactions {
+            tx.consensus_encode(&mut buf)
+                .map_err(|e| ProtoError::Other(format!("Failed to encode transaction: {e}")))?;
         }
         Ok(proto::Value {
             value: Some(Bytes::from(buf)),

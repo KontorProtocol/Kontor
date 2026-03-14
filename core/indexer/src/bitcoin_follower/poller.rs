@@ -24,7 +24,7 @@ use crate::{
     retry::{new_backoff_unlimited, retry},
 };
 
-use super::event::BitcoinEvent;
+use super::event::BlockEvent;
 
 const HASH_CACHE_SIZE: usize = 50;
 
@@ -141,7 +141,7 @@ enum DeliveryResult {
     /// All blocks in the batch were delivered successfully.
     Ok {
         /// Events to send to the consumer.
-        events: Vec<BitcoinEvent>,
+        events: Vec<BlockEvent>,
         /// The next height to fetch.
         next_height: u64,
     },
@@ -180,7 +180,7 @@ fn deliver_blocks(
         }
 
         cache.insert(height, block.hash);
-        events.push(BitcoinEvent::BlockInsert {
+        events.push(BlockEvent::BlockInsert {
             target_height: tip,
             block,
         });
@@ -198,12 +198,12 @@ async fn apply_rollback(
     cache: &mut BlockHashCache,
     next_height: &mut u64,
     fork_height: u64,
-    event_tx: &Sender<BitcoinEvent>,
+    event_tx: &Sender<BlockEvent>,
 ) -> bool {
     cache.truncate_above(fork_height);
     *next_height = fork_height + 1;
     event_tx
-        .send(BitcoinEvent::Rollback {
+        .send(BlockEvent::Rollback {
             to_height: fork_height,
         })
         .await
@@ -228,7 +228,7 @@ async fn wait_for_poll(
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
-    event_tx: Sender<BitcoinEvent>,
+    event_tx: Sender<BlockEvent>,
     cancel_token: CancellationToken,
     start_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
@@ -602,10 +602,10 @@ mod tests {
                 assert_eq!(next_height, 3);
                 assert_eq!(events.len(), 2);
                 assert!(
-                    matches!(&events[0], BitcoinEvent::BlockInsert { block, .. } if block.height == 1)
+                    matches!(&events[0], BlockEvent::BlockInsert { block, .. } if block.height == 1)
                 );
                 assert!(
-                    matches!(&events[1], BitcoinEvent::BlockInsert { block, .. } if block.height == 2)
+                    matches!(&events[1], BlockEvent::BlockInsert { block, .. } if block.height == 2)
                 );
             }
             DeliveryResult::Reorg { .. } => panic!("unexpected reorg"),
@@ -727,7 +727,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -765,7 +765,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -779,7 +779,7 @@ mod tests {
         for expected in &more {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -817,7 +817,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                 }
                 other => panic!("expected BlockInsert, got {:?}", other),
@@ -838,7 +838,7 @@ mod tests {
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -847,7 +847,7 @@ mod tests {
         for expected in &forked[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -884,14 +884,14 @@ mod tests {
 
         for _ in 0..5 {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
-            assert!(matches!(event, BitcoinEvent::BlockInsert { .. }));
+            assert!(matches!(event, BlockEvent::BlockInsert { .. }));
         }
 
         rpc.replace_blocks(blocks[..3].to_vec());
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -942,7 +942,7 @@ mod tests {
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -951,7 +951,7 @@ mod tests {
         for expected in &alt_chain[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -992,7 +992,7 @@ mod tests {
         for expected in &blocks[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -1071,7 +1071,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -1112,7 +1112,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                 }
                 other => panic!(
@@ -1137,7 +1137,7 @@ mod tests {
         // Single rollback to the real fork point
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 5);
             }
             other => panic!("expected Rollback to 5, got {:?}", other),
@@ -1146,7 +1146,7 @@ mod tests {
         for expected in &forked[5..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }

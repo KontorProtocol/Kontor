@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
+use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
 use indexer::consensus::Height;
+use indexer::reactor::executor::Executor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxStatus {
@@ -10,26 +13,35 @@ pub enum TxStatus {
     Confirmed,
 }
 
-impl TxStatus {
-    fn as_byte(&self) -> u8 {
-        match self {
-            TxStatus::Batched => 0,
-            TxStatus::Confirmed => 1,
-        }
+fn tx_status_as_byte(status: &TxStatus) -> u8 {
+    match status {
+        TxStatus::Batched => 0,
+        TxStatus::Confirmed => 1,
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct StateEntry {
     pub anchor_height: u64,
-    pub batch_height: Option<Height>, // None = unbatched (from bitcoin block directly)
-    pub txid: [u8; 32],
+    pub batch_height: Option<Height>,
+    pub txid: Txid,
     pub status: TxStatus,
+}
+
+/// Maps consensus height → anchor height for rollback recovery.
+#[derive(Debug, Clone)]
+struct BatchHeightEntry {
+    consensus_height: Height,
+    anchor_height: u64,
 }
 
 pub struct StateLog {
     entries: Vec<StateEntry>,
     checkpoint: [u8; 32],
+    batch_heights: Vec<BatchHeightEntry>,
+    /// Txids seen in confirmed Bitcoin blocks (for finality checks).
+    /// Includes batched txids that were skipped for execution.
+    block_confirmed: HashSet<Txid>,
 }
 
 impl Default for StateLog {
@@ -43,6 +55,8 @@ impl StateLog {
         Self {
             entries: Vec::new(),
             checkpoint: [0u8; 32],
+            batch_heights: Vec::new(),
+            block_confirmed: HashSet::new(),
         }
     }
 
@@ -54,7 +68,7 @@ impl StateLog {
         &self.entries
     }
 
-    pub fn status_of(&self, txid: &[u8; 32]) -> Option<&TxStatus> {
+    pub fn status_of(&self, txid: &Txid) -> Option<&TxStatus> {
         self.entries
             .iter()
             .rev()
@@ -62,7 +76,7 @@ impl StateLog {
             .map(|e| &e.status)
     }
 
-    pub fn batched_txids(&self) -> HashSet<[u8; 32]> {
+    pub fn batched_txids(&self) -> HashSet<Txid> {
         self.entries
             .iter()
             .filter(|e| e.status == TxStatus::Batched)
@@ -78,7 +92,7 @@ impl StateLog {
     }
 
     /// Low-level append: add a single entry and update checkpoint.
-    pub fn append_entry(&mut self, anchor_height: u64, txid: [u8; 32], status: TxStatus) {
+    pub fn append_entry(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
         let entry = StateEntry {
             anchor_height,
             batch_height: None,
@@ -90,12 +104,11 @@ impl StateLog {
     }
 
     /// Append entries for a decided batch. All txids get `Batched` status.
-    pub fn apply_batch(
-        &mut self,
-        anchor_height: u64,
-        consensus_height: Height,
-        txids: &[[u8; 32]],
-    ) {
+    pub fn apply_batch(&mut self, anchor_height: u64, consensus_height: Height, txids: &[Txid]) {
+        self.batch_heights.push(BatchHeightEntry {
+            consensus_height,
+            anchor_height,
+        });
         for txid in txids {
             let entry = StateEntry {
                 anchor_height,
@@ -108,9 +121,22 @@ impl StateLog {
         }
     }
 
+    /// Return the highest consensus height whose anchor_height < `anchor`.
+    pub fn last_consensus_height_before(&self, anchor: u64) -> Option<Height> {
+        self.batch_heights
+            .iter()
+            .filter(|e| e.anchor_height < anchor)
+            .max_by_key(|e| e.consensus_height)
+            .map(|e| e.consensus_height)
+    }
+
     /// Append entries for a bitcoin block's transactions. Skips txids already in `Batched` status
     /// (deduplication — batched txs take priority).
-    pub fn apply_block(&mut self, height: u64, txids: &[[u8; 32]]) {
+    pub fn apply_block(&mut self, height: u64, txids: &[Txid]) {
+        // Record all txids as block-confirmed (for finality checks),
+        // even batched ones that we skip for execution.
+        self.block_confirmed.extend(txids);
+
         let batched = self.batched_txids();
         for txid in txids {
             if batched.contains(txid) {
@@ -131,6 +157,10 @@ impl StateLog {
     pub fn rollback_to(&mut self, anchor_height: u64) -> usize {
         let before = self.entries.len();
         self.entries.retain(|e| e.anchor_height < anchor_height);
+        self.batch_heights
+            .retain(|e| e.anchor_height < anchor_height);
+        // Rebuild block_confirmed from surviving entries
+        self.block_confirmed.clear();
         let removed = before - self.entries.len();
         self.recompute_checkpoint();
         removed
@@ -139,22 +169,68 @@ impl StateLog {
     fn update_checkpoint(&mut self, entry: &StateEntry) {
         let mut hasher = Keccak256::new();
         hasher.update(self.checkpoint);
-        hasher.update(entry.txid);
-        hasher.update([entry.status.as_byte()]);
+        hasher.update(entry.txid.to_byte_array());
+        hasher.update([tx_status_as_byte(&entry.status)]);
         self.checkpoint = hasher.finalize().into();
     }
 
     fn recompute_checkpoint(&mut self) {
         self.checkpoint = [0u8; 32];
         for i in 0..self.entries.len() {
-            let txid = self.entries[i].txid;
-            let status_byte = self.entries[i].status.as_byte();
+            let txid_bytes = self.entries[i].txid.to_byte_array();
+            let status_byte = tx_status_as_byte(&self.entries[i].status);
             let mut hasher = Keccak256::new();
             hasher.update(self.checkpoint);
-            hasher.update(txid);
+            hasher.update(txid_bytes);
             hasher.update([status_byte]);
             self.checkpoint = hasher.finalize().into();
         }
+    }
+}
+
+/// Executor implementation backed by StateLog — used by consensus-sim for testing.
+impl Executor for StateLog {
+    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
+        true
+    }
+
+    async fn execute_batch(
+        &mut self,
+        anchor_height: u64,
+        consensus_height: Height,
+        txs: &[bitcoin::Transaction],
+    ) {
+        let txids: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
+        self.apply_batch(anchor_height, consensus_height, &txids);
+    }
+
+    async fn execute_block(&mut self, block: &indexer_types::Block) {
+        let txids: Vec<Txid> = block.transactions.iter().map(|tx| tx.txid).collect();
+        self.apply_block(block.height, &txids);
+    }
+
+    async fn rollback_state(&mut self, to_anchor: u64) -> usize {
+        self.rollback_to(to_anchor)
+    }
+
+    async fn checkpoint(&self) -> Option<[u8; 32]> {
+        Some(self.checkpoint)
+    }
+
+    async fn last_batch_consensus_height_before(&self, anchor: u64) -> Option<Height> {
+        self.last_consensus_height_before(anchor)
+    }
+
+    async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool {
+        self.block_confirmed.contains(txid)
+    }
+
+    async fn last_executed_block_height(&self) -> Option<u64> {
+        self.entries
+            .iter()
+            .filter(|e| e.status == TxStatus::Confirmed)
+            .map(|e| e.anchor_height)
+            .max()
     }
 }
 
@@ -162,10 +238,10 @@ impl StateLog {
 mod tests {
     use super::*;
 
-    fn make_txid(n: u8) -> [u8; 32] {
-        let mut txid = [0u8; 32];
-        txid[0] = n;
-        txid
+    fn make_txid(n: u8) -> Txid {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        Txid::from_byte_array(bytes)
     }
 
     #[test]
@@ -199,12 +275,10 @@ mod tests {
         let tx2 = make_txid(2);
         let tx3 = make_txid(3);
 
-        // Batch contains tx1 and tx2
         log.apply_batch(100, Height::new(1), &[tx1, tx2]);
-        // Block contains tx1, tx2, tx3 — only tx3 should be added
         log.apply_block(100, &[tx1, tx2, tx3]);
 
-        assert_eq!(log.entries().len(), 3); // 2 batched + 1 confirmed
+        assert_eq!(log.entries().len(), 3);
         assert_eq!(log.status_of(&tx1), Some(&TxStatus::Batched));
         assert_eq!(log.status_of(&tx2), Some(&TxStatus::Batched));
         assert_eq!(log.status_of(&tx3), Some(&TxStatus::Confirmed));
@@ -218,7 +292,7 @@ mod tests {
         log.apply_batch(102, Height::new(3), &[make_txid(3)]);
 
         let removed = log.rollback_to(101);
-        assert_eq!(removed, 2); // entries at 101 and 102
+        assert_eq!(removed, 2);
         assert_eq!(log.entries().len(), 1);
         assert_eq!(log.status_of(&make_txid(1)), Some(&TxStatus::Batched));
         assert_eq!(log.status_of(&make_txid(2)), None);
@@ -228,15 +302,15 @@ mod tests {
     #[test]
     fn checkpoint_changes_on_append() {
         let mut log = StateLog::new();
-        let initial = log.checkpoint();
+        let initial = StateLog::checkpoint(&log);
         assert_eq!(initial, [0u8; 32]);
 
         log.apply_batch(100, Height::new(1), &[make_txid(1)]);
-        let after_one = log.checkpoint();
+        let after_one = StateLog::checkpoint(&log);
         assert_ne!(after_one, initial);
 
         log.apply_batch(100, Height::new(1), &[make_txid(2)]);
-        let after_two = log.checkpoint();
+        let after_two = StateLog::checkpoint(&log);
         assert_ne!(after_two, after_one);
     }
 
@@ -244,13 +318,13 @@ mod tests {
     fn checkpoint_restored_after_rollback() {
         let mut log = StateLog::new();
         log.apply_batch(100, Height::new(1), &[make_txid(1)]);
-        let checkpoint_at_100 = log.checkpoint();
+        let checkpoint_at_100 = StateLog::checkpoint(&log);
 
         log.apply_batch(101, Height::new(2), &[make_txid(2)]);
-        assert_ne!(log.checkpoint(), checkpoint_at_100);
+        assert_ne!(StateLog::checkpoint(&log), checkpoint_at_100);
 
         log.rollback_to(101);
-        assert_eq!(log.checkpoint(), checkpoint_at_100);
+        assert_eq!(StateLog::checkpoint(&log), checkpoint_at_100);
     }
 
     #[test]
@@ -262,12 +336,12 @@ mod tests {
         log_a.apply_batch(100, Height::new(1), &txids);
         log_b.apply_batch(100, Height::new(1), &txids);
 
-        assert_eq!(log_a.checkpoint(), log_b.checkpoint());
+        assert_eq!(StateLog::checkpoint(&log_a), StateLog::checkpoint(&log_b));
 
         log_a.apply_block(100, &[make_txid(3)]);
         log_b.apply_block(100, &[make_txid(3)]);
 
-        assert_eq!(log_a.checkpoint(), log_b.checkpoint());
+        assert_eq!(StateLog::checkpoint(&log_a), StateLog::checkpoint(&log_b));
     }
 
     #[test]
@@ -291,9 +365,9 @@ mod tests {
         log.apply_block(100, &[make_txid(3)]);
 
         let at_100 = log.entries_at_anchor(100);
-        assert_eq!(at_100.len(), 2); // tx1 (batched) + tx3 (confirmed)
+        assert_eq!(at_100.len(), 2);
 
         let at_101 = log.entries_at_anchor(101);
-        assert_eq!(at_101.len(), 1); // tx2 (batched)
+        assert_eq!(at_101.len(), 1);
     }
 }
