@@ -28,9 +28,20 @@ pub struct StateEntry {
     pub status: TxStatus,
 }
 
+/// Maps consensus height → anchor height for rollback recovery.
+#[derive(Debug, Clone)]
+struct BatchHeightEntry {
+    consensus_height: Height,
+    anchor_height: u64,
+}
+
 pub struct StateLog {
     entries: Vec<StateEntry>,
     checkpoint: [u8; 32],
+    batch_heights: Vec<BatchHeightEntry>,
+    /// Txids seen in confirmed Bitcoin blocks (for finality checks).
+    /// Includes batched txids that were skipped for execution.
+    block_confirmed: HashSet<Txid>,
 }
 
 impl Default for StateLog {
@@ -44,6 +55,8 @@ impl StateLog {
         Self {
             entries: Vec::new(),
             checkpoint: [0u8; 32],
+            batch_heights: Vec::new(),
+            block_confirmed: HashSet::new(),
         }
     }
 
@@ -92,6 +105,10 @@ impl StateLog {
 
     /// Append entries for a decided batch. All txids get `Batched` status.
     pub fn apply_batch(&mut self, anchor_height: u64, consensus_height: Height, txids: &[Txid]) {
+        self.batch_heights.push(BatchHeightEntry {
+            consensus_height,
+            anchor_height,
+        });
         for txid in txids {
             let entry = StateEntry {
                 anchor_height,
@@ -104,9 +121,22 @@ impl StateLog {
         }
     }
 
+    /// Return the highest consensus height whose anchor_height < `anchor`.
+    pub fn last_consensus_height_before(&self, anchor: u64) -> Option<Height> {
+        self.batch_heights
+            .iter()
+            .filter(|e| e.anchor_height < anchor)
+            .max_by_key(|e| e.consensus_height)
+            .map(|e| e.consensus_height)
+    }
+
     /// Append entries for a bitcoin block's transactions. Skips txids already in `Batched` status
     /// (deduplication — batched txs take priority).
     pub fn apply_block(&mut self, height: u64, txids: &[Txid]) {
+        // Record all txids as block-confirmed (for finality checks),
+        // even batched ones that we skip for execution.
+        self.block_confirmed.extend(txids);
+
         let batched = self.batched_txids();
         for txid in txids {
             if batched.contains(txid) {
@@ -127,6 +157,10 @@ impl StateLog {
     pub fn rollback_to(&mut self, anchor_height: u64) -> usize {
         let before = self.entries.len();
         self.entries.retain(|e| e.anchor_height < anchor_height);
+        self.batch_heights
+            .retain(|e| e.anchor_height < anchor_height);
+        // Rebuild block_confirmed from surviving entries
+        self.block_confirmed.clear();
         let removed = before - self.entries.len();
         self.recompute_checkpoint();
         removed
@@ -160,9 +194,14 @@ impl Executor for StateLog {
         true
     }
 
-    async fn execute_batch(&mut self, anchor_height: u64, txs: &[bitcoin::Transaction]) {
+    async fn execute_batch(
+        &mut self,
+        anchor_height: u64,
+        consensus_height: Height,
+        txs: &[bitcoin::Transaction],
+    ) {
         let txids: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
-        self.apply_batch(anchor_height, Height::new(0), &txids);
+        self.apply_batch(anchor_height, consensus_height, &txids);
     }
 
     async fn execute_block(&mut self, block: &indexer_types::Block) {
@@ -176,6 +215,22 @@ impl Executor for StateLog {
 
     async fn checkpoint(&self) -> Option<[u8; 32]> {
         Some(self.checkpoint)
+    }
+
+    async fn last_batch_consensus_height_before(&self, anchor: u64) -> Option<Height> {
+        self.last_consensus_height_before(anchor)
+    }
+
+    async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool {
+        self.block_confirmed.contains(txid)
+    }
+
+    async fn last_executed_block_height(&self) -> Option<u64> {
+        self.entries
+            .iter()
+            .filter(|e| e.status == TxStatus::Confirmed)
+            .map(|e| e.anchor_height)
+            .max()
     }
 }
 

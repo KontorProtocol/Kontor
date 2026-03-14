@@ -153,7 +153,11 @@ impl ConsensusState {
         self.pending_batches.push(pending);
     }
 
-    pub fn check_finality(&mut self, bitcoin_state: &BitcoinState) -> Vec<FinalityEvent> {
+    pub async fn check_finality(
+        &mut self,
+        executor: &impl Executor,
+        bitcoin_state: &BitcoinState,
+    ) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
         let tip = bitcoin_state.chain_tip;
 
@@ -171,12 +175,13 @@ impl ConsensusState {
         at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
 
         for batch in &at_deadline {
-            let missing: Vec<bitcoin::Txid> = batch
-                .transactions
-                .iter()
-                .map(|tx| tx.compute_txid())
-                .filter(|txid| !bitcoin_state.confirmed_txids.contains_key(txid))
-                .collect();
+            let mut missing = Vec::new();
+            for tx in &batch.transactions {
+                let txid = tx.compute_txid();
+                if !executor.is_confirmed_on_chain(&txid).await {
+                    missing.push(txid);
+                }
+            }
 
             if missing.is_empty() {
                 info!(
@@ -231,7 +236,7 @@ impl ConsensusState {
         }
     }
 
-    fn emit_state_event(&self, event: StateEvent) {
+    pub fn emit_state_event(&self, event: StateEvent) {
         if let Some(tx) = &self.state_tx {
             let _ = tx.try_send(event);
         }
@@ -243,7 +248,7 @@ impl ConsensusState {
         executor: &mut impl Executor,
         bitcoin_state: &BitcoinState,
     ) {
-        let finality_events = self.check_finality(bitcoin_state);
+        let finality_events = self.check_finality(executor, bitcoin_state).await;
         for event in &finality_events {
             if let FinalityEvent::Rollback { from_anchor, .. } = event {
                 let removed = executor.rollback_state(*from_anchor).await;
@@ -262,6 +267,10 @@ impl ConsensusState {
     }
 
     /// Execute a decided batch, then flush all pending blocks.
+    ///
+    /// If blocks at or above the anchor height were already executed (e.g. by a
+    /// pending-block timeout), rolls back the executor and resets bitcoin state
+    /// so that blocks are re-processed in correct order (batch first, then block).
     pub async fn process_decided_batch(
         &mut self,
         executor: &mut impl Executor,
@@ -270,7 +279,27 @@ impl ConsensusState {
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
     ) {
-        executor.execute_batch(anchor_height, batch_txs).await;
+        // Detect timeout race: blocks executed before this batch was decided
+        if let Some(last_block) = executor.last_executed_block_height().await
+            && last_block >= anchor_height
+        {
+            warn!(
+                anchor_height,
+                last_block, "Timeout race detected — rolling back to re-apply batch before blocks"
+            );
+            let removed = executor.rollback_state(anchor_height).await;
+            bitcoin_state.reset();
+
+            self.emit_state_event(StateEvent::RollbackExecuted {
+                to_anchor: anchor_height,
+                entries_removed: removed,
+                checkpoint: executor.checkpoint().await,
+            });
+        }
+
+        executor
+            .execute_batch(anchor_height, consensus_height, batch_txs)
+            .await;
 
         while let Some(block) = bitcoin_state.pending_blocks.pop_front() {
             executor.execute_block(&block).await;

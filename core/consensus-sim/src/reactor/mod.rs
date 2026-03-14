@@ -16,8 +16,8 @@ use indexer::reactor::executor::Executor;
 
 pub use types::{FinalityEvent, StateEvent};
 
-/// How long to wait for a batch to be decided before executing a buffered block.
-const PENDING_BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default: how long to wait for a batch to be decided before executing a buffered block.
+pub const DEFAULT_PENDING_BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run the reactor loop, handling both consensus messages and bitcoin events.
 #[allow(clippy::too_many_arguments)]
@@ -30,6 +30,33 @@ pub async fn run(
     block_rx: &mut mpsc::Receiver<BlockEvent>,
     mempool_rx: &mut mpsc::Receiver<MempoolEvent>,
     cancel: CancellationToken,
+) -> anyhow::Result<()> {
+    run_with_timeout(
+        consensus_state,
+        executor,
+        bitcoin_state,
+        node_index,
+        channels,
+        block_rx,
+        mempool_rx,
+        cancel,
+        DEFAULT_PENDING_BLOCK_TIMEOUT,
+    )
+    .await
+}
+
+/// Run the reactor loop with a custom pending block timeout.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_timeout(
+    consensus_state: &mut ConsensusState,
+    executor: &mut impl Executor,
+    bitcoin_state: &mut BitcoinState,
+    node_index: usize,
+    channels: &mut Channels<Ctx>,
+    block_rx: &mut mpsc::Receiver<BlockEvent>,
+    mempool_rx: &mut mpsc::Receiver<MempoolEvent>,
+    cancel: CancellationToken,
+    pending_block_timeout: Duration,
 ) -> anyhow::Result<()> {
     let mut pending_deadline: Option<Instant> = None;
 
@@ -53,20 +80,40 @@ pub async fn run(
                         );
 
                         bitcoin_state.pending_blocks.push_back(block);
-                        if pending_deadline.is_none() {
-                            pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
-                        }
 
                         if consensus_state
                             .pending_batches
                             .iter()
                             .any(|b| b.deadline <= bitcoin_state.chain_tip)
                         {
+                            // Drain pending blocks so executor has seen them before finality checks
+                            while let Some(pending) = bitcoin_state.pending_blocks.pop_front() {
+                                executor.execute_block(&pending).await;
+                            }
+                            pending_deadline = None;
                             consensus_state.run_finality_checks(executor, bitcoin_state).await;
+                        } else if pending_deadline.is_none() {
+                            pending_deadline = Some(Instant::now() + pending_block_timeout);
                         }
                     }
                     BlockEvent::Rollback { to_height } => {
-                        info!(to_height, "Bitcoin rollback");
+                        let removed = executor.rollback_state(to_height).await;
+                        let resume_height = executor.last_batch_consensus_height_before(to_height).await;
+                        bitcoin_state.reset();
+                        pending_deadline = None;
+
+                        info!(
+                            to_height,
+                            removed,
+                            ?resume_height,
+                            "Bitcoin rollback"
+                        );
+
+                        consensus_state.emit_state_event(StateEvent::RollbackExecuted {
+                            to_anchor: to_height,
+                            entries_removed: removed,
+                            checkpoint: executor.checkpoint().await,
+                        });
                     }
                 }
             }
