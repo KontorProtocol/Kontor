@@ -302,12 +302,14 @@ impl Reactor {
                                     self.rollback(to_height).await?;
                                 },
                                 BitcoinEvent::MempoolSync(txs) => {
-                                    self.bitcoin_state.track_mempool_sync(txs.iter().map(|tx| tx.txid));
-                                    info!("MempoolSync {}", txs.len());
+                                    let count = txs.len();
+                                    self.bitcoin_state.track_mempool_sync(txs.into_iter());
+                                    info!("MempoolSync {}", count);
                                 },
                                 BitcoinEvent::MempoolInsert(tx) => {
-                                    self.bitcoin_state.track_mempool_insert(tx.txid);
-                                    debug!("MempoolInsert {}", tx.txid);
+                                    let txid = tx.compute_txid();
+                                    self.bitcoin_state.track_mempool_insert(tx);
+                                    debug!("MempoolInsert {}", txid);
                                 },
                                 BitcoinEvent::MempoolRemove(txid) => {
                                     self.bitcoin_state.track_mempool_remove(&txid);

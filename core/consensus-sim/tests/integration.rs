@@ -66,7 +66,7 @@ async fn decided_values_contain_mempool_txids() {
 
     let mut mock = MockBitcoin::new(0);
     let events = mock.generate_mempool_txs(3);
-    let expected_txids: Vec<bitcoin::Txid> = mock.mempool().iter().map(|tx| tx.txid).collect();
+    let expected_txids: Vec<bitcoin::Txid> = mock.mempool_txids();
 
     for event in events {
         cluster.send_bitcoin_event(event);
@@ -76,9 +76,10 @@ async fn decided_values_contain_mempool_txids() {
 
     // At least one node should have decided a value containing our txids
     let decided_value = &results[0][0].value;
+    let decided_txids = decided_value.txids();
     for expected in &expected_txids {
         assert!(
-            decided_value.txids.contains(expected),
+            decided_txids.contains(expected),
             "Decided value missing expected txid"
         );
     }
@@ -152,7 +153,7 @@ async fn empty_mempool_produces_empty_batch() {
             "Node {i} should have decided at least 1 value"
         );
         assert!(
-            node_decisions[0].value.txids.is_empty(),
+            node_decisions[0].value.transactions.is_empty(),
             "Node {i} decided a value with txids, expected empty"
         );
     }
@@ -236,7 +237,7 @@ async fn missing_tx_invalidation() {
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let decided_txids = decided.value.txids.clone();
+    let decided_txids = decided.value.txids();
     assert!(
         decided_txids.len() >= 3,
         "Expected at least 3 txids in decided batch"
@@ -414,7 +415,7 @@ async fn unbatched_txs_skip_batched_duplicates() {
     // Wait for consensus to decide a batch containing these txids
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let batch_txid_count = decided.value.txids.len();
+    let batch_txid_count = decided.value.transactions.len();
 
     // Mine a block that confirms the same txids — they overlap with the batch
     for event in mock.mine_block_all() {
@@ -533,7 +534,7 @@ async fn rollback_preserves_pre_anchor_state() {
         cluster.send_bitcoin_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    let batch1_txids = results[0][0].value.txids.clone();
+    let batch1_txids = results[0][0].value.txids();
 
     // Mine block 1 confirming batch 1's txids — batch 1 will finalize
     for event in mock.mine_block(&batch1_txids) {
