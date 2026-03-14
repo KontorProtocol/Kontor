@@ -23,7 +23,7 @@ use crate::consensus::{
 };
 
 use super::bitcoin_state::BitcoinState;
-use super::executor::{Executor, TxStatus};
+use super::executor::Executor;
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
@@ -242,7 +242,6 @@ impl ConsensusState {
         &mut self,
         executor: &mut impl Executor,
         bitcoin_state: &BitcoinState,
-        _replay_up_to: u64,
     ) {
         let finality_events = self.check_finality(bitcoin_state);
         for event in &finality_events {
@@ -256,15 +255,13 @@ impl ConsensusState {
                     checkpoint: executor.checkpoint().await,
                 });
 
-                // Block-by-block replay after rollback is deferred to Phase 6d
-                // which will simplify the execution model to execute-on-arrival.
                 self.last_processed_anchor = from_anchor.saturating_sub(1);
             }
         }
         self.emit_finality_events(&finality_events);
     }
 
-    /// Two-phase processing triggered when a batch is decided at anchor A.
+    /// Execute a decided batch, then flush the pending block if it's at the same height.
     pub async fn process_decided_batch(
         &mut self,
         executor: &mut impl Executor,
@@ -273,24 +270,18 @@ impl ConsensusState {
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
     ) {
-        // Phase 1: process queued blocks before this anchor
-        // Note: block replay skipped here — block_history only stores txids, not full txs.
-        // Phase 6d will simplify this to execute-on-arrival.
-        while let Some(&next) = bitcoin_state.pending_blocks.front() {
-            if next >= anchor_height {
-                break;
+        executor.execute_batch(anchor_height, batch_txs).await;
+
+        // If a block was buffered waiting for this batch, execute it now
+        if let Some(block) = bitcoin_state.pending_block.take() {
+            if block.height <= anchor_height {
+                executor.execute_block(&block).await;
+            } else {
+                // Block is for a future height, put it back
+                bitcoin_state.pending_block = Some(block);
             }
-            bitcoin_state.pending_blocks.pop_front();
         }
 
-        // Phase 2: apply batch txs
-        for tx in batch_txs {
-            executor
-                .execute_transaction(anchor_height, tx, TxStatus::Batched)
-                .await;
-        }
-
-        bitcoin_state.pending_blocks.retain(|h| *h != anchor_height);
         self.last_processed_anchor = anchor_height;
 
         self.emit_state_event(StateEvent::BatchApplied {

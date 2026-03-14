@@ -5,7 +5,13 @@ use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
 use indexer::consensus::Height;
-use indexer::reactor::executor::{Executor, TxStatus};
+use indexer::reactor::executor::Executor;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxStatus {
+    Batched,
+    Confirmed,
+}
 
 fn tx_status_as_byte(status: &TxStatus) -> u8 {
     match status {
@@ -154,13 +160,14 @@ impl Executor for StateLog {
         true
     }
 
-    async fn execute_transaction(
-        &mut self,
-        anchor_height: u64,
-        tx: &bitcoin::Transaction,
-        status: TxStatus,
-    ) {
-        self.append_entry(anchor_height, tx.compute_txid(), status);
+    async fn execute_batch(&mut self, anchor_height: u64, txs: &[bitcoin::Transaction]) {
+        let txids: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
+        self.apply_batch(anchor_height, Height::new(0), &txids);
+    }
+
+    async fn execute_block(&mut self, block: &indexer_types::Block) {
+        let txids: Vec<Txid> = block.transactions.iter().map(|tx| tx.txid).collect();
+        self.apply_block(block.height, &txids);
     }
 
     async fn rollback_state(&mut self, to_anchor: u64) -> usize {
