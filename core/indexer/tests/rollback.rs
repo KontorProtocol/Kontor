@@ -5,7 +5,7 @@ use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use indexer::{
-    bitcoin_follower::event::BitcoinEvent,
+    bitcoin_follower::event::BlockEvent,
     database::queries,
     reactor,
     test_utils::{gen_random_blocks, new_random_blockchain, new_test_db},
@@ -24,14 +24,14 @@ async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHas
 }
 
 async fn send_block_and_wait(
-    tx: &mpsc::Sender<BitcoinEvent>,
+    tx: &mpsc::Sender<BlockEvent>,
     conn: &libsql::Connection,
     block: &indexer_types::Block,
     target_height: u64,
 ) {
     let hash = block.hash;
     let height = block.height as i64;
-    tx.send(BitcoinEvent::BlockInsert {
+    tx.send(BlockEvent::BlockInsert {
         target_height,
         block: block.clone(),
     })
@@ -48,12 +48,14 @@ async fn test_reactor_fetching() -> Result<()> {
 
     let blocks = new_random_blockchain(5);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         None,
         None,
@@ -85,12 +87,14 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
 
     let blocks = new_random_blockchain(3);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         None,
         None,
@@ -106,9 +110,7 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     let initial_block_3_hash = blocks[2].hash;
 
     // Rollback to height 2 (remove block 3), then insert new blocks 3-5
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 2 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 2 }).await?;
 
     let new_blocks = gen_random_blocks(2, 5, Some(blocks[1].hash));
     let target = 5;
@@ -142,12 +144,14 @@ async fn test_reactor_deep_rollback() -> Result<()> {
 
     let blocks = new_random_blockchain(4);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         None,
         None,
@@ -161,9 +165,7 @@ async fn test_reactor_deep_rollback() -> Result<()> {
     }
 
     // Roll back to height 1 (remove blocks 2-4)
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
 
     // Insert new chain from block 1
     let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
@@ -197,12 +199,14 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
 
     let blocks = new_random_blockchain(2);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         None,
         None,
@@ -228,9 +232,7 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
     assert_eq!(block.hash, more_blocks[1].hash);
 
     // Roll back to height 1, insert entirely new chain
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
 
     let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
     let target = 4;

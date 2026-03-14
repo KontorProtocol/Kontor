@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
-use indexer::bitcoin_follower::event::BitcoinEvent;
+use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use indexer::consensus::finality_types::FINALITY_WINDOW;
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
@@ -59,7 +59,8 @@ pub async fn run_node(
     index: usize,
     engine_config: EngineConfig,
     genesis: Genesis,
-    mut bitcoin_rx: mpsc::Receiver<BitcoinEvent>,
+    mut block_rx: mpsc::Receiver<BlockEvent>,
+    mut mempool_rx: mpsc::Receiver<MempoolEvent>,
     decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     finality_tx: Option<mpsc::Sender<FinalityEvent>>,
     state_tx: Option<mpsc::Sender<StateEvent>>,
@@ -96,7 +97,8 @@ pub async fn run_node(
         &mut bitcoin_state,
         index,
         &mut channels,
-        &mut bitcoin_rx,
+        &mut block_rx,
+        &mut mempool_rx,
         cancel,
     )
     .await
@@ -107,7 +109,8 @@ pub async fn run_node(
 
 /// Handle to a running cluster of validators.
 pub struct ClusterHandle {
-    pub bitcoin_tx: broadcast::Sender<BitcoinEvent>,
+    pub block_tx: broadcast::Sender<BlockEvent>,
+    pub mempool_tx: broadcast::Sender<MempoolEvent>,
     pub decided_rx: mpsc::Receiver<DecidedBatch>,
     pub finality_rx: mpsc::Receiver<FinalityEvent>,
     pub state_rx: mpsc::Receiver<StateEvent>,
@@ -140,9 +143,14 @@ impl ClusterHandle {
         }
     }
 
-    /// Send a bitcoin event to all nodes.
-    pub fn send_bitcoin_event(&self, event: BitcoinEvent) {
-        let _ = self.bitcoin_tx.send(event);
+    /// Send a block event to all nodes.
+    pub fn send_block_event(&self, event: BlockEvent) {
+        let _ = self.block_tx.send(event);
+    }
+
+    /// Send a mempool event to all nodes.
+    pub fn send_mempool_event(&self, event: MempoolEvent) {
+        let _ = self.mempool_tx.send(event);
     }
 
     /// Collect decided batches until we have at least `count` per node, or timeout.
@@ -250,7 +258,8 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
 
     let ports = allocate_ports(n)?;
 
-    let (bitcoin_tx, _) = broadcast::channel::<BitcoinEvent>(256);
+    let (block_tx, _) = broadcast::channel::<BlockEvent>(256);
+    let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
     let cancel = CancellationToken::new();
 
     // Single merged channels for observation
@@ -266,10 +275,35 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
         let engine_config = make_engine_config(i, &ports, private_key);
         let cancel = cancel.clone();
 
-        // Per-node: bridge broadcast → mpsc for bitcoin events
-        let bitcoin_rx = {
+        // Per-node: bridge broadcast → mpsc for block events
+        let node_block_rx = {
             let (tx, rx) = mpsc::channel(256);
-            let mut brx = bitcoin_tx.subscribe();
+            let mut brx = block_tx.subscribe();
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        result = brx.recv() => {
+                            match result {
+                                Ok(event) => {
+                                    if tx.send(event).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+            });
+            rx
+        };
+
+        // Per-node: bridge broadcast → mpsc for mempool events
+        let node_mempool_rx = {
+            let (tx, rx) = mpsc::channel(256);
+            let mut brx = mempool_tx.subscribe();
             let cancel = cancel.clone();
             tokio::spawn(async move {
                 loop {
@@ -302,7 +336,8 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
                     i,
                     engine_config,
                     genesis,
-                    bitcoin_rx,
+                    node_block_rx,
+                    node_mempool_rx,
                     Some(dtx),
                     Some(ftx),
                     Some(stx),
@@ -319,7 +354,8 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     }
 
     Ok(ClusterHandle {
-        bitcoin_tx,
+        block_tx,
+        mempool_tx,
         decided_rx,
         finality_rx,
         state_rx,

@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use malachitebft_app_channel::Channels;
 
-use indexer::bitcoin_follower::event::BitcoinEvent;
+use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use indexer::consensus::Ctx;
 use indexer::reactor::bitcoin_state::BitcoinState;
 use indexer::reactor::consensus::{ConsensusState, handle_consensus_msg};
@@ -20,13 +20,15 @@ pub use types::{FinalityEvent, StateEvent};
 const PENDING_BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run the reactor loop, handling both consensus messages and bitcoin events.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     consensus_state: &mut ConsensusState,
     executor: &mut impl Executor,
     bitcoin_state: &mut BitcoinState,
     node_index: usize,
     channels: &mut Channels<Ctx>,
-    bitcoin_rx: &mut mpsc::Receiver<BitcoinEvent>,
+    block_rx: &mut mpsc::Receiver<BlockEvent>,
+    mempool_rx: &mut mpsc::Receiver<MempoolEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let mut pending_deadline: Option<Instant> = None;
@@ -37,9 +39,9 @@ pub async fn run(
                 info!("Reactor cancelled");
                 return Ok(());
             }
-            Some(event) = bitcoin_rx.recv() => {
+            Some(event) = block_rx.recv() => {
                 match event {
-                    BitcoinEvent::BlockInsert { block, .. } => {
+                    BlockEvent::BlockInsert { block, .. } => {
                         let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
                         bitcoin_state.track_block(block.height, &txids);
 
@@ -50,8 +52,6 @@ pub async fn run(
                             "Block received"
                         );
 
-                        // Buffer the block until the next batch is decided.
-                        // process_decided_batch will flush it after executing the batch.
                         bitcoin_state.pending_block = Some(block);
                         pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
 
@@ -63,21 +63,25 @@ pub async fn run(
                             consensus_state.run_finality_checks(executor, bitcoin_state).await;
                         }
                     }
-                    BitcoinEvent::MempoolInsert(tx) => {
+                    BlockEvent::Rollback { to_height } => {
+                        info!(to_height, "Bitcoin rollback");
+                    }
+                }
+            }
+            Some(event) = mempool_rx.recv() => {
+                match event {
+                    MempoolEvent::Insert(tx) => {
                         let txid = tx.compute_txid();
                         bitcoin_state.track_mempool_insert(tx);
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool insert");
                     }
-                    BitcoinEvent::MempoolRemove(txid) => {
+                    MempoolEvent::Remove(txid) => {
                         bitcoin_state.track_mempool_remove(&txid);
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool remove");
                     }
-                    BitcoinEvent::MempoolSync(txs) => {
+                    MempoolEvent::Sync(txs) => {
                         bitcoin_state.track_mempool_sync(txs.into_iter());
                         info!(mempool = bitcoin_state.mempool.len(), "Mempool sync");
-                    }
-                    BitcoinEvent::Rollback { to_height } => {
-                        info!(to_height, "Bitcoin rollback");
                     }
                 }
             }

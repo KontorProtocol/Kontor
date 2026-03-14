@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         .map(|b| (b.height as u64, b.hash))
         .collect();
 
-    let (bitcoin_event_rx, follower_handle) = bitcoin_follower::run(
+    let (block_rx, mempool_rx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
         block::filter_map,
         cancel_token.clone(),
@@ -107,7 +107,8 @@ async fn main() -> Result<()> {
         config.starting_block_height,
         cancel_token.clone(),
         writer,
-        bitcoin_event_rx,
+        block_rx,
+        mempool_rx,
         Some(init_tx),
         Some(event_tx),
         Some(simulate_rx),
