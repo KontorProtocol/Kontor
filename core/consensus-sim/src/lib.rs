@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
-use indexer::consensus::finality_types::FINALITY_WINDOW;
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use indexer::reactor::bitcoin_state::BitcoinState;
@@ -66,6 +65,7 @@ pub async fn run_node(
     state_tx: Option<mpsc::Sender<StateEvent>>,
     ready_tx: Option<mpsc::Sender<usize>>,
     cancel: CancellationToken,
+    pending_block_timeout: Option<Duration>,
 ) -> Result<()> {
     let engine_output = start_engine(engine_config, &genesis)
         .await
@@ -88,10 +88,11 @@ pub async fn run_node(
     consensus_state.state_tx = state_tx;
 
     let mut executor = state_log::StateLog::new();
-    let mut bitcoin_state = BitcoinState::new(FINALITY_WINDOW + 6);
+    let mut bitcoin_state = BitcoinState::new();
     let mut channels = engine_output.channels;
 
-    reactor::run(
+    let timeout = pending_block_timeout.unwrap_or(reactor::DEFAULT_PENDING_BLOCK_TIMEOUT);
+    reactor::run_with_timeout(
         &mut consensus_state,
         &mut executor,
         &mut bitcoin_state,
@@ -100,6 +101,7 @@ pub async fn run_node(
         &mut block_rx,
         &mut mempool_rx,
         cancel,
+        timeout,
     )
     .await
     .map_err(|e| eyre::eyre!("{e}"))?;
@@ -118,6 +120,13 @@ pub struct ClusterHandle {
     join_set: JoinSet<()>,
     node_count: usize,
     ready_rx: mpsc::Receiver<usize>,
+    // Stored for add_node
+    genesis: Genesis,
+    ports: Vec<u16>,
+    decided_tx: mpsc::Sender<DecidedBatch>,
+    finality_tx: mpsc::Sender<FinalityEvent>,
+    state_tx: mpsc::Sender<StateEvent>,
+    ready_tx: mpsc::Sender<usize>,
 }
 
 impl ClusterHandle {
@@ -141,6 +150,116 @@ impl ClusterHandle {
                 }
             }
         }
+    }
+
+    /// Wait for a single node to signal readiness.
+    pub async fn wait_for_node_ready(&mut self) {
+        let timeout = Duration::from_secs(30);
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        tokio::select! {
+            _ = &mut deadline => {
+                panic!("Node readiness timeout after {timeout:?}");
+            }
+            Some(_node_index) = self.ready_rx.recv() => {}
+        }
+    }
+
+    /// Add a new node to the running cluster. Allocates a port, bridges
+    /// broadcast events, and spawns the node. Call `wait_for_node_ready`
+    /// after to ensure the engine is up.
+    pub fn add_node(&mut self, private_key: PrivateKey) -> Result<usize> {
+        let index = self.node_count;
+
+        // Allocate a port for the new node
+        let new_ports = allocate_ports(1).map_err(|e| eyre::eyre!("{e}"))?;
+        self.ports.push(new_ports[0]);
+
+        let engine_config = make_engine_config(index, &self.ports, private_key);
+
+        // Bridge broadcast → mpsc for block events
+        let node_block_rx = {
+            let (tx, rx) = mpsc::channel(256);
+            let mut brx = self.block_tx.subscribe();
+            let cancel = self.cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        result = brx.recv() => {
+                            match result {
+                                Ok(event) => {
+                                    if tx.send(event).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+            });
+            rx
+        };
+
+        // Bridge broadcast → mpsc for mempool events
+        let node_mempool_rx = {
+            let (tx, rx) = mpsc::channel(256);
+            let mut brx = self.mempool_tx.subscribe();
+            let cancel = self.cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        result = brx.recv() => {
+                            match result {
+                                Ok(event) => {
+                                    if tx.send(event).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+            });
+            rx
+        };
+
+        let genesis = self.genesis.clone();
+        let dtx = self.decided_tx.clone();
+        let ftx = self.finality_tx.clone();
+        let stx = self.state_tx.clone();
+        let rtx = self.ready_tx.clone();
+        let cancel = self.cancel.clone();
+
+        self.join_set.spawn(
+            async move {
+                if let Err(e) = run_node(
+                    index,
+                    engine_config,
+                    genesis,
+                    node_block_rx,
+                    node_mempool_rx,
+                    Some(dtx),
+                    Some(ftx),
+                    Some(stx),
+                    Some(rtx),
+                    cancel,
+                    None,
+                )
+                .await
+                {
+                    tracing::error!(node = index, error = %e, "Node exited with error");
+                }
+            }
+            .instrument(tracing::info_span!("validator", id = index)),
+        );
+
+        self.node_count += 1;
+        Ok(index)
     }
 
     /// Send a block event to all nodes.
@@ -247,7 +366,44 @@ impl ClusterHandle {
 pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     let mut rng = rand::thread_rng();
     let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
+    let timeouts = vec![None; n];
+    run_cluster_from_keys(private_keys, n, timeouts).await
+}
 
+/// Spin up a cluster where each node can have a custom pending block timeout.
+/// `timeouts[i]` = `Some(dur)` gives node `i` that timeout; `None` uses the default.
+pub async fn run_cluster_with_timeouts(
+    n: usize,
+    timeouts: Vec<Option<Duration>>,
+) -> Result<ClusterHandle> {
+    assert_eq!(n, timeouts.len());
+    let mut rng = rand::thread_rng();
+    let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
+    run_cluster_from_keys(private_keys, n, timeouts).await
+}
+
+/// Create a cluster with `total` validators in genesis but only start `start_count`.
+/// Returns the cluster handle and the private keys of the unstarted nodes.
+pub async fn run_cluster_delayed(
+    total: usize,
+    start_count: usize,
+) -> Result<(ClusterHandle, Vec<PrivateKey>)> {
+    assert!(start_count <= total);
+    let mut rng = rand::thread_rng();
+    let private_keys: Vec<PrivateKey> =
+        (0..total).map(|_| PrivateKey::generate(&mut rng)).collect();
+    let remaining_keys = private_keys[start_count..].to_vec();
+    let timeouts = vec![None; start_count];
+    let handle = run_cluster_from_keys(private_keys, start_count, timeouts).await?;
+    Ok((handle, remaining_keys))
+}
+
+/// Internal: create genesis from all keys, start `start_count` nodes.
+async fn run_cluster_from_keys(
+    private_keys: Vec<PrivateKey>,
+    start_count: usize,
+    timeouts: Vec<Option<Duration>>,
+) -> Result<ClusterHandle> {
     let validators: Vec<Validator> = private_keys
         .iter()
         .map(|pk| Validator::new(pk.public_key(), 1 as VotingPower))
@@ -256,7 +412,7 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     let validator_set = ValidatorSet::new(validators);
     let genesis = Genesis { validator_set };
 
-    let ports = allocate_ports(n)?;
+    let ports = allocate_ports(start_count)?;
 
     let (block_tx, _) = broadcast::channel::<BlockEvent>(256);
     let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
@@ -266,14 +422,15 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     let (decided_tx, decided_rx) = mpsc::channel(1024);
     let (finality_tx, finality_rx) = mpsc::channel(1024);
     let (state_tx, state_rx) = mpsc::channel(1024);
-    let (ready_tx, ready_rx) = mpsc::channel(n);
+    let (ready_tx, ready_rx) = mpsc::channel(private_keys.len());
 
     let mut join_set = JoinSet::new();
 
-    for (i, private_key) in private_keys.into_iter().enumerate() {
+    for (i, private_key) in private_keys.into_iter().take(start_count).enumerate() {
         let genesis = genesis.clone();
         let engine_config = make_engine_config(i, &ports, private_key);
         let cancel = cancel.clone();
+        let node_timeout = timeouts.get(i).copied().flatten();
 
         // Per-node: bridge broadcast → mpsc for block events
         let node_block_rx = {
@@ -343,6 +500,7 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
                     Some(stx),
                     Some(rtx),
                     cancel,
+                    node_timeout,
                 )
                 .await
                 {
@@ -361,7 +519,13 @@ pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
         state_rx,
         cancel,
         join_set,
-        node_count: n,
+        node_count: start_count,
         ready_rx,
+        genesis,
+        ports,
+        decided_tx,
+        finality_tx,
+        state_tx,
+        ready_tx,
     })
 }

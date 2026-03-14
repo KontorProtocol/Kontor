@@ -156,19 +156,13 @@ impl Reactor {
             None
         };
 
-        let history_window = if consensus_handle.is_some() {
-            crate::consensus::finality_types::FINALITY_WINDOW + 6
-        } else {
-            12
-        };
-
         Ok(Self {
             writer,
             cancel_token,
             block_rx,
             mempool_rx,
             simulate_rx,
-            bitcoin_state: bitcoin_state::BitcoinState::new(history_window),
+            bitcoin_state: bitcoin_state::BitcoinState::new(),
             last_height,
             option_last_hash,
             init_tx,

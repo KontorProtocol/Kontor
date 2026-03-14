@@ -6,32 +6,30 @@ pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
     pub pending_blocks: VecDeque<indexer_types::Block>,
-    pub confirmed_txids: HashMap<Txid, u64>,
-    confirmed_txids_window: u64,
 }
 
 impl BitcoinState {
-    pub fn new(confirmed_txids_window: u64) -> Self {
+    pub fn new() -> Self {
         Self {
             mempool: HashMap::new(),
             chain_tip: 0,
             pending_blocks: VecDeque::new(),
-            confirmed_txids: HashMap::new(),
-            confirmed_txids_window,
         }
     }
 
-    /// Track a new block: update chain tip, remove txids from mempool,
-    /// and record confirmations.
+    /// Track a new block: update chain tip and remove txids from mempool.
     pub fn track_block(&mut self, height: u64, txids: &[Txid]) {
         self.chain_tip = height;
         for txid in txids {
             self.mempool.remove(txid);
-            self.confirmed_txids.entry(*txid).or_insert(height);
         }
+    }
 
-        let prune_below = height.saturating_sub(self.confirmed_txids_window);
-        self.confirmed_txids.retain(|_, h| *h >= prune_below);
+    /// Reset block-derived state after a rollback. Mempool is maintained
+    /// by the event stream and doesn't need resetting.
+    pub fn reset(&mut self) {
+        self.chain_tip = 0;
+        self.pending_blocks.clear();
     }
 
     pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
