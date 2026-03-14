@@ -297,7 +297,7 @@ async fn fetch_mempool<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
     cancel_token: &CancellationToken,
-) -> Result<(Vec<indexer_types::Transaction>, u64)> {
+) -> Result<(Vec<bitcoin::Transaction>, u64)> {
     let snapshot = retry(
         || bitcoin.get_raw_mempool_sequence(),
         "get raw mempool",
@@ -337,9 +337,15 @@ async fn fetch_mempool<C: BitcoinRpc>(
         );
     }
 
-    let filtered =
-        task::spawn_blocking(move || txs.into_par_iter().enumerate().filter_map(f).collect())
-            .await?;
+    // Filter through TransactionFilterMap to only keep relevant txs, but return
+    // the raw bitcoin::Transaction (not the parsed indexer_types::Transaction).
+    let filtered: Vec<bitcoin::Transaction> = task::spawn_blocking(move || {
+        txs.into_par_iter()
+            .enumerate()
+            .filter_map(|(i, tx)| f((i, tx.clone())).map(|_| tx))
+            .collect()
+    })
+    .await?;
 
     Ok((filtered, mempool_sequence))
 }
@@ -367,9 +373,9 @@ async fn process_delta<C: BitcoinRpc>(
             .await
             {
                 Ok(tx) => {
-                    if let Some(filtered) = f((0, tx))
+                    if f((0, tx.clone())).is_some()
                         && event_tx
-                            .send(BitcoinEvent::MempoolInsert(filtered))
+                            .send(BitcoinEvent::MempoolInsert(tx))
                             .await
                             .is_err()
                     {
@@ -576,7 +582,7 @@ mod tests {
 
         let (result, _) = fetch_mempool(&mock, f, &cancel).await.unwrap();
         assert_eq!(result.len(), 2);
-        let txids: Vec<_> = result.iter().map(|t| t.txid).collect();
+        let txids: Vec<_> = result.iter().map(|t| t.compute_txid()).collect();
         assert!(txids.contains(&txid1));
         assert!(txids.contains(&txid3));
     }
@@ -593,7 +599,7 @@ mod tests {
 
         assert_eq!(result.len(), 5);
         for txid in &expected_txids {
-            assert!(result.iter().any(|t| t.txid == *txid));
+            assert!(result.iter().any(|t| t.compute_txid() == *txid));
         }
     }
 
@@ -670,7 +676,7 @@ mod tests {
         assert!(open);
 
         match event_rx.try_recv().unwrap() {
-            BitcoinEvent::MempoolInsert(t) => assert_eq!(t.txid, txid),
+            BitcoinEvent::MempoolInsert(t) => assert_eq!(t.compute_txid(), txid),
             other => panic!("Expected MempoolInsert, got {:?}", other),
         }
     }
@@ -909,7 +915,7 @@ mod tests {
 
         let events = collect_events(&mut event_rx);
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(txs) if txs.len() == 3));
-        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.txid == txid3));
+        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.compute_txid() == txid3));
         assert_eq!(events.len(), 2);
     }
 
@@ -984,7 +990,7 @@ mod tests {
         assert!(matches!(&events[0], BitcoinEvent::MempoolSync(_)));
         // Only tx3 replayed (stale ones skipped)
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.txid == txid3));
+        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.compute_txid() == txid3));
     }
 
     #[tokio::test]

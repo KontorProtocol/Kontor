@@ -1,5 +1,3 @@
-use bitcoin::Txid;
-use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
 use serde::{Deserialize, Serialize};
@@ -13,19 +11,24 @@ use crate::consensus::{Address, Ctx, Height};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalData {
     pub anchor_height: u64,
-    pub txids: Vec<Txid>,
+    pub transactions: Vec<bitcoin::Transaction>,
 }
 
 impl ProposalData {
-    pub fn new(anchor_height: u64, txids: Vec<Txid>) -> Self {
+    pub fn new(anchor_height: u64, transactions: Vec<bitcoin::Transaction>) -> Self {
         Self {
             anchor_height,
-            txids,
+            transactions,
         }
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() + self.txids.len() * 32
+        std::mem::size_of::<u64>()
+            + self
+                .transactions
+                .iter()
+                .map(|tx| bitcoin::consensus::serialize(tx).len())
+                .sum::<usize>()
     }
 }
 
@@ -124,20 +127,19 @@ impl Protobuf for ProposalPart {
                     .and_then(Address::from_proto)?,
             })),
             Part::Data(data) => {
-                let txids: Vec<Txid> = data
-                    .txids
+                let transactions: Vec<bitcoin::Transaction> = data
+                    .transactions
                     .iter()
                     .map(|b| {
-                        let arr = <[u8; 32]>::try_from(b.as_ref()).map_err(|_| {
-                            ProtoError::Other(format!(
-                                "Invalid txid length: expected 32, got {}",
-                                b.len()
-                            ))
-                        })?;
-                        Ok(Txid::from_byte_array(arr))
+                        bitcoin::consensus::deserialize(b).map_err(|e| {
+                            ProtoError::Other(format!("Failed to decode transaction: {e}"))
+                        })
                     })
                     .collect::<Result<Vec<_>, ProtoError>>()?;
-                Ok(Self::Data(ProposalData::new(data.anchor_height, txids)))
+                Ok(Self::Data(ProposalData::new(
+                    data.anchor_height,
+                    transactions,
+                )))
             }
             Part::Fin(fin) => Ok(Self::Fin(ProposalFin {
                 signature: fin
@@ -164,10 +166,10 @@ impl Protobuf for ProposalPart {
             Self::Data(data) => Ok(Self::Proto {
                 part: Some(Part::Data(proto::ProposalData {
                     anchor_height: data.anchor_height,
-                    txids: data
-                        .txids
+                    transactions: data
+                        .transactions
                         .iter()
-                        .map(|t| Bytes::copy_from_slice(&t.to_byte_array()))
+                        .map(|tx| Bytes::from(bitcoin::consensus::serialize(tx)))
                         .collect(),
                 })),
             }),

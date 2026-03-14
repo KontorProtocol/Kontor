@@ -54,8 +54,8 @@ pub async fn run(
                         }
                     }
                     BitcoinEvent::MempoolInsert(tx) => {
-                        let txid = tx.txid;
-                        bitcoin_state.track_mempool_insert(txid);
+                        let txid = tx.compute_txid();
+                        bitcoin_state.track_mempool_insert(tx);
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool insert");
                     }
                     BitcoinEvent::MempoolRemove(txid) => {
@@ -63,7 +63,7 @@ pub async fn run(
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool remove");
                     }
                     BitcoinEvent::MempoolSync(txs) => {
-                        bitcoin_state.track_mempool_sync(txs.iter().map(|tx| tx.txid));
+                        bitcoin_state.track_mempool_sync(txs.into_iter());
                         info!(mempool = bitcoin_state.mempool.len(), "Mempool sync");
                     }
                     BitcoinEvent::Rollback { to_height } => {

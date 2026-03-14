@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bitcoin::Txid;
 
 pub struct BitcoinState {
-    pub mempool: HashSet<Txid>,
+    pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
     pub block_history: BTreeMap<u64, Vec<Txid>>,
     pub pending_blocks: VecDeque<u64>,
@@ -14,7 +14,7 @@ pub struct BitcoinState {
 impl BitcoinState {
     pub fn new(history_window: u64) -> Self {
         Self {
-            mempool: HashSet::new(),
+            mempool: HashMap::new(),
             chain_tip: 0,
             block_history: BTreeMap::new(),
             pending_blocks: VecDeque::new(),
@@ -39,16 +39,20 @@ impl BitcoinState {
         self.block_history.retain(|h, _| *h >= prune_below);
     }
 
-    pub fn track_mempool_insert(&mut self, txid: Txid) {
-        self.mempool.insert(txid);
+    pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
+        let txid = tx.compute_txid();
+        self.mempool.insert(txid, tx);
     }
 
     pub fn track_mempool_remove(&mut self, txid: &Txid) {
         self.mempool.remove(txid);
     }
 
-    pub fn track_mempool_sync(&mut self, txids: impl Iterator<Item = Txid>) {
+    pub fn track_mempool_sync(&mut self, txs: impl Iterator<Item = bitcoin::Transaction>) {
         self.mempool.clear();
-        self.mempool.extend(txids);
+        for tx in txs {
+            let txid = tx.compute_txid();
+            self.mempool.insert(txid, tx);
+        }
     }
 }

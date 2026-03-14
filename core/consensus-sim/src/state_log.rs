@@ -150,12 +150,17 @@ impl StateLog {
 
 /// Executor implementation backed by StateLog — used by consensus-sim for testing.
 impl Executor for StateLog {
-    async fn validate_transaction(&self, _txid: &Txid) -> bool {
+    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
         true
     }
 
-    async fn execute_transaction(&mut self, anchor_height: u64, txid: Txid, status: TxStatus) {
-        self.append_entry(anchor_height, txid, status);
+    async fn execute_transaction(
+        &mut self,
+        anchor_height: u64,
+        tx: &bitcoin::Transaction,
+        status: TxStatus,
+    ) {
+        self.append_entry(anchor_height, tx.compute_txid(), status);
     }
 
     async fn rollback_state(&mut self, to_anchor: u64) -> usize {

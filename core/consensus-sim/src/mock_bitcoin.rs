@@ -1,17 +1,38 @@
-use bitcoin::BlockHash;
-use bitcoin::Txid;
+use bitcoin::blockdata::locktime::absolute::LockTime;
+use bitcoin::transaction::Version;
+use bitcoin::{BlockHash, Txid};
 use indexer::bitcoin_follower::event::BitcoinEvent;
-use indexer::test_utils::{new_mock_block_hash, new_mock_transaction};
-use indexer_types::{Block, Transaction};
+use indexer::test_utils::new_mock_block_hash;
+use indexer_types::Block;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+/// Create a minimal bitcoin::Transaction with a unique txid derived from the nonce.
+pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
+    bitcoin::Transaction {
+        version: Version::ONE,
+        lock_time: LockTime::from_consensus(nonce),
+        input: vec![],
+        output: vec![],
+    }
+}
+
+/// Convert a bitcoin::Transaction to an indexer_types::Transaction (for BlockInsert events).
+fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Transaction {
+    indexer_types::Transaction {
+        txid: tx.compute_txid(),
+        index: index as i64,
+        ops: vec![],
+        op_return_data: Default::default(),
+    }
+}
+
 pub struct MockBitcoin {
     tip_height: u64,
     prev_hash: BlockHash,
-    mempool: Vec<Transaction>,
+    mempool: Vec<bitcoin::Transaction>,
     tx_counter: u32,
 }
 
@@ -29,8 +50,12 @@ impl MockBitcoin {
         self.tip_height
     }
 
-    pub fn mempool(&self) -> &[Transaction] {
+    pub fn mempool(&self) -> &[bitcoin::Transaction] {
         &self.mempool
+    }
+
+    pub fn mempool_txids(&self) -> Vec<Txid> {
+        self.mempool.iter().map(|tx| tx.compute_txid()).collect()
     }
 
     /// Generate new transactions and return MempoolInsert events for each.
@@ -38,7 +63,7 @@ impl MockBitcoin {
         let mut events = Vec::with_capacity(count);
         for _ in 0..count {
             self.tx_counter += 1;
-            let tx = new_mock_transaction(self.tx_counter);
+            let tx = make_tx(self.tx_counter);
             events.push(BitcoinEvent::MempoolInsert(tx.clone()));
             self.mempool.push(tx);
         }
@@ -54,14 +79,18 @@ impl MockBitcoin {
         let prev_hash = self.prev_hash;
         self.prev_hash = hash;
 
-        let mut confirmed = Vec::new();
+        let mut confirmed_raw = Vec::new();
         let mut remove_events = Vec::new();
 
         for txid in txids {
-            if let Some(pos) = self.mempool.iter().position(|tx| tx.txid == *txid) {
+            if let Some(pos) = self
+                .mempool
+                .iter()
+                .position(|tx| tx.compute_txid() == *txid)
+            {
                 let tx = self.mempool.remove(pos);
-                remove_events.push(BitcoinEvent::MempoolRemove(tx.txid));
-                confirmed.push(tx);
+                remove_events.push(BitcoinEvent::MempoolRemove(tx.compute_txid()));
+                confirmed_raw.push(tx);
             }
         }
 
@@ -69,7 +98,11 @@ impl MockBitcoin {
             height,
             hash,
             prev_hash,
-            transactions: confirmed,
+            transactions: confirmed_raw
+                .iter()
+                .enumerate()
+                .map(|(i, tx)| to_indexer_tx(i, tx))
+                .collect(),
         };
 
         let mut events = vec![BitcoinEvent::BlockInsert {
@@ -82,7 +115,7 @@ impl MockBitcoin {
 
     /// Mine a block confirming all mempool transactions.
     pub fn mine_block_all(&mut self) -> Vec<BitcoinEvent> {
-        let txids: Vec<Txid> = self.mempool.iter().map(|tx| tx.txid).collect();
+        let txids = self.mempool_txids();
         self.mine_block(&txids)
     }
 
@@ -93,7 +126,11 @@ impl MockBitcoin {
 
     /// Remove a txid from the mempool without confirming it.
     pub fn drop_txid(&mut self, txid: &Txid) -> Option<BitcoinEvent> {
-        if let Some(pos) = self.mempool.iter().position(|tx| tx.txid == *txid) {
+        if let Some(pos) = self
+            .mempool
+            .iter()
+            .position(|tx| tx.compute_txid() == *txid)
+        {
             self.mempool.remove(pos);
             Some(BitcoinEvent::MempoolRemove(*txid))
         } else {
@@ -161,7 +198,7 @@ mod tests {
     fn generate_mempool_txs_unique() {
         let mut mock = MockBitcoin::new(0);
         mock.generate_mempool_txs(10);
-        let txids: Vec<Txid> = mock.mempool().iter().map(|tx| tx.txid).collect();
+        let txids = mock.mempool_txids();
         let unique: std::collections::HashSet<_> = txids.iter().collect();
         assert_eq!(txids.len(), unique.len());
     }
@@ -170,11 +207,10 @@ mod tests {
     fn mine_block_confirms_specified() {
         let mut mock = MockBitcoin::new(0);
         mock.generate_mempool_txs(5);
-        let target_txid = mock.mempool()[2].txid;
+        let target_txid = mock.mempool()[2].compute_txid();
 
         let events = mock.mine_block(&[target_txid]);
 
-        // BlockInsert should contain the confirmed tx
         let block_event = &events[0];
         match block_event {
             BitcoinEvent::BlockInsert { block, .. } => {
@@ -184,7 +220,6 @@ mod tests {
             _ => panic!("Expected BlockInsert"),
         }
 
-        // Should still have 4 txs in mempool
         assert_eq!(mock.mempool().len(), 4);
     }
 
@@ -192,11 +227,11 @@ mod tests {
     fn mine_block_removes_from_mempool() {
         let mut mock = MockBitcoin::new(0);
         mock.generate_mempool_txs(3);
-        let txids: Vec<Txid> = mock.mempool().iter().map(|tx| tx.txid).collect();
+        let txids = mock.mempool_txids();
 
         mock.mine_block(&txids[..2]);
         assert_eq!(mock.mempool().len(), 1);
-        assert_eq!(mock.mempool()[0].txid, txids[2]);
+        assert_eq!(mock.mempool()[0].compute_txid(), txids[2]);
     }
 
     #[test]
@@ -213,12 +248,12 @@ mod tests {
     fn drop_txid_removes() {
         let mut mock = MockBitcoin::new(0);
         mock.generate_mempool_txs(3);
-        let txid = mock.mempool()[1].txid;
+        let txid = mock.mempool()[1].compute_txid();
 
         let event = mock.drop_txid(&txid);
         assert!(event.is_some());
         assert_eq!(mock.mempool().len(), 2);
-        assert!(mock.mempool().iter().all(|tx| tx.txid != txid));
+        assert!(mock.mempool().iter().all(|tx| tx.compute_txid() != txid));
     }
 
     #[test]
@@ -242,14 +277,12 @@ mod tests {
     fn events_are_correct_types() {
         let mut mock = MockBitcoin::new(0);
 
-        // Generate mempool txs → MempoolInsert events
         let tx_events = mock.generate_mempool_txs(2);
         assert_eq!(tx_events.len(), 2);
         for event in &tx_events {
             assert!(matches!(event, BitcoinEvent::MempoolInsert(_)));
         }
 
-        // Mine block → BlockInsert + MempoolRemove events
         let block_events = mock.mine_block_all();
         assert!(matches!(&block_events[0], BitcoinEvent::BlockInsert { .. }));
         for event in &block_events[1..] {
