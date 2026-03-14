@@ -261,7 +261,7 @@ impl ConsensusState {
         self.emit_finality_events(&finality_events);
     }
 
-    /// Execute a decided batch, then flush the pending block if it's at the same height.
+    /// Execute a decided batch, then flush all pending blocks.
     pub async fn process_decided_batch(
         &mut self,
         executor: &mut impl Executor,
@@ -272,14 +272,8 @@ impl ConsensusState {
     ) {
         executor.execute_batch(anchor_height, batch_txs).await;
 
-        // If a block was buffered waiting for this batch, execute it now
-        if let Some(block) = bitcoin_state.pending_block.take() {
-            if block.height <= anchor_height {
-                executor.execute_block(&block).await;
-            } else {
-                // Block is for a future height, put it back
-                bitcoin_state.pending_block = Some(block);
-            }
+        while let Some(block) = bitcoin_state.pending_blocks.pop_front() {
+            executor.execute_block(&block).await;
         }
 
         self.last_processed_anchor = anchor_height;
