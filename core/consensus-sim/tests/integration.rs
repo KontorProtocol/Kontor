@@ -77,7 +77,7 @@ async fn decided_values_contain_mempool_txids() {
 
     // At least one node should have decided a value containing our txids
     let decided_value = &results[0][0].value;
-    let decided_txids = decided_value.txids();
+    let decided_txids = &decided_value.txids;
     for expected in &expected_txids {
         assert!(
             decided_txids.contains(expected),
@@ -160,7 +160,7 @@ async fn empty_mempool_produces_empty_batch() {
             "Node {i} should have decided at least 1 value"
         );
         assert!(
-            node_decisions[0].value.transactions.is_empty(),
+            node_decisions[0].value.txids.is_empty(),
             "Node {i} decided a value with txids, expected empty"
         );
     }
@@ -253,7 +253,7 @@ async fn missing_tx_invalidation() {
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let decided_txids = decided.value.txids();
+    let decided_txids = &decided.value.txids;
     assert!(
         decided_txids.len() >= 3,
         "Expected at least 3 txids in decided batch"
@@ -452,7 +452,7 @@ async fn unbatched_txs_skip_batched_duplicates() {
     // Wait for consensus to decide a batch containing these txids
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let batch_txid_count = decided.value.transactions.len();
+    let batch_txid_count = decided.value.txids.len();
 
     // Mine a block that confirms the same txids — they overlap with the batch
     {
@@ -583,7 +583,7 @@ async fn rollback_preserves_pre_anchor_state() {
         cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    let batch1_txids = results[0][0].value.txids();
+    let batch1_txids = results[0][0].value.txids.clone();
 
     // Mine block 1 confirming batch 1's txids — batch 1 will finalize
     {
@@ -946,6 +946,146 @@ async fn timeout_race_recovers_and_converges() {
             .map(|(h, cps)| (h, cps.len()))
             .collect::<Vec<_>>()
     );
+
+    cluster.shutdown().await;
+}
+
+/// Multiple batches at the same anchor should all execute correctly.
+/// With no blocks mined, all batches anchor at 0.
+#[tokio::test]
+#[serial_test::serial]
+async fn multi_batch_same_anchor() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("error")
+        .try_init();
+
+    let mut cluster = run_cluster(4).await.unwrap();
+    cluster.wait_for_ready().await;
+
+    let mut mock = MockBitcoin::new(0);
+
+    // Wave 1: insert mempool txs
+    for event in mock.generate_mempool_txs(3) {
+        cluster.send_mempool_event(event);
+    }
+
+    // Wait for first decision at anchor 0
+    let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
+    assert_eq!(results[0][0].value.anchor_height, 0);
+
+    // Wave 2: insert more mempool txs (different txids)
+    for event in mock.generate_mempool_txs(3) {
+        cluster.send_mempool_event(event);
+    }
+
+    // Wait for second decision — should also be at anchor 0 (no blocks mined)
+    let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
+    assert_eq!(
+        results[0][1].value.anchor_height, 0,
+        "Second batch should also anchor at 0 since no blocks were mined"
+    );
+
+    // Collect state events — expect 8 BatchApplied (2 per node × 4 nodes)
+    let state_events = cluster
+        .wait_for_state_events(8, Duration::from_secs(10))
+        .await;
+
+    // All BatchApplied at the same consensus height should have matching checkpoints
+    let mut height_checkpoints: std::collections::HashMap<_, Vec<Option<[u8; 32]>>> =
+        std::collections::HashMap::new();
+    for e in &state_events {
+        if let StateEvent::BatchApplied {
+            consensus_height,
+            checkpoint,
+            ..
+        } = e
+        {
+            height_checkpoints
+                .entry(*consensus_height)
+                .or_default()
+                .push(*checkpoint);
+        }
+    }
+
+    for (height, cps) in &height_checkpoints {
+        if cps.len() >= 4 {
+            assert!(
+                cps.windows(2).all(|w| w[0] == w[1]),
+                "Nodes disagree on checkpoint at height {height}: {cps:?}"
+            );
+        }
+    }
+
+    cluster.shutdown().await;
+}
+
+/// Block at the anchor height should be deferred until the anchor advances.
+/// Verifies that mining a block doesn't cause it to be executed immediately
+/// when a batch at the same anchor is decided.
+#[tokio::test]
+#[serial_test::serial]
+async fn block_at_anchor_deferred() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("error")
+        .try_init();
+
+    let mut cluster = run_cluster(4).await.unwrap();
+    cluster.wait_for_ready().await;
+
+    let mut mock = MockBitcoin::new(0);
+
+    // Insert mempool txs — batch will be decided at anchor 0
+    for event in mock.generate_mempool_txs(3) {
+        cluster.send_mempool_event(event);
+    }
+
+    let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
+    assert_eq!(results[0][0].value.anchor_height, 0);
+
+    // Mine block 1 — this goes to pending_blocks, NOT immediately executed
+    {
+        let (blk_events, mem_events) = mock.mine_block_all();
+        for event in mem_events {
+            cluster.send_mempool_event(event);
+        }
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
+    }
+
+    // Collect state events briefly — should NOT see any BlockProcessed yet
+    // because block 1 is at height 1 which is >= anchor 0
+    let early_events = cluster
+        .wait_for_state_events(8, Duration::from_secs(5))
+        .await;
+
+    // All early events should be BatchApplied (no BlockProcessed from the anchor block)
+    for e in &early_events {
+        if let StateEvent::BlockProcessed { height, .. } = e {
+            // Block 1 should NOT have been processed by process_decided_batch
+            // (it might be processed by the timeout in this 5s window on slow machines,
+            // but with 30s default timeout it shouldn't be)
+            assert!(
+                *height != 1,
+                "Block 1 should not be processed immediately — it should wait for anchor advance"
+            );
+        }
+    }
+
+    // Now mine block 2 and add more mempool txs — this advances chain_tip to 2
+    for event in mock.generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    {
+        let (blk_events, _) = mock.mine_empty_block();
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
+    }
+
+    // Wait for more decisions — a batch at anchor 2 will drain blocks < 2
+    // (including block 1)
+    let _results = cluster.wait_for_decisions(3, Duration::from_secs(30)).await;
 
     cluster.shutdown().await;
 }

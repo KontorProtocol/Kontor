@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
-use indexer::consensus::Height;
+use indexer::consensus::{CommitCertificate, Ctx, Height, Value};
 use indexer::reactor::executor::Executor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +42,12 @@ pub struct StateLog {
     /// Txids seen in confirmed Bitcoin blocks (for finality checks).
     /// Includes batched txids that were skipped for execution.
     block_confirmed: HashSet<Txid>,
+    /// Decided values + certificates, keyed by consensus height.
+    /// Used by Malachite sync protocol to serve historical decided values.
+    decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
+    /// Known transactions — populated from mempool inserts and block confirmations.
+    /// Used to resolve txids back to full transactions for batch execution.
+    known_txs: HashMap<Txid, bitcoin::Transaction>,
 }
 
 impl Default for StateLog {
@@ -57,7 +63,15 @@ impl StateLog {
             checkpoint: [0u8; 32],
             batch_heights: Vec::new(),
             block_confirmed: HashSet::new(),
+            decided: BTreeMap::new(),
+            known_txs: HashMap::new(),
         }
+    }
+
+    /// Register a transaction so it can be resolved by txid later.
+    pub fn track_transaction(&mut self, tx: bitcoin::Transaction) {
+        let txid = tx.compute_txid();
+        self.known_txs.insert(txid, tx);
     }
 
     pub fn checkpoint(&self) -> [u8; 32] {
@@ -194,6 +208,10 @@ impl Executor for StateLog {
         true
     }
 
+    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        self.known_txs.get(txid).cloned()
+    }
+
     async fn execute_batch(
         &mut self,
         anchor_height: u64,
@@ -231,6 +249,23 @@ impl Executor for StateLog {
             .filter(|e| e.status == TxStatus::Confirmed)
             .map(|e| e.anchor_height)
             .max()
+    }
+
+    async fn store_decided(
+        &mut self,
+        height: Height,
+        value: Value,
+        certificate: CommitCertificate<Ctx>,
+    ) {
+        self.decided.insert(height, (value, certificate));
+    }
+
+    async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
+        self.decided.get(&height).cloned()
+    }
+
+    async fn min_decided_height(&self) -> Option<Height> {
+        self.decided.keys().next().copied()
     }
 }
 

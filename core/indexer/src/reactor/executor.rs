@@ -1,4 +1,6 @@
-use crate::consensus::Height;
+use bitcoin::Txid;
+
+use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 
 /// Abstraction over transaction execution and state rollback.
 ///
@@ -9,6 +11,11 @@ use crate::consensus::Height;
 #[allow(async_fn_in_trait)]
 pub trait Executor {
     async fn validate_transaction(&self, tx: &bitcoin::Transaction) -> bool;
+
+    /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
+    /// data for batch execution — batches carry only txids.
+    /// Sources: local mempool/block cache, Bitcoin RPC, LRU cache.
+    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction>;
 
     /// Execute a consensus-decided batch of mempool transactions at the given anchor height.
     async fn execute_batch(
@@ -36,6 +43,22 @@ pub trait Executor {
     /// The highest block height that has been executed. Used to detect timeout
     /// race conditions where blocks were executed before their corresponding batch.
     async fn last_executed_block_height(&self) -> Option<u64>;
+
+    // --- Decided value storage (used by Malachite sync protocol) ---
+
+    /// Store a decided value and its commit certificate. Called after `Finalized`.
+    async fn store_decided(
+        &mut self,
+        height: Height,
+        value: Value,
+        certificate: CommitCertificate<Ctx>,
+    );
+
+    /// Retrieve a decided value at the given height.
+    async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)>;
+
+    /// Return the minimum decided height, or None if no values stored.
+    async fn min_decided_height(&self) -> Option<Height>;
 }
 
 /// Placeholder executor that does nothing. Used by the production reactor until
@@ -45,6 +68,9 @@ pub struct NoopExecutor;
 impl Executor for NoopExecutor {
     async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
         true
+    }
+    async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
+        None
     }
     async fn execute_batch(
         &mut self,
@@ -67,6 +93,19 @@ impl Executor for NoopExecutor {
         false
     }
     async fn last_executed_block_height(&self) -> Option<u64> {
+        None
+    }
+    async fn store_decided(
+        &mut self,
+        _height: Height,
+        _value: Value,
+        _certificate: CommitCertificate<Ctx>,
+    ) {
+    }
+    async fn get_decided(&self, _height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
+        None
+    }
+    async fn min_decided_height(&self) -> Option<Height> {
         None
     }
 }

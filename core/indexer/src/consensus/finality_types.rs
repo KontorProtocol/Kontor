@@ -8,7 +8,7 @@ pub const FINALITY_WINDOW: u64 = 6;
 pub struct PendingBatch {
     pub consensus_height: Height,
     pub anchor_height: u64,
-    pub transactions: Vec<bitcoin::Transaction>,
+    pub txids: Vec<Txid>,
     pub deadline: u64, // anchor_height + FINALITY_WINDOW
 }
 
