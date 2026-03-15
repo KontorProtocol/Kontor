@@ -1,4 +1,4 @@
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
 use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
@@ -13,19 +13,21 @@ use crate::consensus::{Address, Ctx, Height};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalData {
     pub anchor_height: u64,
+    pub anchor_hash: BlockHash,
     pub txids: Vec<Txid>,
 }
 
 impl ProposalData {
-    pub fn new(anchor_height: u64, txids: Vec<Txid>) -> Self {
+    pub fn new(anchor_height: u64, anchor_hash: BlockHash, txids: Vec<Txid>) -> Self {
         Self {
             anchor_height,
+            anchor_hash,
             txids,
         }
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() + self.txids.len() * 32
+        8 + 32 + self.txids.len() * 32
     }
 }
 
@@ -137,7 +139,19 @@ impl Protobuf for ProposalPart {
                         Ok(Txid::from_byte_array(arr))
                     })
                     .collect::<Result<Vec<_>, ProtoError>>()?;
-                Ok(Self::Data(ProposalData::new(data.anchor_height, txids)))
+                let hash_arr: [u8; 32] =
+                    data.anchor_hash.as_ref().try_into().map_err(|_| {
+                        ProtoError::Other(format!(
+                            "Invalid anchor_hash length: got {} bytes, expected 32",
+                            data.anchor_hash.len()
+                        ))
+                    })?;
+                let anchor_hash = BlockHash::from_byte_array(hash_arr);
+                Ok(Self::Data(ProposalData::new(
+                    data.anchor_height,
+                    anchor_hash,
+                    txids,
+                )))
             }
             Part::Fin(fin) => Ok(Self::Fin(ProposalFin {
                 signature: fin
@@ -169,6 +183,7 @@ impl Protobuf for ProposalPart {
                         .iter()
                         .map(|txid| Bytes::from(txid.to_byte_array().to_vec()))
                         .collect(),
+                    anchor_hash: Bytes::from(data.anchor_hash.to_byte_array().to_vec()),
                 })),
             }),
             Self::Fin(fin) => Ok(Self::Proto {

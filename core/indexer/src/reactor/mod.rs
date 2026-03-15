@@ -274,7 +274,7 @@ impl Reactor {
                     match event {
                         BlockEvent::BlockInsert { target_height, block } => {
                             let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                            self.bitcoin_state.track_block(block.height, &txids);
+                            self.bitcoin_state.track_block(block.height, block.hash, &txids);
                             info!("Block {}/{} {}", block.height,
                                   target_height, block.hash);
 

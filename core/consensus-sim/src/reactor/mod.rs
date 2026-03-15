@@ -70,7 +70,7 @@ pub async fn run_with_timeout(
                 match event {
                     BlockEvent::BlockInsert { block, .. } => {
                         let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                        bitcoin_state.track_block(block.height, &txids);
+                        bitcoin_state.track_block(block.height, block.hash, &txids);
 
                         info!(
                             height = block.height,

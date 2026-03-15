@@ -1,6 +1,6 @@
 use core::fmt;
 
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
 use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use malachitebft_proto::{Error as ProtoError, Protobuf};
@@ -49,26 +49,30 @@ impl Protobuf for ValueId {
     }
 }
 
-/// The value to decide on: an anchor bitcoin block height + ordered txids.
-/// No full transaction data is stored or transmitted via consensus.
+/// The value to decide on: an anchor bitcoin block (height + hash) + ordered txids.
+/// The anchor_hash binds the batch to a specific block identity, so reorgs
+/// that replace the block at anchor_height can be detected.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Value {
     pub anchor_height: u64,
+    pub anchor_hash: BlockHash,
     pub txids: Vec<Txid>,
 }
 
 impl Value {
-    pub fn new(anchor_height: u64, txids: Vec<Txid>) -> Self {
+    pub fn new(anchor_height: u64, anchor_hash: BlockHash, txids: Vec<Txid>) -> Self {
         Self {
             anchor_height,
+            anchor_hash,
             txids,
         }
     }
 
-    /// Stable identity hash: anchor_height + txids.
+    /// Stable identity hash: anchor_height + anchor_hash + txids.
     pub fn id(&self) -> ValueId {
         let mut hasher = Sha256::new();
         hasher.update(self.anchor_height.to_be_bytes());
+        hasher.update(self.anchor_hash.to_byte_array());
         for txid in &self.txids {
             hasher.update(txid.to_byte_array());
         }
@@ -76,7 +80,8 @@ impl Value {
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() + self.txids.len() * 32
+        // 8 (height) + 32 (hash) + 32 * len (txids)
+        8 + 32 + self.txids.len() * 32
     }
 }
 
@@ -96,15 +101,18 @@ impl Protobuf for Value {
             .value
             .ok_or_else(|| ProtoError::missing_field::<Self::Proto>("value"))?;
 
-        if bytes.len() < 8 {
+        // 8 (height) + 32 (anchor_hash) = 40 byte header
+        if bytes.len() < 40 {
             return Err(ProtoError::Other(format!(
-                "Too few bytes for Value, expected at least 8, got {}",
+                "Too few bytes for Value, expected at least 40, got {}",
                 bytes.len()
             )));
         }
 
         let anchor_height = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-        let remaining = &bytes[8..];
+        let anchor_hash_arr: [u8; 32] = bytes[8..40].try_into().unwrap();
+        let anchor_hash = BlockHash::from_byte_array(anchor_hash_arr);
+        let remaining = &bytes[40..];
 
         if remaining.len() % 32 != 0 {
             return Err(ProtoError::Other(format!(
@@ -123,13 +131,15 @@ impl Protobuf for Value {
 
         Ok(Value {
             anchor_height,
+            anchor_hash,
             txids,
         })
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
-        let mut buf = Vec::with_capacity(8 + self.txids.len() * 32);
+        let mut buf = Vec::with_capacity(40 + self.txids.len() * 32);
         buf.extend_from_slice(&self.anchor_height.to_be_bytes());
+        buf.extend_from_slice(&self.anchor_hash.to_byte_array());
         for txid in &self.txids {
             buf.extend_from_slice(&txid.to_byte_array());
         }

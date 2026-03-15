@@ -88,6 +88,7 @@ impl ConsensusState {
         hasher.update(value.height.as_u64().to_be_bytes());
         hasher.update(value.round.as_i64().to_be_bytes());
         hasher.update(value.value.anchor_height.to_be_bytes());
+        hasher.update(value.value.anchor_hash.to_byte_array());
         for txid in &value.value.txids {
             hasher.update(txid.to_byte_array());
         }
@@ -104,6 +105,7 @@ impl ConsensusState {
             )),
             ProposalPart::Data(ProposalData::new(
                 value.value.anchor_height,
+                value.value.anchor_hash,
                 value.value.txids.clone(),
             )),
             ProposalPart::Fin(ProposalFin::new(signature)),
@@ -151,7 +153,7 @@ impl ConsensusState {
             }
             txids.push(txid);
         }
-        Value::new(bitcoin_state.chain_tip, txids)
+        Value::new(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids)
     }
 
     // --- Finality tracking ---
@@ -160,6 +162,7 @@ impl ConsensusState {
         let pending = PendingBatch {
             consensus_height,
             anchor_height: value.anchor_height,
+            anchor_hash: value.anchor_hash,
             txids: value.txids.clone(),
             deadline: value.anchor_height + FINALITY_WINDOW,
         };
@@ -464,9 +467,42 @@ pub async fn handle_consensus_msg(
                                     "Rejecting proposal with unknown anchor height"
                                 );
                                 None
+                            } else if let Some(&local_hash) =
+                                bitcoin_state.block_hashes.get(&data.anchor_height)
+                            {
+                                if local_hash != data.anchor_hash {
+                                    warn!(
+                                        anchor = data.anchor_height,
+                                        proposed = %data.anchor_hash,
+                                        local = %local_hash,
+                                        "Rejecting proposal with mismatched anchor hash"
+                                    );
+                                    None
+                                } else {
+                                    let value = Value::new(
+                                        data.anchor_height,
+                                        data.anchor_hash,
+                                        data.txids.clone(),
+                                    );
+                                    let proposed = ProposedValue {
+                                        height,
+                                        round,
+                                        valid_round: Round::Nil,
+                                        proposer: state.address,
+                                        value,
+                                        validity: Validity::Valid,
+                                    };
+                                    state.undecided.insert((height, round), proposed.clone());
+                                    Some(proposed)
+                                }
                             } else {
-                                let value =
-                                    Value::new(data.anchor_height, data.txids.clone());
+                                // No local hash for this height — accept on height alone
+                                // (can happen during sync when we haven't seen the block yet)
+                                let value = Value::new(
+                                    data.anchor_height,
+                                    data.anchor_hash,
+                                    data.txids.clone(),
+                                );
                                 let proposed = ProposedValue {
                                     height,
                                     round,

@@ -1,10 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 
-use bitcoin::Txid;
+use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Txid};
 
 pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
+    pub chain_tip_hash: BlockHash,
+    /// Block hash by height — populated as blocks arrive.
+    pub block_hashes: HashMap<u64, BlockHash>,
     pub pending_blocks: VecDeque<indexer_types::Block>,
 }
 
@@ -13,13 +17,17 @@ impl BitcoinState {
         Self {
             mempool: HashMap::new(),
             chain_tip: 0,
+            chain_tip_hash: BlockHash::all_zeros(),
+            block_hashes: HashMap::new(),
             pending_blocks: VecDeque::new(),
         }
     }
 
-    /// Track a new block: update chain tip and remove txids from mempool.
-    pub fn track_block(&mut self, height: u64, txids: &[Txid]) {
+    /// Track a new block: update chain tip/hash and remove txids from mempool.
+    pub fn track_block(&mut self, height: u64, hash: BlockHash, txids: &[Txid]) {
         self.chain_tip = height;
+        self.chain_tip_hash = hash;
+        self.block_hashes.insert(height, hash);
         for txid in txids {
             self.mempool.remove(txid);
         }
@@ -29,6 +37,8 @@ impl BitcoinState {
     /// by the event stream and doesn't need resetting.
     pub fn reset(&mut self) {
         self.chain_tip = 0;
+        self.chain_tip_hash = BlockHash::all_zeros();
+        self.block_hashes.clear();
         self.pending_blocks.clear();
     }
 
