@@ -284,7 +284,7 @@ impl Reactor {
                                     b.deadline <= self.bitcoin_state.chain_tip
                                 })
                             {
-                                handle.state.run_finality_checks(&mut handle.executor, &self.bitcoin_state).await;
+                                handle.state.run_finality_checks(&mut handle.executor, &mut self.bitcoin_state).await;
                             }
 
                             // In follower mode (no consensus), execute blocks immediately

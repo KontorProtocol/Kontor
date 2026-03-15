@@ -1,5 +1,5 @@
-use bitcoin::{BlockHash, Txid};
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Txid};
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
 use serde::{Deserialize, Serialize};
@@ -139,13 +139,12 @@ impl Protobuf for ProposalPart {
                         Ok(Txid::from_byte_array(arr))
                     })
                     .collect::<Result<Vec<_>, ProtoError>>()?;
-                let hash_arr: [u8; 32] =
-                    data.anchor_hash.as_ref().try_into().map_err(|_| {
-                        ProtoError::Other(format!(
-                            "Invalid anchor_hash length: got {} bytes, expected 32",
-                            data.anchor_hash.len()
-                        ))
-                    })?;
+                let hash_arr: [u8; 32] = data.anchor_hash.as_ref().try_into().map_err(|_| {
+                    ProtoError::Other(format!(
+                        "Invalid anchor_hash length: got {} bytes, expected 32",
+                        data.anchor_hash.len()
+                    ))
+                })?;
                 let anchor_hash = BlockHash::from_byte_array(hash_arr);
                 Ok(Self::Data(ProposalData::new(
                     data.anchor_height,

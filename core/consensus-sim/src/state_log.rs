@@ -48,6 +48,8 @@ pub struct StateLog {
     /// Known transactions — populated from mempool inserts and block confirmations.
     /// Used to resolve txids back to full transactions for batch execution.
     known_txs: HashMap<Txid, bitcoin::Transaction>,
+    /// Records `replay_blocks_from` calls for test assertions.
+    pub replay_requests: Vec<u64>,
 }
 
 impl Default for StateLog {
@@ -65,6 +67,7 @@ impl StateLog {
             block_confirmed: HashSet::new(),
             decided: BTreeMap::new(),
             known_txs: HashMap::new(),
+            replay_requests: Vec::new(),
         }
     }
 
@@ -266,6 +269,18 @@ impl Executor for StateLog {
 
     async fn min_decided_height(&self) -> Option<Height> {
         self.decided.keys().next().copied()
+    }
+
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
+        self.decided
+            .iter()
+            .filter(|(_, (value, _))| value.anchor_height >= from_anchor)
+            .map(|(h, (v, _))| (*h, v.clone()))
+            .collect()
+    }
+
+    async fn replay_blocks_from(&mut self, height: u64) {
+        self.replay_requests.push(height);
     }
 }
 

@@ -1,5 +1,7 @@
 pub mod types;
 
+use std::collections::HashSet;
+
 use anyhow::anyhow;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
@@ -81,7 +83,42 @@ pub async fn run_with_timeout(
 
                         bitcoin_state.pending_blocks.push_back(block);
 
-                        if consensus_state
+                        // Process replay queue batches whose anchor has been reached
+                        if !consensus_state.replay_queue.is_empty() {
+                            while consensus_state
+                                .replay_queue
+                                .front()
+                                .is_some_and(|(_, v)| v.anchor_height <= bitcoin_state.chain_tip)
+                            {
+                                let (height, value) =
+                                    consensus_state.next_replay_batch().unwrap();
+
+                                // Skip batches with stale anchor_hash (reorg replaced the block)
+                                if bitcoin_state
+                                    .block_hashes
+                                    .get(&value.anchor_height)
+                                    .is_some_and(|&local_hash| local_hash != value.anchor_hash)
+                                {
+                                    warn!(
+                                        anchor = value.anchor_height,
+                                        consensus_height = %height,
+                                        "Skipping replay batch with stale anchor_hash"
+                                    );
+                                    continue;
+                                }
+
+                                consensus_state.record_decided_batch(height, &value);
+                                consensus_state
+                                    .process_decided_batch(
+                                        executor,
+                                        bitcoin_state,
+                                        value.anchor_height,
+                                        height,
+                                        &value.txids,
+                                    )
+                                    .await;
+                            }
+                        } else if consensus_state
                             .pending_batches
                             .iter()
                             .any(|b| b.deadline <= bitcoin_state.chain_tip)
@@ -97,23 +134,11 @@ pub async fn run_with_timeout(
                         }
                     }
                     BlockEvent::Rollback { to_height } => {
-                        let removed = executor.rollback_state(to_height).await;
-                        let resume_height = executor.last_batch_consensus_height_before(to_height).await;
-                        bitcoin_state.reset();
+                        info!(to_height, "Bitcoin rollback — initiating replay");
+                        consensus_state
+                            .initiate_rollback(executor, bitcoin_state, to_height, HashSet::new())
+                            .await;
                         pending_deadline = None;
-
-                        info!(
-                            to_height,
-                            removed,
-                            ?resume_height,
-                            "Bitcoin rollback"
-                        );
-
-                        consensus_state.emit_state_event(StateEvent::RollbackExecuted {
-                            to_anchor: to_height,
-                            entries_removed: removed,
-                            checkpoint: executor.checkpoint().await,
-                        });
                     }
                 }
             }

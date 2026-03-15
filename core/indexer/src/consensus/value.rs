@@ -1,7 +1,7 @@
 use core::fmt;
 
-use bitcoin::{BlockHash, Txid};
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Txid};
 use bytes::Bytes;
 use malachitebft_proto::{Error as ProtoError, Protobuf};
 use serde::{Deserialize, Serialize};

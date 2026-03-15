@@ -125,6 +125,13 @@ impl MockBitcoin {
         self.mine_block(&[])
     }
 
+    /// Reset the mock chain to `height`, as if a reorg occurred.
+    /// Future blocks will build from this point with new hashes.
+    pub fn reset_to(&mut self, height: u64) {
+        self.tip_height = height;
+        self.prev_hash = new_mock_block_hash(height as u32 + 1000);
+    }
+
     /// Remove a txid from the mempool without confirming it.
     pub fn drop_txid(&mut self, txid: &Txid) -> Option<MempoolEvent> {
         if let Some(pos) = self

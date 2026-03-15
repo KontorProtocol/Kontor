@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -39,6 +39,10 @@ pub struct ConsensusState {
     pub pending_batches: Vec<PendingBatch>,
     pub last_processed_anchor: u64,
 
+    // Replay queue — populated after a rollback, drained before Malachite decisions
+    pub replay_queue: VecDeque<(Height, Value)>,
+    pub replay_excluded_txids: HashSet<Txid>,
+
     // Observation channels (optional, for testing)
     pub decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     pub finality_tx: Option<mpsc::Sender<FinalityEvent>>,
@@ -56,6 +60,8 @@ impl ConsensusState {
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
             last_processed_anchor: 0,
+            replay_queue: VecDeque::new(),
+            replay_excluded_txids: HashSet::new(),
             decided_tx: None,
             finality_tx: None,
             state_tx: None,
@@ -130,11 +136,7 @@ impl ConsensusState {
         msgs
     }
 
-    async fn make_value(
-        &self,
-        executor: &impl Executor,
-        bitcoin_state: &BitcoinState,
-    ) -> Value {
+    async fn make_value(&self, executor: &impl Executor, bitcoin_state: &BitcoinState) -> Value {
         // Collect txids already in pending (unfinalized) batches to avoid duplicates
         let already_batched: std::collections::HashSet<Txid> = self
             .pending_batches
@@ -264,25 +266,76 @@ impl ConsensusState {
         }
     }
 
+    /// Initiate a rollback: query decided batches from the rollback point,
+    /// truncate executor state, populate the replay queue, and signal block replay.
+    pub async fn initiate_rollback(
+        &mut self,
+        executor: &mut impl Executor,
+        bitcoin_state: &mut BitcoinState,
+        from_anchor: u64,
+        excluded_txids: HashSet<Txid>,
+    ) {
+        let replay_batches = executor.get_decided_from_anchor(from_anchor).await;
+        let removed = executor.rollback_state(from_anchor).await;
+
+        info!(
+            from_anchor,
+            removed,
+            replay_batches = replay_batches.len(),
+            excluded = excluded_txids.len(),
+            "Initiating rollback"
+        );
+
+        self.replay_queue = replay_batches.into();
+        self.replay_excluded_txids = excluded_txids;
+        self.pending_batches
+            .retain(|b| b.anchor_height < from_anchor);
+        self.last_processed_anchor = from_anchor.saturating_sub(1);
+
+        bitcoin_state.reset();
+
+        self.emit_state_event(StateEvent::RollbackExecuted {
+            to_anchor: from_anchor,
+            entries_removed: removed,
+            checkpoint: executor.checkpoint().await,
+        });
+
+        executor.replay_blocks_from(from_anchor).await;
+    }
+
+    /// Pop the next replay batch, filtering out excluded txids.
+    /// Returns None when the queue is empty (back to normal Malachite flow).
+    pub fn next_replay_batch(&mut self) -> Option<(Height, Value)> {
+        if let Some((height, mut value)) = self.replay_queue.pop_front() {
+            if !self.replay_excluded_txids.is_empty() {
+                value
+                    .txids
+                    .retain(|txid| !self.replay_excluded_txids.contains(txid));
+            }
+            return Some((height, value));
+        }
+        // Queue drained — clear excluded set
+        self.replay_excluded_txids.clear();
+        None
+    }
+
     /// Run finality checks and execute any rollbacks.
     pub async fn run_finality_checks(
         &mut self,
         executor: &mut impl Executor,
-        bitcoin_state: &BitcoinState,
+        bitcoin_state: &mut BitcoinState,
     ) {
         let finality_events = self.check_finality(executor, bitcoin_state).await;
         for event in &finality_events {
-            if let FinalityEvent::Rollback { from_anchor, .. } = event {
-                let removed = executor.rollback_state(*from_anchor).await;
-                info!(from_anchor, removed, "Rollback executed");
-
-                self.emit_state_event(StateEvent::RollbackExecuted {
-                    to_anchor: *from_anchor,
-                    entries_removed: removed,
-                    checkpoint: executor.checkpoint().await,
-                });
-
-                self.last_processed_anchor = from_anchor.saturating_sub(1);
+            if let FinalityEvent::Rollback {
+                from_anchor,
+                missing_txids,
+                ..
+            } = event
+            {
+                let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
+                self.initiate_rollback(executor, bitcoin_state, *from_anchor, excluded)
+                    .await;
             }
         }
         self.emit_finality_events(&finality_events);
@@ -589,11 +642,7 @@ pub async fn handle_consensus_msg(
                     .await;
 
                 executor
-                    .store_decided(
-                        certificate.height,
-                        proposal.value,
-                        certificate.clone(),
-                    )
+                    .store_decided(certificate.height, proposal.value, certificate.clone())
                     .await;
             }
 

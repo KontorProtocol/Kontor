@@ -59,6 +59,15 @@ pub trait Executor {
 
     /// Return the minimum decided height, or None if no values stored.
     async fn min_decided_height(&self) -> Option<Height>;
+
+    /// Return all decided values whose anchor_height >= `from_anchor`,
+    /// ordered by consensus height. Used to populate the replay queue after rollback.
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)>;
+
+    /// Signal the block source to re-deliver blocks starting from `height`.
+    /// In prod: resets the poller via a control channel.
+    /// In sim: records the call for test assertions; the test sends blocks manually.
+    async fn replay_blocks_from(&mut self, height: u64);
 }
 
 /// Placeholder executor that does nothing. Used by the production reactor until
@@ -108,4 +117,8 @@ impl Executor for NoopExecutor {
     async fn min_decided_height(&self) -> Option<Height> {
         None
     }
+    async fn get_decided_from_anchor(&self, _from_anchor: u64) -> Vec<(Height, Value)> {
+        Vec::new()
+    }
+    async fn replay_blocks_from(&mut self, _height: u64) {}
 }
