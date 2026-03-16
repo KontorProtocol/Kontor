@@ -14,7 +14,16 @@ world root {
 
   export init: async func(ctx: borrow<proc-context>);
 
+  // Core-only: ensure an x-only pubkey has a registry entry, auto-assigning
+  // a signer-id on first use. Creates entry with empty bls-pubkey.
+  export ensure-signer: async func(
+    ctx: borrow<core-context>,
+    x-only-pubkey: string
+  ) -> result<registry-entry, error>;
+
   // Core-only mutation: indexers register BLS keys after verifying proofs.
+  // If the entry already exists with an empty bls-pubkey (from ensure-signer),
+  // upgrades it in place preserving signer-id and next-nonce.
   export register-bls-key: async func(
     ctx: borrow<core-context>,
     bls-pubkey: list<u8>

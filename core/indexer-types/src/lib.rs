@@ -264,6 +264,8 @@ pub struct OpMetadata {
     #[ts(type = "number")]
     pub input_index: i64,
     pub signer: Signer,
+    #[ts(type = "number")]
+    pub signer_id: u64,
 }
 
 #[serde_as]

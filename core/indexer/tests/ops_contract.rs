@@ -31,7 +31,8 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
             metadata: OpMetadata {
                 previous_output: reveal_tx.input[0].previous_output,
                 input_index: 0,
-                signer: Signer::XOnlyPubKey(ident.x_only_public_key().to_string())
+                signer: Signer::XOnlyPubKey(ident.x_only_public_key().to_string()),
+                signer_id: 0,
             },
             gas_limit: 10_000,
             name: name.to_string(),
