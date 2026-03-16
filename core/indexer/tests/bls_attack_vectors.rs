@@ -238,7 +238,7 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
 
     let attacker_xonly = attacker.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_signer_id(runtime, &attacker_xonly).await?,
+        registry::get_bls_pubkey(runtime, &attacker_xonly).await?,
         None,
         "rogue key must not be registered"
     );
@@ -311,7 +311,7 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_signer_id(runtime, &eve_xonly).await?,
+        registry::get_bls_pubkey(runtime, &eve_xonly).await?,
         None,
         "replayed proof must not register Eve"
     );
@@ -456,7 +456,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_signer_id(runtime, &eve_xonly).await?,
+        registry::get_bls_pubkey(runtime, &eve_xonly).await?,
         None,
         "forged BLS binding must prevent registration"
     );

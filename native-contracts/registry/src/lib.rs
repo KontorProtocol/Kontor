@@ -36,7 +36,14 @@ impl Guest for Registry {
             return Ok(RegistryEntry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
-                bls_pubkey: entry.bls_pubkey(),
+                bls_pubkey: {
+                    let bls_pubkey = entry.bls_pubkey();
+                    if bls_pubkey.is_empty() {
+                        None
+                    } else {
+                        Some(bls_pubkey)
+                    }
+                },
                 next_nonce: entry.next_nonce(),
             });
         }
@@ -57,7 +64,7 @@ impl Guest for Registry {
         Ok(RegistryEntry {
             signer_id,
             x_only_pubkey,
-            bls_pubkey: Vec::new(),
+            bls_pubkey: None,
             next_nonce: 0,
         })
     }
@@ -82,7 +89,7 @@ impl Guest for Registry {
                 return Ok(RegistryEntry {
                     signer_id: entry.signer_id(),
                     x_only_pubkey,
-                    bls_pubkey,
+                    bls_pubkey: Some(bls_pubkey),
                     next_nonce: entry.next_nonce(),
                 });
             }
@@ -94,7 +101,7 @@ impl Guest for Registry {
             return Ok(RegistryEntry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
-                bls_pubkey,
+                bls_pubkey: Some(bls_pubkey),
                 next_nonce: entry.next_nonce(),
             });
         }
@@ -115,7 +122,7 @@ impl Guest for Registry {
         Ok(RegistryEntry {
             signer_id,
             x_only_pubkey,
-            bls_pubkey,
+            bls_pubkey: Some(bls_pubkey),
             next_nonce: 0,
         })
     }
@@ -157,10 +164,15 @@ impl Guest for Registry {
 
     fn get_entry(ctx: &ViewContext, x_only_pubkey: String) -> Option<RegistryEntry> {
         let entry = ctx.model().entries().get(&x_only_pubkey)?;
+        let bls_pubkey = entry.bls_pubkey();
         Some(RegistryEntry {
             signer_id: entry.signer_id(),
             x_only_pubkey,
-            bls_pubkey: entry.bls_pubkey(),
+            bls_pubkey: if bls_pubkey.is_empty() {
+                None
+            } else {
+                Some(bls_pubkey)
+            },
             next_nonce: entry.next_nonce(),
         })
     }
@@ -168,10 +180,15 @@ impl Guest for Registry {
     fn get_entry_by_id(ctx: &ViewContext, signer_id: u64) -> Option<RegistryEntry> {
         let x_only_pubkey = ctx.model().by_id().get(signer_id)?;
         let entry = ctx.model().entries().get(&x_only_pubkey)?;
+        let bls_pubkey = entry.bls_pubkey();
         Some(RegistryEntry {
             signer_id: entry.signer_id(),
             x_only_pubkey,
-            bls_pubkey: entry.bls_pubkey(),
+            bls_pubkey: if bls_pubkey.is_empty() {
+                None
+            } else {
+                Some(bls_pubkey)
+            },
             next_nonce: entry.next_nonce(),
         })
     }
@@ -184,9 +201,12 @@ impl Guest for Registry {
     }
 
     fn get_bls_pubkey(ctx: &ViewContext, x_only_pubkey: String) -> Option<Vec<u8>> {
-        ctx.model()
-            .entries()
-            .get(&x_only_pubkey)
-            .map(|e| e.bls_pubkey())
+        let entry = ctx.model().entries().get(&x_only_pubkey)?;
+        let bls_pubkey = entry.bls_pubkey();
+        if bls_pubkey.is_empty() {
+            None
+        } else {
+            Some(bls_pubkey)
+        }
     }
 }

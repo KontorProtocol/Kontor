@@ -112,7 +112,7 @@ async fn test_get_registry_entry_by_pubkey() -> Result<()> {
     let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
-    assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
     assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
@@ -129,7 +129,7 @@ async fn test_get_registry_entry_by_signer_id() -> Result<()> {
     let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, 0);
     assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
-    assert_eq!(result.result.bls_pubkey, users[0].bls_pubkey);
+    assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
     assert_eq!(result.result.next_nonce, 0);
 
     Ok(())
@@ -203,7 +203,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, 1);
     assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
-    assert_eq!(result.result.bls_pubkey, users[1].bls_pubkey);
+    assert_eq!(result.result.bls_pubkey, Some(users[1].bls_pubkey.clone()));
     assert_eq!(result.result.next_nonce, 0);
 
     let by_id: TestResponse = server.get("/api/registry/entry/1").await;

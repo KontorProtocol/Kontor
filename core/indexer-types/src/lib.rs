@@ -264,8 +264,6 @@ pub struct OpMetadata {
     #[ts(type = "number")]
     pub input_index: i64,
     pub signer: Signer,
-    #[ts(type = "number")]
-    pub signer_id: u64,
 }
 
 #[serde_as]
@@ -568,7 +566,7 @@ pub struct RegistryEntryResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
     pub x_only_pubkey: String,
-    pub bls_pubkey: Vec<u8>,
+    pub bls_pubkey: Option<Vec<u8>>,
     #[ts(type = "number")]
     pub next_nonce: u64,
 }

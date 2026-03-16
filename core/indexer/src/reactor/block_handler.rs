@@ -134,11 +134,11 @@ async fn execute_op(
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
-        if let Err(e) = runtime.ensure_signer(x_only).await {
-            warn!("Failed to ensure signer for {x_only}: {e}");
-            return;
-        }
+    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
+        && let Err(e) = runtime.ensure_signer(x_only).await
+    {
+        warn!("Failed to ensure signer for {x_only}: {e}");
+        return;
     }
 
     match op {

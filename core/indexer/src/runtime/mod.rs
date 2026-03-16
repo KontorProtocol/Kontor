@@ -416,7 +416,7 @@ impl Runtime {
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
         if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
-            && entry.bls_pubkey == bls_pubkey
+            && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
         {
             return Ok(());
         }
