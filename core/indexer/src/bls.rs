@@ -559,6 +559,33 @@ mod tests {
         assert!(err.to_string().contains("invalid BLS pubkey"));
     }
 
+    #[tokio::test]
+    async fn verify_bls_bulk_rejects_wrong_length_register_pubkey() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let sk = BlsSecretKey::key_gen(&[11u8; 32], &[]).expect("BLS key_gen");
+        let sig_bytes = sk.sign(b"len-test", KONTOR_BLS_DST, &[]).to_bytes();
+
+        for (label, bad_pubkey) in [
+            ("too short (48 bytes)", vec![0xABu8; 48]),
+            ("too long (128 bytes)", vec![0xCDu8; 128]),
+            ("empty", vec![]),
+        ] {
+            let ops = vec![BlsBulkOp::RegisterBlsKey {
+                signer: Signer::XOnlyPubKey("aa".repeat(32)),
+                bls_pubkey: bad_pubkey,
+                schnorr_sig: vec![0u8; 64],
+                bls_sig: vec![0u8; 48],
+            }];
+            let err = verify_bls_bulk(&mut runtime, &ops, &sig_bytes)
+                .await
+                .expect_err(&format!("{label}: wrong-length pubkey must be rejected"));
+            assert!(
+                err.to_string().contains("invalid BLS pubkey"),
+                "{label}: expected 'invalid BLS pubkey', got: {err}"
+            );
+        }
+    }
+
     // -----------------------------------------------------------------------
     // SignerResolver unit tests
     // -----------------------------------------------------------------------
