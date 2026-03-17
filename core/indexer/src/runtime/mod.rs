@@ -329,9 +329,9 @@ impl Runtime {
                     contract,
                     expr,
                 } => {
-                    let x_only = signer_map.get(signer_id).expect(
-                        "signer_id must be in signer_map after verify_bls_bulk succeeds",
-                    );
+                    let x_only = signer_map
+                        .get(signer_id)
+                        .expect("signer_id must be in signer_map after verify_bls_bulk succeeds");
 
                     let nonce_result = registry::api::advance_nonce(
                         self,
@@ -535,8 +535,23 @@ impl Runtime {
     }
 }
 
-static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
-    LazyLock::new(|| [("token", ["hold"].into())].into());
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> = LazyLock::new(|| {
+    [
+        ("token", ["hold"].into()),
+        (
+            "registry",
+            [
+                "ensure-signer",
+                "get-entry",
+                "get-entry-by-id",
+                "get-signer-id",
+                "get-bls-pubkey",
+            ]
+            .into(),
+        ),
+    ]
+    .into()
+});
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
     SKIP_RESULT_RULES
