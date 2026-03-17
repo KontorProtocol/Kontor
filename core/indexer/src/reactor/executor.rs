@@ -1,6 +1,13 @@
+use anyhow::Result;
 use bitcoin::Txid;
+use indexer_types::OpWithResult;
+use tracing::info;
 
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
+use crate::database::{self, queries::rollback_to_height};
+use crate::runtime::Runtime;
+
+use super::block_handler::{block_handler, simulate_handler};
 
 /// Abstraction over transaction execution and state rollback.
 ///
@@ -91,6 +98,96 @@ impl Executor for NoopExecutor {
     async fn execute_block(&mut self, _block: &indexer_types::Block) {}
     async fn rollback_state(&mut self, _to_anchor: u64) -> usize {
         0
+    }
+    async fn checkpoint(&self) -> Option<[u8; 32]> {
+        None
+    }
+    async fn last_batch_consensus_height_before(&self, _anchor: u64) -> Option<Height> {
+        None
+    }
+    async fn is_confirmed_on_chain(&self, _txid: &bitcoin::Txid) -> bool {
+        false
+    }
+    async fn last_executed_block_height(&self) -> Option<u64> {
+        None
+    }
+    async fn store_decided(
+        &mut self,
+        _height: Height,
+        _value: Value,
+        _certificate: CommitCertificate<Ctx>,
+    ) {
+    }
+    async fn get_decided(&self, _height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
+        None
+    }
+    async fn min_decided_height(&self) -> Option<Height> {
+        None
+    }
+    async fn get_decided_from_anchor(&self, _from_anchor: u64) -> Vec<(Height, Value)> {
+        Vec::new()
+    }
+    async fn replay_blocks_from(&mut self, _height: u64) {}
+}
+
+/// Production executor: real WASM execution via Runtime + DB persistence.
+pub struct RuntimeExecutor {
+    pub runtime: Runtime,
+    pub writer: database::Writer,
+}
+
+impl RuntimeExecutor {
+    pub fn new(runtime: Runtime, writer: database::Writer) -> Self {
+        Self { runtime, writer }
+    }
+
+    pub fn connection(&self) -> libsql::Connection {
+        self.writer.connection()
+    }
+
+    pub async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
+        simulate_handler(&mut self.runtime, btx).await
+    }
+}
+
+impl Executor for RuntimeExecutor {
+    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
+        true
+    }
+    async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
+        None
+    }
+    async fn execute_batch(
+        &mut self,
+        _anchor_height: u64,
+        _consensus_height: Height,
+        _txs: &[bitcoin::Transaction],
+    ) {
+    }
+    async fn execute_block(&mut self, block: &indexer_types::Block) {
+        info!("# Block Kontor Transactions: {}", block.transactions.len());
+        if let Err(e) = block_handler(&mut self.runtime, block).await {
+            tracing::error!("block_handler error: {e}");
+        }
+    }
+    async fn rollback_state(&mut self, to_anchor: u64) -> usize {
+        match rollback_to_height(&self.writer.connection(), to_anchor).await {
+            Ok(n) => {
+                if let Err(e) = self
+                    .runtime
+                    .file_ledger
+                    .force_resync_from_db(&self.runtime.storage.conn)
+                    .await
+                {
+                    tracing::error!("file_ledger resync failed: {e}");
+                }
+                n as usize
+            }
+            Err(e) => {
+                tracing::error!("rollback_to_height failed: {e}");
+                0
+            }
+        }
     }
     async fn checkpoint(&self) -> Option<[u8; 32]> {
         None

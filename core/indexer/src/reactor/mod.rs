@@ -27,15 +27,14 @@ use crate::{
     consensus::Ctx,
     database::{
         self,
-        queries::{
-            insert_processed_block, rollback_to_height, select_block_at_height, select_block_latest,
-        },
+        queries::{insert_processed_block, select_block_at_height, select_block_latest},
     },
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
 
 pub use block_handler::{block_handler, simulate_handler};
+use executor::Executor;
 
 pub type Simulation = (
     bitcoin::Transaction,
@@ -45,7 +44,6 @@ pub type Simulation = (
 /// Handle to the Malachite engine + consensus state, present only when consensus is configured.
 struct ConsensusHandle {
     state: consensus::ConsensusState,
-    executor: executor::NoopExecutor,
     channels: Channels<Ctx>,
     _engine_handle: malachitebft_app_channel::EngineHandle,
     _wal_dir: tempfile::TempDir,
@@ -53,13 +51,12 @@ struct ConsensusHandle {
 }
 
 struct Reactor {
-    writer: database::Writer,
+    executor: executor::RuntimeExecutor,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
-    runtime: Runtime,
     simulate_rx: Option<Receiver<Simulation>>,
     bitcoin_state: bitcoin_state::BitcoinState,
     consensus_handle: Option<ConsensusHandle>,
@@ -80,8 +77,8 @@ impl Reactor {
         simulate_rx: Option<Receiver<Simulation>>,
         engine_config: Option<engine::EngineConfig>,
     ) -> Result<Self> {
-        let conn = &writer.connection();
-        let (last_height, option_last_hash) = match select_block_latest(conn).await? {
+        let conn = writer.connection();
+        let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
             Some(block) => {
                 let block_height = block.height as u64;
                 if block_height < starting_block_height - 1 {
@@ -108,14 +105,14 @@ impl Reactor {
         };
 
         // ensure 0 (native) block exists
-        if select_block_at_height(conn, 0)
+        if select_block_at_height(&conn, 0)
             .await
             .expect("Failed to select block at height 0")
             .is_none()
         {
             info!("Creating native block");
             insert_processed_block(
-                conn,
+                &conn,
                 BlockRow::builder()
                     .height(0)
                     .hash(new_mock_block_hash(0))
@@ -146,7 +143,6 @@ impl Reactor {
                     genesis,
                     engine_output.address,
                 ),
-                executor: executor::NoopExecutor,
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
                 _wal_dir: engine_output._wal_dir,
@@ -157,7 +153,7 @@ impl Reactor {
         };
 
         Ok(Self {
-            writer,
+            executor: executor::RuntimeExecutor::new(runtime, writer),
             cancel_token,
             block_rx,
             mempool_rx,
@@ -167,22 +163,16 @@ impl Reactor {
             option_last_hash,
             init_tx,
             event_tx,
-            runtime,
             consensus_handle,
         })
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
-        rollback_to_height(&self.writer.connection(), height).await?;
+        self.executor.rollback_state(height).await;
         self.last_height = height;
 
-        self.runtime
-            .file_ledger
-            .force_resync_from_db(&self.runtime.storage.conn)
-            .await?;
-
-        let conn = &self.writer.connection();
-        if let Some(block) = select_block_at_height(conn, height as i64).await? {
+        let conn = self.executor.connection();
+        if let Some(block) = select_block_at_height(&conn, height as i64).await? {
             self.option_last_hash = Some(block.hash);
             info!("Rollback to height {} ({})", height, block.hash);
         } else {
@@ -229,9 +219,7 @@ impl Reactor {
         self.last_height = height;
         self.option_last_hash = Some(hash);
 
-        info!("# Block Kontor Transactions: {}", block.transactions.len());
-
-        block_handler(&mut self.runtime, &block).await?;
+        self.executor.execute_block(&block).await;
 
         if let Some(tx) = &self.event_tx {
             let _ = tx
@@ -284,7 +272,7 @@ impl Reactor {
                                     b.deadline <= self.bitcoin_state.chain_tip
                                 })
                             {
-                                handle.state.run_finality_checks(&mut handle.executor, &mut self.bitcoin_state).await;
+                                handle.state.run_finality_checks(&mut self.executor, &mut self.bitcoin_state).await;
                             }
 
                             // In follower mode (no consensus), execute blocks immediately
@@ -320,7 +308,7 @@ impl Reactor {
                     let node_index = handle.node_index;
                     consensus::handle_consensus_msg(
                         &mut handle.state,
-                        &mut handle.executor,
+                        &mut self.executor,
                         &mut self.bitcoin_state,
                         &mut handle.channels,
                         msg,
@@ -329,7 +317,7 @@ impl Reactor {
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
-                        let _ = ret_tx.send(simulate_handler(&mut self.runtime, btx).await);
+                        let _ = ret_tx.send(self.executor.simulate(btx).await);
                     }
                 }
             }

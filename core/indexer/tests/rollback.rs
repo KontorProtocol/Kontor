@@ -363,9 +363,7 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         "registration must write contract_state at height 1"
     );
 
-    event_tx
-        .send(BlockEvent::Rollback { to_height: 0 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 0),
         other => panic!("expected Rolledback, got {other:?}"),
@@ -512,9 +510,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
     );
 
     // -- Rollback to height 1: block 2 is deleted, nonce reverts --
-    event_tx
-        .send(BlockEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 1),
         other => panic!("expected Rolledback, got {other:?}"),
@@ -643,9 +639,7 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
     );
 
     // -- Rollback to height 0: block 1 is deleted --
-    event_tx
-        .send(BlockEvent::Rollback { to_height: 0 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 0),
         other => panic!("expected Rolledback, got {other:?}"),
