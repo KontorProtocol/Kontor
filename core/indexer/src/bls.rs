@@ -185,7 +185,8 @@ impl SignerResolver {
             BlsBulkOp::Call { signer_id, .. } => {
                 let entry = get_entry_by_id(runtime, *signer_id).await?;
                 let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-                self.signer_map.insert(*signer_id, entry.x_only_pubkey);
+                self.signer_map
+                    .insert(*signer_id, entry.x_only_pubkey.clone());
                 entry
                     .bls_pubkey
                     .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?
