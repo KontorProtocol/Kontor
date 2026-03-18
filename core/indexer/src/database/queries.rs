@@ -181,7 +181,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             INSERT OR REPLACE INTO contract_state (
                 contract_id,
                 height,
-                tx_index,
+                tx_id,
                 size,
                 path,
                 value,
@@ -191,7 +191,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             params![
                 row.contract_id,
                 row.height,
-                row.tx_index,
+                row.tx_id,
                 row.size(),
                 row.path,
                 row.value,
@@ -222,7 +222,7 @@ pub async fn get_latest_contract_state(
                 SELECT
                     contract_id,
                     height,
-                    tx_index,
+                    tx_id,
                     path,
                     value,
                     deleted
@@ -277,7 +277,7 @@ pub async fn get_latest_contract_state_value(
 pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
@@ -286,7 +286,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_index = tx_index;
+                row.tx_id = tx_id;
                 insert_contract_state(conn, row).await?;
                 true
             }
@@ -533,13 +533,13 @@ pub async fn get_contract_bytes_by_id(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<(), Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT INTO transactions (height, txid, tx_index) VALUES (?, ?, ?)",
-        params![row.height, row.txid, row.tx_index],
+        "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
+        params![row.height, row.txid, row.confirmed_height, row.tx_index, row.batch_height],
     )
     .await?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 pub async fn get_transaction_by_txid(
@@ -548,7 +548,7 @@ pub async fn get_transaction_by_txid(
 ) -> Result<Option<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE txid = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE txid = ?",
             params![txid],
         )
         .await?;
@@ -562,7 +562,7 @@ pub async fn get_transactions_at_height(
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE height = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
             params![height],
         )
         .await?;
@@ -708,7 +708,8 @@ pub async fn get_transactions_paginated(
 ) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "t";
-    let mut selects = "t.id, t.txid, t.height, t.tx_index".to_string();
+    let mut selects =
+        "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
     let mut from = "transactions t JOIN blocks b USING (height)".to_string();
     let mut where_clauses = vec!["b.processed = 1".to_string()];
     if let Some(address) = &query.contract {
@@ -716,7 +717,7 @@ pub async fn get_transactions_paginated(
             .await?
             .ok_or(Error::ContractNotFound(address.to_string()))?;
         selects = format!("DISTINCT {}", selects);
-        from = format!("{} JOIN contract_state c USING (height, tx_index)", from);
+        from = format!("{} JOIN contract_state c ON c.tx_id = t.id", from);
         where_clauses.push(format!("c.contract_id = {}", contract_id));
     }
 
@@ -750,7 +751,7 @@ pub async fn get_results_paginated(
         DISTINCT
         r.id,
         r.height,
-        r.tx_index,
+        t.tx_index,
         r.input_index,
         r.op_index,
         r.result_index,
@@ -764,8 +765,8 @@ pub async fn get_results_paginated(
     "#;
     let from = r#"
         contract_results r
-        JOIN blocks b USING (height)
-        LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+        JOIN blocks b ON r.height = b.height
+        LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
     let mut where_clauses = vec!["b.processed = 1".to_string()];
@@ -821,12 +822,12 @@ pub async fn get_op_result(
             r#"
             SELECT
                 r.id,
-                r.func,
                 r.height,
-                r.tx_index,
+                t.tx_index,
                 r.input_index,
                 r.op_index,
                 r.result_index,
+                r.func,
                 r.gas,
                 r.value,
                 c.name as contract_name,
@@ -834,8 +835,8 @@ pub async fn get_op_result(
                 c.tx_index as contract_tx_index,
                 t.txid
             FROM contract_results r
-            JOIN blocks b USING (height)
-            LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+            JOIN blocks b ON r.height = b.height
+            LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
             WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
             ORDER BY r.result_index DESC
@@ -854,8 +855,7 @@ pub async fn get_op_result(
 
 pub async fn get_contract_result(
     conn: &Connection,
-    height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     input_index: Option<i64>,
     op_index: Option<i64>,
     result_index: i64,
@@ -868,22 +868,20 @@ pub async fn get_contract_result(
                 contract_id,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
                 gas,
                 value
             FROM contract_results
-            WHERE height = :height
-              AND tx_index IS :tx_index
+            WHERE tx_id IS :tx_id
               AND input_index IS :input_index
               AND op_index IS :op_index
               AND result_index = :result_index
             "#,
             named_params! {
-                ":height": height,
-                ":tx_index": tx_index,
+                ":tx_id": tx_id,
                 ":input_index": input_index,
                 ":op_index": op_index,
                 ":result_index": result_index,
@@ -904,7 +902,7 @@ pub async fn insert_contract_result(
                 size,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
@@ -917,7 +915,7 @@ pub async fn insert_contract_result(
             row.size(),
             row.func,
             row.height,
-            row.tx_index,
+            row.tx_id,
             row.input_index,
             row.op_index,
             row.result_index,

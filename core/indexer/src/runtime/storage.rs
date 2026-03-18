@@ -23,6 +23,10 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
 pub struct TransactionContext {
+    /// Autoincrement id from the transactions table (for contract_state/contract_results FK).
+    /// None when no transaction row exists (e.g. publish_native_contracts).
+    pub tx_id: Option<i64>,
+    /// Position in the confirming Bitcoin block (for contracts table)
     #[builder(default = 0)]
     pub tx_index: i64,
     #[builder(default = 0)]
@@ -55,7 +59,7 @@ impl Storage {
             &self.conn,
             ContractStateRow::builder()
                 .contract_id(contract_id)
-                .maybe_tx_index(self.tx_context.as_ref().map(|c| c.tx_index))
+                .maybe_tx_id(self.effective_tx_id())
                 .height(self.height)
                 .path(path.to_string())
                 .value(value.to_vec())
@@ -69,7 +73,7 @@ impl Storage {
         Ok(delete_contract_state(
             &self.conn,
             self.height,
-            self.tx_context.as_ref().map(|c| c.tx_index),
+            self.effective_tx_id(),
             contract_id,
             path,
         )
@@ -159,6 +163,10 @@ impl Storage {
         .await?)
     }
 
+    fn effective_tx_id(&self) -> Option<i64> {
+        self.tx_context.as_ref().and_then(|c| c.tx_id)
+    }
+
     pub fn build_contract_result_row(
         &self,
         result_index: i64,
@@ -170,7 +178,7 @@ impl Storage {
         ContractResultRow::builder()
             .contract_id(contract_id)
             .height(self.height)
-            .maybe_tx_index(self.tx_context.as_ref().map(|c| c.tx_index))
+            .maybe_tx_id(self.effective_tx_id())
             .maybe_input_index(self.tx_context.as_ref().map(|c| c.input_index))
             .maybe_op_index(self.tx_context.as_ref().map(|c| c.op_index))
             .result_index(result_index)

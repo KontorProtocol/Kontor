@@ -296,25 +296,24 @@ impl Runtime {
         signature: &[u8],
         previous_output: bitcoin::OutPoint,
         input_index: i64,
+        tx_id: i64,
+        tx_index: i64,
+        txid: bitcoin::Txid,
         op_return_data: Option<indexer_types::OpReturnData>,
     ) -> Result<()> {
         use crate::bls::verify_bls_bulk;
 
         let signer_map = verify_bls_bulk(self, ops, signature).await?;
 
-        let base_ctx = self
-            .tx_context()
-            .expect("tx context must be set for BLS bulk execution")
-            .clone();
-
         for (inner_index, inner_op) in ops.iter().enumerate() {
             self.set_context(
                 self.storage.height,
                 Some(TransactionContext {
-                    tx_index: base_ctx.tx_index,
+                    tx_id: Some(tx_id),
+                    tx_index,
                     input_index,
                     op_index: inner_index as i64,
-                    txid: base_ctx.txid,
+                    txid,
                 }),
                 Some(previous_output),
                 op_return_data.clone().map(Into::into),

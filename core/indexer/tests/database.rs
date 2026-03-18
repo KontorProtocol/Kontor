@@ -91,8 +91,9 @@ async fn test_contract_state_operations() -> Result<()> {
         .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
-    insert_transaction(&conn, tx.clone()).await?;
+    let tx_id = insert_transaction(&conn, tx.clone()).await?;
 
     // Test contract state insertion and retrieval
     let contract_id = 123;
@@ -103,7 +104,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx.tx_index)
+        .tx_id(tx_id)
         .height(height)
         .path(path.to_string())
         .value(value.clone())
@@ -146,7 +147,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(retrieved_value.unwrap(), value);
     assert!(!retrieved_state.deleted);
     assert_eq!(retrieved_state.height, height);
-    assert_eq!(retrieved_state.tx_index, contract_state.tx_index);
+    assert_eq!(retrieved_state.tx_id, contract_state.tx_id);
 
     // Test with a newer version of the same contract state
     let height2 = 800001;
@@ -159,13 +160,14 @@ async fn test_contract_state_operations() -> Result<()> {
         .height(height2)
         .txid(txid2.to_string())
         .tx_index(2)
+        .confirmed_height(height2)
         .build();
-    insert_transaction(&conn, tx2.clone()).await?;
+    let tx_id2 = insert_transaction(&conn, tx2.clone()).await?;
 
     let updated_value = vec![5, 6, 7, 8];
     let updated_contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx2.tx_index)
+        .tx_id(tx_id2)
         .height(height2)
         .path(path.to_string())
         .value(updated_value.clone())
@@ -185,7 +187,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Delete the contract state
     let deleted =
-        delete_contract_state(&conn, height2, Some(tx2.tx_index), contract_id, path).await?;
+        delete_contract_state(&conn, height2, Some(tx_id2), contract_id, path).await?;
     assert!(deleted);
 
     let count = conn
@@ -223,16 +225,19 @@ async fn test_transaction_operations() -> Result<()> {
         .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
     let tx2 = TransactionRow::builder()
         .height(height)
         .txid("123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0".to_string())
         .tx_index(1)
+        .confirmed_height(height)
         .build();
     let tx3 = TransactionRow::builder()
         .height(height)
         .txid("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string())
         .tx_index(2)
+        .confirmed_height(height)
         .build();
 
     // Insert multiple transactions at the same height
@@ -501,14 +506,45 @@ async fn test_map_keys() -> Result<()> {
 
     insert_block(&conn, block1.clone()).await?;
 
+    // Insert transactions to satisfy FK constraints
+    let tx_id1 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000001".to_string())
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let tx_id2 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000002".to_string())
+            .tx_index(1)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let tx_id3 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000003".to_string())
+            .tx_index(2)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
     let contract_id = 123;
     let path = "test.path";
     let value = vec![1, 2, 3, 4];
-    let tx_index = 1;
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index)
+        .tx_id(tx_id1)
         .height(height)
         .path(format!("{}.key0.foo", path))
         .value(value.clone())
@@ -518,7 +554,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index)
+        .tx_id(tx_id1)
         .height(height)
         .path(format!("{}.key0.bar", path))
         .value(value.clone())
@@ -528,7 +564,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index + 1)
+        .tx_id(tx_id2)
         .height(height)
         .path(format!("{}.key2", path))
         .value(value.clone())
@@ -537,7 +573,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index + 2)
+        .tx_id(tx_id3)
         .height(height)
         .path(format!("{}.key1", path))
         .value(value.clone())
@@ -591,13 +627,14 @@ async fn test_contract_result_operations() -> Result<()> {
         .height(height)
         .txid(txid.to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
 
-    insert_transaction(&conn, tx1.clone()).await?;
+    let tx_id = insert_transaction(&conn, tx1.clone()).await?;
 
     let result = ContractResultRow::builder()
         .id(1)
-        .tx_index(tx1.tx_index)
+        .tx_id(tx_id)
         .input_index(0)
         .op_index(0)
         .height(height)
@@ -610,8 +647,7 @@ async fn test_contract_result_operations() -> Result<()> {
 
     let row = get_contract_result(
         &conn,
-        result.height,
-        result.tx_index,
+        result.tx_id,
         result.input_index,
         result.op_index,
         result.result_index,

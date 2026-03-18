@@ -195,6 +195,16 @@ impl RuntimeLocal {
             .await?;
             (1, 1, new_mock_transaction(0).txid)
         };
+        let tx_id = insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(height)
+                .txid(txid.to_string())
+                .tx_index(tx_index)
+                .confirmed_height(height)
+                .build(),
+        )
+        .await?;
         let storage = Storage::builder().height(height).conn(conn).build();
         let component_cache = ComponentCache::new();
         let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
@@ -204,6 +214,7 @@ impl RuntimeLocal {
                 height,
                 Some(
                     TransactionContext::builder()
+                        .tx_id(tx_id)
                         .tx_index(tx_index)
                         .txid(txid)
                         .build(),

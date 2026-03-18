@@ -93,10 +93,11 @@ pub async fn process_transaction(
     block_height: u64,
     t: &Transaction,
 ) -> Result<()> {
-    insert_transaction(
+    let tx_id = insert_transaction(
         &runtime.storage.conn,
         TransactionRow::builder()
             .height(block_height as i64)
+            .confirmed_height(block_height as i64)
             .tx_index(t.index)
             .txid(t.txid.to_string())
             .build(),
@@ -113,6 +114,7 @@ pub async fn process_transaction(
             .set_context(
                 block_height as i64,
                 Some(TransactionContext {
+                    tx_id: Some(tx_id),
                     tx_index: t.index,
                     input_index,
                     op_index: 0,
@@ -123,7 +125,7 @@ pub async fn process_transaction(
             )
             .await;
 
-        execute_op(runtime, op, op_return_data).await;
+        execute_op(runtime, tx_id, t, op, op_return_data).await;
     }
 
     Ok(())
@@ -131,9 +133,13 @@ pub async fn process_transaction(
 
 async fn execute_op(
     runtime: &mut Runtime,
+    tx_id: i64,
+    t: &Transaction,
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
+    let input_index = op.metadata().input_index;
+
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {
@@ -202,7 +208,10 @@ async fn execute_op(
                     ops,
                     signature,
                     metadata.previous_output,
-                    metadata.input_index,
+                    input_index,
+                    tx_id,
+                    t.index,
+                    t.txid,
                     op_return_data,
                 )
                 .await
