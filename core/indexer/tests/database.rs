@@ -9,11 +9,13 @@ use indexer::{
             exists_contract_state, get_contract_bytes_by_address, get_contract_bytes_by_id,
             get_contract_id_from_address, get_contract_result, get_contracts,
             get_latest_contract_state, get_latest_contract_state_value, get_op_result,
-            get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_result, insert_contract_state, insert_file_metadata,
+            get_transaction_by_txid, get_transactions_at_height, insert_batch, insert_block,
+            insert_contract, insert_contract_result, insert_contract_state, insert_file_metadata,
             insert_processed_block, insert_transaction, matching_path,
             path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
-            select_block_at_height, select_block_latest, select_processed_block_by_height_or_hash,
+            select_batch, select_batches_from_anchor, select_block_at_height, select_block_latest,
+            select_min_batch_height, select_processed_block_by_height_or_hash,
+            update_batch_certificate,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId},
     },
@@ -772,6 +774,158 @@ async fn test_file_metadata_operations() -> Result<()> {
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, id1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_and_select_batch() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: i64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    insert_batch(&conn, 1, height, &hash.to_string()).await?;
+
+    // Insert two batch transactions
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .batch_height(1)
+            .txid("aa".repeat(32))
+            .build(),
+    )
+    .await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .batch_height(1)
+            .txid("bb".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    let result = select_batch(&conn, 1).await?;
+    assert!(result.is_some());
+    let (anchor_height, anchor_hash, certificate, txids) = result.unwrap();
+    assert_eq!(anchor_height, height);
+    assert_eq!(anchor_hash, hash.to_string());
+    assert!(certificate.is_none());
+    assert_eq!(txids.len(), 2);
+    assert_eq!(txids[0], "aa".repeat(32));
+    assert_eq!(txids[1], "bb".repeat(32));
+
+    // Non-existent batch
+    assert!(select_batch(&conn, 999).await?.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_batch_certificate() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: i64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    insert_batch(&conn, 1, height, &hash.to_string()).await?;
+
+    let cert_bytes = vec![1, 2, 3, 4, 5];
+    update_batch_certificate(&conn, 1, &cert_bytes).await?;
+
+    let (_, _, certificate, _) = select_batch(&conn, 1).await?.unwrap();
+    assert_eq!(certificate, Some(cert_bytes));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_min_batch_height() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    assert!(select_min_batch_height(&conn).await?.is_none());
+
+    let height: i64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    insert_batch(&conn, 5, height, &hash.to_string()).await?;
+    insert_batch(&conn, 3, height, &hash.to_string()).await?;
+    insert_batch(&conn, 8, height, &hash.to_string()).await?;
+
+    assert_eq!(select_min_batch_height(&conn).await?, Some(3));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_batches_from_anchor() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Create blocks at heights 100 and 200
+    for h in [100i64, 200] {
+        let hash = new_mock_block_hash(h as u32);
+        insert_processed_block(&conn, BlockRow::builder().height(h).hash(hash).build()).await?;
+    }
+
+    let hash100 = new_mock_block_hash(100);
+    let hash200 = new_mock_block_hash(200);
+
+    // Batch at anchor 100
+    insert_batch(&conn, 1, 100, &hash100.to_string()).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .batch_height(1)
+            .txid("aa".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    // Batch at anchor 200
+    insert_batch(&conn, 2, 200, &hash200.to_string()).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(200)
+            .batch_height(2)
+            .txid("bb".repeat(32))
+            .build(),
+    )
+    .await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(200)
+            .batch_height(2)
+            .txid("cc".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    // Query from anchor 200 — should only return the second batch
+    let results = select_batches_from_anchor(&conn, 200).await?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, 2); // consensus_height
+    assert_eq!(results[0].1, 200); // anchor_height
+    assert_eq!(results[0].3.len(), 2); // txids
+
+    // Query from anchor 100 — should return both
+    let results = select_batches_from_anchor(&conn, 100).await?;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].0, 1);
+    assert_eq!(results[0].3.len(), 1);
+    assert_eq!(results[1].0, 2);
+    assert_eq!(results[1].3.len(), 2);
 
     Ok(())
 }

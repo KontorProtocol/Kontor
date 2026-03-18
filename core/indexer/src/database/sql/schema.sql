@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 CREATE TABLE IF NOT EXISTS batches (
   consensus_height INTEGER PRIMARY KEY,
   anchor_height INTEGER NOT NULL,
-  anchor_hash TEXT NOT NULL
+  anchor_hash TEXT NOT NULL,
+  certificate BLOB
 );
 
 CREATE TABLE IF NOT EXISTS transactions (

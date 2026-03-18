@@ -1,11 +1,17 @@
 use anyhow::Result;
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
 use indexer_types::OpWithResult;
+use prost::Message;
 use tracing::{info, warn};
 
 use crate::bitcoin_client::Client;
+use crate::consensus::codec::{decode_commit_certificate, encode_commit_certificate};
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
-use crate::database::{self, queries::rollback_to_height};
+use crate::database::queries::{
+    rollback_to_height, select_batch, select_batches_from_anchor, select_min_batch_height,
+    update_batch_certificate,
+};
+use crate::database::{self};
 use crate::runtime::Runtime;
 
 use super::block_handler::{batch_handler, block_handler, simulate_handler};
@@ -169,7 +175,6 @@ impl Executor for RuntimeExecutor {
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         let client = self.bitcoin_client.as_ref()?;
-        // Cache is checked inside get_raw_transaction
         match client.get_raw_transaction(txid).await {
             Ok(tx) => Some(tx),
             Err(e) => {
@@ -236,19 +241,68 @@ impl Executor for RuntimeExecutor {
     }
     async fn store_decided(
         &mut self,
-        _height: Height,
+        height: Height,
         _value: Value,
-        _certificate: CommitCertificate<Ctx>,
+        certificate: CommitCertificate<Ctx>,
     ) {
+        let proto = match encode_commit_certificate(&certificate) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(%e, "Failed to encode commit certificate");
+                return;
+            }
+        };
+        let bytes = proto.encode_to_vec();
+        if let Err(e) =
+            update_batch_certificate(&self.connection(), height.as_u64() as i64, &bytes).await
+        {
+            tracing::error!(%e, "Failed to store commit certificate");
+        }
     }
-    async fn get_decided(&self, _height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
-        None
+    async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
+        let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
+            select_batch(&self.connection(), height.as_u64() as i64)
+                .await
+                .ok()
+                .flatten()?;
+
+        let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
+        let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
+        let value = Value::new(anchor_height as u64, anchor_hash, txids);
+
+        let cert_bytes = cert_bytes?;
+        let proto =
+            crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
+        let certificate = decode_commit_certificate(proto).ok()?;
+
+        Some((value, certificate))
     }
     async fn min_decided_height(&self) -> Option<Height> {
-        None
+        select_min_batch_height(&self.connection())
+            .await
+            .ok()
+            .flatten()
+            .map(|h| Height::new(h as u64))
     }
-    async fn get_decided_from_anchor(&self, _from_anchor: u64) -> Vec<(Height, Value)> {
-        Vec::new()
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
+        let rows = match select_batches_from_anchor(&self.connection(), from_anchor as i64).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(%e, "Failed to query batches from anchor");
+                return Vec::new();
+            }
+        };
+
+        rows.into_iter()
+            .filter_map(|(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
+                let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
+                let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
+                Some((
+                    Height::new(consensus_height as u64),
+                    Value::new(anchor_height as u64, anchor_hash, txids),
+                ))
+            })
+            .collect()
     }
     async fn replay_blocks_from(&mut self, _height: u64) {}
 }

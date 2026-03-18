@@ -556,6 +556,104 @@ pub async fn insert_batch(
     Ok(())
 }
 
+pub async fn update_batch_certificate(
+    conn: &Connection,
+    consensus_height: i64,
+    certificate: &[u8],
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE batches SET certificate = ? WHERE consensus_height = ?",
+        params![certificate, consensus_height],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_batch(
+    conn: &Connection,
+    consensus_height: i64,
+) -> Result<Option<(i64, String, Option<Vec<u8>>, Vec<String>)>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT b.anchor_height, b.anchor_hash, b.certificate, t.txid \
+             FROM batches b \
+             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+             WHERE b.consensus_height = ? \
+             ORDER BY t.id",
+            params![consensus_height],
+        )
+        .await?;
+
+    let mut anchor_height = None;
+    let mut anchor_hash = None;
+    let mut certificate = None;
+    let mut txids = Vec::new();
+
+    while let Some(row) = rows.next().await? {
+        if anchor_height.is_none() {
+            anchor_height = Some(row.get::<i64>(0)?);
+            anchor_hash = Some(row.get::<String>(1)?);
+            certificate = row.get::<Option<Vec<u8>>>(2)?;
+        }
+        if let Ok(txid) = row.get::<String>(3) {
+            txids.push(txid);
+        }
+    }
+
+    match (anchor_height, anchor_hash) {
+        (Some(ah), Some(hash)) => Ok(Some((ah, hash, certificate, txids))),
+        _ => Ok(None),
+    }
+}
+
+pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    let mut rows = conn
+        .query("SELECT MIN(consensus_height) FROM batches", params![])
+        .await?;
+
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+
+    Ok(row.get::<Option<i64>>(0)?)
+}
+
+pub async fn select_batches_from_anchor(
+    conn: &Connection,
+    from_anchor: i64,
+) -> Result<Vec<(i64, i64, String, Vec<String>)>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, t.txid \
+             FROM batches b \
+             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+             WHERE b.anchor_height >= ? \
+             ORDER BY b.consensus_height, t.id",
+            params![from_anchor],
+        )
+        .await?;
+
+    let mut results: Vec<(i64, i64, String, Vec<String>)> = Vec::new();
+
+    while let Some(row) = rows.next().await? {
+        let consensus_height: i64 = row.get(0)?;
+        let anchor_height: i64 = row.get(1)?;
+        let anchor_hash: String = row.get(2)?;
+        let txid: Option<String> = row.get(3).ok();
+
+        if results.last().is_some_and(|(ch, _, _, _)| *ch == consensus_height) {
+            if let Some(txid) = txid {
+                results.last_mut().unwrap().3.push(txid);
+            }
+        } else {
+            let txids = txid.into_iter().collect();
+            results.push((consensus_height, anchor_height, anchor_hash, txids));
+        }
+    }
+
+    Ok(results)
+}
+
 pub async fn get_transaction_by_txid(
     conn: &Connection,
     txid: &str,
