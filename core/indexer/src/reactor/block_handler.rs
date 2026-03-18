@@ -5,11 +5,10 @@ use tracing::{info, warn};
 
 use crate::{
     block::{filter_map, inspect},
-    bls::verify_bls_bulk,
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -109,6 +108,7 @@ pub async fn process_transaction(
         let input_index = metadata.input_index;
         let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
         info!("Op return data: {:#?}", op_return_data);
+
         runtime
             .set_context(
                 block_height as i64,
@@ -123,7 +123,7 @@ pub async fn process_transaction(
             )
             .await;
 
-        execute_op(runtime, block_height, t, op, op_return_data).await;
+        execute_op(runtime, op, op_return_data).await;
     }
 
     Ok(())
@@ -131,13 +131,15 @@ pub async fn process_transaction(
 
 async fn execute_op(
     runtime: &mut Runtime,
-    block_height: u64,
-    t: &Transaction,
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
-    let metadata = op.metadata();
-    let input_index = metadata.input_index;
+    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
+        && let Err(e) = runtime.ensure_signer(x_only).await
+    {
+        warn!("Failed to ensure signer for {x_only}: {e}");
+        return;
+    }
 
     match op {
         Op::Publish {
@@ -192,91 +194,20 @@ async fn execute_op(
         }
         Op::BlsBulk {
             metadata,
-            signature,
             ops,
+            signature,
         } => {
-            let signer_map = match verify_bls_bulk(runtime, ops.as_slice(), signature).await {
-                Ok(map) => map,
-                Err(e) => {
-                    warn!("BlsBulk aggregate verification failed: {e}");
-                    return;
-                }
-            };
-
-            for (inner_index, inner_op) in ops.iter().enumerate() {
-                runtime
-                    .set_context(
-                        block_height as i64,
-                        Some(TransactionContext {
-                            tx_index: t.index,
-                            input_index,
-                            op_index: inner_index as i64,
-                            txid: t.txid,
-                        }),
-                        Some(metadata.previous_output),
-                        op_return_data.clone().map(Into::into),
-                    )
-                    .await;
-
-                match inner_op {
-                    indexer_types::BlsBulkOp::Call {
-                        signer_id,
-                        nonce,
-                        gas_limit,
-                        contract,
-                        expr,
-                    } => {
-                        let x_only = signer_map.get(signer_id).expect(
-                            "signer_id must be in signer_map after verify_bls_bulk succeeds",
-                        );
-
-                        let nonce_result = registry::api::advance_nonce(
-                            runtime,
-                            &Signer::Core(Box::new(Signer::Nobody)),
-                            *signer_id,
-                            *nonce,
-                        )
-                        .await;
-                        match nonce_result {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(e)) => {
-                                warn!("BlsBulk nonce check failed for signer {signer_id}: {e:?}");
-                                continue;
-                            }
-                            Err(e) => {
-                                warn!("BlsBulk nonce advance error for signer {signer_id}: {e}");
-                                continue;
-                            }
-                        }
-
-                        let signer = Signer::XOnlyPubKey(x_only.clone());
-                        runtime.set_gas_limit(*gas_limit);
-                        let result = runtime
-                            .execute(Some(&signer), &(contract.into()), expr)
-                            .await;
-                        if result.is_err() {
-                            warn!("BlsBulk call operation failed: {:?}", result);
-                        }
-                    }
-                    indexer_types::BlsBulkOp::RegisterBlsKey {
-                        signer,
-                        bls_pubkey,
-                        schnorr_sig,
-                        bls_sig,
-                    } => {
-                        if let Err(e) = runtime
-                            .register_bls_key(
-                                signer,
-                                bls_pubkey.as_slice(),
-                                schnorr_sig.as_slice(),
-                                bls_sig.as_slice(),
-                            )
-                            .await
-                        {
-                            warn!("BlsBulk RegisterBlsKey failed: {e}");
-                        }
-                    }
-                }
+            if let Err(e) = runtime
+                .execute_bls_bulk(
+                    ops,
+                    signature,
+                    metadata.previous_output,
+                    metadata.input_index,
+                    op_return_data,
+                )
+                .await
+            {
+                warn!("BlsBulk failed: {e}");
             }
         }
     }

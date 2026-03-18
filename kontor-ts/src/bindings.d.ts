@@ -160,7 +160,7 @@ export type ParticipantScripts = {
 export type RegistryEntryResponse = {
   signer_id: number;
   x_only_pubkey: string;
-  bls_pubkey: Array<number>;
+  bls_pubkey: Array<number> | null;
   next_nonce: number;
 };
 
