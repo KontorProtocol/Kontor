@@ -158,15 +158,15 @@ pub async fn run_with_timeout(
                 match event {
                     MempoolEvent::Insert(tx) => {
                         let txid = tx.compute_txid();
-                        bitcoin_state.track_mempool_insert(tx);
+                        bitcoin_state.track_mempool_insert(tx).await;
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool insert");
                     }
                     MempoolEvent::Remove(txid) => {
-                        bitcoin_state.track_mempool_remove(&txid);
+                        bitcoin_state.track_mempool_remove(&txid).await;
                         debug!(%txid, mempool = bitcoin_state.mempool.len(), "Mempool remove");
                     }
                     MempoolEvent::Sync(txs) => {
-                        bitcoin_state.track_mempool_sync(txs.into_iter());
+                        bitcoin_state.track_mempool_sync(txs.into_iter()).await;
                         info!(mempool = bitcoin_state.mempool.len(), "Mempool sync");
                     }
                 }

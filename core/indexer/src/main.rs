@@ -113,6 +113,7 @@ async fn main() -> Result<()> {
         Some(event_tx),
         Some(simulate_rx),
         engine_config,
+        Some(bitcoin.clone()),
     ));
     init_rx.await?;
     {

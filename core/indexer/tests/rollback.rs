@@ -69,6 +69,7 @@ async fn test_reactor_fetching() -> Result<()> {
         None,
         None,
         None,
+        None,
     );
 
     let target = 5;
@@ -104,6 +105,7 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
         writer,
         block_rx,
         mempool_rx,
+        None,
         None,
         None,
         None,
@@ -165,6 +167,7 @@ async fn test_reactor_deep_rollback() -> Result<()> {
         None,
         None,
         None,
+        None,
     );
 
     // Insert blocks 1-4
@@ -216,6 +219,7 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         writer,
         block_rx,
         mempool_rx,
+        None,
         None,
         None,
         None,
@@ -316,6 +320,7 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         Some(output_tx),
         None,
         None,
+        None,
     );
 
     let seed = [42u8; 64];
@@ -409,6 +414,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         mempool_rx,
         None,
         Some(output_tx),
+        None,
         None,
         None,
     );
@@ -580,6 +586,7 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         mempool_rx,
         None,
         Some(output_tx),
+        None,
         None,
         None,
     );

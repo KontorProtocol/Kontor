@@ -1,8 +1,9 @@
 use anyhow::Result;
 use bitcoin::Txid;
 use indexer_types::OpWithResult;
-use tracing::info;
+use tracing::{info, warn};
 
+use crate::bitcoin_client::Client;
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 use crate::database::{self, queries::rollback_to_height};
 use crate::runtime::Runtime;
@@ -134,11 +135,21 @@ impl Executor for NoopExecutor {
 pub struct RuntimeExecutor {
     pub runtime: Runtime,
     pub writer: database::Writer,
+    pub bitcoin_client: Option<Client>,
 }
 
 impl RuntimeExecutor {
     pub fn new(runtime: Runtime, writer: database::Writer) -> Self {
-        Self { runtime, writer }
+        Self {
+            runtime,
+            writer,
+            bitcoin_client: None,
+        }
+    }
+
+    pub fn with_bitcoin_client(mut self, client: Client) -> Self {
+        self.bitcoin_client = Some(client);
+        self
     }
 
     pub fn connection(&self) -> libsql::Connection {
@@ -154,8 +165,16 @@ impl Executor for RuntimeExecutor {
     async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
         true
     }
-    async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
-        None
+    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        let client = self.bitcoin_client.as_ref()?;
+        // Cache is checked inside get_raw_transaction
+        match client.get_raw_transaction(txid).await {
+            Ok(tx) => Some(tx),
+            Err(e) => {
+                warn!(%txid, %e, "Failed to resolve transaction via RPC");
+                None
+            }
+        }
     }
     async fn execute_batch(
         &mut self,

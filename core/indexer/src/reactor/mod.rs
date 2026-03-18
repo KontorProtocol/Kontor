@@ -76,6 +76,7 @@ impl Reactor {
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
         engine_config: Option<engine::EngineConfig>,
+        bitcoin_client: Option<crate::bitcoin_client::Client>,
     ) -> Result<Self> {
         let conn = writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
@@ -152,13 +153,21 @@ impl Reactor {
             None
         };
 
+        let mut executor = executor::RuntimeExecutor::new(runtime, writer);
+        let mut bs = bitcoin_state::BitcoinState::new();
+
+        if let Some(client) = bitcoin_client {
+            bs = bs.with_tx_cache(client.tx_cache().clone());
+            executor = executor.with_bitcoin_client(client);
+        }
+
         Ok(Self {
-            executor: executor::RuntimeExecutor::new(runtime, writer),
+            executor,
             cancel_token,
             block_rx,
             mempool_rx,
             simulate_rx,
-            bitcoin_state: bitcoin_state::BitcoinState::new(),
+            bitcoin_state: bs,
             last_height,
             option_last_hash,
             init_tx,
@@ -289,16 +298,16 @@ impl Reactor {
                     match event {
                         MempoolEvent::Sync(txs) => {
                             let count = txs.len();
-                            self.bitcoin_state.track_mempool_sync(txs.into_iter());
+                            self.bitcoin_state.track_mempool_sync(txs.into_iter()).await;
                             info!("MempoolSync {}", count);
                         },
                         MempoolEvent::Insert(tx) => {
                             let txid = tx.compute_txid();
-                            self.bitcoin_state.track_mempool_insert(tx);
+                            self.bitcoin_state.track_mempool_insert(tx).await;
                             debug!("MempoolInsert {}", txid);
                         },
                         MempoolEvent::Remove(txid) => {
-                            self.bitcoin_state.track_mempool_remove(&txid);
+                            self.bitcoin_state.track_mempool_remove(&txid).await;
                             debug!("MempoolRemove {}", txid);
                         },
                     }
@@ -371,6 +380,7 @@ pub fn run(
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: Option<engine::EngineConfig>,
+    bitcoin_client: Option<crate::bitcoin_client::Client>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -384,6 +394,7 @@ pub fn run(
                 event_tx,
                 simulate_rx,
                 engine_config,
+                bitcoin_client,
             )
             .await
             {
