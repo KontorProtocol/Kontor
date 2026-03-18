@@ -7,6 +7,7 @@ runs:
     - name: Install and start Docker
       shell: bash
       run: |
+        set -e
         # Check if Docker is already running
         if docker info >/dev/null 2>&1; then
           echo "Docker is already running"
