@@ -58,8 +58,11 @@ COPY --from=planner /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
 COPY --from=tool-builder /usr/local/cargo/bin/wasm-opt /usr/local/cargo/bin/
 COPY --from=tool-builder /usr/local/cargo/bin/sccache /usr/local/cargo/bin/
 
-# Install wasm32 target directly instead of copying
-RUN rustup target add wasm32-unknown-unknown
+# Install wasm32 target for default and for 1.90 (core/rust-toolchain.toml).
+# build.sh for test-contracts inherits RUSTUP_TOOLCHAIN=1.90 from the indexer build, so 1.90 must have wasm32.
+RUN rustup target add wasm32-unknown-unknown && \
+    rustup toolchain install 1.90 && \
+    rustup target add wasm32-unknown-unknown --toolchain 1.90
 
 WORKDIR /build
 
