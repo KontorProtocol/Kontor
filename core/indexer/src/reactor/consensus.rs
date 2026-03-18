@@ -375,6 +375,7 @@ impl ConsensusState {
         executor: &mut impl Executor,
         bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
+        anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
     ) {
@@ -407,7 +408,7 @@ impl ConsensusState {
         }
 
         executor
-            .execute_batch(anchor_height, consensus_height, batch_txs)
+            .execute_batch(anchor_height, anchor_hash, consensus_height, batch_txs)
             .await;
 
         self.last_processed_anchor = anchor_height;
@@ -645,6 +646,7 @@ pub async fn handle_consensus_msg(
                         executor,
                         bitcoin_state,
                         proposal.value.anchor_height,
+                        proposal.value.anchor_hash,
                         certificate.height,
                         &full_txs,
                     )

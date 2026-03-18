@@ -5,8 +5,9 @@ use tracing::{info, warn};
 
 use crate::{
     block::{filter_map, inspect},
+    consensus::Height,
     database::queries::{
-        insert_block, insert_transaction, select_block_latest, set_block_processed,
+        insert_batch, insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
     runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
@@ -84,6 +85,70 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     }
 
     set_block_processed(&runtime.storage.conn, block.height as i64).await?;
+
+    Ok(())
+}
+
+pub async fn batch_handler(
+    runtime: &mut Runtime,
+    anchor_height: u64,
+    anchor_hash: bitcoin::BlockHash,
+    consensus_height: Height,
+    txs: &[bitcoin::Transaction],
+) -> Result<()> {
+    insert_batch(
+        &runtime.storage.conn,
+        consensus_height.as_u64() as i64,
+        anchor_height as i64,
+        &anchor_hash.to_string(),
+    )
+    .await?;
+
+    for (i, btx) in txs.iter().enumerate() {
+        let Some(t) = filter_map((i, btx.clone())) else {
+            continue;
+        };
+
+        let tx_id = insert_transaction(
+            &runtime.storage.conn,
+            TransactionRow::builder()
+                .height(anchor_height as i64)
+                .batch_height(consensus_height.as_u64() as i64)
+                .txid(t.txid.to_string())
+                .build(),
+        )
+        .await?;
+
+        for op in &t.ops {
+            let metadata = op.metadata();
+            let input_index = metadata.input_index;
+            let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
+
+            runtime
+                .set_context(
+                    anchor_height as i64,
+                    Some(TransactionContext {
+                        tx_id: Some(tx_id),
+                        tx_index: t.index,
+                        input_index,
+                        op_index: 0,
+                        txid: t.txid,
+                    }),
+                    Some(metadata.previous_output),
+                    op_return_data.clone().map(Into::into),
+                )
+                .await;
+
+            execute_op(runtime, op, op_return_data).await;
+        }
+    }
+
+    info!(
+        consensus_height = %consensus_height,
+        anchor_height,
+        tx_count = txs.len(),
+        "Batch executed"
+    );
 
     Ok(())
 }

@@ -125,6 +125,7 @@ pub async fn run_with_timeout(
                                         executor,
                                         bitcoin_state,
                                         value.anchor_height,
+                                        value.anchor_hash,
                                         height,
                                         &resolved_txs,
                                     )

@@ -218,6 +218,7 @@ impl Executor for StateLog {
     async fn execute_batch(
         &mut self,
         anchor_height: u64,
+        _anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         txs: &[bitcoin::Transaction],
     ) {

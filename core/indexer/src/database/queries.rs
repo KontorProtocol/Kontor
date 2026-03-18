@@ -542,6 +542,20 @@ pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Resul
     Ok(conn.last_insert_rowid())
 }
 
+pub async fn insert_batch(
+    conn: &Connection,
+    consensus_height: i64,
+    anchor_height: i64,
+    anchor_hash: &str,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO batches (consensus_height, anchor_height, anchor_hash) VALUES (?, ?, ?)",
+        params![consensus_height, anchor_height, anchor_hash],
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn get_transaction_by_txid(
     conn: &Connection,
     txid: &str,

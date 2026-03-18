@@ -8,7 +8,7 @@ use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 use crate::database::{self, queries::rollback_to_height};
 use crate::runtime::Runtime;
 
-use super::block_handler::{block_handler, simulate_handler};
+use super::block_handler::{batch_handler, block_handler, simulate_handler};
 
 /// Abstraction over transaction execution and state rollback.
 ///
@@ -29,6 +29,7 @@ pub trait Executor {
     async fn execute_batch(
         &mut self,
         anchor_height: u64,
+        anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         txs: &[bitcoin::Transaction],
     );
@@ -92,6 +93,7 @@ impl Executor for NoopExecutor {
     async fn execute_batch(
         &mut self,
         _anchor_height: u64,
+        _anchor_hash: bitcoin::BlockHash,
         _consensus_height: Height,
         _txs: &[bitcoin::Transaction],
     ) {
@@ -178,10 +180,22 @@ impl Executor for RuntimeExecutor {
     }
     async fn execute_batch(
         &mut self,
-        _anchor_height: u64,
-        _consensus_height: Height,
-        _txs: &[bitcoin::Transaction],
+        anchor_height: u64,
+        anchor_hash: bitcoin::BlockHash,
+        consensus_height: Height,
+        txs: &[bitcoin::Transaction],
     ) {
+        if let Err(e) = batch_handler(
+            &mut self.runtime,
+            anchor_height,
+            anchor_hash,
+            consensus_height,
+            txs,
+        )
+        .await
+        {
+            tracing::error!("batch_handler error: {e}");
+        }
     }
     async fn execute_block(&mut self, block: &indexer_types::Block) {
         info!("# Block Kontor Transactions: {}", block.transactions.len());
