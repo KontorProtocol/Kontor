@@ -547,23 +547,11 @@ pub async fn insert_batch(
     consensus_height: i64,
     anchor_height: i64,
     anchor_hash: &str,
-) -> Result<(), Error> {
-    conn.execute(
-        "INSERT INTO batches (consensus_height, anchor_height, anchor_hash) VALUES (?, ?, ?)",
-        params![consensus_height, anchor_height, anchor_hash],
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn update_batch_certificate(
-    conn: &Connection,
-    consensus_height: i64,
     certificate: &[u8],
 ) -> Result<(), Error> {
     conn.execute(
-        "UPDATE batches SET certificate = ? WHERE consensus_height = ?",
-        params![certificate, consensus_height],
+        "INSERT INTO batches (consensus_height, anchor_height, anchor_hash, certificate) VALUES (?, ?, ?, ?)",
+        params![consensus_height, anchor_height, anchor_hash, certificate],
     )
     .await?;
     Ok(())
@@ -572,7 +560,7 @@ pub async fn update_batch_certificate(
 pub async fn select_batch(
     conn: &Connection,
     consensus_height: i64,
-) -> Result<Option<(i64, String, Option<Vec<u8>>, Vec<String>)>, Error> {
+) -> Result<Option<(i64, String, Vec<u8>, Vec<String>)>, Error> {
     let mut rows = conn
         .query(
             "SELECT b.anchor_height, b.anchor_hash, b.certificate, t.txid \
@@ -593,15 +581,15 @@ pub async fn select_batch(
         if anchor_height.is_none() {
             anchor_height = Some(row.get::<i64>(0)?);
             anchor_hash = Some(row.get::<String>(1)?);
-            certificate = row.get::<Option<Vec<u8>>>(2)?;
+            certificate = Some(row.get::<Vec<u8>>(2)?);
         }
         if let Ok(txid) = row.get::<String>(3) {
             txids.push(txid);
         }
     }
 
-    match (anchor_height, anchor_hash) {
-        (Some(ah), Some(hash)) => Ok(Some((ah, hash, certificate, txids))),
+    match (anchor_height, anchor_hash, certificate) {
+        (Some(ah), Some(hash), Some(cert)) => Ok(Some((ah, hash, cert, txids))),
         _ => Ok(None),
     }
 }

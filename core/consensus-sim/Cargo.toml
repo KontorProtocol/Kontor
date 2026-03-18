@@ -9,6 +9,7 @@ malachitebft-app-channel = { workspace = true }
 indexer-types = { path = "../indexer-types" }
 bitcoin = { workspace = true }
 
+prost = { workspace = true }
 sha3 = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

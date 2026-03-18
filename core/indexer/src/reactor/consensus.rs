@@ -15,7 +15,9 @@ use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
 use malachitebft_core_types::{HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
-use crate::consensus::codec::ProtobufCodec;
+use prost::Message;
+
+use crate::consensus::codec::{ProtobufCodec, encode_commit_certificate};
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
@@ -377,6 +379,7 @@ impl ConsensusState {
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
+        certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) {
         // Detect timeout race: blocks executed before this batch was decided
@@ -408,7 +411,13 @@ impl ConsensusState {
         }
 
         executor
-            .execute_batch(anchor_height, anchor_hash, consensus_height, batch_txs)
+            .execute_batch(
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                certificate,
+                batch_txs,
+            )
             .await;
 
         self.last_processed_anchor = anchor_height;
@@ -641,6 +650,10 @@ pub async fn handle_consensus_msg(
                     .remove(&proposal.value.id())
                     .unwrap_or_default();
 
+                let cert_bytes = encode_commit_certificate(&certificate)
+                    .map(|p| p.encode_to_vec())
+                    .unwrap_or_default();
+
                 state
                     .process_decided_batch(
                         executor,
@@ -648,12 +661,9 @@ pub async fn handle_consensus_msg(
                         proposal.value.anchor_height,
                         proposal.value.anchor_hash,
                         certificate.height,
+                        &cert_bytes,
                         &full_txs,
                     )
-                    .await;
-
-                executor
-                    .store_decided(certificate.height, proposal.value, certificate.clone())
                     .await;
             }
 

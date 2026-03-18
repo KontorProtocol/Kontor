@@ -1561,6 +1561,7 @@ dependencies = [
  "eyre",
  "indexer",
  "indexer-types",
+ "prost 0.13.5",
  "rand 0.8.5",
  "serial_test",
  "sha3",

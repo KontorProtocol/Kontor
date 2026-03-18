@@ -4,6 +4,9 @@ use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
+use prost::Message;
+
+use indexer::consensus::codec::decode_commit_certificate;
 use indexer::consensus::{CommitCertificate, Ctx, Height, Value};
 use indexer::reactor::executor::Executor;
 
@@ -218,12 +221,23 @@ impl Executor for StateLog {
     async fn execute_batch(
         &mut self,
         anchor_height: u64,
-        _anchor_hash: bitcoin::BlockHash,
+        anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
+        certificate: &[u8],
         txs: &[bitcoin::Transaction],
     ) {
         let txids: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
         self.apply_batch(anchor_height, consensus_height, &txids);
+
+        // Store decided value if certificate is present (not a replay)
+        if !certificate.is_empty()
+            && let Ok(proto) =
+                indexer::consensus::proto::CommitCertificate::decode(certificate)
+            && let Ok(cert) = decode_commit_certificate(proto)
+        {
+            let value = Value::new(anchor_height, anchor_hash, txids);
+            self.decided.insert(consensus_height, (value, cert));
+        }
     }
 
     async fn execute_block(&mut self, block: &indexer_types::Block) {
@@ -253,15 +267,6 @@ impl Executor for StateLog {
             .filter(|e| e.status == TxStatus::Confirmed)
             .map(|e| e.anchor_height)
             .max()
-    }
-
-    async fn store_decided(
-        &mut self,
-        height: Height,
-        value: Value,
-        certificate: CommitCertificate<Ctx>,
-    ) {
-        self.decided.insert(height, (value, certificate));
     }
 
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {

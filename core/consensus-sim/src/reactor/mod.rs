@@ -127,6 +127,7 @@ pub async fn run_with_timeout(
                                         value.anchor_height,
                                         value.anchor_hash,
                                         height,
+                                        &[], // replay path — certificate already in DB
                                         &resolved_txs,
                                     )
                                     .await;

@@ -15,7 +15,6 @@ use indexer::{
             path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
             select_batch, select_batches_from_anchor, select_block_at_height, select_block_latest,
             select_min_batch_height, select_processed_block_by_height_or_hash,
-            update_batch_certificate,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId},
     },
@@ -787,7 +786,7 @@ async fn test_insert_and_select_batch() -> Result<()> {
     let hash = new_mock_block_hash(height as u32);
     insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
-    insert_batch(&conn, 1, height, &hash.to_string()).await?;
+    insert_batch(&conn, 1, height, &hash.to_string(), b"cert1").await?;
 
     // Insert two batch transactions
     insert_transaction(
@@ -814,33 +813,13 @@ async fn test_insert_and_select_batch() -> Result<()> {
     let (anchor_height, anchor_hash, certificate, txids) = result.unwrap();
     assert_eq!(anchor_height, height);
     assert_eq!(anchor_hash, hash.to_string());
-    assert!(certificate.is_none());
+    assert_eq!(certificate, b"cert1");
     assert_eq!(txids.len(), 2);
     assert_eq!(txids[0], "aa".repeat(32));
     assert_eq!(txids[1], "bb".repeat(32));
 
     // Non-existent batch
     assert!(select_batch(&conn, 999).await?.is_none());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_update_batch_certificate() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-
-    let height: i64 = 100;
-    let hash = new_mock_block_hash(height as u32);
-    insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
-
-    insert_batch(&conn, 1, height, &hash.to_string()).await?;
-
-    let cert_bytes = vec![1, 2, 3, 4, 5];
-    update_batch_certificate(&conn, 1, &cert_bytes).await?;
-
-    let (_, _, certificate, _) = select_batch(&conn, 1).await?.unwrap();
-    assert_eq!(certificate, Some(cert_bytes));
 
     Ok(())
 }
@@ -856,9 +835,9 @@ async fn test_select_min_batch_height() -> Result<()> {
     let hash = new_mock_block_hash(height as u32);
     insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
-    insert_batch(&conn, 5, height, &hash.to_string()).await?;
-    insert_batch(&conn, 3, height, &hash.to_string()).await?;
-    insert_batch(&conn, 8, height, &hash.to_string()).await?;
+    insert_batch(&conn, 5, height, &hash.to_string(), b"cert5").await?;
+    insert_batch(&conn, 3, height, &hash.to_string(), b"cert3").await?;
+    insert_batch(&conn, 8, height, &hash.to_string(), b"cert8").await?;
 
     assert_eq!(select_min_batch_height(&conn).await?, Some(3));
 
@@ -880,7 +859,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     let hash200 = new_mock_block_hash(200);
 
     // Batch at anchor 100
-    insert_batch(&conn, 1, 100, &hash100.to_string()).await?;
+    insert_batch(&conn, 1, 100, &hash100.to_string(), b"cert1").await?;
     insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -892,7 +871,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     .await?;
 
     // Batch at anchor 200
-    insert_batch(&conn, 2, 200, &hash200.to_string()).await?;
+    insert_batch(&conn, 2, 200, &hash200.to_string(), b"cert2").await?;
     insert_transaction(
         &conn,
         TransactionRow::builder()

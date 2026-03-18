@@ -5,11 +5,10 @@ use prost::Message;
 use tracing::{info, warn};
 
 use crate::bitcoin_client::Client;
-use crate::consensus::codec::{decode_commit_certificate, encode_commit_certificate};
+use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 use crate::database::queries::{
     rollback_to_height, select_batch, select_batches_from_anchor, select_min_batch_height,
-    update_batch_certificate,
 };
 use crate::database::{self};
 use crate::runtime::Runtime;
@@ -37,6 +36,7 @@ pub trait Executor {
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
+        certificate: &[u8],
         txs: &[bitcoin::Transaction],
     );
 
@@ -60,14 +60,6 @@ pub trait Executor {
     async fn last_executed_block_height(&self) -> Option<u64>;
 
     // --- Decided value storage (used by Malachite sync protocol) ---
-
-    /// Store a decided value and its commit certificate. Called after `Finalized`.
-    async fn store_decided(
-        &mut self,
-        height: Height,
-        value: Value,
-        certificate: CommitCertificate<Ctx>,
-    );
 
     /// Retrieve a decided value at the given height.
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)>;
@@ -101,6 +93,7 @@ impl Executor for NoopExecutor {
         _anchor_height: u64,
         _anchor_hash: bitcoin::BlockHash,
         _consensus_height: Height,
+        _certificate: &[u8],
         _txs: &[bitcoin::Transaction],
     ) {
     }
@@ -119,13 +112,6 @@ impl Executor for NoopExecutor {
     }
     async fn last_executed_block_height(&self) -> Option<u64> {
         None
-    }
-    async fn store_decided(
-        &mut self,
-        _height: Height,
-        _value: Value,
-        _certificate: CommitCertificate<Ctx>,
-    ) {
     }
     async fn get_decided(&self, _height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
         None
@@ -195,6 +181,7 @@ impl Executor for RuntimeExecutor {
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
+        certificate: &[u8],
         txs: &[bitcoin::Transaction],
     ) {
         if let Err(e) = batch_handler(
@@ -202,6 +189,7 @@ impl Executor for RuntimeExecutor {
             anchor_height,
             anchor_hash,
             consensus_height,
+            certificate,
             txs,
         )
         .await
@@ -246,26 +234,6 @@ impl Executor for RuntimeExecutor {
     async fn last_executed_block_height(&self) -> Option<u64> {
         None
     }
-    async fn store_decided(
-        &mut self,
-        height: Height,
-        _value: Value,
-        certificate: CommitCertificate<Ctx>,
-    ) {
-        let proto = match encode_commit_certificate(&certificate) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(%e, "Failed to encode commit certificate");
-                return;
-            }
-        };
-        let bytes = proto.encode_to_vec();
-        if let Err(e) =
-            update_batch_certificate(&self.connection(), height.as_u64() as i64, &bytes).await
-        {
-            tracing::error!(%e, "Failed to store commit certificate");
-        }
-    }
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
         let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
             select_batch(&self.connection(), height.as_u64() as i64)
@@ -277,7 +245,6 @@ impl Executor for RuntimeExecutor {
         let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
         let value = Value::new(anchor_height as u64, anchor_hash, txids);
 
-        let cert_bytes = cert_bytes?;
         let proto =
             crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
         let certificate = decode_commit_certificate(proto).ok()?;

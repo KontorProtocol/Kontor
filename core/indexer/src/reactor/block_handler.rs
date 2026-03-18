@@ -94,6 +94,7 @@ pub async fn batch_handler(
     anchor_height: u64,
     anchor_hash: bitcoin::BlockHash,
     consensus_height: Height,
+    certificate: &[u8],
     txs: &[bitcoin::Transaction],
 ) -> Result<()> {
     insert_batch(
@@ -101,6 +102,7 @@ pub async fn batch_handler(
         consensus_height.as_u64() as i64,
         anchor_height as i64,
         &anchor_hash.to_string(),
+        certificate,
     )
     .await?;
 
