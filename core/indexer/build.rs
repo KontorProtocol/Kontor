@@ -64,7 +64,11 @@ fn main() {
 
     build_protos();
 
-    // Get the path to the contracts directory
+    // Skip test-contracts when building as a library (e.g. Horizon only needs compose API).
+    if std::env::var("SKIP_INDEXER_TEST_CONTRACTS").is_ok() {
+        return;
+    }
+
     let mut cd = std::env::current_dir().unwrap();
     cd.pop();
     cd.pop();
