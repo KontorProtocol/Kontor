@@ -31,10 +31,12 @@ pub async fn run<C: BitcoinRpc>(
 ) -> (
     mpsc::Receiver<BlockEvent>,
     mpsc::Receiver<MempoolEvent>,
+    mpsc::Sender<u64>,
     JoinHandle<()>,
 ) {
     let (block_tx, block_rx) = mpsc::channel(32);
     let (mempool_tx, mempool_rx) = mpsc::channel(32);
+    let (replay_tx, replay_rx) = mpsc::channel(4);
 
     let start_height = known_hashes
         .iter()
@@ -54,6 +56,7 @@ pub async fn run<C: BitcoinRpc>(
             known_hashes,
             poll_notify.clone(),
             PollerConfig::default(),
+            replay_rx,
         ));
 
         let listener_handle = tokio::spawn(listener::run(
@@ -81,5 +84,5 @@ pub async fn run<C: BitcoinRpc>(
         }
     });
 
-    (block_rx, mempool_rx, handle)
+    (block_rx, mempool_rx, replay_tx, handle)
 }

@@ -641,7 +641,10 @@ pub async fn select_batches_from_anchor(
         let anchor_hash: String = row.get(2)?;
         let txid: Option<String> = row.get(3).ok();
 
-        if results.last().is_some_and(|(ch, _, _, _)| *ch == consensus_height) {
+        if results
+            .last()
+            .is_some_and(|(ch, _, _, _)| *ch == consensus_height)
+        {
             if let Some(txid) = txid {
                 results.last_mut().unwrap().3.push(txid);
             }

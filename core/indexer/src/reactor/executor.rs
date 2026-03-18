@@ -144,6 +144,7 @@ pub struct RuntimeExecutor {
     pub runtime: Runtime,
     pub writer: database::Writer,
     pub bitcoin_client: Option<Client>,
+    pub replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
 }
 
 impl RuntimeExecutor {
@@ -152,11 +153,17 @@ impl RuntimeExecutor {
             runtime,
             writer,
             bitcoin_client: None,
+            replay_tx: None,
         }
     }
 
     pub fn with_bitcoin_client(mut self, client: Client) -> Self {
         self.bitcoin_client = Some(client);
+        self
+    }
+
+    pub fn with_replay_tx(mut self, tx: tokio::sync::mpsc::Sender<u64>) -> Self {
+        self.replay_tx = Some(tx);
         self
     }
 
@@ -294,15 +301,24 @@ impl Executor for RuntimeExecutor {
         };
 
         rows.into_iter()
-            .filter_map(|(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
-                let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
-                let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-                Some((
-                    Height::new(consensus_height as u64),
-                    Value::new(anchor_height as u64, anchor_hash, txids),
-                ))
-            })
+            .filter_map(
+                |(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
+                    let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
+                    let txids: Vec<Txid> =
+                        txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
+                    Some((
+                        Height::new(consensus_height as u64),
+                        Value::new(anchor_height as u64, anchor_hash, txids),
+                    ))
+                },
+            )
             .collect()
     }
-    async fn replay_blocks_from(&mut self, _height: u64) {}
+    async fn replay_blocks_from(&mut self, height: u64) {
+        if let Some(tx) = &self.replay_tx
+            && let Err(e) = tx.send(height).await
+        {
+            tracing::error!(%e, height, "Failed to send replay request to poller");
+        }
+    }
 }

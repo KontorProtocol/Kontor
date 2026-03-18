@@ -77,6 +77,7 @@ impl Reactor {
         simulate_rx: Option<Receiver<Simulation>>,
         engine_config: Option<engine::EngineConfig>,
         bitcoin_client: Option<crate::bitcoin_client::Client>,
+        replay_tx: Option<mpsc::Sender<u64>>,
     ) -> Result<Self> {
         let conn = writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
@@ -159,6 +160,9 @@ impl Reactor {
         if let Some(client) = bitcoin_client {
             bs = bs.with_tx_cache(client.tx_cache().clone());
             executor = executor.with_bitcoin_client(client);
+        }
+        if let Some(tx) = replay_tx {
+            executor = executor.with_replay_tx(tx);
         }
 
         Ok(Self {
@@ -381,6 +385,7 @@ pub fn run(
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: Option<engine::EngineConfig>,
     bitcoin_client: Option<crate::bitcoin_client::Client>,
+    replay_tx: Option<mpsc::Sender<u64>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -395,6 +400,7 @@ pub fn run(
                 simulate_rx,
                 engine_config,
                 bitcoin_client,
+                replay_tx,
             )
             .await
             {
