@@ -248,7 +248,7 @@ impl Client {
                 calls.push((
                     "getrawtransaction".to_owned(),
                     vec![
-                        serde_json::to_value(&txids[i])?,
+                        serde_json::to_value(txids[i])?,
                         serde_json::to_value(false)?,
                     ],
                 ));

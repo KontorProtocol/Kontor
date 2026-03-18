@@ -539,14 +539,9 @@ pub async fn handle_consensus_msg(
                                     None
                                 } else {
                                     let txids = data.txids();
-                                    let value = Value::new(
-                                        data.anchor_height,
-                                        data.anchor_hash,
-                                        txids,
-                                    );
-                                    state
-                                        .tx_cache
-                                        .insert(value.id(), data.transactions.clone());
+                                    let value =
+                                        Value::new(data.anchor_height, data.anchor_hash, txids);
+                                    state.tx_cache.insert(value.id(), data.transactions.clone());
                                     let proposed = ProposedValue {
                                         height,
                                         round,
@@ -562,14 +557,8 @@ pub async fn handle_consensus_msg(
                                 // No local hash for this height — accept on height alone
                                 // (can happen during sync when we haven't seen the block yet)
                                 let txids = data.txids();
-                                let value = Value::new(
-                                    data.anchor_height,
-                                    data.anchor_hash,
-                                    txids,
-                                );
-                                state
-                                    .tx_cache
-                                    .insert(value.id(), data.transactions.clone());
+                                let value = Value::new(data.anchor_height, data.anchor_hash, txids);
+                                state.tx_cache.insert(value.id(), data.transactions.clone());
                                 let proposed = ProposedValue {
                                     height,
                                     round,

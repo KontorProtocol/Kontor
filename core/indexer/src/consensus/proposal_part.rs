@@ -20,11 +20,7 @@ pub struct ProposalData {
 }
 
 impl ProposalData {
-    pub fn new(
-        anchor_height: u64,
-        anchor_hash: BlockHash,
-        transactions: Vec<Transaction>,
-    ) -> Self {
+    pub fn new(anchor_height: u64, anchor_hash: BlockHash, transactions: Vec<Transaction>) -> Self {
         Self {
             anchor_height,
             anchor_hash,

@@ -125,7 +125,7 @@ pub async fn process_transaction(
             )
             .await;
 
-        execute_op(runtime, tx_id, t, op, op_return_data).await;
+        execute_op(runtime, op, op_return_data).await;
     }
 
     Ok(())
@@ -133,8 +133,6 @@ pub async fn process_transaction(
 
 async fn execute_op(
     runtime: &mut Runtime,
-    tx_id: i64,
-    t: &Transaction,
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
@@ -209,9 +207,6 @@ async fn execute_op(
                     signature,
                     metadata.previous_output,
                     input_index,
-                    tx_id,
-                    t.index,
-                    t.txid,
                     op_return_data,
                 )
                 .await

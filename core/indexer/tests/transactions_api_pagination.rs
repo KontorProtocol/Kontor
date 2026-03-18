@@ -395,9 +395,13 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
         let expected_indices: [i64; 5] = [4, 3, 2, 1, 0];
         for (i, tx) in cursor_transactions.iter().enumerate() {
             assert_eq!(
-                tx.tx_index, Some(expected_indices[i]),
+                tx.tx_index,
+                Some(expected_indices[i]),
                 "Incorrect tx_index at position {} for limit={}: expected {}, got {:?}",
-                i, limit, expected_indices[i], tx.tx_index
+                i,
+                limit,
+                expected_indices[i],
+                tx.tx_index
             );
         }
     }
@@ -440,9 +444,13 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
         let expected_indices: [i64; 7] = [6, 5, 4, 3, 2, 1, 0];
         for (i, tx) in cursor_transactions.iter().enumerate() {
             assert_eq!(
-                tx.tx_index, Some(expected_indices[i]),
+                tx.tx_index,
+                Some(expected_indices[i]),
                 "Incorrect tx_index at position {} for limit={}: expected {}, got {:?}",
-                i, limit, expected_indices[i], tx.tx_index
+                i,
+                limit,
+                expected_indices[i],
+                tx.tx_index
             );
         }
     }

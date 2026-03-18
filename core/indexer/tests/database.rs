@@ -186,8 +186,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted =
-        delete_contract_state(&conn, height2, Some(tx_id2), contract_id, path).await?;
+    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, path).await?;
     assert!(deleted);
 
     let count = conn
