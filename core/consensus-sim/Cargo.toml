@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 indexer = { path = "../indexer" }
 malachitebft-app-channel = { workspace = true }
-malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types", features = ["serde"] }
-malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-engine" }
+malachitebft-core-types = { git = "https://github.com/circlefin/malachite", rev = "86f82fa55fb5a531f5d438e6ef1c1f0642508485", package = "informalsystems-malachitebft-core-types", features = ["serde"] }
+malachitebft-engine = { git = "https://github.com/circlefin/malachite", rev = "86f82fa55fb5a531f5d438e6ef1c1f0642508485", package = "informalsystems-malachitebft-engine" }
 
 indexer-types = { path = "../indexer-types" }
 bitcoin = { workspace = true }
