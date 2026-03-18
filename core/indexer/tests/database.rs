@@ -619,7 +619,15 @@ async fn test_contract_result_operations() -> Result<()> {
     .await?;
     assert_eq!(Some(result.clone()), row);
 
-    let row = get_op_result(&conn, &OpResultId::builder().txid(txid.to_string()).build()).await?;
+    let row = get_op_result(
+        &conn,
+        &OpResultId::builder()
+            .txid(txid.to_string())
+            .input_index(0)
+            .op_index(0)
+            .build(),
+    )
+    .await?;
     assert!(row.is_some());
     assert_eq!(result.id, row.unwrap().id);
 
