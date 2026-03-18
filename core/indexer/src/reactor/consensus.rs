@@ -50,6 +50,12 @@ pub struct ConsensusState {
     // Not used for sync/replay — those paths resolve txids via Executor.
     pub tx_cache: HashMap<ValueId, Vec<bitcoin::Transaction>>,
 
+    // Parsed transaction cache: Txid → parsed indexer_types::Transaction.
+    // Populated during validate_transaction (proposing or receiving proposals).
+    // Consumed during execute_batch to avoid double-parsing.
+    // Cleared after process_decided_batch completes for a batch's txids.
+    pub parsed_tx_cache: HashMap<Txid, indexer_types::Transaction>,
+
     // Observation channels (optional, for testing)
     pub decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     pub finality_tx: Option<mpsc::Sender<FinalityEvent>>,
@@ -70,6 +76,7 @@ impl ConsensusState {
             replay_queue: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
             tx_cache: HashMap::new(),
+            parsed_tx_cache: HashMap::new(),
             decided_tx: None,
             finality_tx: None,
             state_tx: None,
@@ -168,10 +175,15 @@ impl ConsensusState {
             if already_batched.contains(&txid) {
                 continue;
             }
-            if !executor.validate_transaction(tx).await {
+            // Skip validation if already parsed and cached
+            if self.parsed_tx_cache.contains_key(&txid) {
+                txs.push(tx.clone());
                 continue;
             }
-            txs.push(tx.clone());
+            if let Some(parsed) = executor.validate_transaction(tx).await {
+                self.parsed_tx_cache.insert(txid, parsed);
+                txs.push(tx.clone());
+            }
         }
         let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
         let value = Value::new(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids);
@@ -382,6 +394,7 @@ impl ConsensusState {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) {
+        use crate::block::filter_map;
         // Detect timeout race: blocks executed before this batch was decided
         if let Some(last_block) = executor.last_executed_block_height().await
             && last_block >= anchor_height
@@ -410,13 +423,27 @@ impl ConsensusState {
             }
         }
 
+        // Resolve batch txs to parsed form: check parsed_tx_cache first,
+        // fall back to filter_map for replay/sync path
+        let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
+            .iter()
+            .filter_map(|btx| {
+                let txid = btx.compute_txid();
+                if let Some(parsed) = self.parsed_tx_cache.remove(&txid) {
+                    Some(parsed)
+                } else {
+                    filter_map((0, btx.clone()))
+                }
+            })
+            .collect();
+
         executor
             .execute_batch(
                 anchor_height,
                 anchor_hash,
                 consensus_height,
                 certificate,
-                batch_txs,
+                &parsed_txs,
             )
             .await;
 
@@ -425,7 +452,7 @@ impl ConsensusState {
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
-            txid_count: batch_txs.len(),
+            txid_count: parsed_txs.len(),
             checkpoint: executor.checkpoint().await,
         });
 
@@ -435,6 +462,45 @@ impl ConsensusState {
             "Batch processing complete"
         );
     }
+}
+
+/// Validate all transactions in a received proposal, cache parsed results,
+/// and accept the proposal. Returns None if any transaction fails validation.
+async fn validate_and_accept_proposal(
+    state: &mut ConsensusState,
+    executor: &mut impl Executor,
+    data: &ProposalData,
+    height: Height,
+    round: Round,
+) -> Option<ProposedValue<Ctx>> {
+    for tx in &data.transactions {
+        let txid = tx.compute_txid();
+        if state.parsed_tx_cache.contains_key(&txid) {
+            continue;
+        }
+        if let Some(parsed) = executor.validate_transaction(tx).await {
+            state.parsed_tx_cache.insert(txid, parsed);
+        } else {
+            warn!(
+                %txid,
+                "Rejecting proposal: transaction failed validation"
+            );
+            return None;
+        }
+    }
+    let txids = data.txids();
+    let value = Value::new(data.anchor_height, data.anchor_hash, txids);
+    state.tx_cache.insert(value.id(), data.transactions.clone());
+    let proposed = ProposedValue {
+        height,
+        round,
+        valid_round: Round::Nil,
+        proposer: state.address,
+        value,
+        validity: Validity::Valid,
+    };
+    state.undecided.insert((height, round), proposed.clone());
+    Some(proposed)
 }
 
 /// Handle a consensus message from the Malachite engine.
@@ -548,37 +614,16 @@ pub async fn handle_consensus_msg(
                                     );
                                     None
                                 } else {
-                                    let txids = data.txids();
-                                    let value =
-                                        Value::new(data.anchor_height, data.anchor_hash, txids);
-                                    state.tx_cache.insert(value.id(), data.transactions.clone());
-                                    let proposed = ProposedValue {
-                                        height,
-                                        round,
-                                        valid_round: Round::Nil,
-                                        proposer: state.address,
-                                        value,
-                                        validity: Validity::Valid,
-                                    };
-                                    state.undecided.insert((height, round), proposed.clone());
-                                    Some(proposed)
+                                    validate_and_accept_proposal(
+                                        state, executor, data, height, round,
+                                    )
+                                    .await
                                 }
                             } else {
                                 // No local hash for this height — accept on height alone
                                 // (can happen during sync when we haven't seen the block yet)
-                                let txids = data.txids();
-                                let value = Value::new(data.anchor_height, data.anchor_hash, txids);
-                                state.tx_cache.insert(value.id(), data.transactions.clone());
-                                let proposed = ProposedValue {
-                                    height,
-                                    round,
-                                    valid_round: Round::Nil,
-                                    proposer: state.address,
-                                    value,
-                                    validity: Validity::Valid,
-                                };
-                                state.undecided.insert((height, round), proposed.clone());
-                                Some(proposed)
+                                validate_and_accept_proposal(state, executor, data, height, round)
+                                    .await
                             }
                         } else {
                             None

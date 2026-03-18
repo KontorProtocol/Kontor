@@ -154,7 +154,7 @@ impl Reactor {
             None
         };
 
-        let mut executor = executor::RuntimeExecutor::new(runtime, writer);
+        let mut executor = executor::RuntimeExecutor::new(runtime, writer, cancel_token.clone());
         let mut bs = bitcoin_state::BitcoinState::new();
 
         if let Some(client) = bitcoin_client {

@@ -9,6 +9,7 @@ use prost::Message;
 use indexer::consensus::codec::decode_commit_certificate;
 use indexer::consensus::{CommitCertificate, Ctx, Height, Value};
 use indexer::reactor::executor::Executor;
+use indexer_types::Transaction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxStatus {
@@ -210,8 +211,14 @@ impl StateLog {
 
 /// Executor implementation backed by StateLog — used by consensus-sim for testing.
 impl Executor for StateLog {
-    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
-        true
+    async fn validate_transaction(&self, tx: &bitcoin::Transaction) -> Option<Transaction> {
+        // Sim doesn't parse real Kontor ops — return a dummy transaction
+        Some(Transaction {
+            txid: tx.compute_txid(),
+            index: 0,
+            ops: Vec::new(),
+            op_return_data: Default::default(),
+        })
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
@@ -224,15 +231,14 @@ impl Executor for StateLog {
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         certificate: &[u8],
-        txs: &[bitcoin::Transaction],
+        txs: &[indexer_types::Transaction],
     ) {
-        let txids: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
+        let txids: Vec<Txid> = txs.iter().map(|tx| tx.txid).collect();
         self.apply_batch(anchor_height, consensus_height, &txids);
 
         // Store decided value if certificate is present (not a replay)
         if !certificate.is_empty()
-            && let Ok(proto) =
-                indexer::consensus::proto::CommitCertificate::decode(certificate)
+            && let Ok(proto) = indexer::consensus::proto::CommitCertificate::decode(certificate)
             && let Ok(cert) = decode_commit_certificate(proto)
         {
             let value = Value::new(anchor_height, anchor_hash, txids);

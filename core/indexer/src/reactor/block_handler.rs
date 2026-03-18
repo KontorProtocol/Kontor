@@ -95,7 +95,7 @@ pub async fn batch_handler(
     anchor_hash: bitcoin::BlockHash,
     consensus_height: Height,
     certificate: &[u8],
-    txs: &[bitcoin::Transaction],
+    txs: &[Transaction],
 ) -> Result<()> {
     insert_batch(
         &runtime.storage.conn,
@@ -106,11 +106,7 @@ pub async fn batch_handler(
     )
     .await?;
 
-    for (i, btx) in txs.iter().enumerate() {
-        let Some(t) = filter_map((i, btx.clone())) else {
-            continue;
-        };
-
+    for t in txs {
         let tx_id = insert_transaction(
             &runtime.storage.conn,
             TransactionRow::builder()

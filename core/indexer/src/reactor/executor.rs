@@ -2,6 +2,7 @@ use anyhow::Result;
 use bitcoin::{BlockHash, Txid};
 use indexer_types::OpWithResult;
 use prost::Message;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::bitcoin_client::Client;
@@ -23,7 +24,13 @@ use super::block_handler::{batch_handler, block_handler, simulate_handler};
 /// and `RuntimeExecutor` (production, WASM execution + DB).
 #[allow(async_fn_in_trait)]
 pub trait Executor {
-    async fn validate_transaction(&self, tx: &bitcoin::Transaction) -> bool;
+    /// Validate a transaction and parse its Kontor ops.
+    /// Returns the parsed transaction if valid, None otherwise.
+    /// Implementations may also propagate the tx to the local bitcoind mempool.
+    async fn validate_transaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction>;
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
@@ -37,7 +44,7 @@ pub trait Executor {
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         certificate: &[u8],
-        txs: &[bitcoin::Transaction],
+        txs: &[indexer_types::Transaction],
     );
 
     /// Execute a confirmed Bitcoin block. Implementations handle deduplication of
@@ -82,8 +89,11 @@ pub trait Executor {
 pub struct NoopExecutor;
 
 impl Executor for NoopExecutor {
-    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
-        true
+    async fn validate_transaction(
+        &self,
+        _tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
+        None
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
@@ -94,7 +104,7 @@ impl Executor for NoopExecutor {
         _anchor_hash: bitcoin::BlockHash,
         _consensus_height: Height,
         _certificate: &[u8],
-        _txs: &[bitcoin::Transaction],
+        _txs: &[indexer_types::Transaction],
     ) {
     }
     async fn execute_block(&mut self, _block: &indexer_types::Block) {}
@@ -131,15 +141,21 @@ pub struct RuntimeExecutor {
     pub writer: database::Writer,
     pub bitcoin_client: Option<Client>,
     pub replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
+    pub cancel_token: CancellationToken,
 }
 
 impl RuntimeExecutor {
-    pub fn new(runtime: Runtime, writer: database::Writer) -> Self {
+    pub fn new(
+        runtime: Runtime,
+        writer: database::Writer,
+        cancel_token: CancellationToken,
+    ) -> Self {
         Self {
             runtime,
             writer,
             bitcoin_client: None,
             replay_tx: None,
+            cancel_token,
         }
     }
 
@@ -163,8 +179,33 @@ impl RuntimeExecutor {
 }
 
 impl Executor for RuntimeExecutor {
-    async fn validate_transaction(&self, _tx: &bitcoin::Transaction) -> bool {
-        true
+    async fn validate_transaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
+        use crate::block::filter_map;
+        use crate::retry::{new_backoff_unlimited, retry};
+
+        // Parse Kontor ops — reject if no valid ops
+        let parsed = filter_map((0, tx.clone()))?;
+
+        // Push to local bitcoind mempool (idempotent, succeeds if already present)
+        if let Some(client) = &self.bitcoin_client {
+            let raw_hex = bitcoin::consensus::encode::serialize_hex(tx);
+            let result = retry(
+                || client.send_raw_transaction(&raw_hex),
+                "send_raw_transaction",
+                new_backoff_unlimited(),
+                self.cancel_token.clone(),
+            )
+            .await;
+            if let Err(e) = result {
+                warn!(txid = %tx.compute_txid(), %e, "Transaction rejected by bitcoind");
+                return None;
+            }
+        }
+
+        Some(parsed)
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         let client = self.bitcoin_client.as_ref()?;
@@ -182,7 +223,7 @@ impl Executor for RuntimeExecutor {
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
         certificate: &[u8],
-        txs: &[bitcoin::Transaction],
+        txs: &[indexer_types::Transaction],
     ) {
         if let Err(e) = batch_handler(
             &mut self.runtime,

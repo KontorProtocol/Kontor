@@ -270,6 +270,10 @@ impl Client {
         Ok(results.into_iter().map(|r| r.unwrap()).collect())
     }
 
+    pub async fn send_raw_transaction(&self, raw_tx: &str) -> Result<String, Error> {
+        self.call("sendrawtransaction", vec![raw_tx.into()]).await
+    }
+
     pub async fn test_mempool_accept(
         &self,
         raw_txs: &[String],
