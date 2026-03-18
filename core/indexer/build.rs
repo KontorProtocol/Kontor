@@ -60,6 +60,9 @@ fn build_protos() {
 }
 
 fn main() {
+    // So Cargo re-runs this script when the env var is added, removed, or changed.
+    println!("cargo:rerun-if-env-changed=SKIP_INDEXER_TEST_CONTRACTS");
+
     built::write_built_file().expect("Failed to acquire build-time information");
 
     build_protos();
