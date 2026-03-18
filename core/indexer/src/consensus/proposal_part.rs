@@ -1,5 +1,5 @@
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, Txid};
+use bitcoin::{BlockHash, Transaction, Txid};
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
 use serde::{Deserialize, Serialize};
@@ -10,24 +10,42 @@ use malachitebft_proto::{self as proto_trait, Error as ProtoError, Protobuf};
 use crate::consensus::codec::{decode_signature, encode_signature};
 use crate::consensus::{Address, Ctx, Height};
 
+/// Proposal data streamed during live consensus. Carries full bitcoin transactions
+/// so all nodes can execute immediately without needing to resolve txids.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalData {
     pub anchor_height: u64,
     pub anchor_hash: BlockHash,
-    pub txids: Vec<Txid>,
+    pub transactions: Vec<Transaction>,
 }
 
 impl ProposalData {
-    pub fn new(anchor_height: u64, anchor_hash: BlockHash, txids: Vec<Txid>) -> Self {
+    pub fn new(
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        transactions: Vec<Transaction>,
+    ) -> Self {
         Self {
             anchor_height,
             anchor_hash,
-            txids,
+            transactions,
         }
     }
 
+    pub fn txids(&self) -> Vec<Txid> {
+        self.transactions
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect()
+    }
+
     pub fn size_bytes(&self) -> usize {
-        8 + 32 + self.txids.len() * 32
+        8 + 32
+            + self
+                .transactions
+                .iter()
+                .map(|tx| bitcoin::consensus::serialize(tx).len())
+                .sum::<usize>()
     }
 }
 
@@ -126,17 +144,13 @@ impl Protobuf for ProposalPart {
                     .and_then(Address::from_proto)?,
             })),
             Part::Data(data) => {
-                let txids: Vec<Txid> = data
-                    .txids
+                let transactions: Vec<Transaction> = data
+                    .transactions
                     .iter()
                     .map(|b: &Bytes| {
-                        let arr: [u8; 32] = b.as_ref().try_into().map_err(|_| {
-                            ProtoError::Other(format!(
-                                "Invalid txid length: got {} bytes, expected 32",
-                                b.len()
-                            ))
-                        })?;
-                        Ok(Txid::from_byte_array(arr))
+                        bitcoin::consensus::deserialize(b.as_ref()).map_err(|e| {
+                            ProtoError::Other(format!("Failed to deserialize transaction: {e}"))
+                        })
                     })
                     .collect::<Result<Vec<_>, ProtoError>>()?;
                 let hash_arr: [u8; 32] = data.anchor_hash.as_ref().try_into().map_err(|_| {
@@ -149,7 +163,7 @@ impl Protobuf for ProposalPart {
                 Ok(Self::Data(ProposalData::new(
                     data.anchor_height,
                     anchor_hash,
-                    txids,
+                    transactions,
                 )))
             }
             Part::Fin(fin) => Ok(Self::Fin(ProposalFin {
@@ -177,10 +191,10 @@ impl Protobuf for ProposalPart {
             Self::Data(data) => Ok(Self::Proto {
                 part: Some(Part::Data(proto::ProposalData {
                     anchor_height: data.anchor_height,
-                    txids: data
-                        .txids
+                    transactions: data
+                        .transactions
                         .iter()
-                        .map(|txid| Bytes::from(txid.to_byte_array().to_vec()))
+                        .map(|tx| Bytes::from(bitcoin::consensus::serialize(tx)))
                         .collect(),
                     anchor_hash: Bytes::from(data.anchor_hash.to_byte_array().to_vec()),
                 })),

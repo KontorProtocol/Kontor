@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -20,7 +20,7 @@ use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
     Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ValidatorSet, Value,
+    ValidatorSet, Value, ValueId,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -43,6 +43,11 @@ pub struct ConsensusState {
     pub replay_queue: VecDeque<(Height, Value)>,
     pub replay_excluded_txids: HashSet<Txid>,
 
+    // Full transaction cache: ValueId → full txs. Populated when proposing or
+    // receiving proposals (live consensus). Consumed when the value is decided.
+    // Not used for sync/replay — those paths resolve txids via Executor.
+    pub tx_cache: HashMap<ValueId, Vec<bitcoin::Transaction>>,
+
     // Observation channels (optional, for testing)
     pub decided_tx: Option<mpsc::Sender<DecidedBatch>>,
     pub finality_tx: Option<mpsc::Sender<FinalityEvent>>,
@@ -62,6 +67,7 @@ impl ConsensusState {
             last_processed_anchor: 0,
             replay_queue: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
+            tx_cache: HashMap::new(),
             decided_tx: None,
             finality_tx: None,
             state_tx: None,
@@ -102,6 +108,12 @@ impl ConsensusState {
         let hash = hasher.finalize();
         let signature = self.signing_provider.sign(&hash);
 
+        let txs = self
+            .tx_cache
+            .get(&value.value.id())
+            .cloned()
+            .unwrap_or_default();
+
         let parts = vec![
             ProposalPart::Init(ProposalInit::new(
                 value.height,
@@ -112,7 +124,7 @@ impl ConsensusState {
             ProposalPart::Data(ProposalData::new(
                 value.value.anchor_height,
                 value.value.anchor_hash,
-                value.value.txids.clone(),
+                txs,
             )),
             ProposalPart::Fin(ProposalFin::new(signature)),
         ];
@@ -136,15 +148,19 @@ impl ConsensusState {
         msgs
     }
 
-    async fn make_value(&self, executor: &impl Executor, bitcoin_state: &BitcoinState) -> Value {
+    async fn make_value(
+        &mut self,
+        executor: &impl Executor,
+        bitcoin_state: &BitcoinState,
+    ) -> Value {
         // Collect txids already in pending (unfinalized) batches to avoid duplicates
-        let already_batched: std::collections::HashSet<Txid> = self
+        let already_batched: HashSet<Txid> = self
             .pending_batches
             .iter()
             .flat_map(|b| b.txids.iter().copied())
             .collect();
 
-        let mut txids = Vec::new();
+        let mut txs = Vec::new();
         for tx in bitcoin_state.mempool.values() {
             let txid = tx.compute_txid();
             if already_batched.contains(&txid) {
@@ -153,9 +169,12 @@ impl ConsensusState {
             if !executor.validate_transaction(tx).await {
                 continue;
             }
-            txids.push(txid);
+            txs.push(tx.clone());
         }
-        Value::new(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids)
+        let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
+        let value = Value::new(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids);
+        self.tx_cache.insert(value.id(), txs);
+        value
     }
 
     // --- Finality tracking ---
@@ -357,7 +376,7 @@ impl ConsensusState {
         bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
         consensus_height: Height,
-        batch_txids: &[Txid],
+        batch_txs: &[bitcoin::Transaction],
     ) {
         // Detect timeout race: blocks executed before this batch was decided
         if let Some(last_block) = executor.last_executed_block_height().await
@@ -387,21 +406,8 @@ impl ConsensusState {
             }
         }
 
-        // Resolve txids to full transactions for execution.
-        // Try the local mempool first, then fall back to the executor (RPC/cache).
-        let mut resolved_txs = Vec::with_capacity(batch_txids.len());
-        for txid in batch_txids {
-            if let Some(tx) = bitcoin_state.mempool.get(txid) {
-                resolved_txs.push(tx.clone());
-            } else if let Some(tx) = executor.resolve_transaction(txid).await {
-                resolved_txs.push(tx);
-            } else {
-                warn!(%txid, "Could not resolve txid for batch execution — skipping");
-            }
-        }
-
         executor
-            .execute_batch(anchor_height, consensus_height, &resolved_txs)
+            .execute_batch(anchor_height, consensus_height, batch_txs)
             .await;
 
         self.last_processed_anchor = anchor_height;
@@ -409,7 +415,7 @@ impl ConsensusState {
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
-            txid_count: batch_txids.len(),
+            txid_count: batch_txs.len(),
             checkpoint: executor.checkpoint().await,
         });
 
@@ -532,11 +538,15 @@ pub async fn handle_consensus_msg(
                                     );
                                     None
                                 } else {
+                                    let txids = data.txids();
                                     let value = Value::new(
                                         data.anchor_height,
                                         data.anchor_hash,
-                                        data.txids.clone(),
+                                        txids,
                                     );
+                                    state
+                                        .tx_cache
+                                        .insert(value.id(), data.transactions.clone());
                                     let proposed = ProposedValue {
                                         height,
                                         round,
@@ -551,11 +561,15 @@ pub async fn handle_consensus_msg(
                             } else {
                                 // No local hash for this height — accept on height alone
                                 // (can happen during sync when we haven't seen the block yet)
+                                let txids = data.txids();
                                 let value = Value::new(
                                     data.anchor_height,
                                     data.anchor_hash,
-                                    data.txids.clone(),
+                                    txids,
                                 );
+                                state
+                                    .tx_cache
+                                    .insert(value.id(), data.transactions.clone());
                                 let proposed = ProposedValue {
                                     height,
                                     round,
@@ -631,13 +645,19 @@ pub async fn handle_consensus_msg(
                 }
                 state.record_decided_batch(certificate.height, &proposal.value);
 
+                // Live path: full txs available from cache
+                let full_txs = state
+                    .tx_cache
+                    .remove(&proposal.value.id())
+                    .unwrap_or_default();
+
                 state
                     .process_decided_batch(
                         executor,
                         bitcoin_state,
                         proposal.value.anchor_height,
                         certificate.height,
-                        &proposal.value.txids,
+                        &full_txs,
                     )
                     .await;
 

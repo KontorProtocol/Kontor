@@ -107,6 +107,18 @@ pub async fn run_with_timeout(
                                     continue;
                                 }
 
+                                // Replay path: resolve txids to full txs via mempool/executor
+                                let mut resolved_txs = Vec::with_capacity(value.txids.len());
+                                for txid in &value.txids {
+                                    if let Some(tx) = bitcoin_state.mempool.get(txid) {
+                                        resolved_txs.push(tx.clone());
+                                    } else if let Some(tx) = executor.resolve_transaction(txid).await {
+                                        resolved_txs.push(tx);
+                                    } else {
+                                        warn!(%txid, "Could not resolve txid during replay — skipping");
+                                    }
+                                }
+
                                 consensus_state.record_decided_batch(height, &value);
                                 consensus_state
                                     .process_decided_batch(
@@ -114,7 +126,7 @@ pub async fn run_with_timeout(
                                         bitcoin_state,
                                         value.anchor_height,
                                         height,
-                                        &value.txids,
+                                        &resolved_txs,
                                     )
                                     .await;
                             }

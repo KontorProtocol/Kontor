@@ -64,7 +64,7 @@ message ProposalInit {
 
 message ProposalData {
     uint64 anchor_height = 1;
-    repeated bytes txids = 2;
+    repeated bytes transactions = 2;
     bytes anchor_hash = 3;
 }
 
