@@ -41,12 +41,14 @@ runs:
           sudo usermod -aG docker $USER
         fi
 
-        # Make docker socket accessible (group membership won't take effect until new login)
+        # Make docker socket accessible (group membership won't take effect until new login).
+        # Don't fail if socket doesn't exist yet (Docker still starting); retry loop below handles that.
         echo "Making Docker socket accessible..."
-        sudo chmod 666 /var/run/docker.sock
+        sudo chmod 666 /var/run/docker.sock || true
 
-        # Wait for Docker to be ready
+        # Wait for Docker to be ready (socket may appear after systemctl start)
         for i in {1..30}; do
+          sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
           if docker info >/dev/null 2>&1; then
             echo "Docker is ready and accessible"
             exit 0
