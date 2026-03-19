@@ -72,6 +72,7 @@ async fn test_reactor_fetching() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     let target = 5;
@@ -114,6 +115,7 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     // Insert blocks 1-3
@@ -174,6 +176,7 @@ async fn test_reactor_deep_rollback() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     // Insert blocks 1-4
@@ -232,6 +235,7 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     // Insert blocks 1-2
@@ -331,6 +335,7 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     let seed = [42u8; 64];
@@ -429,6 +434,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     let seed = [42u8; 64];
@@ -603,6 +609,7 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         None,
         None,
         vec![],
+        None,
     );
 
     let seed = [55u8; 64];

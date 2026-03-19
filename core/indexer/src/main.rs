@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
         Some(bitcoin.clone()),
         Some(replay_tx),
         load_genesis_validators(&config)?,
+        None,
     ));
     init_rx.await?;
     {

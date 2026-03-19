@@ -79,6 +79,7 @@ impl Reactor {
         bitcoin_client: Option<crate::bitcoin_client::Client>,
         replay_tx: Option<mpsc::Sender<u64>>,
         genesis_validators: Vec<crate::runtime::GenesisValidator>,
+        observation_channels: Option<consensus::ObservationChannels>,
     ) -> Result<Self> {
         let conn = writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
@@ -141,12 +142,15 @@ impl Reactor {
             let engine_output = engine::start(engine_cfg, &genesis).await?;
             info!(address = %engine_output.address, "Consensus engine started");
 
+            let mut state = consensus::ConsensusState::new(
+                engine_output.signing_provider,
+                genesis,
+                engine_output.address,
+            );
+            state.observation = observation_channels;
+
             Some(ConsensusHandle {
-                state: consensus::ConsensusState::new(
-                    engine_output.signing_provider,
-                    genesis,
-                    engine_output.address,
-                ),
+                state,
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
                 _wal_dir: engine_output._wal_dir,
@@ -389,6 +393,7 @@ pub fn run(
     bitcoin_client: Option<crate::bitcoin_client::Client>,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
+    observation_channels: Option<consensus::ObservationChannels>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -405,6 +410,7 @@ pub fn run(
                 bitcoin_client,
                 replay_tx,
                 genesis_validators,
+                observation_channels,
             )
             .await
             {
