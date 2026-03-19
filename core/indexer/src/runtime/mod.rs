@@ -106,14 +106,13 @@ pub struct Runtime {
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = wasmtime::Config::new();
-        config.async_support(true);
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
-        Engine::new(&config)
+        Ok(Engine::new(&config)?)
     }
 
     pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
@@ -490,7 +489,7 @@ impl Runtime {
         })
         .await
         .expect("Failed to join execution");
-        let mut result = self.handle_call(is_fallback, result, results).await;
+        let mut result = self.handle_call(is_fallback, result.map_err(Into::into), results).await;
         OptionFuture::from(
             self.gauge
                 .as_ref()

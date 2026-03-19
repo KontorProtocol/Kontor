@@ -244,7 +244,7 @@ impl Runtime {
                     Err(anyhow!("fallback did not return a string"))
                 }
             } else {
-                val.to_wave()
+                val.to_wave().map_err(Into::into)
             }
         };
 
@@ -380,7 +380,7 @@ impl Runtime {
         })
         .await
         .expect("Failed to join call");
-        let mut result = self.handle_call(is_fallback, result, results).await;
+        let mut result = self.handle_call(is_fallback, result.map_err(Into::into), results).await;
         let fuel = store.get_fuel().unwrap();
         accessor
             .with(|mut access| access.as_context_mut().set_fuel(fuel))
