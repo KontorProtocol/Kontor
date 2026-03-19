@@ -229,7 +229,16 @@ impl RegTesterInner {
         bitcoin_client: BitcoinClient,
         kontor_client: KontorClient,
     ) -> Result<Self> {
-        let ws_client = WebSocketClient::new(9333).await?;
+        Self::with_port(identity, bitcoin_client, kontor_client, 9333).await
+    }
+
+    pub async fn with_port(
+        identity: Identity,
+        bitcoin_client: BitcoinClient,
+        kontor_client: KontorClient,
+        api_port: u16,
+    ) -> Result<Self> {
+        let ws_client = WebSocketClient::new(api_port).await?;
         Ok(Self {
             identity,
             ws_client,
@@ -811,6 +820,7 @@ pub struct RegTesterCluster {
     pub bitcoin_client: BitcoinClient,
     pub nodes: Vec<KontorClient>,
     pub identity: Identity,
+    api_ports: Vec<u16>,
     _bitcoin_child: Child,
     _kontor_children: Vec<Child>,
     _bitcoin_data_dir: TempDir,
@@ -939,6 +949,7 @@ impl RegTesterCluster {
             bitcoin_client,
             nodes,
             identity,
+            api_ports,
             _bitcoin_child: bitcoin_child,
             _kontor_children: kontor_children,
             _bitcoin_data_dir: bitcoin_data_dir,
@@ -950,6 +961,21 @@ impl RegTesterCluster {
     /// Get the primary Kontor client (node 0).
     pub fn client(&self) -> &KontorClient {
         &self.nodes[0]
+    }
+
+    /// Create a `RegTester` targeting a specific node in the cluster.
+    /// Uses the cluster's shared bitcoin client and identity.
+    pub async fn reg_tester(&self, node_index: usize) -> Result<RegTester> {
+        let inner = RegTesterInner::with_port(
+            self.identity.clone(),
+            self.bitcoin_client.clone(),
+            self.nodes[node_index].clone(),
+            self.api_ports[node_index],
+        )
+        .await?;
+        Ok(RegTester {
+            inner: Arc::new(Mutex::new(inner)),
+        })
     }
 
     /// Mine blocks using the funded identity.
