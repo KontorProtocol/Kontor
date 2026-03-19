@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
@@ -11,7 +11,6 @@ pub struct BitcoinState {
     pub chain_tip_hash: BlockHash,
     /// Block hash by height — populated as blocks arrive.
     pub block_hashes: HashMap<u64, BlockHash>,
-    pub pending_blocks: VecDeque<indexer_types::Block>,
     /// Shared tx cache (clone of the one held by BitcoinClient).
     /// Populated from mempool events and block transactions.
     pub tx_cache: Option<TxCache>,
@@ -24,7 +23,6 @@ impl BitcoinState {
             chain_tip: 0,
             chain_tip_hash: BlockHash::all_zeros(),
             block_hashes: HashMap::new(),
-            pending_blocks: VecDeque::new(),
             tx_cache: None,
         }
     }
@@ -50,7 +48,6 @@ impl BitcoinState {
         self.chain_tip = 0;
         self.chain_tip_hash = BlockHash::all_zeros();
         self.block_hashes.clear();
-        self.pending_blocks.clear();
     }
 
     pub async fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {

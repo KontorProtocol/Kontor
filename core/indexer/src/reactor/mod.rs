@@ -261,13 +261,8 @@ impl Reactor {
 
     async fn run_event_loop(&mut self) -> Result<()> {
         use std::collections::HashSet;
-        use tokio::time::{Duration, Instant};
-
-        const PENDING_BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
         self.init_tx.take().map(|tx| tx.send(true));
-
-        let mut pending_deadline: Option<Instant> = None;
 
         loop {
             let simulate_rx = async {
@@ -286,8 +281,6 @@ impl Reactor {
                 }
             };
 
-            let has_pending_deadline = pending_deadline.is_some();
-
             select! {
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
@@ -301,69 +294,69 @@ impl Reactor {
                             info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                             if let Some(handle) = self.consensus_handle.as_mut() {
-                                self.bitcoin_state.pending_blocks.push_back(block);
+                                // Store block for execution when consensus decides it
+                                handle.state.block_cache.insert(block.height, block.clone());
+                                handle.state.pending_blocks.push_back((block.height, block.hash));
 
-                                // Process replay queue batches whose anchor has been reached
-                                if !handle.state.replay_queue.is_empty() {
-                                    while handle.state
-                                        .replay_queue
-                                        .front()
-                                        .is_some_and(|(_, v)| v.anchor_height <= self.bitcoin_state.chain_tip)
+                                // Process replay queue entries whose anchor has been reached
+                                while handle.state
+                                    .replay_queue
+                                    .front()
+                                    .is_some_and(|(_, v)| v.block_height() <= self.bitcoin_state.chain_tip)
+                                {
+                                    let (height, value) = handle.state.next_replay_batch().unwrap();
+
+                                    if self.bitcoin_state
+                                        .block_hashes
+                                        .get(&value.block_height())
+                                        .is_some_and(|&local_hash| local_hash != value.block_hash())
                                     {
-                                        let (height, value) = handle.state.next_replay_batch().unwrap();
+                                        warn!(
+                                            anchor = value.block_height(),
+                                            consensus_height = %height,
+                                            "Skipping replay value with stale hash"
+                                        );
+                                        continue;
+                                    }
 
-                                        if self.bitcoin_state
-                                            .block_hashes
-                                            .get(&value.anchor_height)
-                                            .is_some_and(|&local_hash| local_hash != value.anchor_hash)
-                                        {
-                                            warn!(
-                                                anchor = value.anchor_height,
-                                                consensus_height = %height,
-                                                "Skipping replay batch with stale anchor_hash"
-                                            );
-                                            continue;
+                                    match &value {
+                                        crate::consensus::Value::Batch {
+                                            anchor_height,
+                                            anchor_hash,
+                                            txids,
+                                        } => {
+                                            let mut resolved_txs = Vec::with_capacity(txids.len());
+                                            for txid in txids {
+                                                if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
+                                                    resolved_txs.push(tx.clone());
+                                                } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
+                                                    resolved_txs.push(tx);
+                                                } else {
+                                                    warn!(%txid, "Could not resolve txid during replay — skipping");
+                                                }
+                                            }
+
+                                            handle.state.record_decided_batch(height, &value);
+                                            handle.state
+                                                .process_decided_batch(
+                                                    &mut self.executor,
+                                                    &mut self.bitcoin_state,
+                                                    *anchor_height,
+                                                    *anchor_hash,
+                                                    height,
+                                                    &[],
+                                                    &resolved_txs,
+                                                )
+                                                .await;
                                         }
-
-                                        let mut resolved_txs = Vec::with_capacity(value.txids.len());
-                                        for txid in &value.txids {
-                                            if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
-                                                resolved_txs.push(tx.clone());
-                                            } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
-                                                resolved_txs.push(tx);
-                                            } else {
-                                                warn!(%txid, "Could not resolve txid during replay — skipping");
+                                        crate::consensus::Value::Block { height: bh, .. } => {
+                                            if let Some(block) = handle.state.block_cache.remove(bh) {
+                                                self.executor.execute_block(&block).await;
                                             }
                                         }
-
-                                        handle.state.record_decided_batch(height, &value);
-                                        handle.state
-                                            .process_decided_batch(
-                                                &mut self.executor,
-                                                &mut self.bitcoin_state,
-                                                value.anchor_height,
-                                                value.anchor_hash,
-                                                height,
-                                                &[],
-                                                &resolved_txs,
-                                            )
-                                            .await;
                                     }
-                                } else if handle.state
-                                    .pending_batches
-                                    .iter()
-                                    .any(|b| b.deadline <= self.bitcoin_state.chain_tip)
-                                {
-                                    while let Some(pending) = self.bitcoin_state.pending_blocks.pop_front() {
-                                        self.executor.execute_block(&pending).await;
-                                    }
-                                    pending_deadline = None;
-                                    handle.state.run_finality_checks(&mut self.executor, &mut self.bitcoin_state).await;
-                                } else if pending_deadline.is_none() {
-                                    pending_deadline = Some(Instant::now() + PENDING_BLOCK_TIMEOUT);
                                 }
                             } else {
-                                // Follower mode: execute blocks immediately
                                 self.handle_block(block).await?;
                             }
                         },
@@ -378,7 +371,6 @@ impl Reactor {
                                         HashSet::new(),
                                     )
                                     .await;
-                                pending_deadline = None;
                             } else {
                                 self.rollback(to_height).await?;
                             }
@@ -414,25 +406,11 @@ impl Reactor {
                         msg,
                         node_index,
                     ).await?;
-                    if self.bitcoin_state.pending_blocks.is_empty() {
-                        pending_deadline = None;
-                    }
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
                         let _ = ret_tx.send(self.executor.simulate(btx).await);
                     }
-                }
-                _ = tokio::time::sleep_until(pending_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if has_pending_deadline => {
-                    let count = self.bitcoin_state.pending_blocks.len();
-                    while let Some(block) = self.bitcoin_state.pending_blocks.pop_front() {
-                        warn!(height = block.height, "Pending block timeout — executing without waiting for batch");
-                        self.executor.execute_block(&block).await;
-                    }
-                    if count > 0 {
-                        info!(count, "Drained pending blocks on timeout");
-                    }
-                    pending_deadline = None;
                 }
             }
         }

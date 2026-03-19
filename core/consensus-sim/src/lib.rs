@@ -65,7 +65,6 @@ pub async fn run_node(
     state_tx: Option<mpsc::Sender<StateEvent>>,
     ready_tx: Option<mpsc::Sender<usize>>,
     cancel: CancellationToken,
-    pending_block_timeout: Option<Duration>,
 ) -> Result<()> {
     let engine_output = start_engine(engine_config, &genesis)
         .await
@@ -95,8 +94,7 @@ pub async fn run_node(
     let mut bitcoin_state = BitcoinState::new();
     let mut channels = engine_output.channels;
 
-    let timeout = pending_block_timeout.unwrap_or(reactor::DEFAULT_PENDING_BLOCK_TIMEOUT);
-    reactor::run_with_timeout(
+    reactor::run(
         &mut consensus_state,
         &mut executor,
         &mut bitcoin_state,
@@ -105,7 +103,6 @@ pub async fn run_node(
         &mut block_rx,
         &mut mempool_rx,
         cancel,
-        timeout,
     )
     .await
     .map_err(|e| eyre::eyre!("{e}"))?;
@@ -252,7 +249,6 @@ impl ClusterHandle {
                     Some(stx),
                     Some(rtx),
                     cancel,
-                    None,
                 )
                 .await
                 {
@@ -370,20 +366,7 @@ impl ClusterHandle {
 pub async fn run_cluster(n: usize) -> Result<ClusterHandle> {
     let mut rng = rand::thread_rng();
     let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
-    let timeouts = vec![None; n];
-    run_cluster_from_keys(private_keys, n, timeouts).await
-}
-
-/// Spin up a cluster where each node can have a custom pending block timeout.
-/// `timeouts[i]` = `Some(dur)` gives node `i` that timeout; `None` uses the default.
-pub async fn run_cluster_with_timeouts(
-    n: usize,
-    timeouts: Vec<Option<Duration>>,
-) -> Result<ClusterHandle> {
-    assert_eq!(n, timeouts.len());
-    let mut rng = rand::thread_rng();
-    let private_keys: Vec<PrivateKey> = (0..n).map(|_| PrivateKey::generate(&mut rng)).collect();
-    run_cluster_from_keys(private_keys, n, timeouts).await
+    run_cluster_from_keys(private_keys, n).await
 }
 
 /// Create a cluster with `total` validators in genesis but only start `start_count`.
@@ -397,8 +380,7 @@ pub async fn run_cluster_delayed(
     let private_keys: Vec<PrivateKey> =
         (0..total).map(|_| PrivateKey::generate(&mut rng)).collect();
     let remaining_keys = private_keys[start_count..].to_vec();
-    let timeouts = vec![None; start_count];
-    let handle = run_cluster_from_keys(private_keys, start_count, timeouts).await?;
+    let handle = run_cluster_from_keys(private_keys, start_count).await?;
     Ok((handle, remaining_keys))
 }
 
@@ -406,7 +388,6 @@ pub async fn run_cluster_delayed(
 async fn run_cluster_from_keys(
     private_keys: Vec<PrivateKey>,
     start_count: usize,
-    timeouts: Vec<Option<Duration>>,
 ) -> Result<ClusterHandle> {
     let validators: Vec<Validator> = private_keys
         .iter()
@@ -434,8 +415,6 @@ async fn run_cluster_from_keys(
         let genesis = genesis.clone();
         let engine_config = make_engine_config(i, &ports, private_key);
         let cancel = cancel.clone();
-        let node_timeout = timeouts.get(i).copied().flatten();
-
         // Per-node: bridge broadcast → mpsc for block events
         let node_block_rx = {
             let (tx, rx) = mpsc::channel(256);
@@ -504,7 +483,6 @@ async fn run_cluster_from_keys(
                     Some(stx),
                     Some(rtx),
                     cancel,
-                    node_timeout,
                 )
                 .await
                 {

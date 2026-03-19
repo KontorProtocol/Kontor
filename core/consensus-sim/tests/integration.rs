@@ -3,7 +3,7 @@ use std::time::Duration;
 use consensus_sim::mock_bitcoin::MockBitcoin;
 use consensus_sim::reactor::FinalityEvent;
 use consensus_sim::reactor::StateEvent;
-use consensus_sim::{run_cluster, run_cluster_delayed, run_cluster_with_timeouts};
+use consensus_sim::{run_cluster, run_cluster_delayed};
 use indexer::bitcoin_follower::event::BlockEvent;
 
 /// All 4 validators should decide the same value at each consensus height.
@@ -77,7 +77,7 @@ async fn decided_values_contain_mempool_txids() {
 
     // At least one node should have decided a value containing our txids
     let decided_value = &results[0][0].value;
-    let decided_txids = &decided_value.txids;
+    let decided_txids = decided_value.batch_txids();
     for expected in &expected_txids {
         assert!(
             decided_txids.contains(expected),
@@ -85,7 +85,7 @@ async fn decided_values_contain_mempool_txids() {
         );
     }
     // Anchor should be 0 since no blocks were mined
-    assert_eq!(decided_value.anchor_height, 0);
+    assert_eq!(decided_value.block_height(), 0);
 
     cluster.shutdown().await;
 }
@@ -110,7 +110,7 @@ async fn block_updates_chain_tip() {
 
     // Wait for at least 1 decision at anchor 0
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert_eq!(results[0][0].value.anchor_height, 0);
+    assert_eq!(results[0][0].value.block_height(), 0);
 
     // Mine a block — this advances the chain tip to 1
     {
@@ -132,9 +132,10 @@ async fn block_updates_chain_tip() {
     let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
     let second = &results[0][1].value;
     assert_eq!(
-        second.anchor_height, 1,
+        second.block_height(),
+        1,
         "Expected anchor_height 1 after mining a block, got {}",
-        second.anchor_height
+        second.block_height()
     );
 
     cluster.shutdown().await;
@@ -160,7 +161,7 @@ async fn empty_mempool_produces_empty_batch() {
             "Node {i} should have decided at least 1 value"
         );
         assert!(
-            node_decisions[0].value.txids.is_empty(),
+            node_decisions[0].value.batch_txids().is_empty(),
             "Node {i} decided a value with txids, expected empty"
         );
     }
@@ -188,7 +189,7 @@ async fn happy_path_finalization() {
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    assert_eq!(decided.value.anchor_height, 0);
+    assert_eq!(decided.value.block_height(), 0);
 
     // Mine blocks confirming all the batched txids, then mine through the finality window.
     // Block 1: confirm all mempool txs
@@ -253,7 +254,7 @@ async fn missing_tx_invalidation() {
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let decided_txids = &decided.value.txids;
+    let decided_txids = &decided.value.batch_txids();
     assert!(
         decided_txids.len() >= 3,
         "Expected at least 3 txids in decided batch"
@@ -321,7 +322,7 @@ async fn cascade_invalidation() {
         cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert_eq!(results[0][0].value.anchor_height, 0);
+    assert_eq!(results[0][0].value.block_height(), 0);
 
     // Mine block 1 (confirm nothing — intentionally leave batch 1 txids unconfirmed)
     {
@@ -452,7 +453,7 @@ async fn unbatched_txs_skip_batched_duplicates() {
     // Wait for consensus to decide a batch containing these txids
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    let batch_txid_count = decided.value.txids.len();
+    let batch_txid_count = decided.value.batch_txids().len();
 
     // Mine a block that confirms the same txids — they overlap with the batch
     {
@@ -486,7 +487,7 @@ async fn unbatched_txs_skip_batched_duplicates() {
     // If there's a BlockProcessed at the same anchor, unbatched_count should be 0
     // because all txids were already in the batch
     let block_at_anchor = state_events.iter().find(|e| {
-        matches!(e, StateEvent::BlockProcessed { height, .. } if *height == decided.value.anchor_height)
+        matches!(e, StateEvent::BlockProcessed { height, .. } if *height == decided.value.block_height())
     });
     // Either no BlockProcessed (because 0 unbatched) or unbatched_count == 0
     if let Some(StateEvent::BlockProcessed {
@@ -520,7 +521,7 @@ async fn rollback_truncates_and_replays() {
         cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert_eq!(results[0][0].value.anchor_height, 0);
+    assert_eq!(results[0][0].value.block_height(), 0);
 
     // Mine block 1 (confirm nothing — leave batch 1 txids unconfirmed)
     {
@@ -583,7 +584,7 @@ async fn rollback_preserves_pre_anchor_state() {
         cluster.send_mempool_event(event);
     }
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    let batch1_txids = results[0][0].value.txids.clone();
+    let batch1_txids = results[0][0].value.batch_txids().to_vec();
 
     // Mine block 1 confirming batch 1's txids — batch 1 will finalize
     {
@@ -832,124 +833,6 @@ async fn bitcoin_rollback_reverts_state() {
     cluster.shutdown().await;
 }
 
-/// Timeout race: one node executes a block early via short timeout, then consensus
-/// decides a batch. The node should detect the conflict, rollback, and re-apply the
-/// batch before blocks — converging with other nodes after the block is re-sent.
-#[tokio::test]
-#[serial_test::serial]
-async fn timeout_race_recovers_and_converges() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
-
-    // Node 0 gets a 1ms timeout — will execute pending blocks almost immediately.
-    // Other nodes get the default (30s) — will wait for batches.
-    let timeouts = vec![Some(Duration::from_millis(1)), None, None, None];
-    let mut cluster = run_cluster_with_timeouts(4, timeouts).await.unwrap();
-    cluster.wait_for_ready().await;
-
-    let mut mock = MockBitcoin::new(0);
-
-    // Insert mempool txs so consensus has content
-    for event in mock.generate_mempool_txs(3) {
-        cluster.send_mempool_event(event);
-    }
-
-    // Mine block 1 — save the events so we can re-send after recovery.
-    // Node 0 will execute it within 1ms (before batch is decided).
-    // Other nodes buffer it in pending_blocks until the batch arrives.
-    let saved_block_events;
-    {
-        let (blk_events, mem_events) = mock.mine_block_all();
-        saved_block_events = blk_events.clone();
-        for event in mem_events {
-            cluster.send_mempool_event(event);
-        }
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
-
-    // Wait for consensus to decide at least 1 batch
-    let _results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-
-    // Collect state events — expect a RollbackExecuted from node 0 (timeout race recovery)
-    // followed by BatchApplied from all nodes.
-    let state_events = cluster
-        .wait_for_state_events(12, Duration::from_secs(15))
-        .await;
-
-    // Node 0 should have emitted a RollbackExecuted due to timeout race detection
-    let timeout_rollback = state_events
-        .iter()
-        .any(|e| matches!(e, StateEvent::RollbackExecuted { .. }));
-    assert!(
-        timeout_rollback,
-        "Expected RollbackExecuted from timeout race recovery, got: {state_events:?}"
-    );
-
-    // Re-send the block so node 0 re-executes in correct order (batch before block).
-    // In prod, the Bitcoin follower re-sends blocks after a reset.
-    for event in saved_block_events {
-        cluster.send_block_event(event);
-    }
-
-    // Give node 0 time to process the re-sent block, then collect state events.
-    // All nodes should now have matching state (batch + block at same anchor).
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Mine a new block to trigger a second batch cycle where all nodes are in sync
-    for event in mock.generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-
-    let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
-
-    // After the second batch, all nodes should have converged
-    let more_events = cluster
-        .wait_for_state_events(8, Duration::from_secs(10))
-        .await;
-
-    // Find the second consensus height's BatchApplied events
-    let all_events: Vec<_> = state_events.iter().chain(more_events.iter()).collect();
-
-    // Use the latest batch height that has 4 BatchApplied events
-    let mut height_counts: std::collections::HashMap<_, Vec<[u8; 32]>> =
-        std::collections::HashMap::new();
-    for e in &all_events {
-        if let StateEvent::BatchApplied {
-            consensus_height,
-            checkpoint: Some(cp),
-            ..
-        } = e
-        {
-            height_counts
-                .entry(*consensus_height)
-                .or_default()
-                .push(*cp);
-        }
-    }
-
-    // Find a height where we got 4+ BatchApplied events
-    let converged = height_counts
-        .iter()
-        .any(|(_, cps)| cps.len() >= 4 && cps.windows(2).all(|w| w[0] == w[1]));
-
-    // At minimum, verify the recovery happened. Full checkpoint convergence
-    // requires block replay which happened via re-sent events above.
-    assert!(
-        converged || results[0].len() >= 2,
-        "Expected checkpoint convergence or at least 2 decisions. \
-         Heights with BatchApplied: {:?}",
-        height_counts
-            .iter()
-            .map(|(h, cps)| (h, cps.len()))
-            .collect::<Vec<_>>()
-    );
-
-    cluster.shutdown().await;
-}
-
 /// Multiple batches at the same anchor should all execute correctly.
 /// With no blocks mined, all batches anchor at 0.
 #[tokio::test]
@@ -971,7 +854,7 @@ async fn multi_batch_same_anchor() {
 
     // Wait for first decision at anchor 0
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert_eq!(results[0][0].value.anchor_height, 0);
+    assert_eq!(results[0][0].value.block_height(), 0);
 
     // Wave 2: insert more mempool txs (different txids)
     for event in mock.generate_mempool_txs(3) {
@@ -981,7 +864,8 @@ async fn multi_batch_same_anchor() {
     // Wait for second decision — should also be at anchor 0 (no blocks mined)
     let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
     assert_eq!(
-        results[0][1].value.anchor_height, 0,
+        results[0][1].value.block_height(),
+        0,
         "Second batch should also anchor at 0 since no blocks were mined"
     );
 
@@ -1043,8 +927,8 @@ async fn finality_rollback_replays_with_excluded_txids() {
     // Wait for consensus to decide batch at anchor 0
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
     let decided = &results[0][0];
-    assert_eq!(decided.value.anchor_height, 0);
-    let decided_txids = decided.value.txids.clone();
+    assert_eq!(decided.value.block_height(), 0);
+    let decided_txids = decided.value.batch_txids().to_vec();
 
     // Confirm only first 2 txids — 3rd will be missing at finality deadline
     let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2].to_vec();
@@ -1164,13 +1048,13 @@ async fn reorg_rollback_skips_stale_anchor_hash() {
 
     // Wait for a decision at anchor 1
     let results = cluster.wait_for_decisions(2, Duration::from_secs(30)).await;
-    let batch_at_1 = results[0].iter().find(|d| d.value.anchor_height == 1);
+    let batch_at_1 = results[0].iter().find(|d| d.value.block_height() == 1);
     assert!(
         batch_at_1.is_some(),
         "Expected a batch at anchor 1, decisions: {:?}",
         results[0]
             .iter()
-            .map(|d| d.value.anchor_height)
+            .map(|d| d.value.block_height())
             .collect::<Vec<_>>()
     );
 
@@ -1258,7 +1142,7 @@ async fn block_at_anchor_deferred() {
     }
 
     let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert_eq!(results[0][0].value.anchor_height, 0);
+    assert_eq!(results[0][0].value.block_height(), 0);
 
     // Mine block 1 — this goes to pending_blocks, NOT immediately executed
     {

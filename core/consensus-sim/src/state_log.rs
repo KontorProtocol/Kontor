@@ -241,7 +241,7 @@ impl Executor for StateLog {
             && let Ok(proto) = indexer::consensus::proto::CommitCertificate::decode(certificate)
             && let Ok(cert) = decode_commit_certificate(proto)
         {
-            let value = Value::new(anchor_height, anchor_hash, txids);
+            let value = Value::new_batch(anchor_height, anchor_hash, txids);
             self.decided.insert(consensus_height, (value, cert));
         }
     }
@@ -286,7 +286,7 @@ impl Executor for StateLog {
     async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
         self.decided
             .iter()
-            .filter(|(_, (value, _))| value.anchor_height >= from_anchor)
+            .filter(|(_, (value, _))| value.block_height() >= from_anchor)
             .map(|(h, (v, _))| (*h, v.clone()))
             .collect()
     }

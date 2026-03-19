@@ -66,6 +66,7 @@ message ProposalData {
     uint64 anchor_height = 1;
     repeated bytes transactions = 2;
     bytes anchor_hash = 3;
+    bool is_block = 4;
 }
 
 message ProposalFin {

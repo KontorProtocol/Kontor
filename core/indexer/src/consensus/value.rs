@@ -49,39 +49,95 @@ impl Protobuf for ValueId {
     }
 }
 
-/// The value to decide on: an anchor bitcoin block (height + hash) + ordered txids.
-/// The anchor_hash binds the batch to a specific block identity, so reorgs
-/// that replace the block at anchor_height can be detected.
+/// A consensus decision: either a batch of mempool transactions or a block confirmation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Value {
-    pub anchor_height: u64,
-    pub anchor_hash: BlockHash,
-    pub txids: Vec<Txid>,
+pub enum Value {
+    /// A batch of mempool transactions to execute, anchored at a specific block.
+    Batch {
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        txids: Vec<Txid>,
+    },
+    /// A Bitcoin block to execute. All validators agree to process this block.
+    Block { height: u64, hash: BlockHash },
 }
 
 impl Value {
-    pub fn new(anchor_height: u64, anchor_hash: BlockHash, txids: Vec<Txid>) -> Self {
-        Self {
+    pub fn new_batch(anchor_height: u64, anchor_hash: BlockHash, txids: Vec<Txid>) -> Self {
+        Self::Batch {
             anchor_height,
             anchor_hash,
             txids,
         }
     }
 
-    /// Stable identity hash: anchor_height + anchor_hash + txids.
+    pub fn new_block(height: u64, hash: BlockHash) -> Self {
+        Self::Block { height, hash }
+    }
+
+    /// Stable identity hash.
     pub fn id(&self) -> ValueId {
         let mut hasher = Sha256::new();
-        hasher.update(self.anchor_height.to_be_bytes());
-        hasher.update(self.anchor_hash.to_byte_array());
-        for txid in &self.txids {
-            hasher.update(txid.to_byte_array());
+        match self {
+            Value::Batch {
+                anchor_height,
+                anchor_hash,
+                txids,
+            } => {
+                hasher.update([0u8]); // discriminant
+                hasher.update(anchor_height.to_be_bytes());
+                hasher.update(anchor_hash.to_byte_array());
+                for txid in txids {
+                    hasher.update(txid.to_byte_array());
+                }
+            }
+            Value::Block { height, hash } => {
+                hasher.update([1u8]); // discriminant
+                hasher.update(height.to_be_bytes());
+                hasher.update(hash.to_byte_array());
+            }
         }
         ValueId(hasher.finalize().into())
     }
 
     pub fn size_bytes(&self) -> usize {
-        // 8 (height) + 32 (hash) + 32 * len (txids)
-        8 + 32 + self.txids.len() * 32
+        match self {
+            Value::Batch { txids, .. } => 1 + 8 + 32 + txids.len() * 32,
+            Value::Block { .. } => 1 + 8 + 32,
+        }
+    }
+
+    /// The Bitcoin block height this value references.
+    /// For batches: the anchor height. For blocks: the block height.
+    pub fn block_height(&self) -> u64 {
+        match self {
+            Value::Batch { anchor_height, .. } => *anchor_height,
+            Value::Block { height, .. } => *height,
+        }
+    }
+
+    /// The Bitcoin block hash this value references.
+    pub fn block_hash(&self) -> BlockHash {
+        match self {
+            Value::Batch { anchor_hash, .. } => *anchor_hash,
+            Value::Block { hash, .. } => *hash,
+        }
+    }
+
+    /// Returns the txids if this is a Batch, empty slice if Block.
+    pub fn batch_txids(&self) -> &[Txid] {
+        match self {
+            Value::Batch { txids, .. } => txids,
+            Value::Block { .. } => &[],
+        }
+    }
+
+    pub fn is_block(&self) -> bool {
+        matches!(self, Value::Block { .. })
+    }
+
+    pub fn is_batch(&self) -> bool {
+        matches!(self, Value::Batch { .. })
     }
 }
 
@@ -101,48 +157,90 @@ impl Protobuf for Value {
             .value
             .ok_or_else(|| ProtoError::missing_field::<Self::Proto>("value"))?;
 
-        // 8 (height) + 32 (anchor_hash) = 40 byte header
-        if bytes.len() < 40 {
-            return Err(ProtoError::Other(format!(
-                "Too few bytes for Value, expected at least 40, got {}",
-                bytes.len()
-            )));
+        if bytes.is_empty() {
+            return Err(ProtoError::Other("Empty Value bytes".to_string()));
         }
 
-        let anchor_height = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-        let anchor_hash_arr: [u8; 32] = bytes[8..40].try_into().unwrap();
-        let anchor_hash = BlockHash::from_byte_array(anchor_hash_arr);
-        let remaining = &bytes[40..];
+        match bytes[0] {
+            0 => {
+                // Batch: discriminant(1) + height(8) + hash(32) + txids(N*32)
+                let data = &bytes[1..];
+                if data.len() < 40 {
+                    return Err(ProtoError::Other(format!(
+                        "Too few bytes for Batch Value, expected at least 41, got {}",
+                        bytes.len()
+                    )));
+                }
+                let anchor_height = u64::from_be_bytes(data[..8].try_into().unwrap());
+                let anchor_hash_arr: [u8; 32] = data[8..40].try_into().unwrap();
+                let anchor_hash = BlockHash::from_byte_array(anchor_hash_arr);
+                let remaining = &data[40..];
 
-        if remaining.len() % 32 != 0 {
-            return Err(ProtoError::Other(format!(
-                "Txid data not a multiple of 32 bytes: got {}",
-                remaining.len()
-            )));
+                if remaining.len() % 32 != 0 {
+                    return Err(ProtoError::Other(format!(
+                        "Txid data not a multiple of 32 bytes: got {}",
+                        remaining.len()
+                    )));
+                }
+
+                let txids = remaining
+                    .chunks_exact(32)
+                    .map(|chunk| {
+                        let arr: [u8; 32] = chunk.try_into().unwrap();
+                        Txid::from_byte_array(arr)
+                    })
+                    .collect();
+
+                Ok(Value::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    txids,
+                })
+            }
+            1 => {
+                // Block: discriminant(1) + height(8) + hash(32)
+                let data = &bytes[1..];
+                if data.len() != 40 {
+                    return Err(ProtoError::Other(format!(
+                        "Invalid Block Value length: expected 41, got {}",
+                        bytes.len()
+                    )));
+                }
+                let height = u64::from_be_bytes(data[..8].try_into().unwrap());
+                let hash_arr: [u8; 32] = data[8..40].try_into().unwrap();
+                let hash = BlockHash::from_byte_array(hash_arr);
+                Ok(Value::Block { height, hash })
+            }
+            d => Err(ProtoError::Other(format!(
+                "Unknown Value discriminant: {d}"
+            ))),
         }
-
-        let txids = remaining
-            .chunks_exact(32)
-            .map(|chunk| {
-                let arr: [u8; 32] = chunk.try_into().unwrap();
-                Txid::from_byte_array(arr)
-            })
-            .collect();
-
-        Ok(Value {
-            anchor_height,
-            anchor_hash,
-            txids,
-        })
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
-        let mut buf = Vec::with_capacity(40 + self.txids.len() * 32);
-        buf.extend_from_slice(&self.anchor_height.to_be_bytes());
-        buf.extend_from_slice(&self.anchor_hash.to_byte_array());
-        for txid in &self.txids {
-            buf.extend_from_slice(&txid.to_byte_array());
-        }
+        let buf = match self {
+            Value::Batch {
+                anchor_height,
+                anchor_hash,
+                txids,
+            } => {
+                let mut buf = Vec::with_capacity(1 + 40 + txids.len() * 32);
+                buf.push(0); // discriminant
+                buf.extend_from_slice(&anchor_height.to_be_bytes());
+                buf.extend_from_slice(&anchor_hash.to_byte_array());
+                for txid in txids {
+                    buf.extend_from_slice(&txid.to_byte_array());
+                }
+                buf
+            }
+            Value::Block { height, hash } => {
+                let mut buf = Vec::with_capacity(1 + 40);
+                buf.push(1); // discriminant
+                buf.extend_from_slice(&height.to_be_bytes());
+                buf.extend_from_slice(&hash.to_byte_array());
+                buf
+            }
+        };
         Ok(proto::Value {
             value: Some(Bytes::from(buf)),
         })

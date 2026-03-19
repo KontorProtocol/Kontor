@@ -284,7 +284,7 @@ impl Executor for RuntimeExecutor {
 
         let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
         let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-        let value = Value::new(anchor_height as u64, anchor_hash, txids);
+        let value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
 
         let proto =
             crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
@@ -316,7 +316,7 @@ impl Executor for RuntimeExecutor {
                         txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
                     Some((
                         Height::new(consensus_height as u64),
-                        Value::new(anchor_height as u64, anchor_hash, txids),
+                        Value::new_batch(anchor_height as u64, anchor_hash, txids),
                     ))
                 },
             )

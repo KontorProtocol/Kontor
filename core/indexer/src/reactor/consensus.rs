@@ -56,6 +56,14 @@ pub struct ConsensusState {
     // Cleared after process_decided_batch completes for a batch's txids.
     pub parsed_tx_cache: HashMap<Txid, indexer_types::Transaction>,
 
+    // Blocks waiting for consensus decision — pushed when new Bitcoin blocks arrive,
+    // popped from the front when Value::Block decisions are finalized.
+    pub pending_blocks: VecDeque<(u64, bitcoin::BlockHash)>,
+
+    // Blocks received from the poller, keyed by height. Consumed when a
+    // Value::Block decision is finalized.
+    pub block_cache: HashMap<u64, indexer_types::Block>,
+
     // Observation channels (optional, for testing)
     pub observation: Option<ObservationChannels>,
 }
@@ -81,6 +89,8 @@ impl ConsensusState {
             replay_excluded_txids: HashSet::new(),
             tx_cache: HashMap::new(),
             parsed_tx_cache: HashMap::new(),
+            pending_blocks: VecDeque::new(),
+            block_cache: HashMap::new(),
             observation: None,
         }
     }
@@ -110,20 +120,34 @@ impl ConsensusState {
         let mut hasher = sha3::Keccak256::new();
         hasher.update(value.height.as_u64().to_be_bytes());
         hasher.update(value.round.as_i64().to_be_bytes());
-        hasher.update(value.value.anchor_height.to_be_bytes());
-        hasher.update(value.value.anchor_hash.to_byte_array());
-        for txid in &value.value.txids {
-            hasher.update(txid.to_byte_array());
-        }
+
+        let data_part = match &value.value {
+            Value::Batch {
+                anchor_height,
+                anchor_hash,
+                txids,
+            } => {
+                hasher.update(anchor_height.to_be_bytes());
+                hasher.update(anchor_hash.to_byte_array());
+                for txid in txids {
+                    hasher.update(txid.to_byte_array());
+                }
+                let txs = self
+                    .tx_cache
+                    .get(&value.value.id())
+                    .cloned()
+                    .unwrap_or_default();
+                ProposalData::new_batch(*anchor_height, *anchor_hash, txs)
+            }
+            Value::Block { height, hash } => {
+                hasher.update(height.to_be_bytes());
+                hasher.update(hash.to_byte_array());
+                ProposalData::new_block(*height, *hash)
+            }
+        };
 
         let hash = hasher.finalize();
         let signature = self.signing_provider.sign(&hash);
-
-        let txs = self
-            .tx_cache
-            .get(&value.value.id())
-            .cloned()
-            .unwrap_or_default();
 
         let parts = vec![
             ProposalPart::Init(ProposalInit::new(
@@ -132,11 +156,7 @@ impl ConsensusState {
                 pol_round,
                 self.address,
             )),
-            ProposalPart::Data(ProposalData::new(
-                value.value.anchor_height,
-                value.value.anchor_hash,
-                txs,
-            )),
+            ProposalPart::Data(data_part),
             ProposalPart::Fin(ProposalFin::new(signature)),
         ];
 
@@ -164,6 +184,11 @@ impl ConsensusState {
         executor: &impl Executor,
         bitcoin_state: &BitcoinState,
     ) -> Value {
+        // If blocks are pending, always propose the next one first
+        if let Some(&(height, hash)) = self.pending_blocks.front() {
+            return Value::new_block(height, hash);
+        }
+
         // Collect txids already in pending (unfinalized) batches to avoid duplicates
         let already_batched: HashSet<Txid> = self
             .pending_batches
@@ -188,7 +213,7 @@ impl ConsensusState {
             }
         }
         let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let value = Value::new(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids);
+        let value = Value::new_batch(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids);
         self.tx_cache.insert(value.id(), txs);
         value
     }
@@ -196,21 +221,37 @@ impl ConsensusState {
     // --- Finality tracking ---
 
     pub fn record_decided_batch(&mut self, consensus_height: Height, value: &Value) {
-        let pending = PendingBatch {
-            consensus_height,
-            anchor_height: value.anchor_height,
-            anchor_hash: value.anchor_hash,
-            txids: value.txids.clone(),
-            deadline: value.anchor_height + FINALITY_WINDOW,
-        };
-        info!(
-            consensus_height = %consensus_height,
-            anchor = value.anchor_height,
-            deadline = pending.deadline,
-            txs = value.txids.len(),
-            "Tracking batch for finality"
-        );
-        self.pending_batches.push(pending);
+        match value {
+            Value::Batch {
+                anchor_height,
+                anchor_hash,
+                txids,
+            } => {
+                let pending = PendingBatch {
+                    consensus_height,
+                    anchor_height: *anchor_height,
+                    anchor_hash: *anchor_hash,
+                    txids: txids.clone(),
+                    deadline: anchor_height + FINALITY_WINDOW,
+                };
+                info!(
+                    consensus_height = %consensus_height,
+                    anchor = anchor_height,
+                    deadline = pending.deadline,
+                    txs = txids.len(),
+                    "Tracking batch for finality"
+                );
+                self.pending_batches.push(pending);
+            }
+            Value::Block { height, hash } => {
+                info!(
+                    consensus_height = %consensus_height,
+                    block_height = height,
+                    block_hash = %hash,
+                    "Block decided — no finality tracking needed"
+                );
+            }
+        }
     }
 
     pub async fn check_finality(
@@ -342,10 +383,10 @@ impl ConsensusState {
     /// Returns None when the queue is empty (back to normal Malachite flow).
     pub fn next_replay_batch(&mut self) -> Option<(Height, Value)> {
         if let Some((height, mut value)) = self.replay_queue.pop_front() {
-            if !self.replay_excluded_txids.is_empty() {
-                value
-                    .txids
-                    .retain(|txid| !self.replay_excluded_txids.contains(txid));
+            if !self.replay_excluded_txids.is_empty()
+                && let Value::Batch { ref mut txids, .. } = value
+            {
+                txids.retain(|txid| !self.replay_excluded_txids.contains(txid));
             }
             return Some((height, value));
         }
@@ -376,20 +417,12 @@ impl ConsensusState {
         self.emit_finality_events(&finality_events);
     }
 
-    /// Execute a decided batch, then drain pending blocks below the anchor.
-    ///
-    /// Only blocks with height < anchor are drained. The block at the anchor
-    /// stays queued — the node doesn't know if more batches at this anchor are
-    /// coming. It gets processed when the anchor advances (next batch has a
-    /// higher anchor), the pending-block timeout fires, or finality checks run.
-    ///
-    /// If blocks at or above the anchor height were already executed (e.g. by a
-    /// pending-block timeout), rolls back the executor and resets bitcoin state
-    /// so that blocks are re-processed in correct order (batch first, then block).
+    /// Execute a decided batch. Blocks are executed separately via Value::Block
+    /// consensus decisions — no block draining or timeout race detection needed.
     pub async fn process_decided_batch(
         &mut self,
         executor: &mut impl Executor,
-        bitcoin_state: &mut BitcoinState,
+        _bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
@@ -397,33 +430,6 @@ impl ConsensusState {
         batch_txs: &[bitcoin::Transaction],
     ) {
         use crate::block::filter_map;
-        // Detect timeout race: blocks executed before this batch was decided
-        if let Some(last_block) = executor.last_executed_block_height().await
-            && last_block >= anchor_height
-        {
-            warn!(
-                anchor_height,
-                last_block, "Timeout race detected — rolling back to re-apply batch before blocks"
-            );
-            let removed = executor.rollback_state(anchor_height).await;
-            bitcoin_state.reset();
-
-            self.emit_state_event(StateEvent::RollbackExecuted {
-                to_anchor: anchor_height,
-                entries_removed: removed,
-                checkpoint: executor.checkpoint().await,
-            });
-        }
-
-        // Drain blocks below the anchor — these precede all batches at this anchor
-        while let Some(block) = bitcoin_state.pending_blocks.front() {
-            if block.height < anchor_height {
-                let block = bitcoin_state.pending_blocks.pop_front().unwrap();
-                executor.execute_block(&block).await;
-            } else {
-                break;
-            }
-        }
 
         // Resolve batch txs to parsed form: check parsed_tx_cache first,
         // fall back to filter_map for replay/sync path
@@ -466,8 +472,7 @@ impl ConsensusState {
     }
 }
 
-/// Validate all transactions in a received proposal, cache parsed results,
-/// and accept the proposal. Returns None if any transaction fails validation.
+/// Validate a received proposal and accept it. Returns None if validation fails.
 async fn validate_and_accept_proposal(
     state: &mut ConsensusState,
     executor: &mut impl Executor,
@@ -475,24 +480,43 @@ async fn validate_and_accept_proposal(
     height: Height,
     round: Round,
 ) -> Option<ProposedValue<Ctx>> {
-    for tx in &data.transactions {
-        let txid = tx.compute_txid();
-        if state.parsed_tx_cache.contains_key(&txid) {
-            continue;
+    let value = match data {
+        ProposalData::Block { height, hash } => {
+            // Block proposals need no tx validation
+            Value::new_block(*height, *hash)
         }
-        if let Some(parsed) = executor.validate_transaction(tx).await {
-            state.parsed_tx_cache.insert(txid, parsed);
-        } else {
-            warn!(
-                %txid,
-                "Rejecting proposal: transaction failed validation"
-            );
-            return None;
+        ProposalData::Batch {
+            anchor_height,
+            anchor_hash,
+            transactions,
+        } => {
+            // Reject batch proposals when a block is pending
+            if !state.pending_blocks.is_empty() {
+                warn!("Rejecting batch proposal: block is pending");
+                return None;
+            }
+            for tx in transactions {
+                let txid = tx.compute_txid();
+                if state.parsed_tx_cache.contains_key(&txid) {
+                    continue;
+                }
+                if let Some(parsed) = executor.validate_transaction(tx).await {
+                    state.parsed_tx_cache.insert(txid, parsed);
+                } else {
+                    warn!(
+                        %txid,
+                        "Rejecting proposal: transaction failed validation"
+                    );
+                    return None;
+                }
+            }
+            let txids = data.txids();
+            let value = Value::new_batch(*anchor_height, *anchor_hash, txids);
+            state.tx_cache.insert(value.id(), transactions.clone());
+            value
         }
-    }
-    let txids = data.txids();
-    let value = Value::new(data.anchor_height, data.anchor_hash, txids);
-    state.tx_cache.insert(value.id(), data.transactions.clone());
+    };
+
     let proposed = ProposedValue {
         height,
         round,
@@ -597,35 +621,49 @@ pub async fn handle_consensus_msg(
                 match &part.content {
                     StreamContent::Data(ProposalPart::Data(data)) => {
                         if !state.undecided.contains_key(&(height, round)) {
-                            if data.anchor_height > bitcoin_state.chain_tip {
-                                warn!(
-                                    anchor = data.anchor_height,
-                                    tip = bitcoin_state.chain_tip,
-                                    "Rejecting proposal with unknown anchor height"
-                                );
-                                None
-                            } else if let Some(&local_hash) =
-                                bitcoin_state.block_hashes.get(&data.anchor_height)
-                            {
-                                if local_hash != data.anchor_hash {
-                                    warn!(
-                                        anchor = data.anchor_height,
-                                        proposed = %data.anchor_hash,
-                                        local = %local_hash,
-                                        "Rejecting proposal with mismatched anchor hash"
-                                    );
-                                    None
-                                } else {
+                            match data {
+                                ProposalData::Block { .. } => {
                                     validate_and_accept_proposal(
                                         state, executor, data, height, round,
                                     )
                                     .await
                                 }
-                            } else {
-                                // No local hash for this height — accept on height alone
-                                // (can happen during sync when we haven't seen the block yet)
-                                validate_and_accept_proposal(state, executor, data, height, round)
-                                    .await
+                                ProposalData::Batch {
+                                    anchor_height,
+                                    anchor_hash,
+                                    ..
+                                } => {
+                                    if *anchor_height > bitcoin_state.chain_tip {
+                                        warn!(
+                                            anchor = anchor_height,
+                                            tip = bitcoin_state.chain_tip,
+                                            "Rejecting proposal with unknown anchor height"
+                                        );
+                                        None
+                                    } else if let Some(&local_hash) =
+                                        bitcoin_state.block_hashes.get(anchor_height)
+                                    {
+                                        if local_hash != *anchor_hash {
+                                            warn!(
+                                                anchor = anchor_height,
+                                                proposed = %anchor_hash,
+                                                local = %local_hash,
+                                                "Rejecting proposal with mismatched anchor hash"
+                                            );
+                                            None
+                                        } else {
+                                            validate_and_accept_proposal(
+                                                state, executor, data, height, round,
+                                            )
+                                            .await
+                                        }
+                                    } else {
+                                        validate_and_accept_proposal(
+                                            state, executor, data, height, round,
+                                        )
+                                        .await
+                                    }
+                                }
                             }
                         } else {
                             None
@@ -691,27 +729,54 @@ pub async fn handle_consensus_msg(
                 }
                 state.record_decided_batch(certificate.height, &proposal.value);
 
-                // Live path: full txs available from cache
-                let full_txs = state
-                    .tx_cache
-                    .remove(&proposal.value.id())
-                    .unwrap_or_default();
+                match &proposal.value {
+                    Value::Batch {
+                        anchor_height,
+                        anchor_hash,
+                        ..
+                    } => {
+                        let full_txs = state
+                            .tx_cache
+                            .remove(&proposal.value.id())
+                            .unwrap_or_default();
 
-                let cert_bytes = encode_commit_certificate(&certificate)
-                    .map(|p| p.encode_to_vec())
-                    .unwrap_or_default();
+                        let cert_bytes = encode_commit_certificate(&certificate)
+                            .map(|p| p.encode_to_vec())
+                            .unwrap_or_default();
 
-                state
-                    .process_decided_batch(
-                        executor,
-                        bitcoin_state,
-                        proposal.value.anchor_height,
-                        proposal.value.anchor_hash,
-                        certificate.height,
-                        &cert_bytes,
-                        &full_txs,
-                    )
-                    .await;
+                        state
+                            .process_decided_batch(
+                                executor,
+                                bitcoin_state,
+                                *anchor_height,
+                                *anchor_hash,
+                                certificate.height,
+                                &cert_bytes,
+                                &full_txs,
+                            )
+                            .await;
+                    }
+                    Value::Block { height, hash } => {
+                        if let Some(block) = state.block_cache.remove(height) {
+                            executor.execute_block(&block).await;
+                        } else {
+                            warn!(
+                                block_height = height,
+                                block_hash = %hash,
+                                "Block decided but not found in block_cache"
+                            );
+                        }
+                        state.pending_blocks.pop_front();
+                        // Check finality after executing a block — batch txids may now be confirmed
+                        if state
+                            .pending_batches
+                            .iter()
+                            .any(|b| b.deadline <= bitcoin_state.chain_tip)
+                        {
+                            state.run_finality_checks(executor, bitcoin_state).await;
+                        }
+                    }
+                }
             }
 
             state.current_height = certificate.height.increment();

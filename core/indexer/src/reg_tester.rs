@@ -138,7 +138,7 @@ async fn run_kontor(
     }
 
     let process = cmd.spawn()?;
-    let client = KontorClient::new(&format!("http://localhost:{api_port}/api"))?;
+    let client = KontorClient::new(format!("http://localhost:{api_port}/api"))?;
     retry_simple(async || {
         let i = client.index().await?;
         if !i.available {
@@ -864,11 +864,8 @@ impl RegTesterCluster {
         let block_hashes = bitcoin_client
             .generate_to_address(101, &address.to_string())
             .await?;
-        let block_hash = BlockHash::from_str(
-            block_hashes
-                .first()
-                .ok_or(anyhow!("No blocks created"))?,
-        )?;
+        let block_hash =
+            BlockHash::from_str(block_hashes.first().ok_or(anyhow!("No blocks created"))?)?;
         let block = bitcoin_client.get_block(&block_hash).await?;
         let identity = Identity {
             address,
@@ -933,12 +930,8 @@ impl RegTesterCluster {
                 genesis_file: genesis_path.to_string_lossy().into_owned(),
             };
 
-            let (child, client) = run_kontor(
-                data_dir.path(),
-                api_ports[i],
-                Some(&consensus_config),
-            )
-            .await?;
+            let (child, client) =
+                run_kontor(data_dir.path(), api_ports[i], Some(&consensus_config)).await?;
 
             kontor_children.push(child);
             nodes.push(client);
