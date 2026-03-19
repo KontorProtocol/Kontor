@@ -310,6 +310,39 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
+pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
+    use crate::database::queries::insert_processed_block;
+    use crate::runtime::{ComponentCache, Runtime, Storage};
+
+    let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+
+    let storage = Storage::builder().height(1).conn(conn).build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime.publish_native_contracts().await?;
+
+    Ok((runtime, db_dir))
+}
+
 pub fn new_mock_block_hash(i: u32) -> BlockHash {
     let mut bytes = [0u8; 32];
     let i_bytes = i.to_le_bytes();

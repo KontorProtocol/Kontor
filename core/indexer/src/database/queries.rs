@@ -645,6 +645,20 @@ pub async fn select_batches_from_anchor(
     Ok(results)
 }
 
+pub async fn confirm_transaction(
+    conn: &Connection,
+    txid: &str,
+    confirmed_height: i64,
+    tx_index: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
+        params![confirmed_height, tx_index, txid],
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn get_transaction_by_txid(
     conn: &Connection,
     txid: &str,

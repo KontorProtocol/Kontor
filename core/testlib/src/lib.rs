@@ -168,6 +168,10 @@ impl RuntimeLocal {
         Ok(())
     }
 
+    pub fn into_parts(self) -> (IndexerRuntime, TempDir) {
+        (self.runtime, self._db_dir)
+    }
+
     pub async fn new(block: Option<&Block>) -> Result<Self> {
         let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();

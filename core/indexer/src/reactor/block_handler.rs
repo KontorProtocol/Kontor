@@ -7,7 +7,8 @@ use crate::{
     block::{filter_map, inspect},
     consensus::Height,
     database::queries::{
-        insert_batch, insert_block, insert_transaction, select_block_latest, set_block_processed,
+        confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
+        insert_transaction, select_block_latest, set_block_processed,
     },
     runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
@@ -156,6 +157,22 @@ pub async fn process_transaction(
     block_height: u64,
     t: &Transaction,
 ) -> Result<()> {
+    // Dedup: if this tx was already executed via batch_handler, just mark it
+    // as confirmed on-chain (for finality checks) and skip re-execution.
+    if let Some(_existing) =
+        get_transaction_by_txid(&runtime.storage.conn, &t.txid.to_string()).await?
+    {
+        confirm_transaction(
+            &runtime.storage.conn,
+            &t.txid.to_string(),
+            block_height as i64,
+            t.index,
+        )
+        .await?;
+        info!(txid = %t.txid, "Transaction already batched — confirmed on chain, skipping execution");
+        return Ok(());
+    }
+
     let tx_id = insert_transaction(
         &runtime.storage.conn,
         TransactionRow::builder()
