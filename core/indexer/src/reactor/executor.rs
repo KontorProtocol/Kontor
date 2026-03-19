@@ -189,6 +189,19 @@ impl Executor for RuntimeExecutor {
         // Parse Kontor ops — reject if no valid ops
         let parsed = filter_map((0, tx.clone()))?;
 
+        // Reject transactions with non-batchable ops (these execute via block decisions only)
+        let has_non_batchable = parsed.ops.iter().any(|op| {
+            matches!(
+                op,
+                indexer_types::Op::Publish { .. }
+                    | indexer_types::Op::Issuance { .. }
+                    | indexer_types::Op::RegisterBlsKey { .. }
+            )
+        });
+        if has_non_batchable {
+            return None;
+        }
+
         // Push to local bitcoind mempool (idempotent, succeeds if already present)
         if let Some(client) = &self.bitcoin_client {
             let raw_hex = bitcoin::consensus::encode::serialize_hex(tx);

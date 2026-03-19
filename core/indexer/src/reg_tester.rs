@@ -971,6 +971,15 @@ impl RegTesterCluster {
         })
     }
 
+    /// Create an identity with issuance via node 0.
+    /// Returns the RegTester and Identity for subsequent operations.
+    pub async fn funded_identity(&self) -> Result<(RegTester, Identity)> {
+        let mut rt = self.reg_tester(0).await?;
+        let mut identity = rt.identity().await?;
+        rt.instruction(&mut identity, Inst::Issuance).await?;
+        Ok((rt, identity))
+    }
+
     /// Mine blocks using the funded identity.
     pub async fn mine(&self, count: u64) -> Result<()> {
         self.bitcoin_client

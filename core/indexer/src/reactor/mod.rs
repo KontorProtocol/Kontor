@@ -398,7 +398,7 @@ impl Reactor {
                 Some(msg) = consensus_rx => {
                     let handle = self.consensus_handle.as_mut().unwrap();
                     let node_index = handle.node_index;
-                    consensus::handle_consensus_msg(
+                    let decided_block = consensus::handle_consensus_msg(
                         &mut handle.state,
                         &mut self.executor,
                         &mut self.bitcoin_state,
@@ -406,6 +406,18 @@ impl Reactor {
                         msg,
                         node_index,
                     ).await?;
+                    if let Some(block) = decided_block {
+                        self.handle_block(block).await?;
+                        // Check finality after block execution — batch txids may now be confirmed
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        if handle.state
+                            .pending_batches
+                            .iter()
+                            .any(|b| b.deadline <= self.bitcoin_state.chain_tip)
+                        {
+                            handle.state.run_finality_checks(&mut self.executor, &mut self.bitcoin_state).await;
+                        }
+                    }
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {

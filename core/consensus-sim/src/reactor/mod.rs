@@ -134,7 +134,17 @@ pub async fn run(
                 }
             }
             Some(msg) = channels.consensus.recv() => {
-                handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
+                let decided_block = handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
+                if let Some(block) = decided_block {
+                    executor.execute_block(&block).await;
+                    if consensus_state
+                        .pending_batches
+                        .iter()
+                        .any(|b| b.deadline <= bitcoin_state.chain_tip)
+                    {
+                        consensus_state.run_finality_checks(executor, bitcoin_state).await;
+                    }
+                }
             }
             else => break,
         }

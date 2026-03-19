@@ -530,6 +530,8 @@ async fn validate_and_accept_proposal(
 }
 
 /// Handle a consensus message from the Malachite engine.
+/// Handle a consensus message. Returns `Some(block)` if a `Value::Block` was
+/// decided and the block should be executed by the reactor via `handle_block`.
 pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
     executor: &mut impl Executor,
@@ -537,7 +539,8 @@ pub async fn handle_consensus_msg(
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
     node_index: usize,
-) -> Result<()> {
+) -> Result<Option<indexer_types::Block>> {
+    let mut decided_block = None;
     match msg {
         AppMsg::ConsensusReady { reply } => {
             let start_height = state.current_height;
@@ -757,23 +760,15 @@ pub async fn handle_consensus_msg(
                             .await;
                     }
                     Value::Block { height, hash } => {
+                        state.pending_blocks.pop_front();
                         if let Some(block) = state.block_cache.remove(height) {
-                            executor.execute_block(&block).await;
+                            decided_block = Some(block);
                         } else {
                             warn!(
                                 block_height = height,
                                 block_hash = %hash,
                                 "Block decided but not found in block_cache"
                             );
-                        }
-                        state.pending_blocks.pop_front();
-                        // Check finality after executing a block — batch txids may now be confirmed
-                        if state
-                            .pending_batches
-                            .iter()
-                            .any(|b| b.deadline <= bitcoin_state.chain_tip)
-                        {
-                            state.run_finality_checks(executor, bitcoin_state).await;
                         }
                     }
                 }
@@ -875,5 +870,5 @@ pub async fn handle_consensus_msg(
         }
     }
 
-    Ok(())
+    Ok(decided_block)
 }
