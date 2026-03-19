@@ -23,7 +23,7 @@ async fn batch_then_block_deduplicates_transaction() -> Result<()> {
         new_mock_block_hash(1),
         Height::new(1),
         &cert,
-        &[mock_tx.clone()],
+        std::slice::from_ref(&mock_tx),
     )
     .await?;
 

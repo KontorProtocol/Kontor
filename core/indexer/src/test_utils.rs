@@ -338,7 +338,7 @@ pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
 
     let storage = Storage::builder().height(1).conn(conn).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts().await?;
+    runtime.publish_native_contracts(&[]).await?;
 
     Ok((runtime, db_dir))
 }

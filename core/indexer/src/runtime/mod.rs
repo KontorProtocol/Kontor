@@ -60,6 +60,23 @@ use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
+#[derive(Clone, Debug)]
+pub struct GenesisValidator {
+    pub x_only_pubkey: String,
+    pub stake: Decimal,
+    pub ed25519_pubkey: Vec<u8>,
+}
+
+impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
+    fn from(v: GenesisValidator) -> Self {
+        Self {
+            x_only_pubkey: v.x_only_pubkey,
+            stake: v.stake,
+            ed25519_pubkey: v.ed25519_pubkey,
+        }
+    }
+}
+
 impls!(host = true);
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -221,7 +238,10 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
-    pub async fn publish_native_contracts(&mut self) -> Result<()> {
+    pub async fn publish_native_contracts(
+        &mut self,
+        genesis_validators: &[GenesisValidator],
+    ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
@@ -241,6 +261,15 @@ impl Runtime {
         .await?;
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
+        if !genesis_validators.is_empty() {
+            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+            staking::api::set_genesis_set(
+                self,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                validators,
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -489,7 +518,9 @@ impl Runtime {
         })
         .await
         .expect("Failed to join execution");
-        let mut result = self.handle_call(is_fallback, result.map_err(Into::into), results).await;
+        let mut result = self
+            .handle_call(is_fallback, result.map_err(Into::into), results)
+            .await;
         OptionFuture::from(
             self.gauge
                 .as_ref()

@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
         engine_config,
         Some(bitcoin.clone()),
         Some(replay_tx),
+        load_genesis_validators(&config)?,
     ));
     init_rx.await?;
     {
@@ -128,4 +129,25 @@ async fn main() -> Result<()> {
     }
     info!("Exited");
     Ok(())
+}
+
+fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
+    let Some(path) = &config.genesis_file else {
+        return Ok(vec![]);
+    };
+    let genesis = indexer::config::GenesisConfig::load(path)?;
+    genesis
+        .validators
+        .into_iter()
+        .map(|v| {
+            let ed25519_bytes = hex::decode(&v.ed25519_pubkey)
+                .map_err(|e| anyhow::anyhow!("invalid ed25519 hex: {e}"))?;
+            let stake = runtime::Decimal::from(v.stake.as_str());
+            Ok(runtime::GenesisValidator {
+                x_only_pubkey: v.x_only_pubkey,
+                stake,
+                ed25519_pubkey: ed25519_bytes,
+            })
+        })
+        .collect()
 }

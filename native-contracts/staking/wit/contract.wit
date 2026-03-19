@@ -48,6 +48,9 @@ world root {
   export begin-unstake: async func(ctx: borrow<proc-context>) -> result<validator-info, error>;
   export withdraw-stake: async func(ctx: borrow<proc-context>) -> result<validator-info, error>;
 
+  // --- System initialization (CoreContext — called during native contract publishing) ---
+  export set-genesis-set: async func(ctx: borrow<core-context>, validators: list<active-validator-info>);
+
   // --- Epoch management (CoreContext — called by block handler) ---
   export transition-epoch: async func(ctx: borrow<core-context>, block-height: u64) -> result<epoch-transition-result, error>;
 

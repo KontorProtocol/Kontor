@@ -100,6 +100,13 @@ pub struct Config {
         value_delimiter = ','
     )]
     pub consensus_peers: Vec<String>,
+
+    #[clap(
+        long,
+        env = "GENESIS_FILE",
+        help = "Path to genesis JSON file containing the initial validator set"
+    )]
+    pub genesis_file: Option<PathBuf>,
 }
 
 impl Config {
@@ -118,7 +125,27 @@ impl Config {
             consensus_private_key: None,
             consensus_listen_addr: None,
             consensus_peers: Vec::new(),
+            genesis_file: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisValidatorConfig {
+    pub x_only_pubkey: String,
+    pub stake: String,
+    pub ed25519_pubkey: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisConfig {
+    pub validators: Vec<GenesisValidatorConfig>,
+}
+
+impl GenesisConfig {
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&contents)?)
     }
 }
 

@@ -208,6 +208,25 @@ impl Guest for Staking {
         })
     }
 
+    fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
+        let model = ctx.proc_context().model();
+        if model.active_count() > 0 {
+            return;
+        }
+        for v in &validators {
+            model.validators().set(
+                v.x_only_pubkey.clone(),
+                ValidatorEntry {
+                    stake: v.stake,
+                    status: STATUS_ACTIVE,
+                    joined_epoch: 0,
+                    ed25519_pubkey: v.ed25519_pubkey.clone(),
+                },
+            );
+        }
+        model.set_active_count(validators.len() as u64);
+    }
+
     fn transition_epoch(
         ctx: &CoreContext,
         block_height: u64,

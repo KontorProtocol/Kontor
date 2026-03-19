@@ -78,6 +78,7 @@ impl Reactor {
         engine_config: Option<engine::EngineConfig>,
         bitcoin_client: Option<crate::bitcoin_client::Client>,
         replay_tx: Option<mpsc::Sender<u64>>,
+        genesis_validators: Vec<crate::runtime::GenesisValidator>,
     ) -> Result<Self> {
         let conn = writer.connection();
         let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
@@ -129,11 +130,12 @@ impl Reactor {
             .build();
 
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-        runtime.publish_native_contracts().await?;
+        runtime
+            .publish_native_contracts(&genesis_validators)
+            .await?;
 
         // Start consensus engine if configured
         let consensus_handle = if let Some(engine_cfg) = engine_config {
-            // Build genesis from staking contract's active validator set
             let genesis = build_genesis_from_staking(&mut runtime).await?;
 
             let engine_output = engine::start(engine_cfg, &genesis).await?;
@@ -386,6 +388,7 @@ pub fn run(
     engine_config: Option<engine::EngineConfig>,
     bitcoin_client: Option<crate::bitcoin_client::Client>,
     replay_tx: Option<mpsc::Sender<u64>>,
+    genesis_validators: Vec<crate::runtime::GenesisValidator>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -401,6 +404,7 @@ pub fn run(
                 engine_config,
                 bitcoin_client,
                 replay_tx,
+                genesis_validators,
             )
             .await
             {

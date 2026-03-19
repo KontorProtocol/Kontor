@@ -212,7 +212,7 @@ impl RuntimeLocal {
         let storage = Storage::builder().height(height).conn(conn).build();
         let component_cache = ComponentCache::new();
         let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
-        runtime.publish_native_contracts().await?;
+        runtime.publish_native_contracts(&[]).await?;
         runtime
             .set_context(
                 height,
