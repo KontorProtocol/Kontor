@@ -10,7 +10,7 @@ error: Store derive does not support Result field types
 9 | struct Test1 {
   |        ^^^^^
 
-error[E0412]: cannot find type `Error` in this scope
+error[E0425]: cannot find type `Error` in this scope
   --> tests/ui/store_invalid_result_field.rs:10:22
    |
 10 |     res: Result<u64, Error>,
