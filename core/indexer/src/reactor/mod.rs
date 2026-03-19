@@ -142,6 +142,13 @@ impl Reactor {
             let engine_output = engine::start(engine_cfg, &genesis).await?;
             info!(address = %engine_output.address, "Consensus engine started");
 
+            let node_index = genesis
+                .validator_set
+                .validators
+                .iter()
+                .position(|v| v.address == engine_output.address)
+                .expect("Our address not found in genesis validator set");
+
             let mut state = consensus::ConsensusState::new(
                 engine_output.signing_provider,
                 genesis,
@@ -154,7 +161,7 @@ impl Reactor {
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
                 _wal_dir: engine_output._wal_dir,
-                node_index: 0,
+                node_index,
             })
         } else {
             None
@@ -293,10 +300,8 @@ impl Reactor {
                             self.bitcoin_state.track_block(block.height, block.hash, &txids);
                             info!("Block {}/{} {}", block.height, target_height, block.hash);
 
-                            if self.consensus_handle.is_some() {
+                            if let Some(handle) = self.consensus_handle.as_mut() {
                                 self.bitcoin_state.pending_blocks.push_back(block);
-
-                                let handle = self.consensus_handle.as_mut().unwrap();
 
                                 // Process replay queue batches whose anchor has been reached
                                 if !handle.state.replay_queue.is_empty() {
