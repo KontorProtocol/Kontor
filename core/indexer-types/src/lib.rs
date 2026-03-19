@@ -186,12 +186,23 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct ParsedInput {
+    #[ts(as = "String")]
+    pub previous_output: OutPoint,
+    #[ts(type = "number")]
+    pub input_index: i64,
+    pub x_only_pubkey: String,
+    pub inst: Inst,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Transaction {
     #[ts(type = "string")]
     pub txid: Txid,
     #[ts(type = "number")]
     pub index: i64,
-    pub ops: Vec<Op>,
+    pub instructions: Vec<ParsedInput>,
     #[ts(type = "Record<number, OpReturnData>")]
     #[serde(with = "indexmap::map::serde_seq")]
     pub op_return_data: IndexMap<u64, OpReturnData>,
@@ -213,7 +224,11 @@ pub struct Block {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum Signer {
     Core(Box<Signer>),
-    XOnlyPubKey(String),
+    SignerId {
+        #[ts(type = "number")]
+        id: u64,
+        id_str: String,
+    },
     ContractId {
         #[ts(type = "number")]
         id: i64,
@@ -241,7 +256,7 @@ impl core::ops::Deref for Signer {
         match self {
             Self::Nobody => "nobody",
             Self::Core(_) => "core",
-            Self::XOnlyPubKey(s) => s,
+            Self::SignerId { id_str, .. } => id_str,
             Self::ContractId { id_str, .. } => id_str,
         }
     }
@@ -283,7 +298,7 @@ pub enum BlsBulkOp {
         expr: String,
     },
     RegisterBlsKey {
-        signer: Signer,
+        x_only_pubkey: String,
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
@@ -333,11 +348,6 @@ pub enum Op {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
-    BlsBulk {
-        metadata: OpMetadata,
-        ops: Vec<BlsBulkOp>,
-        signature: Vec<u8>,
-    },
 }
 
 impl Op {
@@ -347,7 +357,6 @@ impl Op {
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
             Op::RegisterBlsKey { metadata, .. } => metadata,
-            Op::BlsBulk { metadata, .. } => metadata,
         }
     }
 }

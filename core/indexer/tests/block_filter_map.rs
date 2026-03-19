@@ -9,7 +9,7 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use indexer::block::filter_map;
 use indexer::test_utils::{PublicKey as TestPublicKey, build_inscription};
-use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, Signer, serialize};
+use indexer_types::{BlsBulkOp, ContractAddress, Inst, serialize};
 
 fn tx_with_taproot_script_witness(
     tap_script: ScriptBuf,
@@ -79,19 +79,10 @@ fn filter_map_parses_valid_blsbulk_envelope() {
     let tx = tx_with_taproot_script_witness(tap_script, xonly);
 
     let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
-    assert_eq!(parsed.ops.len(), 1);
-    match &parsed.ops[0] {
-        Op::BlsBulk {
-            metadata,
-            ops,
-            signature,
-        } => {
-            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
-            assert_eq!(ops.as_slice(), &[op]);
-            assert_eq!(signature.as_slice(), &[9u8; 48]);
-        }
-        other => panic!("expected Op::BlsBulk, got {other:?}"),
-    }
+    assert_eq!(parsed.instructions.len(), 1);
+    let input = &parsed.instructions[0];
+    assert_eq!(input.x_only_pubkey, xonly.to_string());
+    assert_eq!(input.inst, inst);
 }
 
 #[test]
@@ -169,22 +160,22 @@ fn filter_map_concatenates_multi_push_payload() {
 
     let tx = tx_with_taproot_script_witness(tap_script, xonly);
     let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
-    assert_eq!(parsed.ops.len(), 1);
-    match &parsed.ops[0] {
-        Op::Call {
-            metadata,
+    assert_eq!(parsed.instructions.len(), 1);
+    let input = &parsed.instructions[0];
+    assert_eq!(input.x_only_pubkey, xonly.to_string());
+    match &input.inst {
+        Inst::Call {
             gas_limit,
             contract,
             expr,
         } => {
-            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
             assert_eq!(*gas_limit, 7);
             assert_eq!(contract.name, "arith");
             assert_eq!(contract.height, 1);
             assert_eq!(contract.tx_index, 0);
             assert_eq!(expr, "eval(10, id)");
         }
-        other => panic!("expected Op::Call, got {other:?}"),
+        other => panic!("expected Inst::Call, got {other:?}"),
     }
 }
 

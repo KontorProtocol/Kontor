@@ -1,14 +1,15 @@
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::Hash;
-use indexer_types::{Block, Op, OpWithResult, Transaction, TransactionRow};
+use indexer_types::{BlsBulkOp, Block, Inst, OpWithResult, ParsedInput, Transaction, TransactionRow};
 use tracing::{info, warn};
 
 use crate::{
+    bls::verify_bls_bulk,
     block::{filter_map, inspect},
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -32,7 +33,7 @@ pub async fn simulate_handler(
         },
     )
     .await?;
-    let result = inspect(&runtime.storage.conn, btx).await;
+    let result = inspect(runtime, btx).await;
     runtime
         .storage
         .rollback()
@@ -103,111 +104,197 @@ pub async fn process_transaction(
     )
     .await?;
 
-    for op in &t.ops {
-        let metadata = op.metadata();
-        let input_index = metadata.input_index;
-        let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
-        info!("Op return data: {:#?}", op_return_data);
+    for input in &t.instructions {
+        let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
 
         runtime
             .set_context(
                 block_height as i64,
                 Some(TransactionContext {
                     tx_index: t.index,
-                    input_index,
+                    input_index: input.input_index,
                     op_index: 0,
                     txid: t.txid,
                 }),
-                Some(metadata.previous_output),
+                Some(input.previous_output),
                 op_return_data.clone().map(Into::into),
             )
             .await;
 
-        execute_op(runtime, op, op_return_data).await;
+        resolve_and_execute(
+            runtime,
+            input,
+            block_height,
+            t.index,
+            t.txid,
+            op_return_data,
+        )
+        .await;
     }
 
     Ok(())
 }
 
-async fn execute_op(
+async fn resolve_and_execute(
     runtime: &mut Runtime,
-    op: &Op,
+    input: &ParsedInput,
+    block_height: u64,
+    tx_index: i64,
+    txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
-        && let Err(e) = runtime.ensure_signer(x_only).await
-    {
-        warn!("Failed to ensure signer for {x_only}: {e}");
-        return;
-    }
+    let signer_id = match runtime.ensure_signer(&input.x_only_pubkey).await {
+        Ok(signer_id) => signer_id,
+        Err(e) => {
+            warn!(
+                "Failed to ensure signer for {}: {e}",
+                input.x_only_pubkey
+            );
+            return;
+        }
+    };
 
-    match op {
-        Op::Publish {
-            metadata,
+    let canonical_signer = Signer::SignerId {
+        id: signer_id,
+        id_str: format!("__sid__{}", signer_id),
+    };
+    match &input.inst {
+        Inst::Publish {
             gas_limit,
             name,
             bytes,
         } => {
             runtime.set_gas_limit(*gas_limit);
-            let result = runtime.publish(&metadata.signer, name, bytes).await;
-            if result.is_err() {
-                warn!("Publish operation failed: {:?}", result);
+            if let Err(e) = runtime.publish(&canonical_signer, name, bytes).await {
+                warn!("Publish operation failed: {:?}", e);
             }
         }
-        Op::Call {
-            metadata,
+        Inst::Call {
             gas_limit,
             contract,
             expr,
         } => {
             runtime.set_gas_limit(*gas_limit);
-            let result = runtime
-                .execute(Some(&metadata.signer), &(contract.into()), expr)
-                .await;
-            if result.is_err() {
-                warn!("Call operation failed: {:?}", result);
+            if let Err(e) = runtime
+                .execute(Some(&canonical_signer), &(contract.into()), expr)
+                .await
+            {
+                warn!("Call operation failed: {:?}", e);
             }
         }
-        Op::Issuance { metadata, .. } => {
-            let result = runtime.issuance(&metadata.signer).await;
-            if result.is_err() {
-                warn!("Issuance operation failed: {:?}", result);
+        Inst::Issuance => {
+            if let Err(e) = runtime.issuance(&canonical_signer).await {
+                warn!("Issuance operation failed: {:?}", e);
             }
         }
-        Op::RegisterBlsKey {
-            metadata,
+        Inst::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,
             bls_sig,
         } => {
             if let Err(e) = runtime
-                .register_bls_key(
-                    &metadata.signer,
-                    bls_pubkey.as_slice(),
-                    schnorr_sig.as_slice(),
-                    bls_sig.as_slice(),
-                )
+                .register_bls_key(&input.x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)
                 .await
             {
                 warn!("RegisterBlsKey failed: {e}");
             }
         }
-        Op::BlsBulk {
-            metadata,
-            ops,
-            signature,
-        } => {
-            if let Err(e) = runtime
-                .execute_bls_bulk(
-                    ops,
-                    signature,
-                    metadata.previous_output,
-                    metadata.input_index,
-                    op_return_data,
+        Inst::BlsBulk { ops, signature } => {
+            execute_bls_bulk(
+                runtime,
+                ops,
+                signature,
+                input.previous_output,
+                input.input_index,
+                block_height,
+                tx_index,
+                txid,
+                op_return_data,
+            )
+            .await;
+        }
+    }
+}
+
+async fn execute_bls_bulk(
+    runtime: &mut Runtime,
+    ops: &[BlsBulkOp],
+    signature: &[u8],
+    previous_output: bitcoin::OutPoint,
+    input_index: i64,
+    block_height: u64,
+    tx_index: i64,
+    txid: bitcoin::Txid,
+    op_return_data: Option<indexer_types::OpReturnData>,
+) {
+    if let Err(e) = verify_bls_bulk(runtime, ops, signature).await {
+        warn!("BlsBulk verification failed: {e}");
+        return;
+    }
+
+    for (inner_index, inner_op) in ops.iter().enumerate() {
+        runtime
+            .set_context(
+                block_height as i64,
+                Some(TransactionContext {
+                    tx_index,
+                    input_index,
+                    op_index: inner_index as i64,
+                    txid,
+                }),
+                Some(previous_output),
+                op_return_data.clone().map(Into::into),
+            )
+            .await;
+
+        match inner_op {
+            BlsBulkOp::Call {
+                signer_id,
+                nonce,
+                gas_limit,
+                contract,
+                expr,
+            } => {
+                let nonce_result = registry::api::advance_nonce(
+                    runtime,
+                    &Signer::Core(Box::new(Signer::Nobody)),
+                    *signer_id,
+                    *nonce,
                 )
-                .await
-            {
-                warn!("BlsBulk failed: {e}");
+                .await;
+                match nonce_result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        warn!("BlsBulk nonce check failed for signer {signer_id}: {e:?}");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("BlsBulk nonce advance error for signer {signer_id}: {e}");
+                        continue;
+                    }
+                }
+
+                let signer = Signer::SignerId {
+                    id: *signer_id,
+                    id_str: format!("__sid__{}", signer_id),
+                };
+                runtime.set_gas_limit(*gas_limit);
+                if let Err(e) = runtime.execute(Some(&signer), &(contract.into()), expr).await {
+                    warn!("BlsBulk call operation failed: {:?}", e);
+                }
+            }
+            BlsBulkOp::RegisterBlsKey {
+                x_only_pubkey,
+                bls_pubkey,
+                schnorr_sig,
+                bls_sig,
+            } => {
+                if let Err(e) = runtime
+                    .register_bls_key(x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)
+                    .await
+                {
+                    warn!("BlsBulk RegisterBlsKey failed: {e}");
+                }
             }
         }
     }

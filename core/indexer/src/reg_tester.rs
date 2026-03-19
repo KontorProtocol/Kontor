@@ -14,7 +14,7 @@ use crate::{
     config::RegtestConfig,
     database::types::OpResultId,
     retry::retry_simple,
-    runtime::{ContractAddress, wit::Signer},
+    runtime::ContractAddress,
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -160,10 +160,6 @@ pub struct Identity {
 impl Identity {
     pub fn x_only_public_key(&self) -> XOnlyPublicKey {
         self.keypair.x_only_public_key().0
-    }
-
-    pub fn signer(&self) -> Signer {
-        Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
 }
 
@@ -701,6 +697,17 @@ impl RegTester {
             .kontor_client
             .transaction_inspect(txid)
             .await
+    }
+
+    pub async fn signer_id(&self, x_only_pubkey: &str) -> Result<u64> {
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .kontor_client
+            .registry_entry(x_only_pubkey)
+            .await?
+            .signer_id)
     }
 
     pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {

@@ -3,16 +3,20 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{Inst, Op, OpMetadata, OpWithResult, Signer, Transaction, deserialize};
+use indexer_types::{
+    BlsBulkOp, Inst, Op, OpMetadata, OpWithResult, ParsedInput, Signer, Transaction, deserialize,
+};
 use indexmap::IndexMap;
-use libsql::Connection;
 
-use crate::database::{queries::get_op_result, types::OpResultId};
+use crate::{
+    database::{queries::get_op_result, types::OpResultId},
+    runtime::{Runtime, registry},
+};
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
 pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Transaction> {
-    let ops = tx
+    let instructions = tx
         .input
         .iter()
         .enumerate()
@@ -43,48 +47,11 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                         && insts.next().is_none()
                         && let Ok(inst) = deserialize::<Inst>(&data)
                     {
-                        let metadata = OpMetadata {
+                        return Some(ParsedInput {
                             previous_output: input.previous_output,
                             input_index: input_index as i64,
-                            signer: Signer::XOnlyPubKey(signer.to_string()),
-                        };
-                        return Some(match inst {
-                            Inst::Publish {
-                                gas_limit,
-                                name,
-                                bytes,
-                            } => Op::Publish {
-                                metadata,
-                                gas_limit,
-                                name,
-                                bytes,
-                            },
-                            Inst::Call {
-                                gas_limit,
-                                contract,
-                                expr,
-                            } => Op::Call {
-                                metadata,
-                                gas_limit,
-                                contract,
-                                expr,
-                            },
-                            Inst::RegisterBlsKey {
-                                bls_pubkey,
-                                schnorr_sig,
-                                bls_sig,
-                            } => Op::RegisterBlsKey {
-                                metadata,
-                                bls_pubkey,
-                                schnorr_sig,
-                                bls_sig,
-                            },
-                            Inst::BlsBulk { signature, ops } => Op::BlsBulk {
-                                metadata,
-                                signature,
-                                ops,
-                            },
-                            Inst::Issuance => Op::Issuance { metadata },
+                            x_only_pubkey: signer.to_string(),
+                            inst,
                         });
                     }
                 }
@@ -93,7 +60,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
         })
         .collect::<Vec<_>>();
 
-    if ops.is_empty() {
+    if instructions.is_empty() {
         return None;
     }
 
@@ -114,26 +81,136 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
     Some(Transaction {
         txid: tx.compute_txid(),
         index: tx_index as i64,
-        ops,
+        instructions,
         op_return_data,
     })
 }
 
-pub async fn inspect(
-    conn: &Connection,
-    btx: bitcoin::Transaction,
-) -> anyhow::Result<Vec<OpWithResult>> {
-    let mut ops = Vec::new();
-    if let Some(tx) = filter_map((0, btx)) {
-        for op in tx.ops {
-            let id = OpResultId::builder()
-                .txid(tx.txid.to_string())
-                .input_index(op.metadata().input_index)
-                .op_index(0)
-                .build();
-            let result = get_op_result(conn, &id).await?.map(Into::into);
-            ops.push(OpWithResult { op, result });
+async fn resolve_signer(runtime: &mut Runtime, x_only_pubkey: &str) -> Signer {
+    match registry::api::get_entry(runtime, x_only_pubkey).await {
+        Ok(Some(entry)) => Signer::SignerId {
+            id: entry.signer_id,
+            id_str: format!("__sid__{}", entry.signer_id),
+        },
+        _ => Signer::Nobody,
+    }
+}
+
+async fn inst_to_ops(
+    runtime: &mut Runtime,
+    inst: &Inst,
+    previous_output: bitcoin::OutPoint,
+    input_index: i64,
+    x_only_pubkey: &str,
+) -> Vec<Op> {
+    let metadata = OpMetadata {
+        previous_output,
+        input_index,
+        signer: resolve_signer(runtime, x_only_pubkey).await,
+    };
+
+    match inst {
+        Inst::Publish {
+            gas_limit,
+            name,
+            bytes,
+        } => vec![Op::Publish {
+            metadata,
+            gas_limit: *gas_limit,
+            name: name.clone(),
+            bytes: bytes.clone(),
+        }],
+        Inst::Call {
+            gas_limit,
+            contract,
+            expr,
+        } => vec![Op::Call {
+            metadata,
+            gas_limit: *gas_limit,
+            contract: contract.clone(),
+            expr: expr.clone(),
+        }],
+        Inst::Issuance => vec![Op::Issuance { metadata }],
+        Inst::RegisterBlsKey {
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        } => vec![Op::RegisterBlsKey {
+            metadata,
+            bls_pubkey: bls_pubkey.clone(),
+            schnorr_sig: schnorr_sig.clone(),
+            bls_sig: bls_sig.clone(),
+        }],
+        Inst::BlsBulk { ops, .. } => {
+            let mut resolved = Vec::with_capacity(ops.len());
+            for bulk_op in ops {
+                let inner_signer = match bulk_op {
+                    BlsBulkOp::Call { signer_id, .. } => Signer::SignerId {
+                        id: *signer_id,
+                        id_str: format!("__sid__{}", signer_id),
+                    },
+                    BlsBulkOp::RegisterBlsKey { x_only_pubkey, .. } => {
+                        resolve_signer(runtime, x_only_pubkey).await
+                    }
+                };
+                let inner_meta = OpMetadata {
+                    previous_output: metadata.previous_output,
+                    input_index: metadata.input_index,
+                    signer: inner_signer,
+                };
+                match bulk_op {
+                    BlsBulkOp::Call {
+                        gas_limit,
+                        contract,
+                        expr,
+                        ..
+                    } => Op::Call {
+                        metadata: inner_meta,
+                        gas_limit: *gas_limit,
+                        contract: contract.clone(),
+                        expr: expr.clone(),
+                    },
+                    BlsBulkOp::RegisterBlsKey {
+                        bls_pubkey,
+                        schnorr_sig,
+                        bls_sig,
+                        ..
+                    } => Op::RegisterBlsKey {
+                        metadata: inner_meta,
+                        bls_pubkey: bls_pubkey.clone(),
+                        schnorr_sig: schnorr_sig.clone(),
+                        bls_sig: bls_sig.clone(),
+                    },
+                };
+                resolved.push(op);
+            }
+            resolved
         }
     }
-    Ok(ops)
+}
+
+pub async fn inspect(runtime: &mut Runtime, btx: bitcoin::Transaction) -> anyhow::Result<Vec<OpWithResult>> {
+    let mut results = Vec::new();
+    if let Some(tx) = filter_map((0, btx)) {
+        for input in &tx.instructions {
+            let ops = inst_to_ops(
+                runtime,
+                &input.inst,
+                input.previous_output,
+                input.input_index,
+                &input.x_only_pubkey,
+            )
+            .await;
+            for (op_index, op) in ops.into_iter().enumerate() {
+                let id = OpResultId::builder()
+                    .txid(tx.txid.to_string())
+                    .input_index(input.input_index)
+                    .op_index(op_index as i64)
+                    .build();
+                let result = get_op_result(&runtime.storage.conn, &id).await?.map(Into::into);
+                results.push(OpWithResult { op, result });
+            }
+        }
+    }
+    Ok(results)
 }
