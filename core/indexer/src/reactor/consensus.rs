@@ -57,9 +57,13 @@ pub struct ConsensusState {
     pub parsed_tx_cache: HashMap<Txid, indexer_types::Transaction>,
 
     // Observation channels (optional, for testing)
-    pub decided_tx: Option<mpsc::Sender<DecidedBatch>>,
-    pub finality_tx: Option<mpsc::Sender<FinalityEvent>>,
-    pub state_tx: Option<mpsc::Sender<StateEvent>>,
+    pub observation: Option<ObservationChannels>,
+}
+
+pub struct ObservationChannels {
+    pub decided_tx: mpsc::Sender<DecidedBatch>,
+    pub finality_tx: mpsc::Sender<FinalityEvent>,
+    pub state_tx: mpsc::Sender<StateEvent>,
 }
 
 impl ConsensusState {
@@ -77,9 +81,7 @@ impl ConsensusState {
             replay_excluded_txids: HashSet::new(),
             tx_cache: HashMap::new(),
             parsed_tx_cache: HashMap::new(),
-            decided_tx: None,
-            finality_tx: None,
-            state_tx: None,
+            observation: None,
         }
     }
 
@@ -286,16 +288,16 @@ impl ConsensusState {
     }
 
     fn emit_finality_events(&self, events: &[FinalityEvent]) {
-        if let Some(tx) = &self.finality_tx {
+        if let Some(obs) = &self.observation {
             for event in events {
-                let _ = tx.try_send(event.clone());
+                let _ = obs.finality_tx.try_send(event.clone());
             }
         }
     }
 
     pub fn emit_state_event(&self, event: StateEvent) {
-        if let Some(tx) = &self.state_tx {
-            let _ = tx.try_send(event);
+        if let Some(obs) = &self.observation {
+            let _ = obs.state_tx.try_send(event);
         }
     }
 
@@ -680,8 +682,8 @@ pub async fn handle_consensus_msg(
                 .undecided
                 .remove(&(certificate.height, certificate.round))
             {
-                if let Some(tx) = &state.decided_tx {
-                    let _ = tx.try_send(DecidedBatch {
+                if let Some(obs) = &state.observation {
+                    let _ = obs.decided_tx.try_send(DecidedBatch {
                         node_index,
                         consensus_height: certificate.height,
                         value: proposal.value.clone(),

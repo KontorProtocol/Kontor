@@ -83,9 +83,13 @@ pub async fn run_node(
         genesis,
         engine_output.address,
     );
-    consensus_state.decided_tx = decided_tx;
-    consensus_state.finality_tx = finality_tx;
-    consensus_state.state_tx = state_tx;
+    if let (Some(dtx), Some(ftx), Some(stx)) = (decided_tx, finality_tx, state_tx) {
+        consensus_state.observation = Some(indexer::reactor::consensus::ObservationChannels {
+            decided_tx: dtx,
+            finality_tx: ftx,
+            state_tx: stx,
+        });
+    }
 
     let mut executor = state_log::StateLog::new();
     let mut bitcoin_state = BitcoinState::new();
