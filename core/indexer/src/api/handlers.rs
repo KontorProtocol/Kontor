@@ -201,8 +201,8 @@ pub async fn post_transaction_hex_inspect(
 ) -> Result<Vec<OpWithResult>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, btx).await?.into())
+    let mut runtime = env.runtime_pool.get().await?;
+    Ok(inspect(&mut runtime, btx).await?.into())
 }
 
 pub async fn get_transaction_inspect(
@@ -212,8 +212,8 @@ pub async fn get_transaction_inspect(
     let txid = bitcoin::Txid::from_str(&txid)
         .map_err(|e| HttpError::BadRequest(format!("Invalid txid: {}", e)))?;
     let btx = env.bitcoin.get_raw_transaction(&txid).await?;
-    let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, btx).await?.into())
+    let mut runtime = env.runtime_pool.get().await?;
+    Ok(inspect(&mut runtime, btx).await?.into())
 }
 
 pub async fn post_simulate(

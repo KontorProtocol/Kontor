@@ -18,7 +18,7 @@ use indexer::{
     reg_tester::derive_taproot_keypair_from_seed,
     test_utils::{gen_random_blocks, new_mock_block_hash, new_random_blockchain, new_test_db},
 };
-use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
+use indexer_types::{BlsBulkOp, Event, Inst, ParsedInput, Signer, Transaction};
 
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
@@ -292,15 +292,15 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::RegisterBlsKey {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+            instructions: vec![ParsedInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                x_only_pubkey: x_only_public_key.to_string(),
+                inst: Inst::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
                 },
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -387,15 +387,15 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::RegisterBlsKey {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+            instructions: vec![ParsedInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                x_only_pubkey: x_only_public_key.to_string(),
+                inst: Inst::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
                 },
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -438,14 +438,14 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xBB; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::BlsBulk {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::Nobody,
+            instructions: vec![ParsedInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                x_only_pubkey: x_only_public_key.to_string(),
+                inst: Inst::BlsBulk {
+                    ops: vec![call_op],
+                    signature: sig.to_bytes().to_vec(),
                 },
-                ops: vec![call_op],
-                signature: sig.to_bytes().to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -566,14 +566,14 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xCC; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::BlsBulk {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::Nobody,
+            instructions: vec![ParsedInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                x_only_pubkey: x_only_public_key.to_string(),
+                inst: Inst::BlsBulk {
+                    ops: vec![register_op.clone()],
+                    signature: sig.to_bytes().to_vec(),
                 },
-                ops: vec![register_op.clone()],
-                signature: sig.to_bytes().to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],

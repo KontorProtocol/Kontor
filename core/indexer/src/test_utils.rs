@@ -292,7 +292,7 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
     Transaction {
         txid: Txid::from_slice(&bytes).unwrap(),
         index: 0,
-        ops: vec![],
+        instructions: vec![],
         op_return_data: IndexMap::new(),
     }
 }

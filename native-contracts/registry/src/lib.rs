@@ -24,6 +24,15 @@ fn assert_bls_pubkey_len(bls_pubkey: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+fn signer_id_from_signer_key(signer_key: &str) -> Result<u64, Error> {
+    let signer_id = signer_key
+        .strip_prefix("__sid__")
+        .ok_or_else(|| Error::Message("register_bls_key requires canonical signer id".to_string()))?
+        .parse::<u64>()
+        .map_err(|_| Error::Message("invalid canonical signer id".to_string()))?;
+    Ok(signer_id)
+}
+
 impl Guest for Registry {
     fn init(ctx: &ProcContext) {
         RegistryStorage::default().init(ctx);
@@ -72,8 +81,13 @@ impl Guest for Registry {
     fn register_bls_key(ctx: &CoreContext, bls_pubkey: Vec<u8>) -> Result<RegistryEntry, Error> {
         assert_bls_pubkey_len(&bls_pubkey)?;
 
-        let x_only_pubkey = ctx.signer_proc_context().signer().to_string();
         let model = ctx.proc_context().model();
+        let signer_key = ctx.signer_proc_context().signer().to_string();
+        let signer_id = signer_id_from_signer_key(&signer_key)?;
+        let x_only_pubkey = model
+            .by_id()
+            .get(signer_id)
+            .ok_or_else(|| Error::Message("unknown signer id".to_string()))?;
 
         if let Some(entry) = model.entries().get(&x_only_pubkey) {
             let existing_bls = entry.bls_pubkey();
@@ -105,26 +119,9 @@ impl Guest for Registry {
                 next_nonce: entry.next_nonce(),
             });
         }
-
-        let signer_id = model.next_signer_id();
-        model.update_next_signer_id(|n| n + 1);
-
-        model.entries().set(
-            x_only_pubkey.clone(),
-            Entry {
-                signer_id,
-                bls_pubkey: bls_pubkey.clone(),
-                next_nonce: 0,
-            },
-        );
-        model.by_id().set(signer_id, x_only_pubkey.clone());
-
-        Ok(RegistryEntry {
-            signer_id,
-            x_only_pubkey,
-            bls_pubkey: Some(bls_pubkey),
-            next_nonce: 0,
-        })
+        Err(Error::Message(
+            "registry entry missing for canonical signer id".to_string(),
+        ))
     }
 
     fn advance_nonce(ctx: &CoreContext, signer_id: u64, caller_nonce: u64) -> Result<u64, Error> {

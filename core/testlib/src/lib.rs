@@ -224,7 +224,11 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        let signer_id = self.runtime.ensure_signer(&x_only_pubkey).await?;
+        let signer = Signer::SignerId {
+            id: signer_id,
+            id_str: format!("__sid__{}", signer_id),
+        };
         self.issuance(&signer).await?;
         Ok(signer)
     }
@@ -295,10 +299,15 @@ impl RuntimeRegtest {
 #[async_trait]
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
-        let identity = self.reg_tester.identity().await?;
-        let signer = identity.signer();
+        let mut identity = self.reg_tester.identity().await?;
+        let x_only_pubkey = identity.x_only_public_key().to_string();
+        self.reg_tester.instruction(&mut identity, Inst::Issuance).await?;
+        let signer_id = self.reg_tester.signer_id(&x_only_pubkey).await?;
+        let signer = Signer::SignerId {
+            id: signer_id,
+            id_str: format!("__sid__{}", signer_id),
+        };
         self.identities.insert(signer.clone(), identity);
-        self.issuance(&signer).await?;
         Ok(signer)
     }
 
