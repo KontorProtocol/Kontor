@@ -42,7 +42,7 @@ pub type Simulation = (
 );
 
 /// Handle to the Malachite engine + consensus state, present only when consensus is configured.
-struct ConsensusHandle {
+pub struct ConsensusHandle {
     state: consensus::ConsensusState,
     channels: Channels<Ctx>,
     _engine_handle: malachitebft_app_channel::EngineHandle,
@@ -50,8 +50,8 @@ struct ConsensusHandle {
     node_index: usize,
 }
 
-struct Reactor {
-    executor: executor::RuntimeExecutor,
+struct Reactor<E: Executor> {
+    executor: E,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -65,142 +65,42 @@ struct Reactor {
     option_last_hash: Option<BlockHash>,
 }
 
-impl Reactor {
-    pub async fn new(
-        starting_block_height: u64,
-        writer: database::Writer,
+impl<E: Executor> Reactor<E> {
+    pub fn new(
+        executor: E,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-        engine_config: Option<engine::EngineConfig>,
-        bitcoin_client: Option<crate::bitcoin_client::Client>,
-        replay_tx: Option<mpsc::Sender<u64>>,
-        genesis_validators: Vec<crate::runtime::GenesisValidator>,
-        observation_channels: Option<consensus::ObservationChannels>,
-    ) -> Result<Self> {
-        let conn = writer.connection();
-        let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
-            Some(block) => {
-                let block_height = block.height as u64;
-                if block_height < starting_block_height - 1 {
-                    bail!(
-                        "Latest block has height {}, less than start height {}",
-                        block_height,
-                        starting_block_height
-                    );
-                }
-
-                info!(
-                    "Continuing from block height {} ({})",
-                    block_height, block.hash
-                );
-                (block_height, Some(block.hash))
-            }
-            None => {
-                info!(
-                    "No previous blocks found, starting from height {}",
-                    starting_block_height
-                );
-                (starting_block_height - 1, None)
-            }
-        };
-
-        // ensure 0 (native) block exists
-        if select_block_at_height(&conn, 0)
-            .await
-            .expect("Failed to select block at height 0")
-            .is_none()
-        {
-            info!("Creating native block");
-            insert_processed_block(
-                &conn,
-                BlockRow::builder()
-                    .height(0)
-                    .hash(new_mock_block_hash(0))
-                    .relevant(true)
-                    .build(),
-            )
-            .await?;
-        }
-        let storage = Storage::builder()
-            .height(0)
-            .conn(writer.connection())
-            .build();
-
-        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-        runtime
-            .publish_native_contracts(&genesis_validators)
-            .await?;
-
-        // Start consensus engine if configured
-        let consensus_handle = if let Some(engine_cfg) = engine_config {
-            let genesis = build_genesis_from_staking(&mut runtime).await?;
-
-            let engine_output = engine::start(engine_cfg, &genesis).await?;
-            info!(address = %engine_output.address, "Consensus engine started");
-
-            let node_index = genesis
-                .validator_set
-                .validators
-                .iter()
-                .position(|v| v.address == engine_output.address)
-                .expect("Our address not found in genesis validator set");
-
-            let mut state = consensus::ConsensusState::new(
-                engine_output.signing_provider,
-                genesis,
-                engine_output.address,
-            );
-            state.observation = observation_channels;
-
-            Some(ConsensusHandle {
-                state,
-                channels: engine_output.channels,
-                _engine_handle: engine_output._handle,
-                _wal_dir: engine_output._wal_dir,
-                node_index,
-            })
-        } else {
-            None
-        };
-
-        let mut executor = executor::RuntimeExecutor::new(runtime, writer, cancel_token.clone());
-        let mut bs = bitcoin_state::BitcoinState::new();
-
-        if let Some(client) = bitcoin_client {
-            bs = bs.with_tx_cache(client.tx_cache().clone());
-            executor = executor.with_bitcoin_client(client);
-        }
-        if let Some(tx) = replay_tx {
-            executor = executor.with_replay_tx(tx);
-        }
-
-        Ok(Self {
+        bitcoin_state: bitcoin_state::BitcoinState,
+        consensus_handle: Option<ConsensusHandle>,
+        last_height: u64,
+        option_last_hash: Option<BlockHash>,
+    ) -> Self {
+        Self {
             executor,
             cancel_token,
             block_rx,
             mempool_rx,
             simulate_rx,
-            bitcoin_state: bs,
+            bitcoin_state,
             last_height,
             option_last_hash,
             init_tx,
             event_tx,
             consensus_handle,
-        })
+        }
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
         self.executor.rollback_state(height).await;
         self.last_height = height;
 
-        let conn = self.executor.connection();
-        if let Some(block) = select_block_at_height(&conn, height as i64).await? {
-            self.option_last_hash = Some(block.hash);
-            info!("Rollback to height {} ({})", height, block.hash);
+        if let Some(hash) = self.executor.block_hash_at_height(height).await {
+            self.option_last_hash = Some(hash);
+            info!("Rollback to height {} ({})", height, hash);
         } else {
             self.option_last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
@@ -424,6 +324,7 @@ impl Reactor {
                         let _ = ret_tx.send(self.executor.simulate(btx).await);
                     }
                 }
+
             }
         }
         Ok(())
@@ -465,6 +366,113 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::cons
     Ok(crate::consensus::Genesis { validator_set })
 }
 
+pub async fn create_runtime_executor(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    cancel_token: CancellationToken,
+    bitcoin_client: Option<&crate::bitcoin_client::Client>,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    genesis_validators: &[crate::runtime::GenesisValidator],
+) -> Result<(executor::RuntimeExecutor, u64, Option<BlockHash>)> {
+    let conn = writer.connection();
+    let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
+        Some(block) => {
+            let block_height = block.height as u64;
+            if block_height < starting_block_height - 1 {
+                bail!(
+                    "Latest block has height {}, less than start height {}",
+                    block_height,
+                    starting_block_height
+                );
+            }
+
+            info!(
+                "Continuing from block height {} ({})",
+                block_height, block.hash
+            );
+            (block_height, Some(block.hash))
+        }
+        None => {
+            info!(
+                "No previous blocks found, starting from height {}",
+                starting_block_height
+            );
+            (starting_block_height - 1, None)
+        }
+    };
+
+    // ensure 0 (native) block exists
+    if select_block_at_height(&conn, 0)
+        .await
+        .expect("Failed to select block at height 0")
+        .is_none()
+    {
+        info!("Creating native block");
+        insert_processed_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
+    }
+    let storage = Storage::builder()
+        .height(0)
+        .conn(writer.connection())
+        .build();
+
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime
+        .publish_native_contracts(genesis_validators)
+        .await?;
+
+    let mut exec = executor::RuntimeExecutor::new(runtime, writer.clone(), cancel_token);
+
+    if let Some(client) = bitcoin_client {
+        exec = exec.with_bitcoin_client(client.clone());
+    }
+    if let Some(tx) = replay_tx {
+        exec = exec.with_replay_tx(tx);
+    }
+
+    Ok((exec, last_height, option_last_hash))
+}
+
+pub async fn start_consensus(
+    engine_config: engine::EngineConfig,
+    runtime: &mut Runtime,
+    observation_channels: Option<consensus::ObservationChannels>,
+) -> Result<ConsensusHandle> {
+    let genesis = build_genesis_from_staking(runtime).await?;
+
+    let engine_output = engine::start(engine_config, &genesis).await?;
+    info!(address = %engine_output.address, "Consensus engine started");
+
+    let node_index = genesis
+        .validator_set
+        .validators
+        .iter()
+        .position(|v| v.address == engine_output.address)
+        .expect("Our address not found in genesis validator set");
+
+    let mut state = consensus::ConsensusState::new(
+        engine_output.signing_provider,
+        genesis,
+        engine_output.address,
+    );
+    state.observation = observation_channels;
+
+    Ok(ConsensusHandle {
+        state,
+        channels: engine_output.channels,
+        _engine_handle: engine_output._handle,
+        _wal_dir: engine_output._wal_dir,
+        node_index,
+    })
+}
+
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
@@ -482,32 +490,51 @@ pub fn run(
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
-            let mut reactor = match Reactor::new(
-                starting_block_height,
-                writer,
-                block_rx,
-                mempool_rx,
-                cancel_token.clone(),
-                init_tx,
-                event_tx,
-                simulate_rx,
-                engine_config,
-                bitcoin_client,
-                replay_tx,
-                genesis_validators,
-                observation_channels,
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("Failed to create Reactor: {}, exiting", e);
-                    cancel_token.cancel();
-                    return;
-                }
-            };
+            let result: Result<()> = async {
+                let (mut exec, last_height, option_last_hash) = create_runtime_executor(
+                    starting_block_height,
+                    &writer,
+                    cancel_token.clone(),
+                    bitcoin_client.as_ref(),
+                    replay_tx,
+                    &genesis_validators,
+                )
+                .await?;
 
-            if let Err(e) = reactor.run().await {
+                let mut bs = bitcoin_state::BitcoinState::new();
+                if let Some(client) = &bitcoin_client {
+                    bs = bs.with_tx_cache(client.tx_cache().clone());
+                }
+
+                let consensus_handle = if let Some(engine_cfg) = engine_config {
+                    Some(start_consensus(
+                        engine_cfg,
+                        &mut exec.runtime,
+                        observation_channels,
+                    ).await?)
+                } else {
+                    None
+                };
+
+                let mut reactor = Reactor::new(
+                    exec,
+                    block_rx,
+                    mempool_rx,
+                    cancel_token.clone(),
+                    init_tx,
+                    event_tx,
+                    simulate_rx,
+                    bs,
+                    consensus_handle,
+                    last_height,
+                    option_last_hash,
+                );
+
+                reactor.run().await
+            }
+            .await;
+
+            if let Err(e) = result {
                 error!("Reactor error: {}, exiting", e);
                 cancel_token.cancel();
             }

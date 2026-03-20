@@ -9,7 +9,8 @@ use crate::bitcoin_client::Client;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 use crate::database::queries::{
-    rollback_to_height, select_batch, select_batches_from_anchor, select_min_batch_height,
+    rollback_to_height, select_batch, select_batches_from_anchor, select_block_at_height,
+    select_min_batch_height,
 };
 use crate::database::{self};
 use crate::runtime::Runtime;
@@ -82,6 +83,18 @@ pub trait Executor {
     /// In prod: resets the poller via a control channel.
     /// In sim: records the call for test assertions; the test sends blocks manually.
     async fn replay_blocks_from(&mut self, height: u64);
+
+    /// Simulate executing a transaction without committing state changes.
+    /// Returns the op results. Only meaningful for RuntimeExecutor.
+    async fn simulate(&mut self, _btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
+        anyhow::bail!("Simulation not supported on this executor")
+    }
+
+    /// Get the block hash at the given height. Used during rollback to update
+    /// the reactor's last_hash tracking.
+    async fn block_hash_at_height(&self, _height: u64) -> Option<BlockHash> {
+        None
+    }
 }
 
 /// Placeholder executor that does nothing. Used by the production reactor until
@@ -169,13 +182,10 @@ impl RuntimeExecutor {
         self
     }
 
-    pub fn connection(&self) -> libsql::Connection {
+    fn connection(&self) -> libsql::Connection {
         self.writer.connection()
     }
 
-    pub async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
-        simulate_handler(&mut self.runtime, btx).await
-    }
 }
 
 impl Executor for RuntimeExecutor {
@@ -341,5 +351,18 @@ impl Executor for RuntimeExecutor {
         {
             tracing::error!(%e, height, "Failed to send replay request to poller");
         }
+    }
+
+    async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
+        simulate_handler(&mut self.runtime, btx).await
+    }
+
+    async fn block_hash_at_height(&self, height: u64) -> Option<BlockHash> {
+        let conn = self.writer.connection();
+        let block: Option<indexer_types::BlockRow> = select_block_at_height(&conn, height as i64)
+            .await
+            .ok()
+            .flatten();
+        block.map(|b| b.hash)
     }
 }
