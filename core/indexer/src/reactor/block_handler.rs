@@ -8,7 +8,7 @@ use crate::{
     consensus::Height,
     database::queries::{
         confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
-        insert_transaction, select_block_latest, set_block_processed,
+        insert_transaction, select_block_latest, set_batch_processed, set_block_processed,
     },
     runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
@@ -141,6 +141,8 @@ pub async fn batch_handler(
             execute_op(runtime, op, op_return_data).await;
         }
     }
+
+    set_batch_processed(&runtime.storage.conn, consensus_height.as_u64() as i64).await?;
 
     info!(
         consensus_height = %consensus_height,

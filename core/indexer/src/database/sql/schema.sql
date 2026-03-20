@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS batches (
   consensus_height INTEGER PRIMARY KEY,
   anchor_height INTEGER NOT NULL,
   anchor_hash TEXT NOT NULL,
-  certificate BLOB NOT NULL
+  certificate BLOB NOT NULL,
+  processed BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transactions (

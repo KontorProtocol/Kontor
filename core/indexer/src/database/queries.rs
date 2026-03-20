@@ -557,6 +557,27 @@ pub async fn insert_batch(
     Ok(())
 }
 
+pub async fn set_batch_processed(conn: &Connection, consensus_height: i64) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE batches SET processed = 1 WHERE consensus_height = ?",
+        params![consensus_height],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    Ok(conn
+        .query(
+            "SELECT MAX(consensus_height) FROM batches WHERE processed = 1",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .and_then(|row| row.get(0).ok()))
+}
+
 pub async fn select_batch(
     conn: &Connection,
     consensus_height: i64,

@@ -437,6 +437,8 @@ pub struct Info {
     #[ts(type = "number")]
     pub height: i64,
     pub checkpoint: Option<String>,
+    #[ts(type = "number | null")]
+    pub consensus_height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
