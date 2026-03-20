@@ -1,4 +1,8 @@
+pub mod bitcoin_state;
 pub mod block_handler;
+pub mod consensus;
+pub mod engine;
+pub mod executor;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -15,127 +19,89 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
+use malachitebft_app_channel::Channels;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    bitcoin_follower::event::BitcoinEvent,
+    bitcoin_follower::event::{BlockEvent, MempoolEvent},
+    consensus::Ctx,
     database::{
         self,
-        queries::{
-            insert_processed_block, rollback_to_height, select_block_at_height, select_block_latest,
-        },
+        queries::{insert_processed_block, select_block_at_height, select_block_latest},
     },
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
 
 pub use block_handler::{block_handler, simulate_handler};
+use executor::Executor;
 
 pub type Simulation = (
     bitcoin::Transaction,
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
 
-struct Reactor {
-    writer: database::Writer,
+/// Handle to the Malachite engine + consensus state, present only when consensus is configured.
+pub struct ConsensusHandle {
+    state: consensus::ConsensusState,
+    channels: Channels<Ctx>,
+    _engine_handle: malachitebft_app_channel::EngineHandle,
+    _wal_dir: tempfile::TempDir,
+    node_index: usize,
+}
+
+struct Reactor<E: Executor> {
+    executor: E,
     cancel_token: CancellationToken,
-    bitcoin_event_rx: Receiver<BitcoinEvent>,
+    block_rx: Receiver<BlockEvent>,
+    mempool_rx: Receiver<MempoolEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
-    runtime: Runtime,
     simulate_rx: Option<Receiver<Simulation>>,
+    bitcoin_state: bitcoin_state::BitcoinState,
+    consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
     option_last_hash: Option<BlockHash>,
 }
 
-impl Reactor {
-    pub async fn new(
-        starting_block_height: u64,
-        writer: database::Writer,
-        bitcoin_event_rx: Receiver<BitcoinEvent>,
+impl<E: Executor> Reactor<E> {
+    pub fn new(
+        executor: E,
+        block_rx: Receiver<BlockEvent>,
+        mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
         init_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-    ) -> Result<Self> {
-        let conn = &writer.connection();
-        let (last_height, option_last_hash) = match select_block_latest(conn).await? {
-            Some(block) => {
-                let block_height = block.height as u64;
-                if block_height < starting_block_height - 1 {
-                    bail!(
-                        "Latest block has height {}, less than start height {}",
-                        block_height,
-                        starting_block_height
-                    );
-                }
-
-                info!(
-                    "Continuing from block height {} ({})",
-                    block_height, block.hash
-                );
-                (block_height, Some(block.hash))
-            }
-            None => {
-                info!(
-                    "No previous blocks found, starting from height {}",
-                    starting_block_height
-                );
-                (starting_block_height - 1, None)
-            }
-        };
-
-        // ensure 0 (native) block exists
-        if select_block_at_height(conn, 0)
-            .await
-            .expect("Failed to select block at height 0")
-            .is_none()
-        {
-            info!("Creating native block");
-            insert_processed_block(
-                conn,
-                BlockRow::builder()
-                    .height(0)
-                    .hash(new_mock_block_hash(0))
-                    .relevant(true)
-                    .build(),
-            )
-            .await?;
-        }
-        let storage = Storage::builder()
-            .height(0)
-            .conn(writer.connection())
-            .build();
-
-        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-        runtime.publish_native_contracts().await?;
-        Ok(Self {
-            writer,
+        bitcoin_state: bitcoin_state::BitcoinState,
+        consensus_handle: Option<ConsensusHandle>,
+        last_height: u64,
+        option_last_hash: Option<BlockHash>,
+    ) -> Self {
+        Self {
+            executor,
             cancel_token,
-            bitcoin_event_rx,
+            block_rx,
+            mempool_rx,
             simulate_rx,
+            bitcoin_state,
             last_height,
             option_last_hash,
             init_tx,
             event_tx,
-            runtime,
-        })
+            consensus_handle,
+        }
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
-        rollback_to_height(&self.writer.connection(), height).await?;
+        self.executor.rollback_state(height).await;
         self.last_height = height;
 
-        self.runtime
-            .file_ledger
-            .force_resync_from_db(&self.runtime.storage.conn)
-            .await?;
-
-        let conn = &self.writer.connection();
-        if let Some(block) = select_block_at_height(conn, height as i64).await? {
-            self.option_last_hash = Some(block.hash);
-            info!("Rollback to height {} ({})", height, block.hash);
+        if let Some(hash) = self.executor.block_hash_at_height(height).await {
+            self.option_last_hash = Some(hash);
+            info!("Rollback to height {} ({})", height, hash);
         } else {
             self.option_last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
@@ -180,9 +146,7 @@ impl Reactor {
         self.last_height = height;
         self.option_last_hash = Some(hash);
 
-        info!("# Block Kontor Transactions: {}", block.transactions.len());
-
-        block_handler(&mut self.runtime, &block).await?;
+        self.executor.execute_block(&block).await;
 
         if let Some(tx) = &self.event_tx {
             let _ = tx
@@ -208,45 +172,136 @@ impl Reactor {
                 }
             };
 
+            let consensus_rx = async {
+                if let Some(handle) = self.consensus_handle.as_mut() {
+                    handle.channels.consensus.recv().await
+                } else {
+                    pending().await
+                }
+            };
+
             select! {
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
                     break;
                 }
-                option_event = self.bitcoin_event_rx.recv() => {
-                    match option_event {
-                        Some(event) => {
-                            match event {
-                                BitcoinEvent::BlockInsert { target_height, block } => {
-                                    info!("Block {}/{} {}", block.height,
-                                          target_height, block.hash);
-                                    self.handle_block(block).await?;
-                                },
-                                BitcoinEvent::Rollback { to_height } => {
-                                    self.rollback(to_height).await?;
-                                },
-                                BitcoinEvent::MempoolSync(txs) => {
-                                    info!("MempoolSync {}", txs.len());
-                                },
-                                BitcoinEvent::MempoolInsert(tx) => {
-                                    debug!("MempoolInsert {}", tx.txid);
-                                },
-                                BitcoinEvent::MempoolRemove(txid) => {
-                                    debug!("MempoolRemove {}", txid);
-                                },
+                Some(event) = self.block_rx.recv() => {
+                    match event {
+                        BlockEvent::BlockInsert { target_height, block } => {
+                            let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                            self.bitcoin_state.remove_confirmed_txids(&txids);
+                            info!("Block {}/{} {}", block.height, target_height, block.hash);
+
+                            if let Some(handle) = self.consensus_handle.as_mut() {
+                                // Store block for execution when consensus decides it
+                                handle.state.block_cache.insert(block.height, block.clone());
+                                handle.state.pending_blocks.push_back((block.height, block.hash));
+
+                                // Process replay queue entries whose anchor has been reached
+                                while handle.state
+                                    .replay_queue
+                                    .front()
+                                    .is_some_and(|(_, v)| v.block_height() <= self.last_height)
+                                {
+                                    let (height, value) = handle.state.next_replay_batch().unwrap();
+
+                                    match &value {
+                                        crate::consensus::Value::Batch {
+                                            anchor_height,
+                                            anchor_hash,
+                                            txids,
+                                        } => {
+                                            let mut resolved_txs = Vec::with_capacity(txids.len());
+                                            for txid in txids {
+                                                if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
+                                                    resolved_txs.push(tx.clone());
+                                                } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
+                                                    resolved_txs.push(tx);
+                                                } else {
+                                                    warn!(%txid, "Could not resolve txid during replay — skipping");
+                                                }
+                                            }
+
+                                            handle.state.record_decided_batch(height, &value);
+                                            handle.state
+                                                .process_decided_batch(
+                                                    &mut self.executor,
+                                                    &mut self.bitcoin_state,
+                                                    *anchor_height,
+                                                    *anchor_hash,
+                                                    height,
+                                                    &[],
+                                                    &resolved_txs,
+                                                )
+                                                .await;
+                                        }
+                                        crate::consensus::Value::Block { height: bh, .. } => {
+                                            if let Some(block) = handle.state.block_cache.remove(bh) {
+                                                self.executor.execute_block(&block).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.handle_block(block).await?;
                             }
                         },
-                        None => {
-                            info!("Received None event, exiting");
-                            break;
+                        BlockEvent::Rollback { to_height } => {
+                            info!(to_height, "Bitcoin rollback — truncating state");
+                            self.rollback(to_height).await?;
                         },
+                    }
+                }
+                Some(event) = self.mempool_rx.recv() => {
+                    match event {
+                        MempoolEvent::Sync(txs) => {
+                            let count = txs.len();
+                            self.bitcoin_state.track_mempool_sync(txs.into_iter()).await;
+                            info!("MempoolSync {}", count);
+                        },
+                        MempoolEvent::Insert(tx) => {
+                            let txid = tx.compute_txid();
+                            self.bitcoin_state.track_mempool_insert(tx).await;
+                            debug!("MempoolInsert {}", txid);
+                        },
+                        MempoolEvent::Remove(txid) => {
+                            self.bitcoin_state.track_mempool_remove(&txid).await;
+                            debug!("MempoolRemove {}", txid);
+                        },
+                    }
+                }
+                Some(msg) = consensus_rx => {
+                    let handle = self.consensus_handle.as_mut().unwrap();
+                    let node_index = handle.node_index;
+                    let decided_block = consensus::handle_consensus_msg(
+                        &mut handle.state,
+                        &mut self.executor,
+                        &mut self.bitcoin_state,
+                        &mut handle.channels,
+                        msg,
+                        node_index,
+                        self.last_height,
+                        self.option_last_hash.unwrap_or(BlockHash::all_zeros()),
+                    ).await?;
+                    if let Some(block) = decided_block {
+                        self.handle_block(block).await?;
+                        // Check finality after block execution — batch txids may now be confirmed
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        if handle.state
+                            .pending_batches
+                            .iter()
+                            .any(|b| b.deadline <= self.last_height)
+                        {
+                            handle.state.run_finality_checks(&mut self.executor, self.last_height).await;
+                        }
                     }
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
-                        let _ = ret_tx.send(simulate_handler(&mut self.runtime, btx).await);
+                        let _ = ret_tx.send(self.executor.simulate(btx).await);
                     }
                 }
+
             }
         }
         Ok(())
@@ -257,37 +312,206 @@ impl Reactor {
     }
 }
 
+/// Build a Genesis from the staking contract's active validator set.
+async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::consensus::Genesis> {
+    use crate::consensus::signing::PublicKey;
+    use crate::consensus::{Validator, ValidatorSet};
+    use malachitebft_app_channel::app::types::core::VotingPower;
+
+    let active_set = crate::runtime::staking::api::get_active_set(runtime).await?;
+
+    let validators: Vec<Validator> = active_set
+        .into_iter()
+        .filter_map(|v| {
+            if v.ed25519_pubkey.len() != 32 {
+                warn!(
+                    xonly = v.x_only_pubkey,
+                    "Skipping validator with invalid ed25519 pubkey length"
+                );
+                return None;
+            }
+            let mut key_bytes = [0u8; 32];
+            key_bytes.copy_from_slice(&v.ed25519_pubkey);
+            let public_key = PublicKey::from_bytes(key_bytes);
+            // Convert stake to voting power (use 1 for now, refine later)
+            let voting_power = 1 as VotingPower;
+            Some(Validator::new(public_key, voting_power))
+        })
+        .collect();
+
+    let validator_set = ValidatorSet::new(validators);
+    Ok(crate::consensus::Genesis { validator_set })
+}
+
+pub async fn create_runtime_executor(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    cancel_token: CancellationToken,
+    bitcoin_client: Option<&crate::bitcoin_client::Client>,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    genesis_validators: &[crate::runtime::GenesisValidator],
+) -> Result<(executor::RuntimeExecutor, u64, Option<BlockHash>)> {
+    let conn = writer.connection();
+    let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
+        Some(block) => {
+            let block_height = block.height as u64;
+            if block_height < starting_block_height - 1 {
+                bail!(
+                    "Latest block has height {}, less than start height {}",
+                    block_height,
+                    starting_block_height
+                );
+            }
+
+            info!(
+                "Continuing from block height {} ({})",
+                block_height, block.hash
+            );
+            (block_height, Some(block.hash))
+        }
+        None => {
+            info!(
+                "No previous blocks found, starting from height {}",
+                starting_block_height
+            );
+            (starting_block_height - 1, None)
+        }
+    };
+
+    // ensure 0 (native) block exists
+    if select_block_at_height(&conn, 0)
+        .await
+        .expect("Failed to select block at height 0")
+        .is_none()
+    {
+        info!("Creating native block");
+        insert_processed_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
+    }
+    let storage = Storage::builder()
+        .height(0)
+        .conn(writer.connection())
+        .build();
+
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime
+        .publish_native_contracts(genesis_validators)
+        .await?;
+
+    let mut exec = executor::RuntimeExecutor::new(runtime, writer.clone(), cancel_token);
+
+    if let Some(client) = bitcoin_client {
+        exec = exec.with_bitcoin_client(client.clone());
+    }
+    if let Some(tx) = replay_tx {
+        exec = exec.with_replay_tx(tx);
+    }
+
+    Ok((exec, last_height, option_last_hash))
+}
+
+pub async fn start_consensus(
+    engine_config: engine::EngineConfig,
+    runtime: &mut Runtime,
+    observation_channels: Option<consensus::ObservationChannels>,
+) -> Result<ConsensusHandle> {
+    let genesis = build_genesis_from_staking(runtime).await?;
+
+    let engine_output = engine::start(engine_config, &genesis).await?;
+    info!(address = %engine_output.address, "Consensus engine started");
+
+    let node_index = genesis
+        .validator_set
+        .validators
+        .iter()
+        .position(|v| v.address == engine_output.address)
+        .expect("Our address not found in genesis validator set");
+
+    let mut state = consensus::ConsensusState::new(
+        engine_output.signing_provider,
+        genesis,
+        engine_output.address,
+    );
+    state.observation = observation_channels;
+
+    Ok(ConsensusHandle {
+        state,
+        channels: engine_output.channels,
+        _engine_handle: engine_output._handle,
+        _wal_dir: engine_output._wal_dir,
+        node_index,
+    })
+}
+
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
     writer: database::Writer,
-    bitcoin_event_rx: Receiver<BitcoinEvent>,
+    block_rx: Receiver<BlockEvent>,
+    mempool_rx: Receiver<MempoolEvent>,
     init_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    engine_config: Option<engine::EngineConfig>,
+    bitcoin_client: Option<crate::bitcoin_client::Client>,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    genesis_validators: Vec<crate::runtime::GenesisValidator>,
+    observation_channels: Option<consensus::ObservationChannels>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
-            let mut reactor = match Reactor::new(
-                starting_block_height,
-                writer,
-                bitcoin_event_rx,
-                cancel_token.clone(),
-                init_tx,
-                event_tx,
-                simulate_rx,
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("Failed to create Reactor: {}, exiting", e);
-                    cancel_token.cancel();
-                    return;
-                }
-            };
+            let result: Result<()> = async {
+                let (mut exec, last_height, option_last_hash) = create_runtime_executor(
+                    starting_block_height,
+                    &writer,
+                    cancel_token.clone(),
+                    bitcoin_client.as_ref(),
+                    replay_tx,
+                    &genesis_validators,
+                )
+                .await?;
 
-            if let Err(e) = reactor.run().await {
+                let mut bs = bitcoin_state::BitcoinState::new();
+                if let Some(client) = &bitcoin_client {
+                    bs = bs.with_tx_cache(client.tx_cache().clone());
+                }
+
+                let consensus_handle = if let Some(engine_cfg) = engine_config {
+                    Some(start_consensus(
+                        engine_cfg,
+                        &mut exec.runtime,
+                        observation_channels,
+                    ).await?)
+                } else {
+                    None
+                };
+
+                let mut reactor = Reactor::new(
+                    exec,
+                    block_rx,
+                    mempool_rx,
+                    cancel_token.clone(),
+                    init_tx,
+                    event_tx,
+                    simulate_rx,
+                    bs,
+                    consensus_handle,
+                    last_height,
+                    option_last_hash,
+                );
+
+                reactor.run().await
+            }
+            .await;
+
+            if let Err(e) = result {
                 error!("Reactor error: {}, exiting", e);
                 cancel_token.cancel();
             }

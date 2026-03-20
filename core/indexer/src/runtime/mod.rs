@@ -60,6 +60,23 @@ use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
+#[derive(Clone, Debug)]
+pub struct GenesisValidator {
+    pub x_only_pubkey: String,
+    pub stake: Decimal,
+    pub ed25519_pubkey: Vec<u8>,
+}
+
+impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
+    fn from(v: GenesisValidator) -> Self {
+        Self {
+            x_only_pubkey: v.x_only_pubkey,
+            stake: v.stake,
+            ed25519_pubkey: v.ed25519_pubkey,
+        }
+    }
+}
+
 impls!(host = true);
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -106,14 +123,13 @@ pub struct Runtime {
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = wasmtime::Config::new();
-        config.async_support(true);
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
-        Engine::new(&config)
+        Ok(Engine::new(&config)?)
     }
 
     pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
@@ -222,7 +238,10 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
-    pub async fn publish_native_contracts(&mut self) -> Result<()> {
+    pub async fn publish_native_contracts(
+        &mut self,
+        genesis_validators: &[GenesisValidator],
+    ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
@@ -242,6 +261,15 @@ impl Runtime {
         .await?;
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
+        if !genesis_validators.is_empty() {
+            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+            staking::api::set_genesis_set(
+                self,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                validators,
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -311,6 +339,7 @@ impl Runtime {
             self.set_context(
                 self.storage.height,
                 Some(TransactionContext {
+                    tx_id: base_ctx.tx_id,
                     tx_index: base_ctx.tx_index,
                     input_index,
                     op_index: inner_index as i64,
@@ -489,7 +518,9 @@ impl Runtime {
         })
         .await
         .expect("Failed to join execution");
-        let mut result = self.handle_call(is_fallback, result, results).await;
+        let mut result = self
+            .handle_call(is_fallback, result.map_err(Into::into), results)
+            .await;
         OptionFuture::from(
             self.gauge
                 .as_ref()

@@ -6,8 +6,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
-use consensus_sim::{allocate_ports, make_config, mock_bitcoin, run_node};
-use indexer::bitcoin_follower::event::BitcoinEvent;
+use consensus_sim::{allocate_ports, make_engine_config, mock_bitcoin, run_node};
+use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use malachitebft_app_channel::app::types::core::VotingPower;
@@ -47,24 +47,40 @@ async fn main() -> Result<()> {
 
     let cancel_token = CancellationToken::new();
 
-    // Spawn mock bitcoin source with a shared broadcast sender
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<BitcoinEvent>(256);
-    let mock_bitcoin_tx = {
-        let (tx, rx) = mpsc::channel(256);
-        let btx = broadcast_tx.clone();
+    // Spawn mock bitcoin source with shared broadcast senders
+    let (block_broadcast_tx, _) = tokio::sync::broadcast::channel::<BlockEvent>(256);
+    let (mempool_broadcast_tx, _) = tokio::sync::broadcast::channel::<MempoolEvent>(256);
+    let (mock_block_tx, mock_mempool_tx) = {
+        let (btx, brx) = mpsc::channel(256);
+        let (mtx, mrx) = mpsc::channel(256);
+        let bbtx = block_broadcast_tx.clone();
+        let mbtx = mempool_broadcast_tx.clone();
         tokio::spawn(async move {
-            let mut rx = rx;
-            while let Some(event) = rx.recv().await {
-                let _ = btx.send(event);
+            let mut brx = brx;
+            while let Some(event) = brx.recv().await {
+                let _ = bbtx.send(event);
             }
         });
-        tx
+        tokio::spawn(async move {
+            let mut mrx = mrx;
+            while let Some(event) = mrx.recv().await {
+                let _ = mbtx.send(event);
+            }
+        });
+        (btx, mtx)
     };
 
     tokio::spawn({
         let cancel = cancel_token.clone();
         async move {
-            mock_bitcoin::run(mock_bitcoin_tx, cancel, Duration::from_secs(10), 3).await;
+            mock_bitcoin::run(
+                mock_block_tx,
+                mock_mempool_tx,
+                cancel,
+                Duration::from_secs(10),
+                3,
+            )
+            .await;
         }
     });
 
@@ -73,12 +89,24 @@ async fn main() -> Result<()> {
 
     for (i, private_key) in private_keys.into_iter().enumerate() {
         let genesis = genesis.clone();
-        let config = make_config(i, &ports);
+        let engine_config = make_engine_config(i, &ports, private_key);
 
         // Per-node: bridge broadcast → mpsc
-        let bitcoin_rx = {
+        let node_block_rx = {
             let (tx, rx) = mpsc::channel(256);
-            let mut brx = broadcast_tx.subscribe();
+            let mut brx = block_broadcast_tx.subscribe();
+            tokio::spawn(async move {
+                while let Ok(event) = brx.recv().await {
+                    if tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        };
+        let node_mempool_rx = {
+            let (tx, rx) = mpsc::channel(256);
+            let mut brx = mempool_broadcast_tx.subscribe();
             tokio::spawn(async move {
                 while let Ok(event) = brx.recv().await {
                     if tx.send(event).await.is_err() {
@@ -94,10 +122,10 @@ async fn main() -> Result<()> {
             async move {
                 if let Err(e) = run_node(
                     i,
-                    private_key,
+                    engine_config,
                     genesis,
-                    config,
-                    bitcoin_rx,
+                    node_block_rx,
+                    node_mempool_rx,
                     None,
                     None,
                     None,

@@ -1,0 +1,12 @@
+package root:component;
+
+world root {
+	include kontor:built-in/built-in;
+	use kontor:built-in/context.{view-context, proc-context};
+
+	export init: async func(ctx: borrow<proc-context>);
+
+	export increment: async func(ctx: borrow<proc-context>);
+
+	export get: async func(ctx: borrow<view-context>) -> u64;
+}

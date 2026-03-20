@@ -181,7 +181,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             INSERT OR REPLACE INTO contract_state (
                 contract_id,
                 height,
-                tx_index,
+                tx_id,
                 size,
                 path,
                 value,
@@ -191,7 +191,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             params![
                 row.contract_id,
                 row.height,
-                row.tx_index,
+                row.tx_id,
                 row.size(),
                 row.path,
                 row.value,
@@ -222,7 +222,7 @@ pub async fn get_latest_contract_state(
                 SELECT
                     contract_id,
                     height,
-                    tx_index,
+                    tx_id,
                     path,
                     value,
                     deleted
@@ -277,7 +277,7 @@ pub async fn get_latest_contract_state_value(
 pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
@@ -286,7 +286,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_index = tx_index;
+                row.tx_id = tx_id;
                 insert_contract_state(conn, row).await?;
                 true
             }
@@ -533,10 +533,148 @@ pub async fn get_contract_bytes_by_id(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<(), Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT INTO transactions (height, txid, tx_index) VALUES (?, ?, ?)",
-        params![row.height, row.txid, row.tx_index],
+        "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
+        params![row.height, row.txid, row.confirmed_height, row.tx_index, row.batch_height],
+    )
+    .await?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub async fn insert_batch(
+    conn: &Connection,
+    consensus_height: i64,
+    anchor_height: i64,
+    anchor_hash: &str,
+    certificate: &[u8],
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO batches (consensus_height, anchor_height, anchor_hash, certificate) VALUES (?, ?, ?, ?)",
+        params![consensus_height, anchor_height, anchor_hash, certificate],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn set_batch_processed(conn: &Connection, consensus_height: i64) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE batches SET processed = 1 WHERE consensus_height = ?",
+        params![consensus_height],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    Ok(conn
+        .query(
+            "SELECT MAX(consensus_height) FROM batches WHERE processed = 1",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .and_then(|row| row.get(0).ok()))
+}
+
+pub async fn select_batch(
+    conn: &Connection,
+    consensus_height: i64,
+) -> Result<Option<(i64, String, Vec<u8>, Vec<String>)>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT b.anchor_height, b.anchor_hash, b.certificate, t.txid \
+             FROM batches b \
+             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+             WHERE b.consensus_height = ? \
+             ORDER BY t.id",
+            params![consensus_height],
+        )
+        .await?;
+
+    let mut anchor_height = None;
+    let mut anchor_hash = None;
+    let mut certificate = None;
+    let mut txids = Vec::new();
+
+    while let Some(row) = rows.next().await? {
+        if anchor_height.is_none() {
+            anchor_height = Some(row.get::<i64>(0)?);
+            anchor_hash = Some(row.get::<String>(1)?);
+            certificate = Some(row.get::<Vec<u8>>(2)?);
+        }
+        if let Ok(txid) = row.get::<String>(3) {
+            txids.push(txid);
+        }
+    }
+
+    match (anchor_height, anchor_hash, certificate) {
+        (Some(ah), Some(hash), Some(cert)) => Ok(Some((ah, hash, cert, txids))),
+        _ => Ok(None),
+    }
+}
+
+pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    let mut rows = conn
+        .query("SELECT MIN(consensus_height) FROM batches", params![])
+        .await?;
+
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+
+    Ok(row.get::<Option<i64>>(0)?)
+}
+
+pub async fn select_batches_from_anchor(
+    conn: &Connection,
+    from_anchor: i64,
+) -> Result<Vec<(i64, i64, String, Vec<String>)>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, t.txid \
+             FROM batches b \
+             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+             WHERE b.anchor_height >= ? \
+             ORDER BY b.consensus_height, t.id",
+            params![from_anchor],
+        )
+        .await?;
+
+    let mut results: Vec<(i64, i64, String, Vec<String>)> = Vec::new();
+
+    while let Some(row) = rows.next().await? {
+        let consensus_height: i64 = row.get(0)?;
+        let anchor_height: i64 = row.get(1)?;
+        let anchor_hash: String = row.get(2)?;
+        let txid: Option<String> = row.get(3).ok();
+
+        if results
+            .last()
+            .is_some_and(|(ch, _, _, _)| *ch == consensus_height)
+        {
+            if let Some(txid) = txid {
+                results.last_mut().unwrap().3.push(txid);
+            }
+        } else {
+            let txids = txid.into_iter().collect();
+            results.push((consensus_height, anchor_height, anchor_hash, txids));
+        }
+    }
+
+    Ok(results)
+}
+
+pub async fn confirm_transaction(
+    conn: &Connection,
+    txid: &str,
+    confirmed_height: i64,
+    tx_index: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
+        params![confirmed_height, tx_index, txid],
     )
     .await?;
     Ok(())
@@ -548,7 +686,7 @@ pub async fn get_transaction_by_txid(
 ) -> Result<Option<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE txid = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE txid = ?",
             params![txid],
         )
         .await?;
@@ -562,7 +700,7 @@ pub async fn get_transactions_at_height(
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE height = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
             params![height],
         )
         .await?;
@@ -708,7 +846,8 @@ pub async fn get_transactions_paginated(
 ) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "t";
-    let mut selects = "t.id, t.txid, t.height, t.tx_index".to_string();
+    let mut selects =
+        "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
     let mut from = "transactions t JOIN blocks b USING (height)".to_string();
     let mut where_clauses = vec!["b.processed = 1".to_string()];
     if let Some(address) = &query.contract {
@@ -716,7 +855,7 @@ pub async fn get_transactions_paginated(
             .await?
             .ok_or(Error::ContractNotFound(address.to_string()))?;
         selects = format!("DISTINCT {}", selects);
-        from = format!("{} JOIN contract_state c USING (height, tx_index)", from);
+        from = format!("{} JOIN contract_state c ON c.tx_id = t.id", from);
         where_clauses.push(format!("c.contract_id = {}", contract_id));
     }
 
@@ -750,7 +889,7 @@ pub async fn get_results_paginated(
         DISTINCT
         r.id,
         r.height,
-        r.tx_index,
+        t.tx_index,
         r.input_index,
         r.op_index,
         r.result_index,
@@ -764,8 +903,8 @@ pub async fn get_results_paginated(
     "#;
     let from = r#"
         contract_results r
-        JOIN blocks b USING (height)
-        LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+        JOIN blocks b ON r.height = b.height
+        LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
     let mut where_clauses = vec!["b.processed = 1".to_string()];
@@ -821,12 +960,12 @@ pub async fn get_op_result(
             r#"
             SELECT
                 r.id,
-                r.func,
                 r.height,
-                r.tx_index,
+                t.tx_index,
                 r.input_index,
                 r.op_index,
                 r.result_index,
+                r.func,
                 r.gas,
                 r.value,
                 c.name as contract_name,
@@ -834,8 +973,8 @@ pub async fn get_op_result(
                 c.tx_index as contract_tx_index,
                 t.txid
             FROM contract_results r
-            JOIN blocks b USING (height)
-            LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+            JOIN blocks b ON r.height = b.height
+            LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
             WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
             ORDER BY r.result_index DESC
@@ -854,8 +993,7 @@ pub async fn get_op_result(
 
 pub async fn get_contract_result(
     conn: &Connection,
-    height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     input_index: Option<i64>,
     op_index: Option<i64>,
     result_index: i64,
@@ -868,22 +1006,20 @@ pub async fn get_contract_result(
                 contract_id,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
                 gas,
                 value
             FROM contract_results
-            WHERE height = :height
-              AND tx_index IS :tx_index
+            WHERE tx_id IS :tx_id
               AND input_index IS :input_index
               AND op_index IS :op_index
               AND result_index = :result_index
             "#,
             named_params! {
-                ":height": height,
-                ":tx_index": tx_index,
+                ":tx_id": tx_id,
                 ":input_index": input_index,
                 ":op_index": op_index,
                 ":result_index": result_index,
@@ -904,7 +1040,7 @@ pub async fn insert_contract_result(
                 size,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
@@ -917,7 +1053,7 @@ pub async fn insert_contract_result(
             row.size(),
             row.func,
             row.height,
-            row.tx_index,
+            row.tx_id,
             row.input_index,
             row.op_index,
             row.result_index,
@@ -1046,4 +1182,27 @@ pub async fn insert_file_metadata(
     )
     .await?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Return the subset of `txids` that already exist in the transactions table.
+pub async fn select_existing_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashSet<String>, Error> {
+    if txids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let placeholders: Vec<&str> = txids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT txid FROM transactions WHERE txid IN ({})",
+        placeholders.join(", ")
+    );
+    let params: Vec<libsql::Value> = txids.iter().map(|t| libsql::Value::from(t.clone())).collect();
+    let mut rows = conn.query(&sql, libsql::params::Params::Positional(params)).await?;
+    let mut result = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        let txid: String = row.get(0)?;
+        result.insert(txid);
+    }
+    Ok(result)
 }

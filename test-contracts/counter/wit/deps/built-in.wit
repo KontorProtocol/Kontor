@@ -1,0 +1,237 @@
+package kontor:built-in;
+
+interface context {
+    resource signer {
+        to-string: async func() -> string;
+    }
+
+    variant op-return-data {
+        pub-key(string),
+    }
+
+    record out-point {
+        txid: string,
+        vout: u64,
+    }
+
+    resource transaction {
+        id: async func() -> string;
+        out-point: async func() -> out-point;
+        op-return-data: async func() -> option<op-return-data>;
+    }
+
+    resource keys {
+        next: async func() -> option<string>;
+    }
+
+    resource view-storage {
+        get-str: async func(path: string) -> option<string>;
+        get-u64: async func(path: string) -> option<u64>;
+        get-s64: async func(path: string) -> option<s64>;
+        get-bool: async func(path: string) -> option<bool>;
+        get-list-u8: async func(path: string) -> option<list<u8>>;
+        get-keys: async func(path: string) -> keys;
+        exists: async func(path: string) -> bool;
+        extend-path-with-match: async func(path: string, variants: list<string>) -> option<string>;
+    }
+
+    resource proc-storage {
+        get-str: async func(path: string) -> option<string>;
+        get-u64: async func(path: string) -> option<u64>;
+        get-s64: async func(path: string) -> option<s64>;
+        get-bool: async func(path: string) -> option<bool>;
+        get-list-u8: async func(path: string) -> option<list<u8>>;
+        get-keys: async func(path: string) -> keys;
+        exists: async func(path: string) -> bool;
+        extend-path-with-match: async func(path: string, variants: list<string>) -> option<string>;
+
+        set-str: async func(path: string, value: string);
+        set-u64: async func(path: string, value: u64);
+        set-s64: async func(path: string, value: s64);
+        set-bool: async func(path: string, value: bool);
+        set-list-u8: async func(path: string, value: list<u8>);
+        set-void: async func(path: string);
+        delete-matching-paths: async func(base-path: string, variants: list<string>) -> u64;
+        view-storage: async func() -> view-storage;
+    }
+
+    resource view-context {
+        storage: async func() -> view-storage;
+    }
+
+    resource proc-context {
+        signer: async func() -> signer;
+        contract-signer: async func() -> signer;
+        view-context: async func() -> view-context;
+        generate-id: async func() -> string;
+        storage: async func() -> proc-storage;
+        transaction: async func() -> transaction;
+    }
+
+    resource fall-context {
+        signer: async func() -> option<signer>;
+        proc-context: async func() -> option<proc-context>;
+        view-context: async func() -> view-context;
+    }
+
+    resource core-context {
+        proc-context: async func() -> proc-context;
+        signer-proc-context: async func() -> proc-context;
+    }
+}
+
+interface foreign {
+    use context.{signer};
+
+    record contract-address {
+        name: string,
+        height: u64,
+        tx-index: u64,
+    }
+
+    call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+
+    get-contract-address: async func() -> contract-address;
+}
+
+interface crypto {
+    hash: async func(input: string) -> tuple<string, list<u8>>;
+    hash-with-salt: async func(input: string, salt: string) -> tuple<string, list<u8>>;
+
+    hkdf-derive: async func(
+        ikm: list<u8>,
+        salt: list<u8>,
+        info: list<u8>
+    ) -> list<u8>;
+}
+
+interface error {
+    variant error {
+        message(string),
+        overflow(string),
+        div-by-zero(string),
+        syntax(string),
+        validation(string),
+    }
+}
+
+interface numbers {
+    use error.{error};
+
+    enum sign {
+        plus,
+        minus
+    }
+
+    record integer {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    record decimal {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    enum ordering {
+        less,
+        equal,
+        greater
+    }
+
+    u64-to-integer: async func(i: u64) -> integer;
+    s64-to-integer: async func(i: s64) -> integer;
+    string-to-integer: async func(s: string) -> result<integer, error>;
+    integer-to-string: async func(i: integer) -> string;
+    eq-integer: async func(a: integer, b: integer) -> bool;
+    cmp-integer: async func(a: integer, b: integer) -> ordering;
+    add-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    sub-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    mul-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    div-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    sqrt-integer: async func(i: integer) -> result<integer, error>;
+
+    integer-to-decimal: async func(i: integer) -> decimal;
+    decimal-to-integer: async func(d: decimal) -> integer;
+    u64-to-decimal: async func(i: u64) -> decimal;
+    s64-to-decimal: async func(i: s64) -> decimal;
+    f64-to-decimal: async func(f: f64) -> decimal;
+    string-to-decimal: async func(s: string) -> result<decimal, error>;
+    decimal-to-string: async func(d: decimal) -> string;
+    eq-decimal: async func(a: decimal, b: decimal) -> bool;
+    cmp-decimal: async func(a: decimal, b: decimal) -> ordering;
+    add-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    sub-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    mul-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    div-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    log10-decimal: async func(a: decimal) -> result<decimal, error>;
+}
+
+interface file-registry {
+    use error.{error};
+
+    record raw-file-descriptor {
+        file-id: string,
+        object-id: string,
+        nonce: list<u8>,
+        root: list<u8>,
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
+    }
+
+    resource file-descriptor {
+        file-id: async func() -> string;
+        from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+        compute-challenge-id: async func(
+            block-height: u64,
+            num-challenges: u64,
+            seed: list<u8>,
+            prover-id: string
+        ) -> result<string, error>;
+    }
+
+    add-file: async func(file-descriptor: borrow<file-descriptor>);
+
+    get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    record challenge-input {
+        challenge-id: string,
+        file-id: string,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: string,
+    }
+
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
+
+    resource proof {
+        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
+        challenge-ids: async func() -> list<string>;
+        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
+    }
+}
+
+world built-in {
+    import context;
+    import foreign;
+    import crypto;
+    import error;
+    import numbers;
+    import file-registry;
+}

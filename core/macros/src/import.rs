@@ -226,6 +226,14 @@ fn make_call_expr(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
                         }
                     }
                 }
+                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::List(_)) => {
+                    quote! {
+                        {
+                            let items: Vec<String> = #param_name.into_iter().map(|item| stdlib::to_wave_expr(item)).collect();
+                            alloc::format!("[{}]", items.join(", "))
+                        }
+                    }
+                }
                 _ => quote! {
                     stdlib::to_wave_expr(#param_name)
                 },

@@ -310,6 +310,39 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
+pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
+    use crate::database::queries::insert_processed_block;
+    use crate::runtime::{ComponentCache, Runtime, Storage};
+
+    let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+
+    let storage = Storage::builder().height(1).conn(conn).build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    runtime.publish_native_contracts(&[]).await?;
+
+    Ok((runtime, db_dir))
+}
+
 pub fn new_mock_block_hash(i: u32) -> BlockHash {
     let mut bytes = [0u8; 32];
     let i_bytes = i.to_le_bytes();
@@ -488,4 +521,210 @@ pub fn lucky_hash(hex: &str) -> [u8; 32] {
         .expect("Invalid hex string")
         .try_into()
         .expect("Hash must be exactly 32 bytes")
+}
+
+/// Test harness for running the production reactor with a single-validator
+/// Malachite engine. Feeds blocks and mempool events through channels
+/// (no poller/bitcoind needed). Uses a real RuntimeExecutor with temp DB.
+pub mod reactor_harness {
+    use std::time::Duration;
+
+    use anyhow::Result;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
+    use tokio_util::sync::CancellationToken;
+
+    use indexer_types::Block;
+
+    use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
+    use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
+    use crate::consensus::signing::PrivateKey;
+    use crate::reactor;
+    use crate::reactor::consensus::ObservationChannels;
+    use crate::reactor::engine::EngineConfig;
+    use crate::runtime::GenesisValidator;
+
+    /// Handle to a running single-validator test reactor.
+    pub struct TestReactor {
+        pub block_tx: mpsc::Sender<BlockEvent>,
+        pub mempool_tx: mpsc::Sender<MempoolEvent>,
+        pub decided_rx: mpsc::Receiver<DecidedBatch>,
+        pub finality_rx: mpsc::Receiver<FinalityEvent>,
+        pub state_rx: mpsc::Receiver<StateEvent>,
+        pub cancel: CancellationToken,
+        handle: JoinHandle<()>,
+        _db_dir: TempDir,
+    }
+
+    impl TestReactor {
+        /// Start a single-validator reactor with a fresh temp DB.
+        pub async fn start() -> Result<Self> {
+            let seed: [u8; 32] = [42; 32];
+            let private_key = PrivateKey::from(seed);
+            Self::start_with_key(private_key).await
+        }
+
+        /// Start with a specific private key.
+        pub async fn start_with_key(private_key: PrivateKey) -> Result<Self> {
+            let (_reader, writer, (db_dir, _db_name)) = super::new_test_db().await?;
+
+            let genesis_validators = vec![GenesisValidator {
+                x_only_pubkey: format!("{:064x}", 1),
+                stake: crate::runtime::Decimal::from("100"),
+                ed25519_pubkey: private_key.public_key().as_bytes().to_vec(),
+            }];
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let port = listener.local_addr()?.port();
+            drop(listener);
+            let ports = [port];
+            let engine_config = EngineConfig {
+                private_key,
+                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[0]),
+                persistent_peers: vec![],
+            };
+
+            let (block_tx, block_rx) = mpsc::channel(256);
+            let (mempool_tx, mempool_rx) = mpsc::channel(256);
+
+            let (decided_tx, decided_rx) = mpsc::channel(1024);
+            let (finality_tx, finality_rx) = mpsc::channel(1024);
+            let (state_tx, state_rx) = mpsc::channel(1024);
+
+            let cancel = CancellationToken::new();
+
+            let observation = ObservationChannels {
+                decided_tx,
+                finality_tx,
+                state_tx,
+            };
+
+            let handle = reactor::run(
+                1,
+                cancel.clone(),
+                writer,
+                block_rx,
+                mempool_rx,
+                None,
+                None,
+                None,
+                Some(engine_config),
+                None,
+                None,
+                genesis_validators,
+                Some(observation),
+            );
+
+            // Wait a bit for the reactor + Malachite to start up
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            Ok(Self {
+                block_tx,
+                mempool_tx,
+                decided_rx,
+                finality_rx,
+                state_rx,
+                cancel,
+                handle,
+                _db_dir: db_dir,
+            })
+        }
+
+        /// Send a block to the reactor.
+        pub async fn send_block(&self, block: Block) {
+            let target_height = block.height;
+            let _ = self
+                .block_tx
+                .send(BlockEvent::BlockInsert {
+                    target_height,
+                    block,
+                })
+                .await;
+        }
+
+        /// Send a mempool transaction.
+        pub async fn send_mempool_tx(&self, tx: bitcoin::Transaction) {
+            let _ = self.mempool_tx.send(MempoolEvent::Insert(tx)).await;
+        }
+
+        /// Wait for state events.
+        pub async fn wait_for_state_events(
+            &mut self,
+            count: usize,
+            timeout: Duration,
+        ) -> Vec<StateEvent> {
+            let mut events = Vec::new();
+            let deadline = tokio::time::sleep(timeout);
+            tokio::pin!(deadline);
+
+            loop {
+                if events.len() >= count {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    Some(event) = self.state_rx.recv() => {
+                        events.push(event);
+                    }
+                }
+            }
+            events
+        }
+
+        /// Wait for decided batches.
+        pub async fn wait_for_decisions(
+            &mut self,
+            count: usize,
+            timeout: Duration,
+        ) -> Vec<DecidedBatch> {
+            let mut batches = Vec::new();
+            let deadline = tokio::time::sleep(timeout);
+            tokio::pin!(deadline);
+
+            loop {
+                if batches.len() >= count {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    Some(batch) = self.decided_rx.recv() => {
+                        batches.push(batch);
+                    }
+                }
+            }
+            batches
+        }
+
+        /// Wait for finality events.
+        pub async fn wait_for_finality_events(
+            &mut self,
+            count: usize,
+            timeout: Duration,
+        ) -> Vec<FinalityEvent> {
+            let mut events = Vec::new();
+            let deadline = tokio::time::sleep(timeout);
+            tokio::pin!(deadline);
+
+            loop {
+                if events.len() >= count {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    Some(event) = self.finality_rx.recv() => {
+                        events.push(event);
+                    }
+                }
+            }
+            events
+        }
+
+        /// Shut down the reactor.
+        pub async fn shutdown(self) {
+            self.cancel.cancel();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            drop(self.handle);
+        }
+    }
 }
