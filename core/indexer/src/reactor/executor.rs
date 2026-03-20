@@ -9,8 +9,8 @@ use crate::bitcoin_client::Client;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
 use crate::database::queries::{
-    rollback_to_height, select_batch, select_batches_from_anchor, select_block_at_height,
-    select_min_batch_height,
+    get_transaction_by_txid, rollback_to_height, select_batch, select_batches_from_anchor,
+    select_block_at_height, select_min_batch_height,
 };
 use crate::database::{self};
 use crate::runtime::Runtime;
@@ -78,14 +78,6 @@ pub trait Executor {
     /// Was this txid confirmed in a Bitcoin block? Used by finality checks.
     /// In prod, this is a DB query. In sim, checks a HashSet.
     async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool;
-
-    /// Return the highest consensus height whose anchor_height < `anchor`.
-    /// Used after a Bitcoin rollback to determine where to resume consensus.
-    async fn last_batch_consensus_height_before(&self, anchor: u64) -> Option<Height>;
-
-    /// The highest block height that has been executed. Used to detect timeout
-    /// race conditions where blocks were executed before their corresponding batch.
-    async fn last_executed_block_height(&self) -> Option<u64>;
 
     // --- Decided value storage (used by Malachite sync protocol) ---
 
@@ -155,14 +147,8 @@ impl Executor for NoopExecutor {
     async fn checkpoint(&self) -> Option<[u8; 32]> {
         None
     }
-    async fn last_batch_consensus_height_before(&self, _anchor: u64) -> Option<Height> {
-        None
-    }
     async fn is_confirmed_on_chain(&self, _txid: &bitcoin::Txid) -> bool {
         false
-    }
-    async fn last_executed_block_height(&self) -> Option<u64> {
-        None
     }
     async fn get_decided(&self, _height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
         None
@@ -321,16 +307,27 @@ impl Executor for RuntimeExecutor {
         }
     }
     async fn checkpoint(&self) -> Option<[u8; 32]> {
-        None
+        use crate::database::queries::get_checkpoint_latest;
+        match get_checkpoint_latest(&self.connection()).await {
+            Ok(Some(row)) => {
+                let mut bytes = [0u8; 32];
+                if let Ok(decoded) = hex::decode(&row.hash) {
+                    if decoded.len() == 32 {
+                        bytes.copy_from_slice(&decoded);
+                        return Some(bytes);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
     }
-    async fn last_batch_consensus_height_before(&self, _anchor: u64) -> Option<Height> {
-        None
-    }
-    async fn is_confirmed_on_chain(&self, _txid: &bitcoin::Txid) -> bool {
-        false
-    }
-    async fn last_executed_block_height(&self) -> Option<u64> {
-        None
+    async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool {
+        let conn = self.connection();
+        match get_transaction_by_txid(&conn, &txid.to_string()).await {
+            Ok(Some(row)) => row.confirmed_height.is_some(),
+            _ => false,
+        }
     }
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
         let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =

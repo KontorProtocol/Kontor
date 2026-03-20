@@ -269,20 +269,8 @@ impl Executor for StateLog {
         Some(self.checkpoint)
     }
 
-    async fn last_batch_consensus_height_before(&self, anchor: u64) -> Option<Height> {
-        self.last_consensus_height_before(anchor)
-    }
-
     async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool {
         self.block_confirmed.contains(txid)
-    }
-
-    async fn last_executed_block_height(&self) -> Option<u64> {
-        self.entries
-            .iter()
-            .filter(|e| e.status == TxStatus::Confirmed)
-            .map(|e| e.anchor_height)
-            .max()
     }
 
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
