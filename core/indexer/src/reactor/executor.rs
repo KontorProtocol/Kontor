@@ -202,7 +202,6 @@ impl RuntimeExecutor {
     fn connection(&self) -> libsql::Connection {
         self.writer.connection()
     }
-
 }
 
 impl Executor for RuntimeExecutor {
@@ -311,11 +310,11 @@ impl Executor for RuntimeExecutor {
         match get_checkpoint_latest(&self.connection()).await {
             Ok(Some(row)) => {
                 let mut bytes = [0u8; 32];
-                if let Ok(decoded) = hex::decode(&row.hash) {
-                    if decoded.len() == 32 {
-                        bytes.copy_from_slice(&decoded);
-                        return Some(bytes);
-                    }
+                if let Ok(decoded) = hex::decode(&row.hash)
+                    && decoded.len() == 32
+                {
+                    bytes.copy_from_slice(&decoded);
+                    return Some(bytes);
                 }
                 None
             }

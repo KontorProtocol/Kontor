@@ -395,11 +395,7 @@ impl ConsensusState {
     }
 
     /// Run finality checks and execute any rollbacks.
-    pub async fn run_finality_checks(
-        &mut self,
-        executor: &mut impl Executor,
-        last_height: u64,
-    ) {
+    pub async fn run_finality_checks(&mut self, executor: &mut impl Executor, last_height: u64) {
         let finality_events = self.check_finality(executor, last_height).await;
         for event in &finality_events {
             if let FinalityEvent::Rollback {
@@ -584,7 +580,9 @@ pub async fn handle_consensus_msg(
             let proposal = if let Some(existing) = state.undecided.get(&(height, round)) {
                 LocallyProposedValue::new(existing.height, existing.round, existing.value.clone())
             } else {
-                let value = state.make_value(executor, bitcoin_state, last_height, last_hash).await;
+                let value = state
+                    .make_value(executor, bitcoin_state, last_height, last_hash)
+                    .await;
                 let proposed = ProposedValue {
                     height,
                     round,

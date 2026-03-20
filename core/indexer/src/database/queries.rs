@@ -1197,8 +1197,13 @@ pub async fn select_existing_txids(
         "SELECT txid FROM transactions WHERE txid IN ({})",
         placeholders.join(", ")
     );
-    let params: Vec<libsql::Value> = txids.iter().map(|t| libsql::Value::from(t.clone())).collect();
-    let mut rows = conn.query(&sql, libsql::params::Params::Positional(params)).await?;
+    let params: Vec<libsql::Value> = txids
+        .iter()
+        .map(|t| libsql::Value::from(t.clone()))
+        .collect();
+    let mut rows = conn
+        .query(&sql, libsql::params::Params::Positional(params))
+        .await?;
     let mut result = std::collections::HashSet::new();
     while let Some(row) = rows.next().await? {
         let txid: String = row.get(0)?;

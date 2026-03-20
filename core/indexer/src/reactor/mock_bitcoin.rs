@@ -1,0 +1,136 @@
+use bitcoin::blockdata::locktime::absolute::LockTime;
+use bitcoin::transaction::Version;
+use bitcoin::{BlockHash, Txid};
+
+use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
+use crate::test_utils::new_mock_block_hash;
+use indexer_types::Block;
+
+/// Create a minimal bitcoin::Transaction with a unique txid derived from the nonce.
+pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
+    bitcoin::Transaction {
+        version: Version::ONE,
+        lock_time: LockTime::from_consensus(nonce),
+        input: vec![],
+        output: vec![],
+    }
+}
+
+fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Transaction {
+    indexer_types::Transaction {
+        txid: tx.compute_txid(),
+        index: index as i64,
+        ops: vec![],
+        op_return_data: Default::default(),
+    }
+}
+
+pub struct MockBitcoin {
+    tip_height: u64,
+    prev_hash: BlockHash,
+    mempool: Vec<bitcoin::Transaction>,
+    tx_counter: u32,
+}
+
+impl MockBitcoin {
+    pub fn new(start_height: u64) -> Self {
+        Self {
+            tip_height: start_height,
+            prev_hash: new_mock_block_hash(start_height as u32),
+            mempool: Vec::new(),
+            tx_counter: 0,
+        }
+    }
+
+    pub fn tip_height(&self) -> u64 {
+        self.tip_height
+    }
+
+    pub fn mempool(&self) -> &[bitcoin::Transaction] {
+        &self.mempool
+    }
+
+    pub fn mempool_txids(&self) -> Vec<Txid> {
+        self.mempool.iter().map(|tx| tx.compute_txid()).collect()
+    }
+
+    pub fn generate_mempool_txs(&mut self, count: usize) -> Vec<MempoolEvent> {
+        let mut events = Vec::with_capacity(count);
+        for _ in 0..count {
+            self.tx_counter += 1;
+            let tx = make_tx(self.tx_counter);
+            events.push(MempoolEvent::Insert(tx.clone()));
+            self.mempool.push(tx);
+        }
+        events
+    }
+
+    pub fn mine_block(&mut self, txids: &[Txid]) -> (Vec<BlockEvent>, Vec<MempoolEvent>) {
+        self.tip_height += 1;
+        let height = self.tip_height;
+
+        let hash = new_mock_block_hash(height as u32);
+        let prev_hash = self.prev_hash;
+        self.prev_hash = hash;
+
+        let mut confirmed_raw = Vec::new();
+        let mut remove_events = Vec::new();
+
+        for txid in txids {
+            if let Some(pos) = self
+                .mempool
+                .iter()
+                .position(|tx| tx.compute_txid() == *txid)
+            {
+                let tx = self.mempool.remove(pos);
+                remove_events.push(MempoolEvent::Remove(tx.compute_txid()));
+                confirmed_raw.push(tx);
+            }
+        }
+
+        let block = Block {
+            height,
+            hash,
+            prev_hash,
+            transactions: confirmed_raw
+                .iter()
+                .enumerate()
+                .map(|(i, tx)| to_indexer_tx(i, tx))
+                .collect(),
+        };
+
+        let block_events = vec![BlockEvent::BlockInsert {
+            target_height: height,
+            block,
+        }];
+
+        (block_events, remove_events)
+    }
+
+    pub fn mine_block_all(&mut self) -> (Vec<BlockEvent>, Vec<MempoolEvent>) {
+        let txids = self.mempool_txids();
+        self.mine_block(&txids)
+    }
+
+    pub fn mine_empty_block(&mut self) -> (Vec<BlockEvent>, Vec<MempoolEvent>) {
+        self.mine_block(&[])
+    }
+
+    pub fn reset_to(&mut self, height: u64) {
+        self.tip_height = height;
+        self.prev_hash = new_mock_block_hash(height as u32 + 1000);
+    }
+
+    pub fn drop_txid(&mut self, txid: &Txid) -> Option<MempoolEvent> {
+        if let Some(pos) = self
+            .mempool
+            .iter()
+            .position(|tx| tx.compute_txid() == *txid)
+        {
+            self.mempool.remove(pos);
+            Some(MempoolEvent::Remove(*txid))
+        } else {
+            None
+        }
+    }
+}

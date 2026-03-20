@@ -92,9 +92,7 @@ async fn assert_checkpoints_match(cluster: &RegTesterCluster) -> Result<String> 
 #[tokio::test]
 #[serial_test::serial]
 async fn cluster_counter_increment_via_consensus() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     let cluster = RegTesterCluster::setup(4).await?;
 

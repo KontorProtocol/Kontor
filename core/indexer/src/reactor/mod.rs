@@ -3,6 +3,8 @@ pub mod block_handler;
 pub mod consensus;
 pub mod engine;
 pub mod executor;
+pub mod mock_bitcoin;
+pub mod mock_executor;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -44,14 +46,14 @@ pub type Simulation = (
 
 /// Handle to the Malachite engine + consensus state, present only when consensus is configured.
 pub struct ConsensusHandle {
-    state: consensus::ConsensusState,
-    channels: Channels<Ctx>,
-    _engine_handle: malachitebft_app_channel::EngineHandle,
-    _wal_dir: tempfile::TempDir,
-    node_index: usize,
+    pub state: consensus::ConsensusState,
+    pub channels: Channels<Ctx>,
+    pub _engine_handle: malachitebft_app_channel::EngineHandle,
+    pub _wal_dir: tempfile::TempDir,
+    pub node_index: usize,
 }
 
-struct Reactor<E: Executor> {
+pub struct Reactor<E: Executor> {
     executor: E,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
@@ -401,9 +403,7 @@ pub async fn create_runtime_executor(
         .build();
 
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime
-        .publish_native_contracts(genesis_validators)
-        .await?;
+    runtime.publish_native_contracts(genesis_validators).await?;
 
     let mut exec = executor::RuntimeExecutor::new(runtime, writer.clone(), cancel_token);
 
@@ -484,11 +484,10 @@ pub fn run(
                 }
 
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
-                    Some(start_consensus(
-                        engine_cfg,
-                        &mut exec.runtime,
-                        observation_channels,
-                    ).await?)
+                    Some(
+                        start_consensus(engine_cfg, &mut exec.runtime, observation_channels)
+                            .await?,
+                    )
                 } else {
                     None
                 };

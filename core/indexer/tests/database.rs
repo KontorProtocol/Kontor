@@ -941,7 +941,14 @@ async fn test_select_existing_txids() -> Result<()> {
             .build(),
     )
     .await?;
-    insert_batch(&conn, 1, 100, &new_mock_block_hash(100).to_string(), b"cert").await?;
+    insert_batch(
+        &conn,
+        1,
+        100,
+        &new_mock_block_hash(100).to_string(),
+        b"cert",
+    )
+    .await?;
     insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -953,11 +960,8 @@ async fn test_select_existing_txids() -> Result<()> {
     .await?;
 
     // Query with mix of existing and non-existing txids
-    let result = select_existing_txids(
-        &conn,
-        &[txid_a.clone(), txid_b.clone(), txid_c.clone()],
-    )
-    .await?;
+    let result =
+        select_existing_txids(&conn, &[txid_a.clone(), txid_b.clone(), txid_c.clone()]).await?;
 
     assert!(result.contains(&txid_a), "confirmed tx should be found");
     assert!(result.contains(&txid_b), "batched tx should be found");
