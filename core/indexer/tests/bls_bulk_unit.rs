@@ -3,7 +3,7 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::bls::{bls_derivation_path, derive_bls_secret_key_eip2333};
-use indexer_types::{BlsBulkOp, ContractAddress, Signer};
+use indexer_types::{BlsBulkOp, ContractAddress, SignerRef, Signer};
 use proptest::prelude::*;
 
 fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
@@ -26,14 +26,14 @@ fn bls_bulk_aggregate_signature_roundtrip() {
     };
 
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 2,
+        signer: SignerRef::RegistryId(2),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -75,14 +75,14 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
     };
 
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 2,
+        signer: SignerRef::RegistryId(2),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -100,7 +100,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
 
     // Mutate op1 after signing (e.g. bundler changes gas_limit). Verification must fail.
     let BlsBulkOp::Call {
-        signer_id,
+        signer: signer_ref,
         nonce,
         gas_limit: _,
         contract,
@@ -110,7 +110,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         panic!("expected BlsBulkOp::Call");
     };
     let op1_mutated = BlsBulkOp::Call {
-        signer_id: *signer_id,
+        signer: signer_ref.clone(),
         nonce: *nonce,
         gas_limit: 60_000,
         contract: contract.clone(),
@@ -131,14 +131,14 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
 }
 
 #[test]
-fn bls_bulk_call_roundtrip_serialization_preserves_signer_id() {
+fn bls_bulk_call_roundtrip_serialization_preserves_signer_ref() {
     let contract = ContractAddress {
         name: "arith".to_string(),
         height: 7,
         tx_index: 3,
     };
     let op = BlsBulkOp::Call {
-        signer_id: 42,
+        signer: SignerRef::RegistryId(42),
         nonce: 7,
         gas_limit: 50_000,
         contract,
@@ -151,21 +151,21 @@ fn bls_bulk_call_roundtrip_serialization_preserves_signer_id() {
 }
 
 #[test]
-fn bls_bulk_message_changes_when_signer_id_changes() {
+fn bls_bulk_message_changes_when_signer_ref_changes() {
     let contract = ContractAddress {
         name: "arith".to_string(),
         height: 123,
         tx_index: 4,
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 2,
+        signer: SignerRef::RegistryId(2),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -174,7 +174,7 @@ fn bls_bulk_message_changes_when_signer_id_changes() {
 
     let msg1 = op1.signing_message().unwrap();
     let msg2 = op2.signing_message().unwrap();
-    assert_ne!(msg1, msg2, "signer_id must affect signed bytes");
+    assert_ne!(msg1, msg2, "signer ref must affect signed bytes");
 }
 
 #[test]
@@ -185,14 +185,14 @@ fn bls_bulk_message_changes_when_nonce_changes() {
         tx_index: 4,
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 1,
         gas_limit: 50_000,
         contract,
@@ -212,14 +212,14 @@ fn bls_bulk_message_changes_when_gas_limit_changes() {
         tx_index: 4,
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "eval(10, id)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 60_000,
         contract,
@@ -234,7 +234,7 @@ fn bls_bulk_message_changes_when_gas_limit_changes() {
 #[test]
 fn bls_bulk_message_changes_when_contract_name_changes() {
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -245,7 +245,7 @@ fn bls_bulk_message_changes_when_contract_name_changes() {
         expr: "transfer(\"x\", 10)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -264,7 +264,7 @@ fn bls_bulk_message_changes_when_contract_name_changes() {
 #[test]
 fn bls_bulk_message_changes_when_contract_height_changes() {
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -275,7 +275,7 @@ fn bls_bulk_message_changes_when_contract_height_changes() {
         expr: "transfer(\"x\", 10)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -294,7 +294,7 @@ fn bls_bulk_message_changes_when_contract_height_changes() {
 #[test]
 fn bls_bulk_message_changes_when_contract_tx_index_changes() {
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -305,7 +305,7 @@ fn bls_bulk_message_changes_when_contract_tx_index_changes() {
         expr: "transfer(\"x\", 10)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -329,14 +329,14 @@ fn bls_bulk_message_changes_when_expr_changes() {
         tx_index: 0,
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "transfer(\"alice\", 10)".to_string(),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -358,7 +358,7 @@ fn bls_bulk_wrong_signer_key_fails_single_op() {
     let pk_a = sk_a.sk_to_pk();
 
     let op = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: ContractAddress {
@@ -399,14 +399,14 @@ fn bls_bulk_wrong_signer_key_fails_multi_op_key_swap() {
     };
 
     let op_a = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "transfer(\"x\", 10)".to_string(),
     };
     let op_b = BlsBulkOp::Call {
-        signer_id: 2,
+        signer: SignerRef::RegistryId(2),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -455,14 +455,14 @@ fn bls_bulk_one_correct_one_wrong_key_fails_entire_aggregate() {
     };
 
     let op_a = BlsBulkOp::Call {
-        signer_id: 1,
+        signer: SignerRef::RegistryId(1),
         nonce: 0,
         gas_limit: 50_000,
         contract: contract.clone(),
         expr: "transfer(\"x\", 10)".to_string(),
     };
     let op_b = BlsBulkOp::Call {
-        signer_id: 2,
+        signer: SignerRef::RegistryId(2),
         nonce: 0,
         gas_limit: 50_000,
         contract,
@@ -509,7 +509,7 @@ proptest! {
         expr in any::<String>(),
     ) {
         let op = BlsBulkOp::Call {
-            signer_id,
+            signer: SignerRef::RegistryId(signer_id),
             nonce,
             gas_limit,
             contract: ContractAddress { name, height, tx_index },

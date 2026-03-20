@@ -4,7 +4,7 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
+use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, SignerRef};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -63,14 +63,14 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 
     // Build two inner ops.
     let op0 = BlsBulkOp::Call {
-        signer_id: signer1_id,
+        signer: SignerRef::RegistryId(signer1_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(10, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: signer2_id,
+        signer: SignerRef::RegistryId(signer2_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -206,21 +206,21 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let op0 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(5, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: signer_id + 10_000,
+        signer: SignerRef::RegistryId(signer_id + 10_000),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(7, arith::Op::Id),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -299,7 +299,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
     let op = BlsBulkOp::Call {
-        signer_id: 999_999_999,
+        signer: SignerRef::RegistryId(999_999_999),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract,
@@ -370,21 +370,21 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     let op0 = BlsBulkOp::Call {
-        signer_id: signer1_id,
+        signer: SignerRef::RegistryId(signer1_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(2, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: signer2_id,
+        signer: SignerRef::RegistryId(signer2_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(3, arith::Op::Id),
     };
     let op1_tampered = BlsBulkOp::Call {
-        signer_id: signer2_id,
+        signer: SignerRef::RegistryId(signer2_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
