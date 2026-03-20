@@ -24,7 +24,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::BlsBulkOp;
+use indexer_types::{BlsBulkOp, SignerRef};
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
@@ -149,6 +149,7 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum SignerKey {
     RegistryId(u64),
+    BundleIndex(u16),
     RawPubkey(Vec<u8>),
 }
 
@@ -161,6 +162,13 @@ struct SignerResolver {
     signer_map: SignerMap,
 }
 
+fn nth_register_op(ops: &[BlsBulkOp], n: u16) -> Result<&BlsBulkOp> {
+    ops.iter()
+        .filter(|op| matches!(op, BlsBulkOp::RegisterBlsKey { .. }))
+        .nth(n as usize)
+        .ok_or_else(|| anyhow!("BundleIndex({n}) out of range: not enough RegisterBlsKey ops"))
+}
+
 impl SignerResolver {
     fn new() -> Self {
         Self {
@@ -169,9 +177,17 @@ impl SignerResolver {
         }
     }
 
-    async fn resolve(&mut self, runtime: &mut Runtime, op: &BlsBulkOp) -> Result<BlsPublicKey> {
+    async fn resolve(
+        &mut self,
+        runtime: &mut Runtime,
+        op: &BlsBulkOp,
+        all_ops: &[BlsBulkOp],
+    ) -> Result<BlsPublicKey> {
         let key = match op {
-            BlsBulkOp::Call { signer_id, .. } => SignerKey::RegistryId(*signer_id),
+            BlsBulkOp::Call { signer, .. } => match signer {
+                SignerRef::RegistryId(id) => SignerKey::RegistryId(*id),
+                SignerRef::BundleIndex(n) => SignerKey::BundleIndex(*n),
+            },
             BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
                 SignerKey::RawPubkey(bls_pubkey.clone())
             }
@@ -182,15 +198,25 @@ impl SignerResolver {
         }
 
         let raw_bytes = match op {
-            BlsBulkOp::Call { signer_id, .. } => {
-                let entry = get_entry_by_id(runtime, *signer_id).await?;
-                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-                self.signer_map
-                    .insert(*signer_id, entry.x_only_pubkey.clone());
-                entry
-                    .bls_pubkey
-                    .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?
-            }
+            BlsBulkOp::Call { signer, .. } => match signer {
+                SignerRef::RegistryId(signer_id) => {
+                    let entry = get_entry_by_id(runtime, *signer_id).await?;
+                    let entry =
+                        entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                    self.signer_map
+                        .insert(*signer_id, entry.x_only_pubkey.clone());
+                    entry.bls_pubkey.ok_or_else(|| {
+                        anyhow!("signer_id {signer_id} has no BLS pubkey registered")
+                    })?
+                }
+                SignerRef::BundleIndex(n) => {
+                    let reg_op = nth_register_op(all_ops, *n)?;
+                    let BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } = reg_op else {
+                        unreachable!()
+                    };
+                    bls_pubkey.clone()
+                }
+            },
             BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
         };
 
@@ -250,9 +276,10 @@ pub async fn verify_bls_bulk(
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
-        // Resolve the BLS pubkey for this op (registry lookup for Calls, inline for
-        // RegisterBlsKey). Cached per unique signer to avoid redundant subgroup checks.
-        pks.push(resolver.resolve(runtime, op).await?);
+        // Resolve the BLS pubkey for this op (registry lookup for RegistryId Calls,
+        // bundle scan for BundleIndex Calls, inline for RegisterBlsKey).
+        // Cached per unique signer to avoid redundant subgroup checks.
+        pks.push(resolver.resolve(runtime, op, ops).await?);
         msgs.push(msg);
     }
 
@@ -365,7 +392,7 @@ mod tests {
     use crate::runtime::{ComponentCache, Storage};
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use indexer_types::{ContractAddress, Signer};
+    use indexer_types::{ContractAddress, SignerRef, Signer};
     use tempfile::TempDir;
 
     async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -444,7 +471,7 @@ mod tests {
     async fn verify_bls_bulk_rejects_wrong_signature_length() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
+            signer: SignerRef::RegistryId(0),
             nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
@@ -468,7 +495,7 @@ mod tests {
     async fn verify_bls_bulk_rejects_invalid_signature_bytes() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
+            signer: SignerRef::RegistryId(0),
             nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
@@ -498,7 +525,7 @@ mod tests {
         let mut ops: Vec<BlsBulkOp> = Vec::with_capacity(MAX_BLS_BULK_OPS + 1);
         for _ in 0..=MAX_BLS_BULK_OPS {
             ops.push(BlsBulkOp::Call {
-                signer_id: 0,
+                signer: SignerRef::RegistryId(0),
                 nonce: 0,
                 gas_limit: 0,
                 contract: ContractAddress {
@@ -520,7 +547,7 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
         let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
+            signer: SignerRef::RegistryId(0),
             nonce: 0,
             gas_limit: 0,
             contract: ContractAddress {
@@ -604,7 +631,7 @@ mod tests {
 
     fn make_call_op(signer_id: u64) -> BlsBulkOp {
         BlsBulkOp::Call {
-            signer_id,
+            signer: SignerRef::RegistryId(signer_id),
             nonce: 0,
             gas_limit: 50_000,
             contract: ContractAddress {
@@ -626,9 +653,10 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let pubkey_bytes = valid_bls_pubkey(&[1u8; 32]);
         let op = make_register_op(pubkey_bytes.clone());
+        let ops = [op.clone()];
 
         let mut resolver = SignerResolver::new();
-        let pk = resolver.resolve(&mut runtime, &op).await.unwrap();
+        let pk = resolver.resolve(&mut runtime, &op, &ops).await.unwrap();
 
         let expected = BlsPublicKey::key_validate(&pubkey_bytes).unwrap();
         assert_eq!(pk.to_bytes(), expected.to_bytes());
@@ -639,10 +667,11 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let pubkey_bytes = valid_bls_pubkey(&[2u8; 32]);
         let op = make_register_op(pubkey_bytes);
+        let ops = [op.clone()];
 
         let mut resolver = SignerResolver::new();
-        let first = resolver.resolve(&mut runtime, &op).await.unwrap();
-        let second = resolver.resolve(&mut runtime, &op).await.unwrap();
+        let first = resolver.resolve(&mut runtime, &op, &ops).await.unwrap();
+        let second = resolver.resolve(&mut runtime, &op, &ops).await.unwrap();
 
         assert_eq!(first.to_bytes(), second.to_bytes());
         assert_eq!(resolver.pk_cache.len(), 1);
@@ -653,10 +682,11 @@ mod tests {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let op_a = make_register_op(valid_bls_pubkey(&[3u8; 32]));
         let op_b = make_register_op(valid_bls_pubkey(&[4u8; 32]));
+        let ops = [op_a.clone(), op_b.clone()];
 
         let mut resolver = SignerResolver::new();
-        let pk_a = resolver.resolve(&mut runtime, &op_a).await.unwrap();
-        let pk_b = resolver.resolve(&mut runtime, &op_b).await.unwrap();
+        let pk_a = resolver.resolve(&mut runtime, &op_a, &ops).await.unwrap();
+        let pk_b = resolver.resolve(&mut runtime, &op_b, &ops).await.unwrap();
 
         assert_ne!(pk_a.to_bytes(), pk_b.to_bytes());
         assert_eq!(resolver.pk_cache.len(), 2);
@@ -666,10 +696,11 @@ mod tests {
     async fn resolver_rejects_invalid_register_pubkey() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let op = make_register_op(vec![0u8; 96]);
+        let ops = [op.clone()];
 
         let mut resolver = SignerResolver::new();
         let err = resolver
-            .resolve(&mut runtime, &op)
+            .resolve(&mut runtime, &op, &ops)
             .await
             .expect_err("invalid pubkey must be rejected");
         assert!(err.to_string().contains("invalid BLS pubkey"));
@@ -680,10 +711,11 @@ mod tests {
     async fn resolver_errors_on_unresolvable_call_and_does_not_cache() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let op = make_call_op(999_999);
+        let ops = [op.clone()];
 
         let mut resolver = SignerResolver::new();
         resolver
-            .resolve(&mut runtime, &op)
+            .resolve(&mut runtime, &op, &ops)
             .await
             .expect_err("unresolvable signer_id must be rejected");
         assert!(resolver.pk_cache.is_empty());

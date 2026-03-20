@@ -323,40 +323,95 @@ impl Runtime {
 
             match inner_op {
                 indexer_types::BlsBulkOp::Call {
-                    signer_id,
+                    signer: signer_ref,
                     nonce,
                     gas_limit,
                     contract,
                     expr,
                 } => {
-                    let x_only = signer_map
-                        .get(signer_id)
-                        .expect("signer_id must be in signer_map after verify_bls_bulk succeeds");
-
-                    let nonce_result = registry::api::advance_nonce(
-                        self,
-                        &Signer::Core(Box::new(Signer::Nobody)),
-                        *signer_id,
-                        *nonce,
-                    )
-                    .await;
-                    match nonce_result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                "BlsBulk nonce check failed for signer {signer_id}: {e:?}"
-                            );
-                            continue;
+                    let (x_only, resolved_signer_id) = match signer_ref {
+                        indexer_types::SignerRef::RegistryId(id) => {
+                            let x = signer_map
+                                .get(id)
+                                .expect("signer_id must be in signer_map after verify_bls_bulk succeeds")
+                                .clone();
+                            (x, Some(*id))
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                "BlsBulk nonce advance error for signer {signer_id}: {e}"
-                            );
-                            continue;
+                        indexer_types::SignerRef::BundleIndex(n) => {
+                            let reg_op = ops
+                                .iter()
+                                .filter(|op| matches!(op, indexer_types::BlsBulkOp::RegisterBlsKey { .. }))
+                                .nth(*n as usize);
+                            let Some(indexer_types::BlsBulkOp::RegisterBlsKey { signer: reg_signer, .. }) = reg_op else {
+                                tracing::warn!("BlsBulk BundleIndex({n}) has no matching RegisterBlsKey op");
+                                continue;
+                            };
+                            let Signer::XOnlyPubKey(x) = reg_signer else {
+                                tracing::warn!("BlsBulk BundleIndex({n}) RegisterBlsKey signer is not XOnlyPubKey");
+                                continue;
+                            };
+                            (x.clone(), None)
+                        }
+                    };
+
+                    if let Some(sid) = resolved_signer_id {
+                        let nonce_result = registry::api::advance_nonce(
+                            self,
+                            &Signer::Core(Box::new(Signer::Nobody)),
+                            sid,
+                            *nonce,
+                        )
+                        .await;
+                        match nonce_result {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    "BlsBulk nonce check failed for signer {sid}: {e:?}"
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "BlsBulk nonce advance error for signer {sid}: {e}"
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        let signer_id = self.ensure_signer(&x_only).await;
+                        match signer_id {
+                            Ok(sid) => {
+                                let nonce_result = registry::api::advance_nonce(
+                                    self,
+                                    &Signer::Core(Box::new(Signer::Nobody)),
+                                    sid,
+                                    *nonce,
+                                )
+                                .await;
+                                match nonce_result {
+                                    Ok(Ok(_)) => {}
+                                    Ok(Err(e)) => {
+                                        tracing::warn!(
+                                            "BlsBulk nonce check failed for signer {sid}: {e:?}"
+                                        );
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "BlsBulk nonce advance error for signer {sid}: {e}"
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("BlsBulk BundleIndex signer lookup failed: {e}");
+                                continue;
+                            }
                         }
                     }
 
-                    let signer = Signer::XOnlyPubKey(x_only.clone());
+                    let signer = Signer::XOnlyPubKey(x_only);
                     self.set_gas_limit(*gas_limit);
                     let result = self.execute(Some(&signer), &(contract.into()), expr).await;
                     if result.is_err() {
