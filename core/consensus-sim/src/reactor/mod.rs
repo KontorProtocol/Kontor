@@ -1,6 +1,7 @@
 pub mod types;
 
 use anyhow::anyhow;
+use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -27,6 +28,8 @@ pub async fn run(
     mempool_rx: &mut mpsc::Receiver<MempoolEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let mut last_height: u64 = 0;
+    let mut last_hash = bitcoin::BlockHash::all_zeros();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -37,7 +40,7 @@ pub async fn run(
                 match event {
                     BlockEvent::BlockInsert { block, .. } => {
                         let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                        bitcoin_state.track_block(block.height, block.hash, &txids);
+                        bitcoin_state.remove_confirmed_txids(&txids);
 
                         info!(
                             height = block.height,
@@ -54,7 +57,7 @@ pub async fn run(
                         while consensus_state
                             .replay_queue
                             .front()
-                            .is_some_and(|(_, v)| v.block_height() <= bitcoin_state.chain_tip)
+                            .is_some_and(|(_, v)| v.block_height() <= last_height)
                         {
                             let (height, value) =
                                 consensus_state.next_replay_batch().unwrap();
@@ -96,7 +99,6 @@ pub async fn run(
                     BlockEvent::Rollback { to_height } => {
                         info!(to_height, "Bitcoin rollback — truncating state");
                         let removed = executor.rollback_state(to_height).await;
-                        bitcoin_state.reset();
                         consensus_state.emit_state_event(
                             indexer::consensus::finality_types::StateEvent::RollbackExecuted {
                                 to_anchor: to_height,
@@ -125,15 +127,17 @@ pub async fn run(
                 }
             }
             Some(msg) = channels.consensus.recv() => {
-                let decided_block = handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index).await?;
+                let decided_block = handle_consensus_msg(consensus_state, executor, bitcoin_state, channels, msg, node_index, last_height, last_hash).await?;
                 if let Some(block) = decided_block {
+                    last_height = block.height;
+                    last_hash = block.hash;
                     executor.execute_block(&block).await;
                     if consensus_state
                         .pending_batches
                         .iter()
-                        .any(|b| b.deadline <= bitcoin_state.chain_tip)
+                        .any(|b| b.deadline <= last_height)
                     {
-                        consensus_state.run_finality_checks(executor, bitcoin_state).await;
+                        consensus_state.run_finality_checks(executor, last_height).await;
                     }
                 }
             }

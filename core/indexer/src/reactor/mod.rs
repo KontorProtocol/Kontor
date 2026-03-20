@@ -19,6 +19,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use malachitebft_app_channel::Channels;
 use tracing::{debug, error, info, warn};
 
@@ -188,7 +189,7 @@ impl<E: Executor> Reactor<E> {
                     match event {
                         BlockEvent::BlockInsert { target_height, block } => {
                             let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                            self.bitcoin_state.track_block(block.height, block.hash, &txids);
+                            self.bitcoin_state.remove_confirmed_txids(&txids);
                             info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                             if let Some(handle) = self.consensus_handle.as_mut() {
@@ -200,7 +201,7 @@ impl<E: Executor> Reactor<E> {
                                 while handle.state
                                     .replay_queue
                                     .front()
-                                    .is_some_and(|(_, v)| v.block_height() <= self.bitcoin_state.chain_tip)
+                                    .is_some_and(|(_, v)| v.block_height() <= self.last_height)
                                 {
                                     let (height, value) = handle.state.next_replay_batch().unwrap();
 
@@ -279,6 +280,8 @@ impl<E: Executor> Reactor<E> {
                         &mut handle.channels,
                         msg,
                         node_index,
+                        self.last_height,
+                        self.option_last_hash.unwrap_or(BlockHash::all_zeros()),
                     ).await?;
                     if let Some(block) = decided_block {
                         self.handle_block(block).await?;
@@ -287,9 +290,9 @@ impl<E: Executor> Reactor<E> {
                         if handle.state
                             .pending_batches
                             .iter()
-                            .any(|b| b.deadline <= self.bitcoin_state.chain_tip)
+                            .any(|b| b.deadline <= self.last_height)
                         {
-                            handle.state.run_finality_checks(&mut self.executor, &mut self.bitcoin_state).await;
+                            handle.state.run_finality_checks(&mut self.executor, self.last_height).await;
                         }
                     }
                 }

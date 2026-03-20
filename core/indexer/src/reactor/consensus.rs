@@ -183,6 +183,8 @@ impl ConsensusState {
         &mut self,
         executor: &impl Executor,
         bitcoin_state: &BitcoinState,
+        last_height: u64,
+        last_hash: bitcoin::BlockHash,
     ) -> Value {
         // If blocks are pending, always propose the next one first
         if let Some(&(height, hash)) = self.pending_blocks.front() {
@@ -213,7 +215,7 @@ impl ConsensusState {
             }
         }
         let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let value = Value::new_batch(bitcoin_state.chain_tip, bitcoin_state.chain_tip_hash, txids);
+        let value = Value::new_batch(last_height, last_hash, txids);
         self.tx_cache.insert(value.id(), txs);
         value
     }
@@ -257,10 +259,10 @@ impl ConsensusState {
     pub async fn check_finality(
         &mut self,
         executor: &impl Executor,
-        bitcoin_state: &BitcoinState,
+        last_height: u64,
     ) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
-        let tip = bitcoin_state.chain_tip;
+        let tip = last_height;
 
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
@@ -347,7 +349,6 @@ impl ConsensusState {
     pub async fn initiate_rollback(
         &mut self,
         executor: &mut impl Executor,
-        bitcoin_state: &mut BitcoinState,
         from_anchor: u64,
         excluded_txids: HashSet<Txid>,
     ) {
@@ -367,8 +368,6 @@ impl ConsensusState {
         self.pending_batches
             .retain(|b| b.anchor_height < from_anchor);
         self.last_processed_anchor = from_anchor.saturating_sub(1);
-
-        bitcoin_state.reset();
 
         self.emit_state_event(StateEvent::RollbackExecuted {
             to_anchor: from_anchor,
@@ -399,9 +398,9 @@ impl ConsensusState {
     pub async fn run_finality_checks(
         &mut self,
         executor: &mut impl Executor,
-        bitcoin_state: &mut BitcoinState,
+        last_height: u64,
     ) {
-        let finality_events = self.check_finality(executor, bitcoin_state).await;
+        let finality_events = self.check_finality(executor, last_height).await;
         for event in &finality_events {
             if let FinalityEvent::Rollback {
                 from_anchor,
@@ -410,7 +409,7 @@ impl ConsensusState {
             } = event
             {
                 let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
-                self.initiate_rollback(executor, bitcoin_state, *from_anchor, excluded)
+                self.initiate_rollback(executor, *from_anchor, excluded)
                     .await;
             }
         }
@@ -537,6 +536,8 @@ pub async fn handle_consensus_msg(
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
     node_index: usize,
+    last_height: u64,
+    last_hash: bitcoin::BlockHash,
 ) -> Result<Option<indexer_types::Block>> {
     let mut decided_block = None;
     match msg {
@@ -583,7 +584,7 @@ pub async fn handle_consensus_msg(
             let proposal = if let Some(existing) = state.undecided.get(&(height, round)) {
                 LocallyProposedValue::new(existing.height, existing.round, existing.value.clone())
             } else {
-                let value = state.make_value(executor, bitcoin_state).await;
+                let value = state.make_value(executor, bitcoin_state, last_height, last_hash).await;
                 let proposed = ProposedValue {
                     height,
                     round,
@@ -634,10 +635,10 @@ pub async fn handle_consensus_msg(
                                     anchor_hash,
                                     ..
                                 } => {
-                                    if *anchor_height > bitcoin_state.chain_tip {
+                                    if *anchor_height > last_height {
                                         warn!(
                                             anchor = anchor_height,
-                                            tip = bitcoin_state.chain_tip,
+                                            tip = last_height,
                                             "Rejecting proposal with unknown anchor height"
                                         );
                                         None

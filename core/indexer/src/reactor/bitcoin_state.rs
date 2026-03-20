@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 
-use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, Txid};
+use bitcoin::Txid;
 
 use crate::bitcoin_client::TxCache;
 
 pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
-    pub chain_tip: u64,
-    pub chain_tip_hash: BlockHash,
     /// Shared tx cache (clone of the one held by BitcoinClient).
     /// Populated from mempool events and block transactions.
     pub tx_cache: Option<TxCache>,
@@ -18,8 +15,6 @@ impl BitcoinState {
     pub fn new() -> Self {
         Self {
             mempool: HashMap::new(),
-            chain_tip: 0,
-            chain_tip_hash: BlockHash::all_zeros(),
             tx_cache: None,
         }
     }
@@ -29,20 +24,11 @@ impl BitcoinState {
         self
     }
 
-    /// Track a new block: update chain tip/hash and remove txids from mempool.
-    pub fn track_block(&mut self, height: u64, hash: BlockHash, txids: &[Txid]) {
-        self.chain_tip = height;
-        self.chain_tip_hash = hash;
+    /// Remove confirmed txids from the mempool when a block arrives.
+    pub fn remove_confirmed_txids(&mut self, txids: &[Txid]) {
         for txid in txids {
             self.mempool.remove(txid);
         }
-    }
-
-    /// Reset block-derived state after a rollback. Mempool is maintained
-    /// by the event stream and doesn't need resetting.
-    pub fn reset(&mut self) {
-        self.chain_tip = 0;
-        self.chain_tip_hash = BlockHash::all_zeros();
     }
 
     pub async fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
