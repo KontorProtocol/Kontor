@@ -189,17 +189,17 @@ impl ConsensusState {
             return Value::new_block(height, hash);
         }
 
-        // Collect txids already in pending (unfinalized) batches to avoid duplicates
-        let already_batched: HashSet<Txid> = self
-            .pending_batches
-            .iter()
-            .flat_map(|b| b.txids.iter().copied())
-            .collect();
+        // Collect candidate txids from the mempool
+        let mempool_txids: Vec<Txid> = bitcoin_state.mempool.keys().copied().collect();
+
+        // Filter out txids already in the system (batched or confirmed)
+        let unbatched = executor.filter_unbatched_txids(&mempool_txids).await;
+        let unbatched_set: HashSet<Txid> = unbatched.into_iter().collect();
 
         let mut txs = Vec::new();
         for tx in bitcoin_state.mempool.values() {
             let txid = tx.compute_txid();
-            if already_batched.contains(&txid) {
+            if !unbatched_set.contains(&txid) {
                 continue;
             }
             // Skip validation if already parsed and cached

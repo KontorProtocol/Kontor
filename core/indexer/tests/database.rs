@@ -908,3 +908,65 @@ async fn test_select_batches_from_anchor() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_select_existing_txids() -> Result<()> {
+    use indexer::database::queries::select_existing_txids;
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Create a block
+    insert_processed_block(
+        &conn,
+        BlockRow::builder()
+            .height(100)
+            .hash(new_mock_block_hash(100))
+            .build(),
+    )
+    .await?;
+
+    // Insert some transactions
+    let txid_a = "aa".repeat(32);
+    let txid_b = "bb".repeat(32);
+    let txid_c = "cc".repeat(32);
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .confirmed_height(100)
+            .tx_index(0)
+            .txid(txid_a.clone())
+            .build(),
+    )
+    .await?;
+    insert_batch(&conn, 1, 100, &new_mock_block_hash(100).to_string(), b"cert").await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .batch_height(1)
+            .txid(txid_b.clone())
+            .build(),
+    )
+    .await?;
+
+    // Query with mix of existing and non-existing txids
+    let result = select_existing_txids(
+        &conn,
+        &[txid_a.clone(), txid_b.clone(), txid_c.clone()],
+    )
+    .await?;
+
+    assert!(result.contains(&txid_a), "confirmed tx should be found");
+    assert!(result.contains(&txid_b), "batched tx should be found");
+    assert!(!result.contains(&txid_c), "unknown tx should not be found");
+    assert_eq!(result.len(), 2);
+
+    // Empty input returns empty result
+    let empty = select_existing_txids(&conn, &[]).await?;
+    assert!(empty.is_empty());
+
+    Ok(())
+}

@@ -225,6 +225,11 @@ impl Executor for StateLog {
         self.known_txs.get(txid).cloned()
     }
 
+    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid> {
+        let known: HashSet<&Txid> = self.entries.iter().map(|e| &e.txid).collect();
+        txids.iter().filter(|t| !known.contains(t)).copied().collect()
+    }
+
     async fn execute_batch(
         &mut self,
         anchor_height: u64,

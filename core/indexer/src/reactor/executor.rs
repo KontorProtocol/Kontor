@@ -52,6 +52,12 @@ pub trait Executor {
     /// Sources: local mempool/block cache, Bitcoin RPC, LRU cache.
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction>;
 
+    /// Filter a list of txids, returning only those NOT already in the system
+    /// (not yet batched or confirmed in a block). Used for:
+    /// - Proposal building: filter mempool txids to avoid re-batching
+    /// - Block execution: identify which txids need execution vs confirmation-only
+    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid>;
+
     /// Execute a consensus-decided batch of mempool transactions at the given anchor height.
     async fn execute_batch(
         &mut self,
@@ -129,6 +135,9 @@ impl Executor for NoopExecutor {
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
+    }
+    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid> {
+        txids.to_vec()
     }
     async fn execute_batch(
         &mut self,
@@ -252,6 +261,18 @@ impl Executor for RuntimeExecutor {
                 None
             }
         }
+    }
+    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid> {
+        use crate::database::queries::select_existing_txids;
+        let txid_strs: Vec<String> = txids.iter().map(|t| t.to_string()).collect();
+        let existing = select_existing_txids(&self.connection(), &txid_strs)
+            .await
+            .unwrap_or_default();
+        txids
+            .iter()
+            .filter(|t| !existing.contains(&t.to_string()))
+            .copied()
+            .collect()
     }
     async fn execute_batch(
         &mut self,

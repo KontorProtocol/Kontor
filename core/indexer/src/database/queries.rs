@@ -1162,3 +1162,26 @@ pub async fn insert_file_metadata(
     .await?;
     Ok(conn.last_insert_rowid())
 }
+
+/// Return the subset of `txids` that already exist in the transactions table.
+pub async fn select_existing_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashSet<String>, Error> {
+    if txids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let placeholders: Vec<&str> = txids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT txid FROM transactions WHERE txid IN ({})",
+        placeholders.join(", ")
+    );
+    let params: Vec<libsql::Value> = txids.iter().map(|t| libsql::Value::from(t.clone())).collect();
+    let mut rows = conn.query(&sql, libsql::params::Params::Positional(params)).await?;
+    let mut result = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        let txid: String = row.get(0)?;
+        result.insert(txid);
+    }
+    Ok(result)
+}
