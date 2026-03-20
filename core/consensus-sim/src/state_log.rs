@@ -46,6 +46,8 @@ pub struct StateLog {
     /// Txids seen in confirmed Bitcoin blocks (for finality checks).
     /// Includes batched txids that were skipped for execution.
     block_confirmed: HashSet<Txid>,
+    /// Block hashes by height — populated during execute_block.
+    block_hashes: HashMap<u64, bitcoin::BlockHash>,
     /// Decided values + certificates, keyed by consensus height.
     /// Used by Malachite sync protocol to serve historical decided values.
     decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
@@ -69,6 +71,7 @@ impl StateLog {
             checkpoint: [0u8; 32],
             batch_heights: Vec::new(),
             block_confirmed: HashSet::new(),
+            block_hashes: HashMap::new(),
             decided: BTreeMap::new(),
             known_txs: HashMap::new(),
             replay_requests: Vec::new(),
@@ -182,6 +185,7 @@ impl StateLog {
             .retain(|e| e.anchor_height < anchor_height);
         // Rebuild block_confirmed from surviving entries
         self.block_confirmed.clear();
+        self.block_hashes.retain(|&h, _| h < anchor_height);
         let removed = before - self.entries.len();
         self.recompute_checkpoint();
         removed
@@ -252,6 +256,7 @@ impl Executor for StateLog {
     }
 
     async fn execute_block(&mut self, block: &indexer_types::Block) {
+        self.block_hashes.insert(block.height, block.hash);
         let txids: Vec<Txid> = block.transactions.iter().map(|tx| tx.txid).collect();
         self.apply_block(block.height, &txids);
     }
@@ -308,6 +313,10 @@ impl Executor for StateLog {
             ops: vec![],
             op_return_data: Default::default(),
         })
+    }
+
+    async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
+        self.block_hashes.get(&height).copied()
     }
 }
 

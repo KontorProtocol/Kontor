@@ -160,8 +160,6 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn run_event_loop(&mut self) -> Result<()> {
-        use std::collections::HashSet;
-
         self.init_tx.take().map(|tx| tx.send(true));
 
         loop {
@@ -206,19 +204,6 @@ impl<E: Executor> Reactor<E> {
                                 {
                                     let (height, value) = handle.state.next_replay_batch().unwrap();
 
-                                    if self.bitcoin_state
-                                        .block_hashes
-                                        .get(&value.block_height())
-                                        .is_some_and(|&local_hash| local_hash != value.block_hash())
-                                    {
-                                        warn!(
-                                            anchor = value.block_height(),
-                                            consensus_height = %height,
-                                            "Skipping replay value with stale hash"
-                                        );
-                                        continue;
-                                    }
-
                                     match &value {
                                         crate::consensus::Value::Batch {
                                             anchor_height,
@@ -261,19 +246,8 @@ impl<E: Executor> Reactor<E> {
                             }
                         },
                         BlockEvent::Rollback { to_height } => {
-                            if let Some(handle) = &mut self.consensus_handle {
-                                info!(to_height, "Bitcoin rollback — initiating replay");
-                                handle.state
-                                    .initiate_rollback(
-                                        &mut self.executor,
-                                        &mut self.bitcoin_state,
-                                        to_height,
-                                        HashSet::new(),
-                                    )
-                                    .await;
-                            } else {
-                                self.rollback(to_height).await?;
-                            }
+                            info!(to_height, "Bitcoin rollback — truncating state");
+                            self.rollback(to_height).await?;
                         },
                     }
                 }

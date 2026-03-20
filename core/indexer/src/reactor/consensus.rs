@@ -641,8 +641,8 @@ pub async fn handle_consensus_msg(
                                             "Rejecting proposal with unknown anchor height"
                                         );
                                         None
-                                    } else if let Some(&local_hash) =
-                                        bitcoin_state.block_hashes.get(anchor_height)
+                                    } else if let Some(local_hash) =
+                                        executor.block_hash_at_height(*anchor_height).await
                                     {
                                         if local_hash != *anchor_hash {
                                             warn!(

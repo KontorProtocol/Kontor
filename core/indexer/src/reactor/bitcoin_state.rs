@@ -9,8 +9,6 @@ pub struct BitcoinState {
     pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub chain_tip: u64,
     pub chain_tip_hash: BlockHash,
-    /// Block hash by height — populated as blocks arrive.
-    pub block_hashes: HashMap<u64, BlockHash>,
     /// Shared tx cache (clone of the one held by BitcoinClient).
     /// Populated from mempool events and block transactions.
     pub tx_cache: Option<TxCache>,
@@ -22,7 +20,6 @@ impl BitcoinState {
             mempool: HashMap::new(),
             chain_tip: 0,
             chain_tip_hash: BlockHash::all_zeros(),
-            block_hashes: HashMap::new(),
             tx_cache: None,
         }
     }
@@ -36,7 +33,6 @@ impl BitcoinState {
     pub fn track_block(&mut self, height: u64, hash: BlockHash, txids: &[Txid]) {
         self.chain_tip = height;
         self.chain_tip_hash = hash;
-        self.block_hashes.insert(height, hash);
         for txid in txids {
             self.mempool.remove(txid);
         }
@@ -47,7 +43,6 @@ impl BitcoinState {
     pub fn reset(&mut self) {
         self.chain_tip = 0;
         self.chain_tip_hash = BlockHash::all_zeros();
-        self.block_hashes.clear();
     }
 
     pub async fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {

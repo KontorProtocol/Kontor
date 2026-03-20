@@ -1,7 +1,5 @@
 pub mod types;
 
-use std::collections::HashSet;
-
 use anyhow::anyhow;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -61,19 +59,6 @@ pub async fn run(
                             let (height, value) =
                                 consensus_state.next_replay_batch().unwrap();
 
-                            if bitcoin_state
-                                .block_hashes
-                                .get(&value.block_height())
-                                .is_some_and(|&local_hash| local_hash != value.block_hash())
-                            {
-                                warn!(
-                                    anchor = value.block_height(),
-                                    consensus_height = %height,
-                                    "Skipping replay value with stale hash"
-                                );
-                                continue;
-                            }
-
                             match &value {
                                 Value::Batch { anchor_height, anchor_hash, txids } => {
                                     let mut resolved_txs = Vec::with_capacity(txids.len());
@@ -109,10 +94,16 @@ pub async fn run(
                         }
                     }
                     BlockEvent::Rollback { to_height } => {
-                        info!(to_height, "Bitcoin rollback — initiating replay");
-                        consensus_state
-                            .initiate_rollback(executor, bitcoin_state, to_height, HashSet::new())
-                            .await;
+                        info!(to_height, "Bitcoin rollback — truncating state");
+                        let removed = executor.rollback_state(to_height).await;
+                        bitcoin_state.reset();
+                        consensus_state.emit_state_event(
+                            indexer::consensus::finality_types::StateEvent::RollbackExecuted {
+                                to_anchor: to_height,
+                                entries_removed: removed,
+                                checkpoint: executor.checkpoint().await,
+                            },
+                        );
                     }
                 }
             }

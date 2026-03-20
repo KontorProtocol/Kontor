@@ -115,8 +115,8 @@ pub trait Executor {
         anyhow::bail!("Simulation not supported on this executor")
     }
 
-    /// Get the block hash at the given height. Used during rollback to update
-    /// the reactor's last_hash tracking.
+    /// Get the block hash at the given height. Used for anchor hash validation
+    /// and rollback tracking.
     async fn block_hash_at_height(&self, _height: u64) -> Option<BlockHash> {
         None
     }

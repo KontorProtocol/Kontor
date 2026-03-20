@@ -1082,6 +1082,9 @@ async fn reorg_rollback_skips_stale_anchor_hash() {
     );
 
     // Re-mine block 1 with a DIFFERENT hash (simulating the reorg fork)
+    // Reorg rollback does NOT replay old batches — the old batch at anchor 1
+    // stays in the DB (dead data for sync) but is not re-executed.
+    // New blocks go through consensus normally.
     mock.reset_to(0);
     {
         let (blk_events, _) = mock.mine_empty_block();
@@ -1090,33 +1093,17 @@ async fn reorg_rollback_skips_stale_anchor_hash() {
         }
     }
 
-    // The replay queue has the batch that was decided at anchor 1 with the OLD hash.
-    // The new block 1 has a different hash, so the batch should be skipped.
-    // Give nodes time to process the replayed block.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Collect more state events — should NOT see BatchApplied for the stale batch
-    let post_events = cluster
-        .wait_for_state_events(4, Duration::from_secs(5))
-        .await;
-
-    // No BatchApplied should appear for the old batch (it was skipped due to stale anchor_hash)
-    let stale_batch_applied = post_events.iter().any(|e| {
-        matches!(
-            e,
-            StateEvent::BatchApplied {
-                anchor_height: 1,
-                ..
-            }
-        )
-    });
-
-    // If we do see a BatchApplied at anchor 1, it should NOT be the stale one
-    // (it could be a new batch decided at the new anchor 1)
-    if stale_batch_applied {
-        // This is acceptable if consensus decided a NEW batch at the new anchor 1
-        // The key thing is that the OLD batch with the wrong hash was skipped
+    // New mempool txs at the new anchor
+    for event in mock.generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
     }
+
+    // Consensus should continue working — new batches decided at the new anchor
+    let new_decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
+    assert!(
+        !new_decisions.is_empty(),
+        "Consensus should continue after reorg"
+    );
 
     cluster.shutdown().await;
 }
