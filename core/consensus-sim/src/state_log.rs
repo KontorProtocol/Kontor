@@ -294,6 +294,16 @@ impl Executor for StateLog {
     async fn replay_blocks_from(&mut self, height: u64) {
         self.replay_requests.push(height);
     }
+
+    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+        let txid = tx.compute_txid();
+        Some(indexer_types::Transaction {
+            txid,
+            index: 0,
+            ops: vec![],
+            op_return_data: Default::default(),
+        })
+    }
 }
 
 #[cfg(test)]

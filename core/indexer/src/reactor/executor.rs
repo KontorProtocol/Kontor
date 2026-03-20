@@ -17,6 +17,20 @@ use crate::runtime::Runtime;
 
 use super::block_handler::{batch_handler, block_handler, simulate_handler};
 
+/// Check if a parsed transaction contains only batchable ops.
+/// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
+/// via Value::Block decisions, not consensus batches.
+pub fn is_batchable(ops: &[indexer_types::Op]) -> bool {
+    !ops.iter().any(|op| {
+        matches!(
+            op,
+            indexer_types::Op::Publish { .. }
+                | indexer_types::Op::Issuance { .. }
+                | indexer_types::Op::RegisterBlsKey { .. }
+        )
+    })
+}
+
 /// Abstraction over transaction execution and state rollback.
 ///
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
@@ -84,6 +98,11 @@ pub trait Executor {
     /// In sim: records the call for test assertions; the test sends blocks manually.
     async fn replay_blocks_from(&mut self, height: u64);
 
+    /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
+    /// Used during replay/sync when parsed_tx_cache misses.
+    /// RuntimeExecutor uses filter_map; StateLog returns a dummy with the correct txid.
+    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
+
     /// Simulate executing a transaction without committing state changes.
     /// Returns the op results. Only meaningful for RuntimeExecutor.
     async fn simulate(&mut self, _btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
@@ -146,6 +165,9 @@ impl Executor for NoopExecutor {
         Vec::new()
     }
     async fn replay_blocks_from(&mut self, _height: u64) {}
+    fn parse_transaction(&self, _tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+        None
+    }
 }
 
 /// Production executor: real WASM execution via Runtime + DB persistence.
@@ -199,16 +221,7 @@ impl Executor for RuntimeExecutor {
         // Parse Kontor ops — reject if no valid ops
         let parsed = filter_map((0, tx.clone()))?;
 
-        // Reject transactions with non-batchable ops (these execute via block decisions only)
-        let has_non_batchable = parsed.ops.iter().any(|op| {
-            matches!(
-                op,
-                indexer_types::Op::Publish { .. }
-                    | indexer_types::Op::Issuance { .. }
-                    | indexer_types::Op::RegisterBlsKey { .. }
-            )
-        });
-        if has_non_batchable {
+        if !is_batchable(&parsed.ops) {
             return None;
         }
 
@@ -351,6 +364,11 @@ impl Executor for RuntimeExecutor {
         {
             tracing::error!(%e, height, "Failed to send replay request to poller");
         }
+    }
+
+    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+        use crate::block::filter_map;
+        filter_map((0, tx.clone()))
     }
 
     async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {

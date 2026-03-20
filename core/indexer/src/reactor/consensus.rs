@@ -429,10 +429,8 @@ impl ConsensusState {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) {
-        use crate::block::filter_map;
-
         // Resolve batch txs to parsed form: check parsed_tx_cache first,
-        // fall back to filter_map for replay/sync path
+        // fall back to executor.parse_transaction for replay/sync path
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
             .filter_map(|btx| {
@@ -440,7 +438,7 @@ impl ConsensusState {
                 if let Some(parsed) = self.parsed_tx_cache.remove(&txid) {
                     Some(parsed)
                 } else {
-                    filter_map((0, btx.clone()))
+                    executor.parse_transaction(btx)
                 }
             })
             .collect();
