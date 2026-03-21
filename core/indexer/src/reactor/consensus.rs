@@ -126,6 +126,7 @@ impl ConsensusState {
                 anchor_height,
                 anchor_hash,
                 txids,
+                ..
             } => {
                 hasher.update(anchor_height.to_be_bytes());
                 hasher.update(anchor_hash.to_byte_array());
@@ -228,6 +229,7 @@ impl ConsensusState {
                 anchor_height,
                 anchor_hash,
                 txids,
+                ..
             } => {
                 let pending = PendingBatch {
                     consensus_height,
@@ -445,6 +447,7 @@ impl ConsensusState {
                 consensus_height,
                 certificate,
                 &parsed_txs,
+                batch_txs,
             )
             .await;
 

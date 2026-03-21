@@ -8,7 +8,8 @@ use crate::{
     consensus::Height,
     database::queries::{
         confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
-        insert_transaction, select_block_latest, set_batch_processed, set_block_processed,
+        insert_transaction, insert_unconfirmed_batch_tx, select_block_latest, set_batch_processed,
+        set_block_processed,
     },
     runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
@@ -97,6 +98,7 @@ pub async fn batch_handler(
     consensus_height: Height,
     certificate: &[u8],
     txs: &[Transaction],
+    raw_txs: &[bitcoin::Transaction],
 ) -> Result<()> {
     insert_batch(
         &runtime.storage.conn,
@@ -106,6 +108,19 @@ pub async fn batch_handler(
         certificate,
     )
     .await?;
+
+    // Store raw bitcoin txs for unconfirmed batch recovery/sync
+    for raw_tx in raw_txs {
+        let txid = raw_tx.compute_txid();
+        let serialized = bitcoin::consensus::serialize(raw_tx);
+        insert_unconfirmed_batch_tx(
+            &runtime.storage.conn,
+            &txid.to_string(),
+            consensus_height.as_u64() as i64,
+            &serialized,
+        )
+        .await?;
+    }
 
     for t in txs {
         let tx_id = insert_transaction(

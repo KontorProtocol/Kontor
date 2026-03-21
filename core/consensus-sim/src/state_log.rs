@@ -245,6 +245,7 @@ impl Executor for StateLog {
         consensus_height: Height,
         certificate: &[u8],
         txs: &[indexer_types::Transaction],
+        _raw_txs: &[bitcoin::Transaction],
     ) {
         let txids: Vec<Txid> = txs.iter().map(|tx| tx.txid).collect();
         self.apply_batch(anchor_height, consensus_height, &txids);

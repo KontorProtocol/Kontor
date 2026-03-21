@@ -212,6 +212,7 @@ impl<E: Executor> Reactor<E> {
                                             anchor_height,
                                             anchor_hash,
                                             txids,
+                                            ..
                                         } => {
                                             let mut resolved_txs = Vec::with_capacity(txids.len());
                                             for txid in txids {

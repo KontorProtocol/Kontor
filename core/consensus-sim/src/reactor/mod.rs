@@ -63,7 +63,7 @@ pub async fn run(
                                 consensus_state.next_replay_batch().unwrap();
 
                             match &value {
-                                Value::Batch { anchor_height, anchor_hash, txids } => {
+                                Value::Batch { anchor_height, anchor_hash, txids, .. } => {
                                     let mut resolved_txs = Vec::with_capacity(txids.len());
                                     for txid in txids {
                                         if let Some(tx) = bitcoin_state.mempool.get(txid) {

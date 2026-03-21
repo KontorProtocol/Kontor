@@ -95,3 +95,10 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
+
+CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
+  txid TEXT NOT NULL PRIMARY KEY,
+  batch_height INTEGER NOT NULL,
+  raw_tx BLOB NOT NULL,
+  FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
+);

@@ -677,7 +677,62 @@ pub async fn confirm_transaction(
         params![confirmed_height, tx_index, txid],
     )
     .await?;
+    delete_unconfirmed_batch_tx(conn, txid).await?;
     Ok(())
+}
+
+pub async fn insert_unconfirmed_batch_tx(
+    conn: &Connection,
+    txid: &str,
+    batch_height: i64,
+    raw_tx: &[u8],
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO unconfirmed_batch_txs (txid, batch_height, raw_tx) VALUES (?, ?, ?)",
+        params![txid, batch_height, raw_tx],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM unconfirmed_batch_txs WHERE txid = ?",
+        params![txid],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_unconfirmed_batch_txs(
+    conn: &Connection,
+    batch_height: i64,
+) -> Result<Vec<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE batch_height = ?",
+            params![batch_height],
+        )
+        .await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let raw_tx: Vec<u8> = row.get(0)?;
+        results.push(raw_tx);
+    }
+    Ok(results)
+}
+
+pub async fn select_unconfirmed_batch_tx(
+    conn: &Connection,
+    txid: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE txid = ?",
+            params![txid],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|row| row.get::<Vec<u8>>(0)).transpose()?)
 }
 
 pub async fn get_transaction_by_txid(

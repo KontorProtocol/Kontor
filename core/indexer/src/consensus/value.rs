@@ -57,6 +57,10 @@ pub enum Value {
         anchor_height: u64,
         anchor_hash: BlockHash,
         txids: Vec<Txid>,
+        /// Full raw transactions, included only in sync responses for unfinalized batches.
+        /// Not part of Value::id() — the certificate signs txids only.
+        #[serde(skip)]
+        raw_txs: Option<Vec<bitcoin::Transaction>>,
     },
     /// A Bitcoin block to execute. All validators agree to process this block.
     Block { height: u64, hash: BlockHash },
@@ -68,6 +72,7 @@ impl Value {
             anchor_height,
             anchor_hash,
             txids,
+            raw_txs: None,
         }
     }
 
@@ -83,6 +88,7 @@ impl Value {
                 anchor_height,
                 anchor_hash,
                 txids,
+                ..
             } => {
                 hasher.update([0u8]); // discriminant
                 hasher.update(anchor_height.to_be_bytes());
@@ -195,6 +201,7 @@ impl Protobuf for Value {
                     anchor_height,
                     anchor_hash,
                     txids,
+                    raw_txs: None,
                 })
             }
             1 => {
@@ -223,6 +230,7 @@ impl Protobuf for Value {
                 anchor_height,
                 anchor_hash,
                 txids,
+                ..
             } => {
                 let mut buf = Vec::with_capacity(1 + 40 + txids.len() * 32);
                 buf.push(0); // discriminant

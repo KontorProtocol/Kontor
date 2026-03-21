@@ -24,6 +24,7 @@ async fn batch_then_block_deduplicates_transaction() -> Result<()> {
         Height::new(1),
         &cert,
         std::slice::from_ref(&mock_tx),
+        &[], // no raw bitcoin txs needed for this test
     )
     .await?;
 

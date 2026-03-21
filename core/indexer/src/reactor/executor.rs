@@ -8,9 +8,11 @@ use tracing::{info, warn};
 use crate::bitcoin_client::Client;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::{CommitCertificate, Ctx, Height, Value};
+use crate::consensus::finality_types::FINALITY_WINDOW;
 use crate::database::queries::{
     get_transaction_by_txid, rollback_to_height, select_batch, select_batches_from_anchor,
-    select_block_at_height, select_min_batch_height,
+    select_block_at_height, select_block_latest, select_min_batch_height,
+    select_unconfirmed_batch_txs,
 };
 use crate::database::{self};
 use crate::runtime::Runtime;
@@ -66,6 +68,7 @@ pub trait Executor {
         consensus_height: Height,
         certificate: &[u8],
         txs: &[indexer_types::Transaction],
+        raw_txs: &[bitcoin::Transaction],
     );
 
     /// Execute a confirmed Bitcoin block. Implementations handle deduplication of
@@ -138,6 +141,7 @@ impl Executor for NoopExecutor {
         _consensus_height: Height,
         _certificate: &[u8],
         _txs: &[indexer_types::Transaction],
+        _raw_txs: &[bitcoin::Transaction],
     ) {
     }
     async fn execute_block(&mut self, _block: &indexer_types::Block) {}
@@ -238,6 +242,20 @@ impl Executor for RuntimeExecutor {
         Some(parsed)
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        // Check unconfirmed batch txs table first (for replay/sync recovery)
+        if let Ok(Some(raw_bytes)) =
+            crate::database::queries::select_unconfirmed_batch_tx(
+                &self.connection(),
+                &txid.to_string(),
+            )
+            .await
+        {
+            if let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes) {
+                return Some(tx);
+            }
+        }
+
+        // Fall back to Bitcoin RPC (via tx cache)
         let client = self.bitcoin_client.as_ref()?;
         match client.get_raw_transaction(txid).await {
             Ok(tx) => Some(tx),
@@ -266,6 +284,7 @@ impl Executor for RuntimeExecutor {
         consensus_height: Height,
         certificate: &[u8],
         txs: &[indexer_types::Transaction],
+        raw_txs: &[bitcoin::Transaction],
     ) {
         if let Err(e) = batch_handler(
             &mut self.runtime,
@@ -274,6 +293,7 @@ impl Executor for RuntimeExecutor {
             consensus_height,
             certificate,
             txs,
+            raw_txs,
         )
         .await
         {
@@ -329,15 +349,44 @@ impl Executor for RuntimeExecutor {
         }
     }
     async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
+        let conn = self.connection();
         let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
-            select_batch(&self.connection(), height.as_u64() as i64)
+            select_batch(&conn, height.as_u64() as i64)
                 .await
                 .ok()
                 .flatten()?;
 
         let anchor_hash = anchor_hash_str.parse::<BlockHash>().ok()?;
         let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-        let value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
+
+        // Include raw txs for unfinalized batches (within finality window of current tip)
+        let raw_txs = if let Ok(Some(tip)) = select_block_latest(&conn).await {
+            if (anchor_height as u64) + FINALITY_WINDOW > tip.height as u64 {
+                // Within finality window — include raw txs from unconfirmed_batch_txs
+                if let Ok(raw_bytes_list) =
+                    select_unconfirmed_batch_txs(&conn, height.as_u64() as i64).await
+                {
+                    let txs: Vec<bitcoin::Transaction> = raw_bytes_list
+                        .iter()
+                        .filter_map(|raw| {
+                            bitcoin::consensus::deserialize::<bitcoin::Transaction>(raw).ok()
+                        })
+                        .collect();
+                    if txs.is_empty() { None } else { Some(txs) }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
+        if let Value::Batch { raw_txs: ref mut rt, .. } = value {
+            *rt = raw_txs;
+        }
 
         let proto =
             crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
