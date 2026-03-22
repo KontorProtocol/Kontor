@@ -42,7 +42,7 @@ pub async fn run<C: BitcoinRpc>(
         .iter()
         .map(|(h, _)| *h)
         .max()
-        .map(|h| h + 1)
+        .map(|h| (h + 1).max(starting_block_height))
         .unwrap_or(starting_block_height);
 
     let handle = tokio::spawn(async move {

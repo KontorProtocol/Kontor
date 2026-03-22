@@ -130,7 +130,6 @@ impl RuntimeExecutor {
         self.replay_tx = Some(tx);
         self
     }
-
 }
 
 impl Executor for RuntimeExecutor {

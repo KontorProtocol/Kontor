@@ -938,6 +938,27 @@ impl RegTesterCluster {
             kontor_data_dirs.push(data_dir);
         }
 
+        // Wait for all nodes to be available via API before returning.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let mut all_ready = true;
+            for node in &nodes {
+                if node.index().await.is_err() {
+                    all_ready = false;
+                    break;
+                }
+            }
+            if all_ready {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("Cluster nodes failed to become available within 30s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        // Brief delay for Malachite peer discovery
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
         Ok(Self {
             bitcoin_client,
             nodes,
@@ -999,5 +1020,14 @@ impl RegTesterCluster {
         self.bitcoin_client.stop().await?;
         self._bitcoin_child.wait().await?;
         Ok(())
+    }
+}
+
+impl Drop for RegTesterCluster {
+    fn drop(&mut self) {
+        let _ = self._bitcoin_child.start_kill();
+        for child in &mut self._kontor_children {
+            let _ = child.start_kill();
+        }
     }
 }

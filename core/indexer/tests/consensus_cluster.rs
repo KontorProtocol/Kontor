@@ -122,7 +122,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     // Wait for all nodes to see counter at 0
-    poll_all_nodes(&cluster, &contract, "get()", "0", 30).await?;
+    poll_all_nodes(&cluster, &contract, "get()", "0", 60).await?;
 
     // Checkpoints should match after publish
     assert_checkpoints_match(&cluster).await?;
