@@ -30,7 +30,9 @@ use crate::{
     consensus::Ctx,
     database::{
         self,
-        queries::{insert_processed_block, select_block_at_height, select_block_latest},
+        queries::{
+            insert_processed_block, rollback_to_height, select_block_at_height, select_block_latest,
+        },
     },
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_mock_block_hash,
@@ -55,6 +57,7 @@ pub struct ConsensusHandle {
 
 pub struct Reactor<E: Executor> {
     executor: E,
+    conn: libsql::Connection,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -71,6 +74,7 @@ pub struct Reactor<E: Executor> {
 impl<E: Executor> Reactor<E> {
     pub fn new(
         executor: E,
+        conn: libsql::Connection,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
@@ -84,6 +88,7 @@ impl<E: Executor> Reactor<E> {
     ) -> Self {
         Self {
             executor,
+            conn,
             cancel_token,
             block_rx,
             mempool_rx,
@@ -98,12 +103,18 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
-        self.executor.rollback_state(height).await;
+        rollback_to_height(&self.conn, height).await?;
         self.last_height = height;
 
-        if let Some(hash) = self.executor.block_hash_at_height(height).await {
-            self.option_last_hash = Some(hash);
-            info!("Rollback to height {} ({})", height, hash);
+        if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
+            if let Ok(decoded) = hex::decode(row.hash)
+                && decoded.len() == 32
+            {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&decoded);
+                self.option_last_hash = Some(BlockHash::from_byte_array(bytes));
+                info!("Rollback to height {} ({})", height, row.hash);
+            }
         } else {
             self.option_last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
@@ -163,8 +174,11 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn process_replay_queue(&mut self) {
-        let Some(handle) = self.consensus_handle.as_mut() else { return };
-        while handle.state
+        let Some(handle) = self.consensus_handle.as_mut() else {
+            return;
+        };
+        while handle
+            .state
             .replay_queue
             .front()
             .is_some_and(|(_, v)| v.block_height() <= self.last_height)
@@ -190,7 +204,8 @@ impl<E: Executor> Reactor<E> {
                     }
 
                     handle.state.record_decided_batch(height, &value);
-                    handle.state
+                    handle
+                        .state
                         .process_decided_batch(
                             &mut self.executor,
                             &mut self.bitcoin_state,
@@ -213,14 +228,20 @@ impl<E: Executor> Reactor<E> {
 
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
         match event {
-            BlockEvent::BlockInsert { target_height, block } => {
+            BlockEvent::BlockInsert {
+                target_height,
+                block,
+            } => {
                 let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
                 self.bitcoin_state.remove_confirmed_txids(&txids);
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
                     handle.state.block_cache.insert(block.height, block.clone());
-                    handle.state.pending_blocks.push_back((block.height, block.hash));
+                    handle
+                        .state
+                        .pending_blocks
+                        .push_back((block.height, block.hash));
                 }
                 // Process replay queue entries whose anchor has been reached
                 self.process_replay_queue().await;
@@ -309,15 +330,13 @@ impl<E: Executor> Reactor<E> {
                             .pending_batches
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
-                        {
-                            if let Some(rollback_anchor) = handle.state.run_finality_checks(&mut self.executor, self.last_height).await {
+                            && let Some(rollback_anchor) = handle.state.run_finality_checks(&mut self.executor, self.last_height).await {
                                 self.last_height = rollback_anchor;
-                                self.option_last_hash = self.executor.block_hash_at_height(rollback_anchor).await;
+                                self.option_last_hash = handle.state.block_hash_at_height(rollback_anchor).await;
 
                                 // Process replay queue entries using already-cached blocks
                                 self.process_replay_queue().await;
                             }
-                        }
                     }
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;
@@ -459,6 +478,7 @@ pub async fn start_consensus(
         .expect("Our address not found in genesis validator set");
 
     let mut state = consensus::ConsensusState::new(
+        runtime.get_storage_conn(),
         engine_output.signing_provider,
         genesis,
         engine_output.address,
@@ -518,6 +538,7 @@ pub fn run(
 
                 let mut reactor = Reactor::new(
                     exec,
+                    writer.connection(),
                     block_rx,
                     mempool_rx,
                     cancel_token.clone(),

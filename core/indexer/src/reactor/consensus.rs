@@ -17,12 +17,18 @@ use malachitebft_engine::host::Next;
 
 use prost::Message;
 
-use crate::consensus::codec::{ProtobufCodec, encode_commit_certificate};
+use crate::consensus::codec::{
+    ProtobufCodec, decode_commit_certificate, encode_commit_certificate,
+};
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
     Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     ValidatorSet, Value, ValueId,
+};
+use crate::database::queries::{
+    get_checkpoint_latest, get_transaction_by_txid, rollback_to_height, select_batches_from_anchor,
+    select_block_at_height, select_existing_txids, select_min_batch_height,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -30,6 +36,7 @@ use super::executor::Executor;
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
+    pub conn: libsql::Connection,
     pub signing_provider: Ed25519Provider,
     pub genesis: Genesis,
     pub address: Address,
@@ -75,8 +82,14 @@ pub struct ObservationChannels {
 }
 
 impl ConsensusState {
-    pub fn new(signing_provider: Ed25519Provider, genesis: Genesis, address: Address) -> Self {
+    pub fn new(
+        conn: libsql::Connection,
+        signing_provider: Ed25519Provider,
+        genesis: Genesis,
+        address: Address,
+    ) -> Self {
         Self {
+            conn,
             signing_provider,
             genesis,
             address,
@@ -196,8 +209,14 @@ impl ConsensusState {
         let mempool_txids: Vec<Txid> = bitcoin_state.mempool.keys().copied().collect();
 
         // Filter out txids already in the system (batched or confirmed)
-        let unbatched = executor.filter_unbatched_txids(&mempool_txids).await;
-        let unbatched_set: HashSet<Txid> = unbatched.into_iter().collect();
+        let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
+        let existing = select_existing_txids(&self.conn, &txid_strs)
+            .await
+            .unwrap_or_default();
+        let unbatched_set: HashSet<Txid> = mempool_txids
+            .into_iter()
+            .filter(|t| !existing.contains(&t.to_string()))
+            .collect();
 
         let mut txs = Vec::new();
         for tx in bitcoin_state.mempool.values() {
@@ -258,11 +277,7 @@ impl ConsensusState {
         }
     }
 
-    pub async fn check_finality(
-        &mut self,
-        executor: &impl Executor,
-        last_height: u64,
-    ) -> Vec<FinalityEvent> {
+    pub async fn check_finality(&mut self, last_height: u64) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
         let tip = last_height;
 
@@ -282,7 +297,11 @@ impl ConsensusState {
         for batch in &at_deadline {
             let mut missing = Vec::new();
             for txid in &batch.txids {
-                if !executor.is_confirmed_on_chain(txid).await {
+                let confirmed = match get_transaction_by_txid(&self.conn, &txid.to_string()).await {
+                    Ok(Some(row)) => row.confirmed_height.is_some(),
+                    _ => false,
+                };
+                if !confirmed {
                     missing.push(*txid);
                 }
             }
@@ -346,6 +365,128 @@ impl ConsensusState {
         }
     }
 
+    // --- DB query helpers (moved from Executor trait) ---
+
+    async fn get_checkpoint(&self) -> Option<[u8; 32]> {
+        match get_checkpoint_latest(&self.conn).await {
+            Ok(Some(row)) => {
+                if let Ok(decoded) = hex::decode(&row.hash)
+                    && decoded.len() == 32
+                {
+                    let mut bytes = [0u8; 32];
+                    bytes.copy_from_slice(&decoded);
+                    return Some(bytes);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
+        let rows = match select_batches_from_anchor(&self.conn, from_anchor as i64).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!(%e, "Failed to query batches from anchor");
+                return Vec::new();
+            }
+        };
+
+        rows.into_iter()
+            .filter_map(
+                |(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
+                    let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
+                    let txids: Vec<Txid> =
+                        txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
+                    Some((
+                        Height::new(consensus_height as u64),
+                        Value::new_batch(anchor_height as u64, anchor_hash, txids),
+                    ))
+                },
+            )
+            .collect()
+    }
+
+    pub async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
+        match select_block_at_height(&self.conn, height as i64).await {
+            Ok(Some(row)) => {
+                if let Ok(decoded) = hex::decode(row.hash)
+                    && decoded.len() == 32
+                {
+                    let mut bytes = [0u8; 32];
+                    bytes.copy_from_slice(&decoded);
+                    return Some(bitcoin::BlockHash::from_byte_array(bytes));
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    async fn get_decided(
+        &self,
+        height: Height,
+    ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
+        use crate::consensus::finality_types::FINALITY_WINDOW;
+        use crate::database::queries::{
+            select_batch, select_block_latest, select_unconfirmed_batch_txs,
+        };
+
+        let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
+            select_batch(&self.conn, height.as_u64() as i64)
+                .await
+                .ok()
+                .flatten()?;
+
+        let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
+        let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
+
+        let raw_txs = if let Ok(Some(tip)) = select_block_latest(&self.conn).await {
+            if (anchor_height as u64) + FINALITY_WINDOW > tip.height as u64 {
+                if let Ok(raw_bytes_list) =
+                    select_unconfirmed_batch_txs(&self.conn, height.as_u64() as i64).await
+                {
+                    let txs: Vec<bitcoin::Transaction> = raw_bytes_list
+                        .iter()
+                        .filter_map(|raw| {
+                            bitcoin::consensus::deserialize::<bitcoin::Transaction>(raw).ok()
+                        })
+                        .collect();
+                    if txs.is_empty() { None } else { Some(txs) }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
+        if let Value::Batch {
+            raw_txs: ref mut rt,
+            ..
+        } = value
+        {
+            *rt = raw_txs;
+        }
+
+        let proto =
+            crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
+        let certificate = decode_commit_certificate(proto).ok()?;
+
+        Some((value, certificate))
+    }
+
+    async fn min_decided_height(&self) -> Option<Height> {
+        select_min_batch_height(&self.conn)
+            .await
+            .ok()
+            .flatten()
+            .map(|h| Height::new(h as u64))
+    }
+
     /// Initiate a rollback: query decided batches from the rollback point,
     /// truncate executor state, populate the replay queue, and signal block replay.
     pub async fn initiate_rollback(
@@ -354,8 +495,14 @@ impl ConsensusState {
         from_anchor: u64,
         excluded_txids: HashSet<Txid>,
     ) {
-        let replay_batches = executor.get_decided_from_anchor(from_anchor).await;
-        let removed = executor.rollback_state(from_anchor).await;
+        let replay_batches = self.get_decided_from_anchor(from_anchor).await;
+        let removed = match rollback_to_height(&self.conn, from_anchor).await {
+            Ok(n) => n as usize,
+            Err(e) => {
+                error!(%e, "rollback_to_height failed");
+                0
+            }
+        };
 
         info!(
             from_anchor,
@@ -371,10 +518,11 @@ impl ConsensusState {
             .retain(|b| b.anchor_height < from_anchor);
         self.last_processed_anchor = from_anchor.saturating_sub(1);
 
+        let checkpoint = self.get_checkpoint().await;
         self.emit_state_event(StateEvent::RollbackExecuted {
             to_anchor: from_anchor,
             entries_removed: removed,
-            checkpoint: executor.checkpoint().await,
+            checkpoint,
         });
 
         executor.replay_blocks_from(from_anchor).await;
@@ -398,8 +546,12 @@ impl ConsensusState {
 
     /// Run finality checks and execute any rollbacks.
     /// Returns the rollback anchor height if a rollback was initiated.
-    pub async fn run_finality_checks(&mut self, executor: &mut impl Executor, last_height: u64) -> Option<u64> {
-        let finality_events = self.check_finality(executor, last_height).await;
+    pub async fn run_finality_checks(
+        &mut self,
+        executor: &mut impl Executor,
+        last_height: u64,
+    ) -> Option<u64> {
+        let finality_events = self.check_finality(last_height).await;
         let mut rollback_to = None;
         for event in &finality_events {
             if let FinalityEvent::Rollback {
@@ -461,7 +613,7 @@ impl ConsensusState {
             consensus_height,
             anchor_height,
             txid_count: parsed_txs.len(),
-            checkpoint: executor.checkpoint().await,
+            checkpoint: self.get_checkpoint().await,
         });
 
         info!(
@@ -648,7 +800,7 @@ pub async fn handle_consensus_msg(
                                         );
                                         None
                                     } else if let Some(local_hash) =
-                                        executor.block_hash_at_height(*anchor_height).await
+                                        state.block_hash_at_height(*anchor_height).await
                                     {
                                         if local_hash != *anchor_hash {
                                             warn!(
@@ -789,10 +941,7 @@ pub async fn handle_consensus_msg(
         }
 
         AppMsg::GetHistoryMinHeight { reply } => {
-            let min = executor
-                .min_decided_height()
-                .await
-                .unwrap_or(Height::new(1));
+            let min = state.min_decided_height().await.unwrap_or(Height::new(1));
             if reply.send(min).is_err() {
                 error!("Failed to send GetHistoryMinHeight reply");
             }
@@ -804,7 +953,7 @@ pub async fn handle_consensus_msg(
             let end = *range.end();
             let mut h = start;
             while h <= end {
-                if let Some((value, cert)) = executor.get_decided(h).await
+                if let Some((value, cert)) = state.get_decided(h).await
                     && let Ok(encoded) = ProtobufCodec.encode(&value)
                 {
                     values.push(RawDecidedValue {

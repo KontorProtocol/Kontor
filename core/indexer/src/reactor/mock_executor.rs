@@ -1,13 +1,10 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use sha3::{Digest, Keccak256};
 
-use prost::Message;
-
-use crate::consensus::codec::decode_commit_certificate;
-use crate::consensus::{CommitCertificate, Ctx, Height, Value};
+use crate::consensus::Height;
 use crate::reactor::executor::Executor;
 use indexer_types::Transaction;
 
@@ -45,7 +42,6 @@ pub struct MockExecutor {
     batch_heights: Vec<BatchHeightEntry>,
     block_confirmed: HashSet<Txid>,
     block_hashes: HashMap<u64, bitcoin::BlockHash>,
-    decided: BTreeMap<Height, (Value, CommitCertificate<Ctx>)>,
     known_txs: HashMap<Txid, bitcoin::Transaction>,
     pub replay_requests: Vec<u64>,
 }
@@ -64,7 +60,6 @@ impl MockExecutor {
             batch_heights: Vec::new(),
             block_confirmed: HashSet::new(),
             block_hashes: HashMap::new(),
-            decided: BTreeMap::new(),
             known_txs: HashMap::new(),
             replay_requests: Vec::new(),
         }
@@ -190,68 +185,23 @@ impl Executor for MockExecutor {
         self.known_txs.get(txid).cloned()
     }
 
-    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid> {
-        let known: HashSet<&Txid> = self.entries.iter().map(|e| &e.txid).collect();
-        txids
-            .iter()
-            .filter(|t| !known.contains(t))
-            .copied()
-            .collect()
-    }
-
     async fn execute_batch(
         &mut self,
         anchor_height: u64,
-        anchor_hash: bitcoin::BlockHash,
+        _anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
-        certificate: &[u8],
+        _certificate: &[u8],
         txs: &[indexer_types::Transaction],
         _raw_txs: &[bitcoin::Transaction],
     ) {
         let txids: Vec<Txid> = txs.iter().map(|tx| tx.txid).collect();
         self.apply_batch(anchor_height, consensus_height, &txids);
-
-        if !certificate.is_empty()
-            && let Ok(proto) = crate::consensus::proto::CommitCertificate::decode(certificate)
-            && let Ok(cert) = decode_commit_certificate(proto)
-        {
-            let value = Value::new_batch(anchor_height, anchor_hash, txids);
-            self.decided.insert(consensus_height, (value, cert));
-        }
     }
 
     async fn execute_block(&mut self, block: &indexer_types::Block) {
         self.block_hashes.insert(block.height, block.hash);
         let txids: Vec<Txid> = block.transactions.iter().map(|tx| tx.txid).collect();
         self.apply_block(block.height, &txids);
-    }
-
-    async fn rollback_state(&mut self, to_anchor: u64) -> usize {
-        self.rollback_to(to_anchor)
-    }
-
-    async fn checkpoint(&self) -> Option<[u8; 32]> {
-        Some(self.checkpoint)
-    }
-
-    async fn is_confirmed_on_chain(&self, txid: &bitcoin::Txid) -> bool {
-        self.block_confirmed.contains(txid)
-    }
-
-    async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
-        self.decided.get(&height).cloned()
-    }
-
-    async fn min_decided_height(&self) -> Option<Height> {
-        self.decided.keys().next().copied()
-    }
-
-    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
-        self.decided
-            .iter()
-            .filter(|(_, (value, _))| value.block_height() >= from_anchor)
-            .map(|(h, (v, _))| (*h, v.clone()))
-            .collect()
     }
 
     async fn replay_blocks_from(&mut self, height: u64) {
@@ -266,9 +216,5 @@ impl Executor for MockExecutor {
             ops: vec![],
             op_return_data: Default::default(),
         })
-    }
-
-    async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
-        self.block_hashes.get(&height).copied()
     }
 }

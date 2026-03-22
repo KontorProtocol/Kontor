@@ -732,7 +732,11 @@ pub async fn select_unconfirmed_batch_tx(
             params![txid],
         )
         .await?;
-    Ok(rows.next().await?.map(|row| row.get::<Vec<u8>>(0)).transpose()?)
+    Ok(rows
+        .next()
+        .await?
+        .map(|row| row.get::<Vec<u8>>(0))
+        .transpose()?)
 }
 
 pub async fn get_transaction_by_txid(

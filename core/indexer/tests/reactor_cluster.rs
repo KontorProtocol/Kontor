@@ -9,13 +9,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
-use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use indexer::reactor::bitcoin_state::BitcoinState;
 use indexer::reactor::consensus::{ConsensusState, ObservationChannels};
 use indexer::reactor::engine::{self, EngineConfig};
+use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::reactor::{ConsensusHandle, Reactor};
 use malachitebft_app_channel::app::types::core::VotingPower;
 
@@ -118,7 +118,9 @@ impl ReactorCluster {
             let rtx = ready_tx.clone();
 
             join_set.spawn(async move {
-                let executor = LiteExecutor::new().await.expect("LiteExecutor setup failed");
+                let executor = LiteExecutor::new()
+                    .await
+                    .expect("LiteExecutor setup failed");
 
                 let engine_output = match engine::start(engine_config, &genesis).await {
                     Ok(o) => o,
@@ -137,7 +139,9 @@ impl ReactorCluster {
                     .position(|v| v.address == engine_output.address)
                     .unwrap_or(i);
 
+                let conn = executor.connection();
                 let mut state = ConsensusState::new(
+                    conn.clone(),
                     engine_output.signing_provider,
                     genesis,
                     engine_output.address,
@@ -160,6 +164,7 @@ impl ReactorCluster {
 
                 let mut reactor = Reactor::new(
                     executor,
+                    conn,
                     node_block_rx,
                     node_mempool_rx,
                     cancel.clone(),
@@ -346,7 +351,9 @@ impl ReactorCluster {
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         loop {
-            if count >= n { break; }
+            if count >= n {
+                break;
+            }
             tokio::select! {
                 _ = &mut deadline => break,
                 Some(event) = self.state_rx.recv() => {
@@ -440,7 +447,11 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     // Wait for a batch decision at anchor 0
     let decisions = cluster
         .wait_for_decision_matching(
-            |d| !d.value.is_block() && d.value.block_height() == 0 && !d.value.batch_txids().is_empty(),
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 0
+                    && !d.value.batch_txids().is_empty()
+            },
             Duration::from_secs(30),
         )
         .await;
@@ -468,7 +479,9 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
         )
         .await;
     assert!(
-        block_decisions.iter().any(|d| d.value.is_block() && d.value.block_height() == 1),
+        block_decisions
+            .iter()
+            .any(|d| d.value.is_block() && d.value.block_height() == 1),
         "Expected a Value::Block decision at height 1"
     );
 
@@ -479,12 +492,18 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 
     let batch_at_1 = cluster
         .wait_for_decision_matching(
-            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 1
+                    && !d.value.batch_txids().is_empty()
+            },
             Duration::from_secs(30),
         )
         .await;
     assert!(
-        batch_at_1.iter().any(|d| !d.value.is_block() && d.value.block_height() == 1),
+        batch_at_1
+            .iter()
+            .any(|d| !d.value.is_block() && d.value.block_height() == 1),
         "Expected a Value::Batch anchored at height 1"
     );
 
@@ -697,7 +716,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 
     // The replayed batch should have fewer txids (excluded the missing one)
     assert!(
-        replayed_batches.iter().any(|&count| count == 2),
+        replayed_batches.contains(&2),
         "Expected replayed batch with 2 txids (excluding missing), got counts: {replayed_batches:?}"
     );
 
@@ -752,7 +771,11 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     }
     cluster
         .wait_for_decision_matching(
-            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 1
+                    && !d.value.batch_txids().is_empty()
+            },
             Duration::from_secs(30),
         )
         .await;
@@ -852,7 +875,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     }
     cluster
         .wait_for_decision_matching(
-            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 1
+                    && !d.value.batch_txids().is_empty()
+            },
             Duration::from_secs(30),
         )
         .await;
@@ -877,7 +904,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     }
     cluster
         .wait_for_decision_matching(
-            |d| !d.value.is_block() && d.value.block_height() == 2 && !d.value.batch_txids().is_empty(),
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 2
+                    && !d.value.batch_txids().is_empty()
+            },
             Duration::from_secs(30),
         )
         .await;

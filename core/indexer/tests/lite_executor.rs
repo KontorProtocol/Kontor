@@ -2,26 +2,19 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use bitcoin::Txid;
-use bitcoin::hashes::Hash;
-use prost::Message;
 
-use indexer::consensus::codec::decode_commit_certificate;
-use indexer::consensus::finality_types::FINALITY_WINDOW;
-use indexer::consensus::{CommitCertificate, Ctx, Height, Value};
+use indexer::consensus::Height;
 use indexer::database::queries::{
-    confirm_transaction, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
-    insert_block, insert_transaction, insert_unconfirmed_batch_tx, rollback_to_height,
-    select_batch, select_batches_from_anchor, select_block_at_height, select_block_latest,
-    select_existing_txids, select_min_batch_height, select_unconfirmed_batch_tx,
-    select_unconfirmed_batch_txs, set_batch_processed, set_block_processed,
+    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
+    insert_unconfirmed_batch_tx, select_unconfirmed_batch_tx, set_batch_processed,
+    set_block_processed,
 };
 use indexer::reactor::executor::Executor;
-use indexer::runtime::{ContractAddress, Runtime, TransactionContext};
 use indexer::runtime::wit::Signer;
-use indexer::test_utils::new_test_db;
+use indexer::runtime::{ContractAddress, Runtime, TransactionContext};
+use indexer::test_utils::{new_mock_transaction, new_test_db};
 
 use indexer_types::{BlockRow, TransactionRow};
-use indexer::test_utils::new_mock_transaction;
 use testlib::ContractReader;
 
 pub struct LiteExecutor {
@@ -35,7 +28,9 @@ pub struct LiteExecutor {
 
 impl LiteExecutor {
     pub async fn new() -> Result<Self> {
-        use indexer::database::queries::{insert_processed_block, insert_contract, contract_has_state};
+        use indexer::database::queries::{
+            contract_has_state, insert_contract, insert_processed_block,
+        };
         use indexer::runtime::{ComponentCache, Storage};
         use indexer::test_utils::new_mock_block_hash;
 
@@ -107,7 +102,12 @@ impl LiteExecutor {
             runtime
                 .set_context(
                     0,
-                    Some(TransactionContext::builder().tx_index(0).txid(mock_tx.txid).build()),
+                    Some(
+                        TransactionContext::builder()
+                            .tx_index(0)
+                            .txid(mock_tx.txid)
+                            .build(),
+                    ),
                     None,
                     None,
                 )
@@ -120,23 +120,19 @@ impl LiteExecutor {
         Ok(Self {
             runtime,
             _db_dir: db_dir,
-            counter_address: counter_address,
+            counter_address,
             signer,
             known_txs: HashMap::new(),
             replay_requests: Vec::new(),
         })
     }
 
-    fn connection(&self) -> libsql::Connection {
+    pub fn connection(&self) -> libsql::Connection {
         self.runtime.get_storage_conn()
     }
 
-    pub fn track_transaction(&mut self, tx: bitcoin::Transaction) {
-        let txid = tx.compute_txid();
-        self.known_txs.insert(txid, tx);
-    }
-
     /// Read counter value via the WASM contract
+    #[allow(dead_code)]
     pub async fn counter_value(&mut self) -> Result<u64> {
         let result = self
             .runtime
@@ -147,7 +143,10 @@ impl LiteExecutor {
 }
 
 impl Executor for LiteExecutor {
-    async fn validate_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+    async fn validate_transaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: 0,
@@ -159,24 +158,11 @@ impl Executor for LiteExecutor {
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         if let Ok(Some(raw_bytes)) =
             select_unconfirmed_batch_tx(&self.connection(), &txid.to_string()).await
+            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
         {
-            if let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes) {
-                return Some(tx);
-            }
+            return Some(tx);
         }
         self.known_txs.get(txid).cloned()
-    }
-
-    async fn filter_unbatched_txids(&self, txids: &[Txid]) -> Vec<Txid> {
-        let txid_strs: Vec<String> = txids.iter().map(|t| t.to_string()).collect();
-        match select_existing_txids(&self.connection(), &txid_strs).await {
-            Ok(existing) => txids
-                .iter()
-                .filter(|t| !existing.contains(&t.to_string()))
-                .copied()
-                .collect(),
-            Err(_) => txids.to_vec(),
-        }
     }
 
     async fn execute_batch(
@@ -276,13 +262,9 @@ impl Executor for LiteExecutor {
 
         for (i, t) in block.transactions.iter().enumerate() {
             if let Ok(Some(_)) = get_transaction_by_txid(&conn, &t.txid.to_string()).await {
-                let _ = confirm_transaction(
-                    &conn,
-                    &t.txid.to_string(),
-                    block.height as i64,
-                    i as i64,
-                )
-                .await;
+                let _ =
+                    confirm_transaction(&conn, &t.txid.to_string(), block.height as i64, i as i64)
+                        .await;
                 continue;
             }
 
@@ -331,113 +313,6 @@ impl Executor for LiteExecutor {
         let _ = set_block_processed(&conn, block.height as i64).await;
     }
 
-    async fn rollback_state(&mut self, to_anchor: u64) -> usize {
-        match rollback_to_height(&self.connection(), to_anchor).await {
-            Ok(n) => n as usize,
-            Err(e) => {
-                tracing::error!("rollback_to_height error: {e}");
-                0
-            }
-        }
-    }
-
-    async fn checkpoint(&self) -> Option<[u8; 32]> {
-        match get_checkpoint_latest(&self.connection()).await {
-            Ok(Some(row)) => {
-                let mut bytes = [0u8; 32];
-                if let Ok(decoded) = hex::decode(&row.hash)
-                    && decoded.len() == 32
-                {
-                    bytes.copy_from_slice(&decoded);
-                    return Some(bytes);
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    async fn is_confirmed_on_chain(&self, txid: &Txid) -> bool {
-        match get_transaction_by_txid(&self.connection(), &txid.to_string()).await {
-            Ok(Some(row)) => row.confirmed_height.is_some(),
-            _ => false,
-        }
-    }
-
-    async fn get_decided(&self, height: Height) -> Option<(Value, CommitCertificate<Ctx>)> {
-        let conn = self.connection();
-        let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
-            select_batch(&conn, height.as_u64() as i64).await.ok().flatten()?;
-
-        let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
-        let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-
-        let raw_txs = if let Ok(Some(tip)) = select_block_latest(&conn).await {
-            if (anchor_height as u64) + FINALITY_WINDOW > tip.height as u64 {
-                if let Ok(raw_bytes_list) =
-                    select_unconfirmed_batch_txs(&conn, height.as_u64() as i64).await
-                {
-                    let txs: Vec<bitcoin::Transaction> = raw_bytes_list
-                        .iter()
-                        .filter_map(|raw| {
-                            bitcoin::consensus::deserialize::<bitcoin::Transaction>(raw).ok()
-                        })
-                        .collect();
-                    if txs.is_empty() { None } else { Some(txs) }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
-        if let Value::Batch { raw_txs: ref mut rt, .. } = value {
-            *rt = raw_txs;
-        }
-
-        let proto =
-            indexer::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
-        let certificate = decode_commit_certificate(proto).ok()?;
-
-        Some((value, certificate))
-    }
-
-    async fn min_decided_height(&self) -> Option<Height> {
-        select_min_batch_height(&self.connection())
-            .await
-            .ok()
-            .flatten()
-            .map(|h| Height::new(h as u64))
-    }
-
-    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
-        let rows = match select_batches_from_anchor(&self.connection(), from_anchor as i64).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(%e, "Failed to query batches from anchor");
-                return Vec::new();
-            }
-        };
-
-        rows.into_iter()
-            .filter_map(
-                |(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
-                    let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
-                    let txids: Vec<Txid> =
-                        txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-                    Some((
-                        Height::new(consensus_height as u64),
-                        Value::new_batch(anchor_height as u64, anchor_hash, txids),
-                    ))
-                },
-            )
-            .collect()
-    }
-
     async fn replay_blocks_from(&mut self, height: u64) {
         self.replay_requests.push(height);
     }
@@ -449,21 +324,5 @@ impl Executor for LiteExecutor {
             ops: vec![],
             op_return_data: Default::default(),
         })
-    }
-
-    async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
-        match select_block_at_height(&self.connection(), height as i64).await {
-            Ok(Some(row)) => {
-                let mut bytes = [0u8; 32];
-                if let Ok(decoded) = hex::decode(&row.hash)
-                    && decoded.len() == 32
-                {
-                    bytes.copy_from_slice(&decoded);
-                    return Some(bitcoin::BlockHash::from_byte_array(bytes));
-                }
-                None
-            }
-            _ => None,
-        }
     }
 }
