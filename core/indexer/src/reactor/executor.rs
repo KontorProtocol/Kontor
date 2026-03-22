@@ -1,15 +1,15 @@
 use anyhow::Result;
 use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use indexer_types::OpWithResult;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::bitcoin_client::Client;
-use crate::consensus::Height;
 use crate::database::{self};
 use crate::runtime::Runtime;
 
-use super::block_handler::{batch_handler, block_handler, simulate_handler};
+use super::block_handler::simulate_handler;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
@@ -43,32 +43,31 @@ pub trait Executor {
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
-    /// Sources: local mempool/block cache, Bitcoin RPC, LRU cache.
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction>;
 
-    /// Execute a consensus-decided batch of mempool transactions at the given anchor height.
-    async fn execute_batch(
+    /// Execute a single transaction's operations at the given height.
+    /// Called by the reactor after DB row insertion. Sets context and runs ops.
+    async fn execute_transaction(
         &mut self,
-        anchor_height: u64,
-        anchor_hash: bitcoin::BlockHash,
-        consensus_height: Height,
-        certificate: &[u8],
-        txs: &[indexer_types::Transaction],
-        raw_txs: &[bitcoin::Transaction],
+        height: i64,
+        tx_id: i64,
+        tx: &indexer_types::Transaction,
     );
 
-    /// Execute a confirmed Bitcoin block. Implementations handle deduplication of
-    /// transactions already executed via a prior batch.
-    async fn execute_block(&mut self, block: &indexer_types::Block);
+    /// Run block lifecycle operations after all transactions are processed.
+    /// Includes challenge expiry/generation and epoch transitions.
+    async fn on_block_completed(&mut self, _block: &indexer_types::Block) {}
 
     /// Signal the block source to re-deliver blocks starting from `height`.
-    /// In prod: resets the poller via a control channel.
-    /// In tests: records the call for assertions; the test sends blocks manually.
     async fn replay_blocks_from(&mut self, height: u64);
 
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
-    /// Used during replay/sync when parsed_tx_cache misses.
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
+
+    /// Cache raw bitcoin transactions for replay resolution.
+    /// Called by the reactor after storing raw txs in the DB during batch execution.
+    /// The default is a no-op — RuntimeExecutor uses the moka cache + RPC instead.
+    async fn cache_raw_txs(&mut self, _txs: &[bitcoin::Transaction]) {}
 
     /// Simulate executing a transaction without committing state changes.
     async fn simulate(&mut self, _btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
@@ -90,17 +89,13 @@ impl Executor for NoopExecutor {
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
     }
-    async fn execute_batch(
+    async fn execute_transaction(
         &mut self,
-        _anchor_height: u64,
-        _anchor_hash: bitcoin::BlockHash,
-        _consensus_height: Height,
-        _certificate: &[u8],
-        _txs: &[indexer_types::Transaction],
-        _raw_txs: &[bitcoin::Transaction],
+        _height: i64,
+        _tx_id: i64,
+        _tx: &indexer_types::Transaction,
     ) {
     }
-    async fn execute_block(&mut self, _block: &indexer_types::Block) {}
     async fn replay_blocks_from(&mut self, _height: u64) {}
     fn parse_transaction(&self, _tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
         None
@@ -201,33 +196,80 @@ impl Executor for RuntimeExecutor {
             }
         }
     }
-    async fn execute_batch(
+    async fn execute_transaction(
         &mut self,
-        anchor_height: u64,
-        anchor_hash: bitcoin::BlockHash,
-        consensus_height: Height,
-        certificate: &[u8],
-        txs: &[indexer_types::Transaction],
-        raw_txs: &[bitcoin::Transaction],
+        height: i64,
+        tx_id: i64,
+        tx: &indexer_types::Transaction,
     ) {
-        if let Err(e) = batch_handler(
-            &mut self.runtime,
-            anchor_height,
-            anchor_hash,
-            consensus_height,
-            certificate,
-            txs,
-            raw_txs,
-        )
-        .await
-        {
-            tracing::error!("batch_handler error: {e}");
+        use crate::runtime::TransactionContext;
+        for op in &tx.ops {
+            let metadata = op.metadata();
+            let input_index = metadata.input_index;
+            let op_return_data = tx.op_return_data.get(&(input_index as u64)).cloned();
+
+            self.runtime
+                .set_context(
+                    height,
+                    Some(TransactionContext {
+                        tx_id: Some(tx_id),
+                        tx_index: tx.index,
+                        input_index,
+                        op_index: 0,
+                        txid: tx.txid,
+                    }),
+                    Some(metadata.previous_output),
+                    op_return_data.clone().map(Into::into),
+                )
+                .await;
+
+            super::block_handler::execute_op(&mut self.runtime, op, op_return_data).await;
         }
     }
-    async fn execute_block(&mut self, block: &indexer_types::Block) {
-        info!("# Block Kontor Transactions: {}", block.transactions.len());
-        if let Err(e) = block_handler(&mut self.runtime, block).await {
-            tracing::error!("block_handler error: {e}");
+    async fn on_block_completed(&mut self, block: &indexer_types::Block) {
+        use crate::runtime::wit::Signer;
+
+        let core_signer = Signer::Core(Box::new(Signer::Nobody));
+        let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
+        self.runtime
+            .set_context(block.height as i64, None, None, None)
+            .await;
+        crate::runtime::filestorage::api::expire_challenges(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+        )
+        .await
+        .expect("Failed to expire challenges");
+        let challenges = crate::runtime::filestorage::api::generate_challenges_for_block(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+            block_hash,
+        )
+        .await
+        .expect("Failed to generate challenges");
+        if !challenges.is_empty() {
+            info!(
+                "Generated {} challenges at block height {}",
+                challenges.len(),
+                block.height
+            );
+        }
+
+        let epoch_result = crate::runtime::staking::api::transition_epoch(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+        )
+        .await
+        .expect("Failed to call transition_epoch")
+        .expect("transition_epoch returned error");
+        if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
+            info!(
+                "Epoch {} transition: {} activated, {} deactivated",
+                epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
+            );
         }
     }
     async fn replay_blocks_from(&mut self, height: u64) {

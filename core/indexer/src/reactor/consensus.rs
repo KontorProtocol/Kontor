@@ -27,8 +27,9 @@ use crate::consensus::{
     ValidatorSet, Value, ValueId,
 };
 use crate::database::queries::{
-    get_checkpoint_latest, get_transaction_by_txid, rollback_to_height, select_batches_from_anchor,
-    select_block_at_height, select_existing_txids, select_min_batch_height,
+    get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
+    insert_unconfirmed_batch_tx, rollback_to_height, select_batches_from_anchor,
+    select_block_at_height, select_existing_txids, select_min_batch_height, set_batch_processed,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -596,16 +597,60 @@ impl ConsensusState {
             })
             .collect();
 
-        executor
-            .execute_batch(
-                anchor_height,
-                anchor_hash,
-                consensus_height,
-                certificate,
-                &parsed_txs,
-                batch_txs,
+        // DB orchestration for batch execution
+        if let Err(e) = insert_batch(
+            &self.conn,
+            consensus_height.as_u64() as i64,
+            anchor_height as i64,
+            &anchor_hash.to_string(),
+            certificate,
+        )
+        .await
+        {
+            error!("insert_batch error: {e}");
+            return;
+        }
+
+        // Store raw txs for replay/sync recovery
+        for raw_tx in batch_txs {
+            let txid = raw_tx.compute_txid();
+            let serialized = bitcoin::consensus::serialize(raw_tx);
+            let _ = insert_unconfirmed_batch_tx(
+                &self.conn,
+                &txid.to_string(),
+                consensus_height.as_u64() as i64,
+                &serialized,
             )
             .await;
+        }
+
+        // Let executor cache raw txs for replay resolution (e.g. LiteExecutor's known_txs)
+        executor.cache_raw_txs(batch_txs).await;
+
+        for t in &parsed_txs {
+            let tx_id = match insert_transaction(
+                &self.conn,
+                indexer_types::TransactionRow::builder()
+                    .height(anchor_height as i64)
+                    .batch_height(consensus_height.as_u64() as i64)
+                    .txid(t.txid.to_string())
+                    .build(),
+            )
+            .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("insert_transaction error: {e}");
+                    continue;
+                }
+            };
+
+            executor
+                .execute_transaction(anchor_height as i64, tx_id, t)
+                .await;
+        }
+
+        let _ = set_batch_processed(&self.conn, consensus_height.as_u64() as i64).await;
 
         self.last_processed_anchor = anchor_height;
 

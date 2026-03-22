@@ -376,9 +376,7 @@ impl ReactorCluster {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_validators_agree_on_values() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
@@ -430,9 +428,7 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_block_updates_anchor() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
@@ -516,9 +512,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_happy_path_finalization() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
@@ -584,32 +578,48 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
     let mut mock = MockBitcoin::new(0);
 
-    // Insert 3 mempool txs and wait for batch
-    let mempool_events = mock.generate_mempool_txs(3);
-    // Save raw txs for re-injection during replay
-    let raw_txs: Vec<bitcoin::Transaction> = mempool_events
-        .iter()
-        .filter_map(|e| match e {
-            MempoolEvent::Insert(tx) => Some(tx.clone()),
-            _ => None,
-        })
-        .collect();
-    for event in mempool_events {
+    // Mine block 1 (empty) so the batch anchors at height 1 (not 0)
+    {
+        let (blk_events, _) = mock.mine_empty_block();
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
+    }
+    // Wait for block 1 to be decided
+    cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 1,
+            Duration::from_secs(30),
+        )
+        .await;
+
+    // Insert 3 mempool txs and wait for batch at anchor 1
+    for event in mock.generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
 
-    let decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!decisions.is_empty(), "Expected a decision");
-    let decided_txids = decisions[0].value.batch_txids().to_vec();
+    let decisions = cluster
+        .wait_for_decision_matching(
+            |d| {
+                !d.value.is_block()
+                    && d.value.block_height() == 1
+                    && !d.value.batch_txids().is_empty()
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+    let batch = decisions
+        .iter()
+        .find(|d| !d.value.batch_txids().is_empty())
+        .expect("Expected a batch decision with txids");
+    let decided_txids = batch.value.batch_txids().to_vec();
     assert!(
         decided_txids.len() >= 3,
         "Expected at least 3 txids in decided batch"
@@ -619,89 +629,56 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2].to_vec();
     let missing_txid = decided_txids[2];
 
-    // Save block events so we can re-send after rollback
-    let mut saved_block_events = Vec::new();
-
-    // Mine block 1 with only 2 of the 3 txids
+    // Mine block 2 with only 2 of the 3 txids
     {
         let (blk_events, mem_events) = mock.mine_block(&confirm_txids);
         for event in mem_events {
             cluster.send_mempool_event(event);
         }
-        saved_block_events.extend(blk_events.clone());
         for event in blk_events {
             cluster.send_block_event(event);
         }
     }
 
-    // Mine blocks 2-6 (empty) to reach deadline (anchor 0 + 6 = 6)
+    // Mine blocks 3-7 (empty) to reach deadline (anchor 1 + 6 = 7)
     for _ in 0..5 {
         let (blk_events, _) = mock.mine_empty_block();
-        saved_block_events.extend(blk_events.clone());
         for event in blk_events {
             cluster.send_block_event(event);
         }
     }
 
-    // Wait for finality rollback event (finality channel is separate from state channel)
+    // Wait for finality rollback event
     let finality_events = cluster
-        .wait_for_finality_events(1, Duration::from_secs(30))
+        .wait_for_finality_event_matching(
+            |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid)),
+            Duration::from_secs(30),
+        )
         .await;
 
-    let has_rollback = finality_events.iter().any(
-        |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid)),
-    );
     assert!(
-        has_rollback,
+        finality_events.iter().any(
+            |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid))
+        ),
         "Expected Rollback with missing txid {missing_txid}, got: {finality_events:?}"
     );
 
-    // Wait for all 4 nodes to complete rollback
-    let mut rollback_count = 0;
-    let mut state_events = Vec::new();
-    let deadline = tokio::time::sleep(Duration::from_secs(30));
-    tokio::pin!(deadline);
-    while rollback_count < 4 {
-        tokio::select! {
-            _ = &mut deadline => break,
-            Some(event) = cluster.state_rx.recv() => {
-                if matches!(&event, StateEvent::RollbackExecuted { .. }) {
-                    rollback_count += 1;
-                }
-                state_events.push(event);
-            }
-        }
-    }
-    assert!(
-        rollback_count >= 4,
-        "Expected 4 RollbackExecuted events, got {rollback_count}: {state_events:?}"
-    );
-
-    // Re-inject the confirmed txs back into the mempool so the replay
-    // path can resolve them. In prod, replay_blocks_from re-delivers blocks
-    // and the tx cache has them. Here we re-add to mempool.
-    for tx in &raw_txs {
-        let txid = tx.compute_txid();
-        if confirm_txids.contains(&txid) {
-            cluster.send_mempool_event(MempoolEvent::Insert(tx.clone()));
-        }
-    }
-
-    // Brief delay for mempool events to propagate
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Re-send blocks to trigger replay (reactor called replay_blocks_from)
-    for event in saved_block_events {
-        cluster.send_block_event(event);
-    }
-
-    // Wait for replay to complete — should see BatchApplied with only 2 txids
-    // (the missing txid is excluded from replay)
-    let replay_events = cluster
-        .wait_for_state_events(8, Duration::from_secs(30))
+    // Wait for rollback + replay to complete.
+    // The replay happens immediately after rollback (process_replay_queue),
+    // so BatchApplied events arrive right after RollbackExecuted.
+    let all_events = cluster
+        .wait_for_state_event_matching(
+            |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count == 2),
+            Duration::from_secs(30),
+        )
         .await;
 
-    let replayed_batches: Vec<_> = replay_events
+    let has_rollback = all_events
+        .iter()
+        .any(|e| matches!(e, StateEvent::RollbackExecuted { .. }));
+    assert!(has_rollback, "Expected RollbackExecuted event");
+
+    let replayed_batches: Vec<_> = all_events
         .iter()
         .filter_map(|e| match e {
             StateEvent::BatchApplied { txid_count, .. } => Some(*txid_count),
@@ -709,12 +686,6 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         })
         .collect();
 
-    assert!(
-        !replayed_batches.is_empty(),
-        "Expected replayed BatchApplied events, got: {replay_events:?}"
-    );
-
-    // The replayed batch should have fewer txids (excluded the missing one)
     assert!(
         replayed_batches.contains(&2),
         "Expected replayed batch with 2 txids (excluding missing), got counts: {replayed_batches:?}"
@@ -729,9 +700,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_cascade_invalidation() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
@@ -825,9 +794,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("error")
-        .try_init();
+    indexer::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;

@@ -159,7 +159,60 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
         self.option_last_hash = Some(hash);
 
-        self.executor.execute_block(&block).await;
+        // DB orchestration for block execution
+        use crate::database::queries::{
+            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
+            set_block_processed,
+        };
+
+        let _ = insert_block(
+            &self.conn,
+            BlockRow::builder()
+                .height(block.height as i64)
+                .hash(block.hash)
+                .relevant(!block.transactions.is_empty())
+                .build(),
+        )
+        .await;
+
+        for (i, t) in block.transactions.iter().enumerate() {
+            // Dedup: skip execution for already-batched txs
+            if let Ok(Some(_)) = get_transaction_by_txid(&self.conn, &t.txid.to_string()).await {
+                let _ = confirm_transaction(
+                    &self.conn,
+                    &t.txid.to_string(),
+                    block.height as i64,
+                    i as i64,
+                )
+                .await;
+                continue;
+            }
+
+            let tx_id = match insert_transaction(
+                &self.conn,
+                indexer_types::TransactionRow::builder()
+                    .height(block.height as i64)
+                    .tx_index(i as i64)
+                    .confirmed_height(block.height as i64)
+                    .txid(t.txid.to_string())
+                    .build(),
+            )
+            .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("insert_transaction error: {e}");
+                    continue;
+                }
+            };
+
+            self.executor
+                .execute_transaction(block.height as i64, tx_id, t)
+                .await;
+        }
+
+        self.executor.on_block_completed(&block).await;
+        let _ = set_block_processed(&self.conn, block.height as i64).await;
 
         if let Some(tx) = &self.event_tx {
             let _ = tx
@@ -174,15 +227,18 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn process_replay_queue(&mut self) {
-        let Some(handle) = self.consensus_handle.as_mut() else {
-            return;
-        };
-        while handle
-            .state
-            .replay_queue
-            .front()
-            .is_some_and(|(_, v)| v.block_height() <= self.last_height)
-        {
+        loop {
+            let Some(handle) = self.consensus_handle.as_mut() else {
+                return;
+            };
+            if handle
+                .state
+                .replay_queue
+                .front()
+                .is_none_or(|(_, v)| v.block_height() > self.last_height)
+            {
+                break;
+            }
             let (height, value) = handle.state.next_replay_batch().unwrap();
 
             match &value {
@@ -202,7 +258,7 @@ impl<E: Executor> Reactor<E> {
                             warn!(%txid, "Could not resolve txid during replay — skipping");
                         }
                     }
-
+                    let handle = self.consensus_handle.as_mut().unwrap();
                     handle.state.record_decided_batch(height, &value);
                     handle
                         .state
@@ -218,8 +274,14 @@ impl<E: Executor> Reactor<E> {
                         .await;
                 }
                 crate::consensus::Value::Block { height: bh, .. } => {
-                    if let Some(block) = handle.state.block_cache.remove(bh) {
-                        self.executor.execute_block(&block).await;
+                    let block = {
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        handle.state.block_cache.remove(bh)
+                    };
+                    if let Some(block) = block
+                        && let Err(e) = self.handle_block(block).await
+                    {
+                        error!("replay block execution error: {e}");
                     }
                 }
             }

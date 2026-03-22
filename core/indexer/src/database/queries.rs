@@ -550,7 +550,7 @@ pub async fn insert_batch(
     certificate: &[u8],
 ) -> Result<(), Error> {
     conn.execute(
-        "INSERT INTO batches (consensus_height, anchor_height, anchor_hash, certificate) VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate) VALUES (?, ?, ?, ?)",
         params![consensus_height, anchor_height, anchor_hash, certificate],
     )
     .await?;

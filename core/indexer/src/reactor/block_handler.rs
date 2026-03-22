@@ -228,7 +228,7 @@ pub async fn process_transaction(
     Ok(())
 }
 
-async fn execute_op(
+pub async fn execute_op(
     runtime: &mut Runtime,
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,

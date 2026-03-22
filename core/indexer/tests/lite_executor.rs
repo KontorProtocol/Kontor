@@ -3,11 +3,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use bitcoin::Txid;
 
-use indexer::consensus::Height;
 use indexer::database::queries::{
-    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    insert_unconfirmed_batch_tx, select_unconfirmed_batch_tx, set_batch_processed,
-    set_block_processed,
+    get_transaction_by_txid, insert_transaction, select_unconfirmed_batch_tx,
 };
 use indexer::reactor::executor::Executor;
 use indexer::runtime::wit::Signer;
@@ -165,152 +162,41 @@ impl Executor for LiteExecutor {
         self.known_txs.get(txid).cloned()
     }
 
-    async fn execute_batch(
+    async fn execute_transaction(
         &mut self,
-        anchor_height: u64,
-        anchor_hash: bitcoin::BlockHash,
-        consensus_height: Height,
-        certificate: &[u8],
-        txs: &[indexer_types::Transaction],
-        raw_txs: &[bitcoin::Transaction],
+        height: i64,
+        tx_id: i64,
+        tx: &indexer_types::Transaction,
     ) {
-        let conn = self.connection();
-
-        if let Err(e) = insert_batch(
-            &conn,
-            consensus_height.as_u64() as i64,
-            anchor_height as i64,
-            &anchor_hash.to_string(),
-            certificate,
-        )
-        .await
-        {
-            tracing::error!("insert_batch error: {e}");
-            return;
-        }
-
-        for raw_tx in raw_txs {
-            let txid = raw_tx.compute_txid();
-            self.known_txs.insert(txid, raw_tx.clone());
-            let serialized = bitcoin::consensus::serialize(raw_tx);
-            let _ = insert_unconfirmed_batch_tx(
-                &conn,
-                &txid.to_string(),
-                consensus_height.as_u64() as i64,
-                &serialized,
+        self.runtime
+            .set_context(
+                height,
+                Some(
+                    TransactionContext::builder()
+                        .tx_id(tx_id)
+                        .tx_index(tx.index)
+                        .txid(tx.txid)
+                        .build(),
+                ),
+                None,
+                None,
             )
             .await;
-        }
 
-        for (i, t) in txs.iter().enumerate() {
-            let tx_id = match insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(anchor_height as i64)
-                    .batch_height(consensus_height.as_u64() as i64)
-                    .txid(t.txid.to_string())
-                    .build(),
-            )
+        if let Err(e) = self
+            .runtime
+            .execute(Some(&self.signer), &self.counter_address, "increment()")
             .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("insert_transaction error: {e}");
-                    continue;
-                }
-            };
-
-            self.runtime
-                .set_context(
-                    anchor_height as i64,
-                    Some(
-                        TransactionContext::builder()
-                            .tx_id(tx_id)
-                            .tx_index(i as i64)
-                            .txid(t.txid)
-                            .build(),
-                    ),
-                    None,
-                    None,
-                )
-                .await;
-
-            if let Err(e) = self
-                .runtime
-                .execute(Some(&self.signer), &self.counter_address, "increment()")
-                .await
-            {
-                tracing::error!("counter increment error: {e}");
-            }
+        {
+            tracing::error!("counter increment error: {e}");
         }
-
-        let _ = set_batch_processed(&conn, consensus_height.as_u64() as i64).await;
     }
 
-    async fn execute_block(&mut self, block: &indexer_types::Block) {
-        let conn = self.connection();
-
-        let _ = insert_block(
-            &conn,
-            BlockRow::builder()
-                .height(block.height as i64)
-                .hash(block.hash)
-                .relevant(!block.transactions.is_empty())
-                .build(),
-        )
-        .await;
-
-        for (i, t) in block.transactions.iter().enumerate() {
-            if let Ok(Some(_)) = get_transaction_by_txid(&conn, &t.txid.to_string()).await {
-                let _ =
-                    confirm_transaction(&conn, &t.txid.to_string(), block.height as i64, i as i64)
-                        .await;
-                continue;
-            }
-
-            let tx_id = match insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(block.height as i64)
-                    .tx_index(i as i64)
-                    .confirmed_height(block.height as i64)
-                    .txid(t.txid.to_string())
-                    .build(),
-            )
-            .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("insert_transaction error: {e}");
-                    continue;
-                }
-            };
-
-            self.runtime
-                .set_context(
-                    block.height as i64,
-                    Some(
-                        TransactionContext::builder()
-                            .tx_id(tx_id)
-                            .tx_index(i as i64)
-                            .txid(t.txid)
-                            .build(),
-                    ),
-                    None,
-                    None,
-                )
-                .await;
-
-            if let Err(e) = self
-                .runtime
-                .execute(Some(&self.signer), &self.counter_address, "increment()")
-                .await
-            {
-                tracing::error!("counter increment error: {e}");
-            }
+    async fn cache_raw_txs(&mut self, txs: &[bitcoin::Transaction]) {
+        for tx in txs {
+            let txid = tx.compute_txid();
+            self.known_txs.insert(txid, tx.clone());
         }
-
-        let _ = set_block_processed(&conn, block.height as i64).await;
     }
 
     async fn replay_blocks_from(&mut self, height: u64) {

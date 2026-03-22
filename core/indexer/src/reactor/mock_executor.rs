@@ -185,23 +185,14 @@ impl Executor for MockExecutor {
         self.known_txs.get(txid).cloned()
     }
 
-    async fn execute_batch(
+    async fn execute_transaction(
         &mut self,
-        anchor_height: u64,
-        _anchor_hash: bitcoin::BlockHash,
-        consensus_height: Height,
-        _certificate: &[u8],
-        txs: &[indexer_types::Transaction],
-        _raw_txs: &[bitcoin::Transaction],
+        _height: i64,
+        _tx_id: i64,
+        _tx: &indexer_types::Transaction,
     ) {
-        let txids: Vec<Txid> = txs.iter().map(|tx| tx.txid).collect();
-        self.apply_batch(anchor_height, consensus_height, &txids);
-    }
-
-    async fn execute_block(&mut self, block: &indexer_types::Block) {
-        self.block_hashes.insert(block.height, block.hash);
-        let txids: Vec<Txid> = block.transactions.iter().map(|tx| tx.txid).collect();
-        self.apply_block(block.height, &txids);
+        // MockExecutor doesn't need to do anything per-transaction —
+        // state tracking is handled by the reactor's DB orchestration
     }
 
     async fn replay_blocks_from(&mut self, height: u64) {
