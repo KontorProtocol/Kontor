@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -7,6 +7,7 @@ use indexer::database::queries::{
     get_transaction_by_txid, insert_transaction, select_unconfirmed_batch_tx,
 };
 use indexer::reactor::executor::Executor;
+use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::runtime::wit::Signer;
 use indexer::runtime::{ContractAddress, Runtime, TransactionContext};
 use indexer::test_utils::{new_mock_transaction, new_test_db};
@@ -19,12 +20,12 @@ pub struct LiteExecutor {
     _db_dir: tempfile::TempDir,
     counter_address: ContractAddress,
     signer: Signer,
-    known_txs: HashMap<Txid, bitcoin::Transaction>,
+    mock_bitcoin: Arc<Mutex<MockBitcoin>>,
     pub replay_requests: Vec<u64>,
 }
 
 impl LiteExecutor {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(mock_bitcoin: Arc<Mutex<MockBitcoin>>) -> Result<Self> {
         use indexer::database::queries::{
             contract_has_state, insert_contract, insert_processed_block,
         };
@@ -119,7 +120,7 @@ impl LiteExecutor {
             _db_dir: db_dir,
             counter_address,
             signer,
-            known_txs: HashMap::new(),
+            mock_bitcoin,
             replay_requests: Vec::new(),
         })
     }
@@ -153,13 +154,15 @@ impl Executor for LiteExecutor {
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        // Check unconfirmed batch txs (not yet in a block)
         if let Ok(Some(raw_bytes)) =
             select_unconfirmed_batch_tx(&self.connection(), &txid.to_string()).await
             && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
         {
             return Some(tx);
         }
-        self.known_txs.get(txid).cloned()
+        // Fall back to MockBitcoin (stand-in for Bitcoin RPC)
+        self.mock_bitcoin.lock().unwrap().get_raw_transaction(txid)
     }
 
     async fn execute_transaction(
@@ -189,13 +192,6 @@ impl Executor for LiteExecutor {
             .await
         {
             tracing::error!("counter increment error: {e}");
-        }
-    }
-
-    async fn cache_raw_txs(&mut self, txs: &[bitcoin::Transaction]) {
-        for tx in txs {
-            let txid = tx.compute_txid();
-            self.known_txs.insert(txid, tx.clone());
         }
     }
 

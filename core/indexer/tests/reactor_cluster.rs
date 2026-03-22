@@ -1,5 +1,6 @@
 mod lite_executor;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -38,6 +39,7 @@ struct ReactorCluster {
     join_set: JoinSet<()>,
     node_count: usize,
     ready_rx: mpsc::Receiver<usize>,
+    mock_bitcoin: Arc<Mutex<MockBitcoin>>,
 }
 
 #[allow(dead_code)]
@@ -67,6 +69,7 @@ impl ReactorCluster {
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
         let mut block_txs = Vec::new();
+        let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -116,9 +119,10 @@ impl ReactorCluster {
             let ftx = finality_tx.clone();
             let stx = state_tx.clone();
             let rtx = ready_tx.clone();
+            let mock_btc = mock_bitcoin.clone();
 
             join_set.spawn(async move {
-                let executor = LiteExecutor::new()
+                let executor = LiteExecutor::new(mock_btc)
                     .await
                     .expect("LiteExecutor setup failed");
 
@@ -195,6 +199,7 @@ impl ReactorCluster {
             join_set,
             node_count: n,
             ready_rx,
+            mock_bitcoin,
         })
     }
 
@@ -213,6 +218,10 @@ impl ReactorCluster {
 
     fn send_mempool_event(&self, event: MempoolEvent) {
         let _ = self.mempool_tx.send(event);
+    }
+
+    fn mock_bitcoin(&self) -> std::sync::MutexGuard<'_, MockBitcoin> {
+        self.mock_bitcoin.lock().unwrap()
     }
 
     async fn wait_for_decisions(&mut self, count: usize, timeout: Duration) -> Vec<DecidedBatch> {
@@ -381,10 +390,8 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Insert mempool txs
-    for event in mock.generate_mempool_txs(3) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
 
@@ -433,10 +440,8 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Insert mempool txs and wait for a batch at anchor 0
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
 
@@ -458,7 +463,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 
     // Mine a block — this should trigger a Value::Block decision
     {
-        let (blk_events, mem_events) = mock.mine_block_all();
+        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block_all();
         for event in mem_events {
             cluster.send_mempool_event(event);
         }
@@ -482,7 +487,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     );
 
     // Add new mempool txs and wait for a batch at anchor 1
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
 
@@ -517,10 +522,8 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Insert mempool txs and wait for batch at anchor 0
-    for event in mock.generate_mempool_txs(3) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
 
@@ -537,7 +540,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 
     // Mine block 1 confirming all txs
     {
-        let (blk_events, mem_events) = mock.mine_block_all();
+        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block_all();
         for event in mem_events {
             cluster.send_mempool_event(event);
         }
@@ -548,7 +551,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 
     // Mine blocks 2-6 (empty) to reach finality deadline (anchor 0 + 6 = 6)
     for _ in 0..5 {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -583,11 +586,9 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Mine block 1 (empty) so the batch anchors at height 1 (not 0)
     {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -601,7 +602,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         .await;
 
     // Insert 3 mempool txs and wait for batch at anchor 1
-    for event in mock.generate_mempool_txs(3) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
 
@@ -631,7 +632,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 
     // Mine block 2 with only 2 of the 3 txids
     {
-        let (blk_events, mem_events) = mock.mine_block(&confirm_txids);
+        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block(&confirm_txids);
         for event in mem_events {
             cluster.send_mempool_event(event);
         }
@@ -642,7 +643,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 
     // Mine blocks 3-7 (empty) to reach deadline (anchor 1 + 6 = 7)
     for _ in 0..5 {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -705,10 +706,8 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Batch 1 at anchor 0
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     cluster
@@ -720,7 +719,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 
     // Mine block 1 (empty — batch 1 txids intentionally NOT confirmed)
     {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -735,7 +734,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
         .await;
 
     // Batch 2 at anchor 1
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     cluster
@@ -751,7 +750,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 
     // Mine blocks 2-6 to reach deadline for anchor 0 (0 + 6 = 6)
     for _ in 0..5 {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -799,10 +798,8 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    let mut mock = MockBitcoin::new(0);
-
     // Batch at anchor 0 — will be confirmed and finalized
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     let decisions = cluster
@@ -821,7 +818,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 
     // Mine block 1 confirming batch 0's txids
     {
-        let (blk_events, mem_events) = mock.mine_block(&batch0_txids);
+        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block(&batch0_txids);
         for event in mem_events {
             cluster.send_mempool_event(event);
         }
@@ -837,7 +834,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .await;
 
     // Batch at anchor 1 — txids will NOT be confirmed
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     cluster
@@ -853,7 +850,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 
     // Mine block 2 (empty — batch at anchor 1 not confirmed)
     {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -866,7 +863,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .await;
 
     // Batch at anchor 2
-    for event in mock.generate_mempool_txs(2) {
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     cluster
@@ -882,7 +879,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 
     // Mine block 3
     {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }
@@ -890,7 +887,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 
     // Mine blocks 4-7 to reach deadline for anchor 1 (1 + 6 = 7)
     for _ in 0..4 {
-        let (blk_events, _) = mock.mine_empty_block();
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             cluster.send_block_event(event);
         }

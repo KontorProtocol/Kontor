@@ -64,11 +64,6 @@ pub trait Executor {
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
 
-    /// Cache raw bitcoin transactions for replay resolution.
-    /// Called by the reactor after storing raw txs in the DB during batch execution.
-    /// The default is a no-op — RuntimeExecutor uses the moka cache + RPC instead.
-    async fn cache_raw_txs(&mut self, _txs: &[bitcoin::Transaction]) {}
-
     /// Simulate executing a transaction without committing state changes.
     async fn simulate(&mut self, _btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
         anyhow::bail!("Simulation not supported on this executor")

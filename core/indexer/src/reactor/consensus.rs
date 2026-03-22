@@ -624,9 +624,6 @@ impl ConsensusState {
             .await;
         }
 
-        // Let executor cache raw txs for replay resolution (e.g. LiteExecutor's known_txs)
-        executor.cache_raw_txs(batch_txs).await;
-
         for t in &parsed_txs {
             let tx_id = match insert_transaction(
                 &self.conn,

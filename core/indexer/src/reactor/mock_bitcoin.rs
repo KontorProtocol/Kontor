@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
 use bitcoin::{BlockHash, Txid};
@@ -30,6 +32,10 @@ pub struct MockBitcoin {
     prev_hash: BlockHash,
     mempool: Vec<bitcoin::Transaction>,
     tx_counter: u32,
+    /// Txs confirmed in mined blocks, keyed by txid. Used as RPC stand-in.
+    mined_txs: HashMap<Txid, bitcoin::Transaction>,
+    /// Track which txids were mined at which height, for rollback cleanup.
+    block_txids: HashMap<u64, Vec<Txid>>,
 }
 
 impl MockBitcoin {
@@ -39,6 +45,8 @@ impl MockBitcoin {
             prev_hash: new_mock_block_hash(start_height as u32),
             mempool: Vec::new(),
             tx_counter: 0,
+            mined_txs: HashMap::new(),
+            block_txids: HashMap::new(),
         }
     }
 
@@ -88,6 +96,15 @@ impl MockBitcoin {
             }
         }
 
+        // Store confirmed txs for RPC-like resolution
+        let mut height_txids = Vec::new();
+        for tx in &confirmed_raw {
+            let txid = tx.compute_txid();
+            height_txids.push(txid);
+            self.mined_txs.insert(txid, tx.clone());
+        }
+        self.block_txids.insert(height, height_txids);
+
         let block = Block {
             height,
             hash,
@@ -117,8 +134,27 @@ impl MockBitcoin {
     }
 
     pub fn reset_to(&mut self, height: u64) {
+        // Remove txs from blocks above the reset height
+        let heights_to_remove: Vec<u64> = self
+            .block_txids
+            .keys()
+            .filter(|&&h| h > height)
+            .copied()
+            .collect();
+        for h in heights_to_remove {
+            if let Some(txids) = self.block_txids.remove(&h) {
+                for txid in txids {
+                    self.mined_txs.remove(&txid);
+                }
+            }
+        }
         self.tip_height = height;
         self.prev_hash = new_mock_block_hash(height as u32 + 1000);
+    }
+
+    /// Look up a raw transaction from mined blocks (RPC stand-in for tests).
+    pub fn get_raw_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        self.mined_txs.get(txid).cloned()
     }
 
     pub fn drop_txid(&mut self, txid: &Txid) -> Option<MempoolEvent> {
