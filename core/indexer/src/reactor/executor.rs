@@ -131,9 +131,6 @@ impl RuntimeExecutor {
         self
     }
 
-    fn connection(&self) -> libsql::Connection {
-        self.writer.connection()
-    }
 }
 
 impl Executor for RuntimeExecutor {
@@ -170,17 +167,6 @@ impl Executor for RuntimeExecutor {
         Some(parsed)
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
-        // Check unconfirmed batch txs table first (for replay/sync recovery)
-        if let Ok(Some(raw_bytes)) = crate::database::queries::select_unconfirmed_batch_tx(
-            &self.connection(),
-            &txid.to_string(),
-        )
-        .await
-            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
-        {
-            return Some(tx);
-        }
-
         // Fall back to Bitcoin RPC (via tx cache)
         let client = self.bitcoin_client.as_ref()?;
         match client.get_raw_transaction(txid).await {

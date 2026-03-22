@@ -3,9 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use bitcoin::Txid;
 
-use indexer::database::queries::{
-    get_transaction_by_txid, insert_transaction, select_unconfirmed_batch_tx,
-};
+use indexer::database::queries::{get_transaction_by_txid, insert_transaction};
 use indexer::reactor::executor::Executor;
 use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::runtime::wit::Signer;
@@ -154,13 +152,6 @@ impl Executor for LiteExecutor {
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
-        // Check unconfirmed batch txs (not yet in a block)
-        if let Ok(Some(raw_bytes)) =
-            select_unconfirmed_batch_tx(&self.connection(), &txid.to_string()).await
-            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
-        {
-            return Some(tx);
-        }
         // Fall back to MockBitcoin (stand-in for Bitcoin RPC)
         self.mock_bitcoin.lock().unwrap().get_raw_transaction(txid)
     }

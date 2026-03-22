@@ -20,8 +20,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::Channels;
 use tracing::{debug, error, info, warn};
 
@@ -100,6 +100,20 @@ impl<E: Executor> Reactor<E> {
             event_tx,
             consensus_handle,
         }
+    }
+
+    /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
+    async fn resolve_tx_from_db(
+        conn: &libsql::Connection,
+        txid: &Txid,
+    ) -> Option<bitcoin::Transaction> {
+        use crate::database::queries::select_unconfirmed_batch_tx;
+        if let Ok(Some(raw_bytes)) = select_unconfirmed_batch_tx(conn, &txid.to_string()).await
+            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
+        {
+            return Some(tx);
+        }
+        None
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
@@ -252,6 +266,8 @@ impl<E: Executor> Reactor<E> {
                     for txid in txids {
                         if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
                             resolved_txs.push(tx.clone());
+                        } else if let Some(tx) = Self::resolve_tx_from_db(&self.conn, txid).await {
+                            resolved_txs.push(tx);
                         } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
                             resolved_txs.push(tx);
                         } else {
