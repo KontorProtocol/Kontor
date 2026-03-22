@@ -137,7 +137,9 @@ pub async fn run(
                         .iter()
                         .any(|b| b.deadline <= last_height)
                     {
-                        consensus_state.run_finality_checks(executor, last_height).await;
+                        if let Some(rollback_anchor) = consensus_state.run_finality_checks(executor, last_height).await {
+                            last_height = rollback_anchor;
+                        }
                     }
                 }
             }

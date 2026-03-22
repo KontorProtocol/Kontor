@@ -397,8 +397,10 @@ impl ConsensusState {
     }
 
     /// Run finality checks and execute any rollbacks.
-    pub async fn run_finality_checks(&mut self, executor: &mut impl Executor, last_height: u64) {
+    /// Returns the rollback anchor height if a rollback was initiated.
+    pub async fn run_finality_checks(&mut self, executor: &mut impl Executor, last_height: u64) -> Option<u64> {
         let finality_events = self.check_finality(executor, last_height).await;
+        let mut rollback_to = None;
         for event in &finality_events {
             if let FinalityEvent::Rollback {
                 from_anchor,
@@ -409,9 +411,11 @@ impl ConsensusState {
                 let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
                 self.initiate_rollback(executor, *from_anchor, excluded)
                     .await;
+                rollback_to = Some(*from_anchor);
             }
         }
         self.emit_finality_events(&finality_events);
+        rollback_to
     }
 
     /// Execute a decided batch. Blocks are executed separately via Value::Block

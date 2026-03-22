@@ -162,10 +162,89 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
+    async fn process_replay_queue(&mut self) {
+        let Some(handle) = self.consensus_handle.as_mut() else { return };
+        while handle.state
+            .replay_queue
+            .front()
+            .is_some_and(|(_, v)| v.block_height() <= self.last_height)
+        {
+            let (height, value) = handle.state.next_replay_batch().unwrap();
+
+            match &value {
+                crate::consensus::Value::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    txids,
+                    ..
+                } => {
+                    let mut resolved_txs = Vec::with_capacity(txids.len());
+                    for txid in txids {
+                        if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
+                            resolved_txs.push(tx.clone());
+                        } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
+                            resolved_txs.push(tx);
+                        } else {
+                            warn!(%txid, "Could not resolve txid during replay — skipping");
+                        }
+                    }
+
+                    handle.state.record_decided_batch(height, &value);
+                    handle.state
+                        .process_decided_batch(
+                            &mut self.executor,
+                            &mut self.bitcoin_state,
+                            *anchor_height,
+                            *anchor_hash,
+                            height,
+                            &[],
+                            &resolved_txs,
+                        )
+                        .await;
+                }
+                crate::consensus::Value::Block { height: bh, .. } => {
+                    if let Some(block) = handle.state.block_cache.remove(bh) {
+                        self.executor.execute_block(&block).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
+        match event {
+            BlockEvent::BlockInsert { target_height, block } => {
+                let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                self.bitcoin_state.remove_confirmed_txids(&txids);
+                info!("Block {}/{} {}", block.height, target_height, block.hash);
+
+                if let Some(handle) = self.consensus_handle.as_mut() {
+                    handle.state.block_cache.insert(block.height, block.clone());
+                    handle.state.pending_blocks.push_back((block.height, block.hash));
+                }
+                // Process replay queue entries whose anchor has been reached
+                self.process_replay_queue().await;
+                if self.consensus_handle.is_none() {
+                    self.handle_block(block).await?;
+                }
+            }
+            BlockEvent::Rollback { to_height } => {
+                info!(to_height, "Bitcoin rollback — truncating state");
+                self.rollback(to_height).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn run_event_loop(&mut self) -> Result<()> {
         self.init_tx.take().map(|tx| tx.send(true));
 
         loop {
+            // Drain pending block events before entering select
+            while let Ok(event) = self.block_rx.try_recv() {
+                self.process_block_event(event).await?;
+            }
+
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
                     rx.recv().await
@@ -188,72 +267,7 @@ impl<E: Executor> Reactor<E> {
                     break;
                 }
                 Some(event) = self.block_rx.recv() => {
-                    match event {
-                        BlockEvent::BlockInsert { target_height, block } => {
-                            let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                            self.bitcoin_state.remove_confirmed_txids(&txids);
-                            info!("Block {}/{} {}", block.height, target_height, block.hash);
-
-                            if let Some(handle) = self.consensus_handle.as_mut() {
-                                // Store block for execution when consensus decides it
-                                handle.state.block_cache.insert(block.height, block.clone());
-                                handle.state.pending_blocks.push_back((block.height, block.hash));
-
-                                // Process replay queue entries whose anchor has been reached
-                                while handle.state
-                                    .replay_queue
-                                    .front()
-                                    .is_some_and(|(_, v)| v.block_height() <= self.last_height)
-                                {
-                                    let (height, value) = handle.state.next_replay_batch().unwrap();
-
-                                    match &value {
-                                        crate::consensus::Value::Batch {
-                                            anchor_height,
-                                            anchor_hash,
-                                            txids,
-                                            ..
-                                        } => {
-                                            let mut resolved_txs = Vec::with_capacity(txids.len());
-                                            for txid in txids {
-                                                if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
-                                                    resolved_txs.push(tx.clone());
-                                                } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
-                                                    resolved_txs.push(tx);
-                                                } else {
-                                                    warn!(%txid, "Could not resolve txid during replay — skipping");
-                                                }
-                                            }
-
-                                            handle.state.record_decided_batch(height, &value);
-                                            handle.state
-                                                .process_decided_batch(
-                                                    &mut self.executor,
-                                                    &mut self.bitcoin_state,
-                                                    *anchor_height,
-                                                    *anchor_hash,
-                                                    height,
-                                                    &[],
-                                                    &resolved_txs,
-                                                )
-                                                .await;
-                                        }
-                                        crate::consensus::Value::Block { height: bh, .. } => {
-                                            if let Some(block) = handle.state.block_cache.remove(bh) {
-                                                self.executor.execute_block(&block).await;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                self.handle_block(block).await?;
-                            }
-                        },
-                        BlockEvent::Rollback { to_height } => {
-                            info!(to_height, "Bitcoin rollback — truncating state");
-                            self.rollback(to_height).await?;
-                        },
-                    }
+                    self.process_block_event(event).await?;
                 }
                 Some(event) = self.mempool_rx.recv() => {
                     match event {
@@ -274,6 +288,7 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
                 Some(msg) = consensus_rx => {
+                    debug!("REACTOR: processing consensus msg");
                     let handle = self.consensus_handle.as_mut().unwrap();
                     let node_index = handle.node_index;
                     let decided_block = consensus::handle_consensus_msg(
@@ -295,9 +310,17 @@ impl<E: Executor> Reactor<E> {
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
                         {
-                            handle.state.run_finality_checks(&mut self.executor, self.last_height).await;
+                            if let Some(rollback_anchor) = handle.state.run_finality_checks(&mut self.executor, self.last_height).await {
+                                self.last_height = rollback_anchor;
+                                self.option_last_hash = self.executor.block_hash_at_height(rollback_anchor).await;
+
+                                // Process replay queue entries using already-cached blocks
+                                self.process_replay_queue().await;
+                            }
                         }
                     }
+                    // Yield to allow other channels (block_rx, mempool_rx) to be polled
+                    tokio::task::yield_now().await;
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {

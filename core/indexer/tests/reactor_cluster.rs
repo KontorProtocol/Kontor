@@ -1,3 +1,5 @@
+mod lite_executor;
+
 use std::time::Duration;
 
 use anyhow::Result;
@@ -14,9 +16,10 @@ use indexer::consensus::{Genesis, Validator, ValidatorSet};
 use indexer::reactor::bitcoin_state::BitcoinState;
 use indexer::reactor::consensus::{ConsensusState, ObservationChannels};
 use indexer::reactor::engine::{self, EngineConfig};
-use indexer::reactor::mock_executor::MockExecutor;
 use indexer::reactor::{ConsensusHandle, Reactor};
 use malachitebft_app_channel::app::types::core::VotingPower;
+
+use lite_executor::LiteExecutor;
 
 fn allocate_port() -> Result<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -26,7 +29,7 @@ fn allocate_port() -> Result<u16> {
 /// Handle to a running cluster of validators using the prod reactor + StateLog.
 #[allow(dead_code)]
 struct ReactorCluster {
-    block_tx: broadcast::Sender<BlockEvent>,
+    block_txs: Vec<mpsc::Sender<BlockEvent>>,
     mempool_tx: broadcast::Sender<MempoolEvent>,
     decided_rx: mpsc::Receiver<DecidedBatch>,
     finality_rx: mpsc::Receiver<FinalityEvent>,
@@ -61,9 +64,9 @@ impl ReactorCluster {
             .map(|_| allocate_port().expect("Failed to allocate port"))
             .collect();
 
-        let (block_tx, _) = broadcast::channel::<BlockEvent>(256);
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
+        let mut block_txs = Vec::new();
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -86,25 +89,8 @@ impl ReactorCluster {
             };
             let cancel = cancel.clone();
 
-            let node_block_rx = {
-                let (tx, rx) = mpsc::channel(256);
-                let mut brx = block_tx.subscribe();
-                let cancel = cancel.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = cancel.cancelled() => break,
-                            result = brx.recv() => {
-                                match result {
-                                    Ok(event) => { if tx.send(event).await.is_err() { break; } }
-                                    Err(_) => break,
-                                }
-                            }
-                        }
-                    }
-                });
-                rx
-            };
+            let (node_block_tx, node_block_rx) = mpsc::channel(256);
+            block_txs.push(node_block_tx);
 
             let node_mempool_rx = {
                 let (tx, rx) = mpsc::channel(256);
@@ -132,6 +118,8 @@ impl ReactorCluster {
             let rtx = ready_tx.clone();
 
             join_set.spawn(async move {
+                let executor = LiteExecutor::new().await.expect("LiteExecutor setup failed");
+
                 let engine_output = match engine::start(engine_config, &genesis).await {
                     Ok(o) => o,
                     Err(e) => {
@@ -168,7 +156,6 @@ impl ReactorCluster {
                     node_index,
                 };
 
-                let executor = MockExecutor::new();
                 let bitcoin_state = BitcoinState::new();
 
                 let mut reactor = Reactor::new(
@@ -194,7 +181,7 @@ impl ReactorCluster {
         }
 
         Ok(Self {
-            block_tx,
+            block_txs,
             mempool_tx,
             decided_rx,
             finality_rx,
@@ -214,7 +201,9 @@ impl ReactorCluster {
     }
 
     fn send_block_event(&self, event: BlockEvent) {
-        let _ = self.block_tx.send(event);
+        for tx in &self.block_txs {
+            let _ = tx.try_send(event.clone());
+        }
     }
 
     fn send_mempool_event(&self, event: MempoolEvent) {
@@ -279,6 +268,96 @@ impl ReactorCluster {
         events
     }
 
+    /// Wait until a decision matching the predicate is found. Returns all collected decisions.
+    async fn wait_for_decision_matching(
+        &mut self,
+        pred: impl Fn(&DecidedBatch) -> bool,
+        timeout: Duration,
+    ) -> Vec<DecidedBatch> {
+        let mut batches = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(batch) = self.decided_rx.recv() => {
+                    let matched = pred(&batch);
+                    batches.push(batch);
+                    if matched { break; }
+                }
+            }
+        }
+        batches
+    }
+
+    /// Wait until a state event matching the predicate is found. Returns all collected events.
+    async fn wait_for_state_event_matching(
+        &mut self,
+        pred: impl Fn(&StateEvent) -> bool,
+        timeout: Duration,
+    ) -> Vec<StateEvent> {
+        let mut events = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(event) = self.state_rx.recv() => {
+                    let matched = pred(&event);
+                    events.push(event);
+                    if matched { break; }
+                }
+            }
+        }
+        events
+    }
+
+    /// Wait until a finality event matching the predicate is found. Returns all collected events.
+    async fn wait_for_finality_event_matching(
+        &mut self,
+        pred: impl Fn(&FinalityEvent) -> bool,
+        timeout: Duration,
+    ) -> Vec<FinalityEvent> {
+        let mut events = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(event) = self.finality_rx.recv() => {
+                    let matched = pred(&event);
+                    events.push(event);
+                    if matched { break; }
+                }
+            }
+        }
+        events
+    }
+
+    /// Wait until N state events matching the predicate are found.
+    async fn wait_for_n_state_events_matching(
+        &mut self,
+        n: usize,
+        pred: impl Fn(&StateEvent) -> bool,
+        timeout: Duration,
+    ) -> Vec<StateEvent> {
+        let mut events = Vec::new();
+        let mut count = 0;
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            if count >= n { break; }
+            tokio::select! {
+                _ = &mut deadline => break,
+                Some(event) = self.state_rx.recv() => {
+                    if pred(&event) { count += 1; }
+                    events.push(event);
+                }
+            }
+        }
+        events
+    }
+
     async fn shutdown(mut self) {
         self.cancel.cancel();
         while self.join_set.join_next().await.is_some() {}
@@ -304,24 +383,34 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
         cluster.send_mempool_event(event);
     }
 
-    // Wait for consensus to decide
-    let results = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!results.is_empty(), "Expected at least one decision");
+    // Wait for a batch decision with txids
+    let decisions = cluster
+        .wait_for_decision_matching(
+            |d| !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
+    assert!(
+        decisions.iter().any(|d| !d.value.batch_txids().is_empty()),
+        "Expected a batch decision with txids"
+    );
 
-    // All nodes should produce BatchApplied with same checkpoint
+    // Wait for all 4 nodes to produce BatchApplied
     let state_events = cluster
-        .wait_for_state_events(8, Duration::from_secs(10))
+        .wait_for_n_state_events_matching(
+            4,
+            |e| matches!(e, StateEvent::BatchApplied { .. }),
+            Duration::from_secs(10),
+        )
         .await;
 
-    let batch_applied: Vec<_> = state_events
+    let batch_applied_count = state_events
         .iter()
         .filter(|e| matches!(e, StateEvent::BatchApplied { .. }))
-        .collect();
-
+        .count();
     assert!(
-        batch_applied.len() >= 4,
-        "Expected at least 4 BatchApplied events (one per node), got {}",
-        batch_applied.len()
+        batch_applied_count >= 4,
+        "Expected at least 4 BatchApplied events (one per node), got {batch_applied_count}"
     );
 
     cluster.shutdown().await;
@@ -348,12 +437,16 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
         cluster.send_mempool_event(event);
     }
 
-    let decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!decisions.is_empty(), "Expected at least one decision");
-    assert_eq!(
-        decisions[0].value.block_height(),
-        0,
-        "First batch should anchor at height 0"
+    // Wait for a batch decision at anchor 0
+    let decisions = cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && d.value.block_height() == 0 && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
+    assert!(
+        decisions.iter().any(|d| d.value.block_height() == 0),
+        "Expected a batch at anchor 0"
     );
 
     // Mine a block — this should trigger a Value::Block decision
@@ -367,31 +460,32 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
         }
     }
 
-    // Add new mempool txs so the next batch has content
+    // Wait for block decision at height 1
+    let block_decisions = cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 1,
+            Duration::from_secs(30),
+        )
+        .await;
+    assert!(
+        block_decisions.iter().any(|d| d.value.is_block() && d.value.block_height() == 1),
+        "Expected a Value::Block decision at height 1"
+    );
+
+    // Add new mempool txs and wait for a batch at anchor 1
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
 
-    // Wait for more decisions — should see Value::Block at height 1,
-    // then Value::Batch anchored at height 1
-    let more_decisions = cluster.wait_for_decisions(8, Duration::from_secs(30)).await;
-
-    let has_block_at_1 = more_decisions
-        .iter()
-        .any(|d| d.value.is_block() && d.value.block_height() == 1);
+    let batch_at_1 = cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
     assert!(
-        has_block_at_1,
-        "Expected a Value::Block decision at height 1, got: {:?}",
-        more_decisions.iter().map(|d| format!("{:?}@{}", d.value.is_block(), d.value.block_height())).collect::<Vec<_>>()
-    );
-
-    let has_batch_at_1 = more_decisions
-        .iter()
-        .any(|d| !d.value.is_block() && d.value.block_height() == 1);
-    assert!(
-        has_batch_at_1,
-        "Expected a Value::Batch anchored at height 1, got: {:?}",
-        more_decisions.iter().map(|d| format!("{:?}@{}", d.value.is_block(), d.value.block_height())).collect::<Vec<_>>()
+        batch_at_1.iter().any(|d| !d.value.is_block() && d.value.block_height() == 1),
+        "Expected a Value::Batch anchored at height 1"
     );
 
     cluster.shutdown().await;
@@ -417,9 +511,16 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
         cluster.send_mempool_event(event);
     }
 
-    let decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!decisions.is_empty(), "Expected at least one decision");
-    assert_eq!(decisions[0].value.block_height(), 0);
+    let decisions = cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
+    assert!(
+        decisions.iter().any(|d| d.value.block_height() == 0),
+        "Expected a batch at anchor 0"
+    );
 
     // Mine block 1 confirming all txs
     {
@@ -440,16 +541,18 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
         }
     }
 
-    // Wait for finality event — all txs confirmed, should get BatchFinalized
+    // Wait for BatchFinalized at anchor 0
     let finality_events = cluster
-        .wait_for_finality_events(1, Duration::from_secs(30))
+        .wait_for_finality_event_matching(
+            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
+            Duration::from_secs(30),
+        )
         .await;
 
-    let has_finalized = finality_events.iter().any(
-        |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
-    );
     assert!(
-        has_finalized,
+        finality_events.iter().any(
+            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0)
+        ),
         "Expected BatchFinalized at anchor 0, got: {finality_events:?}"
     );
 
@@ -534,17 +637,25 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         "Expected Rollback with missing txid {missing_txid}, got: {finality_events:?}"
     );
 
-    // Drain all state events — look for RollbackExecuted among them
-    let state_events = cluster
-        .wait_for_state_events(30, Duration::from_secs(10))
-        .await;
-    let rollback_executed = state_events
-        .iter()
-        .filter(|e| matches!(e, StateEvent::RollbackExecuted { .. }))
-        .count();
+    // Wait for all 4 nodes to complete rollback
+    let mut rollback_count = 0;
+    let mut state_events = Vec::new();
+    let deadline = tokio::time::sleep(Duration::from_secs(30));
+    tokio::pin!(deadline);
+    while rollback_count < 4 {
+        tokio::select! {
+            _ = &mut deadline => break,
+            Some(event) = cluster.state_rx.recv() => {
+                if matches!(&event, StateEvent::RollbackExecuted { .. }) {
+                    rollback_count += 1;
+                }
+                state_events.push(event);
+            }
+        }
+    }
     assert!(
-        rollback_executed >= 1,
-        "Expected RollbackExecuted state events, got: {state_events:?}"
+        rollback_count >= 4,
+        "Expected 4 RollbackExecuted events, got {rollback_count}: {state_events:?}"
     );
 
     // Re-inject the confirmed txs back into the mempool so the replay
@@ -612,9 +723,12 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    let decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!decisions.is_empty());
-    assert_eq!(decisions[0].value.block_height(), 0);
+    cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Mine block 1 (empty — batch 1 txids intentionally NOT confirmed)
     {
@@ -624,17 +738,24 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
         }
     }
 
-    // Batch 2 at anchor 1 — need to wait for block decision + batch decision
+    // Wait for block decision at height 1
+    cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 1,
+            Duration::from_secs(30),
+        )
+        .await;
+
+    // Batch 2 at anchor 1
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-
-    // Wait until we see a batch anchored at height 1 from any node
-    let more = cluster.wait_for_decisions(20, Duration::from_secs(30)).await;
-    let has_batch_at_1 = more
-        .iter()
-        .any(|d| !d.value.is_block() && d.value.block_height() == 1);
-    assert!(has_batch_at_1, "Expected a batch at anchor 1");
+    cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Mine blocks 2-6 to reach deadline for anchor 0 (0 + 6 = 6)
     for _ in 0..5 {
@@ -644,8 +765,12 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
         }
     }
 
+    // Wait for Rollback with cascade
     let finality_events = cluster
-        .wait_for_finality_events(1, Duration::from_secs(30))
+        .wait_for_finality_event_matching(
+            |e| matches!(e, FinalityEvent::Rollback { .. }),
+            Duration::from_secs(30),
+        )
         .await;
 
     let rollback = finality_events
@@ -690,9 +815,19 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    let decisions = cluster.wait_for_decisions(1, Duration::from_secs(30)).await;
-    assert!(!decisions.is_empty());
-    let batch0_txids = decisions[0].value.batch_txids().to_vec();
+    let decisions = cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
+    let batch0_txids = decisions
+        .iter()
+        .find(|d| !d.value.batch_txids().is_empty())
+        .unwrap()
+        .value
+        .batch_txids()
+        .to_vec();
 
     // Mine block 1 confirming batch 0's txids
     {
@@ -704,18 +839,23 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
             cluster.send_block_event(event);
         }
     }
+    cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 1,
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Batch at anchor 1 — txids will NOT be confirmed
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-
-    // Wait until we see a batch anchored at height 1
-    let more = cluster.wait_for_decisions(20, Duration::from_secs(30)).await;
-    assert!(
-        more.iter().any(|d| !d.value.is_block() && d.value.block_height() == 1),
-        "Expected a batch at anchor 1"
-    );
+    cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && d.value.block_height() == 1 && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Mine block 2 (empty — batch at anchor 1 not confirmed)
     {
@@ -724,18 +864,23 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
             cluster.send_block_event(event);
         }
     }
+    cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 2,
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Batch at anchor 2
     for event in mock.generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-
-    // Wait until we see a batch anchored at height 2
-    let more = cluster.wait_for_decisions(20, Duration::from_secs(30)).await;
-    assert!(
-        more.iter().any(|d| !d.value.is_block() && d.value.block_height() == 2),
-        "Expected a batch at anchor 2"
-    );
+    cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && d.value.block_height() == 2 && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
 
     // Mine block 3
     {
@@ -753,24 +898,20 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         }
     }
 
-    // Wait for block decisions to propagate — need all 7 blocks decided
-    // Each block decision produces state events, wait for enough
-    let _ = cluster
-        .wait_for_state_events(20, Duration::from_secs(30))
+    // Wait for Rollback from anchor 1
+    let finality_events = cluster
+        .wait_for_finality_event_matching(
+            |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
+            Duration::from_secs(30),
+        )
         .await;
 
-    // Collect finality events — BatchFinalized at anchor 0 from multiple nodes,
-    // then Rollback from anchor 1. Need enough events to capture both types.
-    let all_events = cluster
-        .wait_for_finality_events(8, Duration::from_secs(30))
-        .await;
-
-    let rollback = all_events
+    let rollback = finality_events
         .iter()
         .find(|e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1));
     assert!(
         rollback.is_some(),
-        "Expected Rollback from anchor 1, got: {all_events:?}"
+        "Expected Rollback from anchor 1, got: {finality_events:?}"
     );
 
     if let Some(FinalityEvent::Rollback {
