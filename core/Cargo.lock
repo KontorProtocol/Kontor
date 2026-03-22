@@ -1551,28 +1551,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "consensus-sim"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arc-malachitebft-app-channel",
- "bitcoin",
- "clap",
- "eyre",
- "indexer",
- "indexer-types",
- "prost 0.13.5",
- "rand 0.8.5",
- "serial_test",
- "sha3",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
