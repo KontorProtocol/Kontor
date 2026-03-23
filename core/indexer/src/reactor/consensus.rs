@@ -422,16 +422,7 @@ impl ConsensusState {
 
     pub async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
         match select_block_at_height(&self.conn, height as i64).await {
-            Ok(Some(row)) => {
-                if let Ok(decoded) = hex::decode(row.hash)
-                    && decoded.len() == 32
-                {
-                    let mut bytes = [0u8; 32];
-                    bytes.copy_from_slice(&decoded);
-                    return Some(bitcoin::BlockHash::from_byte_array(bytes));
-                }
-                None
-            }
+            Ok(Some(row)) => Some(row.hash),
             _ => None,
         }
     }

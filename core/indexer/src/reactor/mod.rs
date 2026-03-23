@@ -121,14 +121,8 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
-            if let Ok(decoded) = hex::decode(row.hash)
-                && decoded.len() == 32
-            {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(&decoded);
-                self.option_last_hash = Some(BlockHash::from_byte_array(bytes));
-                info!("Rollback to height {} ({})", height, row.hash);
-            }
+            self.option_last_hash = Some(row.hash);
+            info!("Rollback to height {} ({})", height, row.hash);
         } else {
             self.option_last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
