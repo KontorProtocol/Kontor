@@ -66,16 +66,16 @@ blst = "=0.3.16"
 
 # Malachite BFT consensus
 malachitebft-app-channel = { workspace = true }
-malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-app" }
-malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-types", features = ["serde"] }
-malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-engine" }
-malachitebft-config = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-config" }
-malachitebft-signing = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing" }
-malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-signing-ed25519", features = ["rand", "serde"] }
-malachitebft-codec = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-codec" }
-malachitebft-core-consensus = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-core-consensus" }
-malachitebft-proto = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-proto" }
-malachitebft-sync = { git = "https://github.com/circlefin/malachite", package = "informalsystems-malachitebft-sync" }
+malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-app" }
+malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-core-types", features = ["serde"] }
+malachitebft-engine = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-engine" }
+malachitebft-config = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-config" }
+malachitebft-signing = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-signing" }
+malachitebft-signing-ed25519 = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
+malachitebft-codec = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-codec" }
+malachitebft-core-consensus = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-core-consensus" }
+malachitebft-proto = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-proto" }
+malachitebft-sync = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-sync" }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -84,6 +84,7 @@ sha3 = { workspace = true }
 
 [dev-dependencies]
 testlib = { path = "../testlib" }
+serial_test = "=3.3.1"
 
 once_cell = "=1.21.3"
 axum-test = "=18.7.0"

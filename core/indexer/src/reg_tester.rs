@@ -95,12 +95,23 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
     Ok((process, client))
 }
 
-async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
+struct ConsensusNodeConfig {
+    private_key_hex: String,
+    listen_addr: String,
+    peers: Vec<String>,
+    genesis_file: String,
+}
+
+async fn run_kontor(
+    data_dir: &Path,
+    api_port: u16,
+    consensus: Option<&ConsensusNodeConfig>,
+) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
     let program = format!("{}/../target/debug/kontor", env!("CARGO_MANIFEST_DIR"));
-    let process = Command::new(program)
-        .arg("--api-port")
-        .arg("9333")
+    let mut cmd = Command::new(program);
+    cmd.arg("--api-port")
+        .arg(api_port.to_string())
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
         .arg("--network")
@@ -112,9 +123,22 @@ async fn run_kontor(data_dir: &Path) -> Result<(Child, KontorClient)> {
         .arg("--bitcoin-rpc-user")
         .arg(config.bitcoin_rpc_user)
         .arg("--bitcoin-rpc-password")
-        .arg(config.bitcoin_rpc_password)
-        .spawn()?;
-    let client = KontorClient::new("http://localhost:9333/api")?;
+        .arg(config.bitcoin_rpc_password);
+
+    if let Some(c) = consensus {
+        cmd.arg("--consensus-private-key")
+            .arg(&c.private_key_hex)
+            .arg("--consensus-listen-addr")
+            .arg(&c.listen_addr)
+            .arg("--genesis-file")
+            .arg(&c.genesis_file);
+        for peer in &c.peers {
+            cmd.arg("--consensus-peers").arg(peer);
+        }
+    }
+
+    let process = cmd.spawn()?;
+    let client = KontorClient::new(format!("http://localhost:{api_port}/api"))?;
     retry_simple(async || {
         let i = client.index().await?;
         if !i.available {
@@ -205,7 +229,16 @@ impl RegTesterInner {
         bitcoin_client: BitcoinClient,
         kontor_client: KontorClient,
     ) -> Result<Self> {
-        let ws_client = WebSocketClient::new(9333).await?;
+        Self::with_port(identity, bitcoin_client, kontor_client, 9333).await
+    }
+
+    pub async fn with_port(
+        identity: Identity,
+        bitcoin_client: BitcoinClient,
+        kontor_client: KontorClient,
+        api_port: u16,
+    ) -> Result<Self> {
+        let ws_client = WebSocketClient::new(api_port).await?;
         Ok(Self {
             identity,
             ws_client,
@@ -612,7 +645,7 @@ impl RegTester {
             bls_secret_key,
             bls_pubkey,
         };
-        let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path()).await?;
+        let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path(), 9333, None).await?;
         Ok((
             bitcoin_data_dir,
             bitcoin_child,
@@ -778,5 +811,255 @@ impl RegTester {
 
     pub async fn info(&mut self) -> Result<Info> {
         self.inner.lock().await.kontor_client.index().await
+    }
+}
+
+/// A cluster of N Kontor instances sharing one regtest bitcoind,
+/// each with consensus enabled and its own DB.
+pub struct RegTesterCluster {
+    pub bitcoin_client: BitcoinClient,
+    pub nodes: Vec<KontorClient>,
+    pub identity: Identity,
+    api_ports: Vec<u16>,
+    _bitcoin_child: Child,
+    _kontor_children: Vec<Child>,
+    _bitcoin_data_dir: TempDir,
+    _kontor_data_dirs: Vec<TempDir>,
+    _genesis_dir: TempDir,
+}
+
+fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
+    let mut ports = Vec::with_capacity(n);
+    let mut listeners = Vec::with_capacity(n);
+    for _ in 0..n {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        ports.push(listener.local_addr()?.port());
+        listeners.push(listener);
+    }
+    drop(listeners);
+    Ok(ports)
+}
+
+impl RegTesterCluster {
+    /// Start a cluster of `n` Kontor validators sharing one regtest bitcoind.
+    pub async fn setup(n: usize) -> Result<Self> {
+        use crate::config::{GenesisConfig, GenesisValidatorConfig};
+        use crate::consensus::signing::PrivateKey as Ed25519PrivateKey;
+
+        let bitcoin_data_dir = TempDir::new()?;
+        let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
+
+        // Create a funded identity for transaction building
+        let mut seed = [0u8; 64];
+        rand::thread_rng().fill_bytes(&mut seed);
+        let taproot_path = taproot_derivation_path(Network::Regtest);
+        let bls_path = bls_derivation_path(Network::Regtest);
+        let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+        let secp = Secp256k1::new();
+        let (x_only_public_key, ..) = keypair.x_only_public_key();
+        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+        let bls_secret_key = bls_sk.to_bytes();
+        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
+        let block_hashes = bitcoin_client
+            .generate_to_address(101, &address.to_string())
+            .await?;
+        let block_hash =
+            BlockHash::from_str(block_hashes.first().ok_or(anyhow!("No blocks created"))?)?;
+        let block = bitcoin_client.get_block(&block_hash).await?;
+        let identity = Identity {
+            address,
+            keypair,
+            next_funding_utxo: (
+                OutPoint {
+                    txid: block.txdata[0].compute_txid(),
+                    vout: 0,
+                },
+                block.txdata[0].output[0].clone(),
+            ),
+            bls_secret_key,
+            bls_pubkey,
+        };
+
+        // Generate Ed25519 keypairs for consensus validators
+        let ed25519_keys: Vec<Ed25519PrivateKey> = (0..n)
+            .map(|i| {
+                let mut key_seed = [0u8; 32];
+                key_seed[0] = i as u8;
+                key_seed[1] = 0xAB;
+                Ed25519PrivateKey::from(key_seed)
+            })
+            .collect();
+
+        // Write genesis file
+        let genesis_config = GenesisConfig {
+            validators: ed25519_keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| GenesisValidatorConfig {
+                    x_only_pubkey: format!("{:064x}", i + 1),
+                    stake: "100".to_string(),
+                    ed25519_pubkey: hex::encode(key.public_key().as_bytes()),
+                })
+                .collect(),
+        };
+        let genesis_dir = TempDir::new()?;
+        let genesis_path = genesis_dir.path().join("genesis.json");
+        std::fs::write(&genesis_path, serde_json::to_string(&genesis_config)?)?;
+
+        // Allocate ports: N api ports + N consensus ports
+        let api_ports = allocate_ports(n)?;
+        let consensus_ports = allocate_ports(n)?;
+
+        // Start N Kontor instances
+        let mut kontor_children = Vec::with_capacity(n);
+        let mut kontor_data_dirs = Vec::with_capacity(n);
+        let mut nodes = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let data_dir = TempDir::new()?;
+            let consensus_config = ConsensusNodeConfig {
+                private_key_hex: hex::encode(ed25519_keys[i].inner().to_bytes()),
+                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", consensus_ports[i]),
+                peers: consensus_ports
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
+                    .collect(),
+                genesis_file: genesis_path.to_string_lossy().into_owned(),
+            };
+
+            let (child, client) =
+                run_kontor(data_dir.path(), api_ports[i], Some(&consensus_config)).await?;
+
+            kontor_children.push(child);
+            nodes.push(client);
+            kontor_data_dirs.push(data_dir);
+        }
+
+        // Wait for all nodes to be available via API before returning.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let mut all_ready = true;
+            for node in &nodes {
+                if node.index().await.is_err() {
+                    all_ready = false;
+                    break;
+                }
+            }
+            if all_ready {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("Cluster nodes failed to become available within 30s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        // Mine a block and wait for all nodes to process it.
+        // This ensures Malachite peers are connected and consensus is working.
+        bitcoin_client
+            .generate_to_address(1, &identity.address.to_string())
+            .await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let mut all_synced = true;
+            for node in &nodes {
+                match node.index().await {
+                    Ok(info) if info.height >= 102 => {}
+                    _ => {
+                        all_synced = false;
+                        break;
+                    }
+                }
+            }
+            if all_synced {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let mut heights = Vec::new();
+                for node in &nodes {
+                    if let Ok(info) = node.index().await {
+                        heights.push(info.height);
+                    }
+                }
+                anyhow::bail!(
+                    "Cluster nodes failed to sync after mining block. Heights: {:?}",
+                    heights
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        Ok(Self {
+            bitcoin_client,
+            nodes,
+            identity,
+            api_ports,
+            _bitcoin_child: bitcoin_child,
+            _kontor_children: kontor_children,
+            _bitcoin_data_dir: bitcoin_data_dir,
+            _kontor_data_dirs: kontor_data_dirs,
+            _genesis_dir: genesis_dir,
+        })
+    }
+
+    /// Get the primary Kontor client (node 0).
+    pub fn client(&self) -> &KontorClient {
+        &self.nodes[0]
+    }
+
+    /// Create a `RegTester` targeting a specific node in the cluster.
+    /// Uses the cluster's shared bitcoin client and identity.
+    pub async fn reg_tester(&self, node_index: usize) -> Result<RegTester> {
+        let inner = RegTesterInner::with_port(
+            self.identity.clone(),
+            self.bitcoin_client.clone(),
+            self.nodes[node_index].clone(),
+            self.api_ports[node_index],
+        )
+        .await?;
+        Ok(RegTester {
+            inner: Arc::new(Mutex::new(inner)),
+        })
+    }
+
+    /// Create an identity with issuance via node 0.
+    /// Returns the RegTester and Identity for subsequent operations.
+    pub async fn funded_identity(&self) -> Result<(RegTester, Identity)> {
+        let mut rt = self.reg_tester(0).await?;
+        let mut identity = rt.identity().await?;
+        rt.instruction(&mut identity, Inst::Issuance).await?;
+        Ok((rt, identity))
+    }
+
+    /// Mine blocks using the funded identity.
+    pub async fn mine(&self, count: u64) -> Result<()> {
+        self.bitcoin_client
+            .generate_to_address(count, &self.identity.address.to_string())
+            .await?;
+        Ok(())
+    }
+
+    /// Shut down all nodes.
+    pub async fn teardown(mut self) -> Result<()> {
+        for node in &self.nodes {
+            let _ = node.stop().await;
+        }
+        for child in &mut self._kontor_children {
+            let _ = child.wait().await;
+        }
+        self.bitcoin_client.stop().await?;
+        self._bitcoin_child.wait().await?;
+        Ok(())
+    }
+}
+
+impl Drop for RegTesterCluster {
+    fn drop(&mut self) {
+        let _ = self._bitcoin_child.start_kill();
+        for child in &mut self._kontor_children {
+            let _ = child.start_kill();
+        }
     }
 }

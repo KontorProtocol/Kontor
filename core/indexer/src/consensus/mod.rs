@@ -1,6 +1,7 @@
 mod address;
 pub mod codec;
 mod context;
+pub mod finality_types;
 mod genesis;
 mod height;
 mod proposal;
@@ -24,3 +25,6 @@ pub use proposal_part::{ProposalData, ProposalFin, ProposalInit, ProposalPart};
 pub use validator_set::{Validator, ValidatorSet};
 pub use value::{Value, ValueId};
 pub use vote::Vote;
+
+// Re-export from malachite for downstream crates that don't depend on it directly
+pub use malachitebft_core_types::CommitCertificate;

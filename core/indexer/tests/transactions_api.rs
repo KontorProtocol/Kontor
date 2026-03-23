@@ -257,7 +257,7 @@ async fn test_get_transactions_with_cursor() -> Result<()> {
 
     assert_eq!(response.status_code(), StatusCode::OK);
     assert_eq!(result.result.results[0].height, 800001);
-    assert_eq!(result.result.results[0].tx_index, 0);
+    assert_eq!(result.result.results[0].tx_index, Some(0));
     assert_eq!(result.result.results.len(), 1);
     assert_eq!(result.result.pagination.total_count, 3);
     assert!(result.result.pagination.has_more);
@@ -345,7 +345,7 @@ async fn test_get_transaction_by_txid() -> Result<()> {
         "tx1_800000_0_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
     );
     assert_eq!(result.result.height, 800000);
-    assert_eq!(result.result.tx_index, 0);
+    assert_eq!(result.result.tx_index, Some(0));
 
     Ok(())
 }

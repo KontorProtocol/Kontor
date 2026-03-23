@@ -5,8 +5,11 @@ use tracing::{info, warn};
 
 use crate::{
     block::{filter_map, inspect},
+    consensus::Height,
     database::queries::{
-        insert_block, insert_transaction, select_block_latest, set_block_processed,
+        confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
+        insert_transaction, insert_unconfirmed_batch_tx, select_block_latest, set_batch_processed,
+        set_block_processed,
     },
     runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
     test_utils::new_mock_block_hash,
@@ -88,15 +91,110 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     Ok(())
 }
 
+pub async fn batch_handler(
+    runtime: &mut Runtime,
+    anchor_height: u64,
+    anchor_hash: bitcoin::BlockHash,
+    consensus_height: Height,
+    certificate: &[u8],
+    txs: &[Transaction],
+    raw_txs: &[bitcoin::Transaction],
+) -> Result<()> {
+    insert_batch(
+        &runtime.storage.conn,
+        consensus_height.as_u64() as i64,
+        anchor_height as i64,
+        &anchor_hash.to_string(),
+        certificate,
+    )
+    .await?;
+
+    // Store raw bitcoin txs for unconfirmed batch recovery/sync
+    for raw_tx in raw_txs {
+        let txid = raw_tx.compute_txid();
+        let serialized = bitcoin::consensus::serialize(raw_tx);
+        insert_unconfirmed_batch_tx(
+            &runtime.storage.conn,
+            &txid.to_string(),
+            consensus_height.as_u64() as i64,
+            &serialized,
+        )
+        .await?;
+    }
+
+    for t in txs {
+        let tx_id = insert_transaction(
+            &runtime.storage.conn,
+            TransactionRow::builder()
+                .height(anchor_height as i64)
+                .batch_height(consensus_height.as_u64() as i64)
+                .txid(t.txid.to_string())
+                .build(),
+        )
+        .await?;
+
+        for op in &t.ops {
+            let metadata = op.metadata();
+            let input_index = metadata.input_index;
+            let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
+
+            runtime
+                .set_context(
+                    anchor_height as i64,
+                    Some(TransactionContext {
+                        tx_id: Some(tx_id),
+                        tx_index: t.index,
+                        input_index,
+                        op_index: 0,
+                        txid: t.txid,
+                    }),
+                    Some(metadata.previous_output),
+                    op_return_data.clone().map(Into::into),
+                )
+                .await;
+
+            execute_op(runtime, op, op_return_data).await;
+        }
+    }
+
+    set_batch_processed(&runtime.storage.conn, consensus_height.as_u64() as i64).await?;
+
+    info!(
+        consensus_height = %consensus_height,
+        anchor_height,
+        tx_count = txs.len(),
+        "Batch executed"
+    );
+
+    Ok(())
+}
+
 pub async fn process_transaction(
     runtime: &mut Runtime,
     block_height: u64,
     t: &Transaction,
 ) -> Result<()> {
-    insert_transaction(
+    // Dedup: if this tx was already executed via batch_handler, just mark it
+    // as confirmed on-chain (for finality checks) and skip re-execution.
+    if let Some(_existing) =
+        get_transaction_by_txid(&runtime.storage.conn, &t.txid.to_string()).await?
+    {
+        confirm_transaction(
+            &runtime.storage.conn,
+            &t.txid.to_string(),
+            block_height as i64,
+            t.index,
+        )
+        .await?;
+        info!(txid = %t.txid, "Transaction already batched — confirmed on chain, skipping execution");
+        return Ok(());
+    }
+
+    let tx_id = insert_transaction(
         &runtime.storage.conn,
         TransactionRow::builder()
             .height(block_height as i64)
+            .confirmed_height(block_height as i64)
             .tx_index(t.index)
             .txid(t.txid.to_string())
             .build(),
@@ -113,6 +211,7 @@ pub async fn process_transaction(
             .set_context(
                 block_height as i64,
                 Some(TransactionContext {
+                    tx_id: Some(tx_id),
                     tx_index: t.index,
                     input_index,
                     op_index: 0,
@@ -129,11 +228,13 @@ pub async fn process_transaction(
     Ok(())
 }
 
-async fn execute_op(
+pub async fn execute_op(
     runtime: &mut Runtime,
     op: &Op,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
+    let input_index = op.metadata().input_index;
+
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {
@@ -202,7 +303,7 @@ async fn execute_op(
                     ops,
                     signature,
                     metadata.previous_output,
-                    metadata.input_index,
+                    input_index,
                     op_return_data,
                 )
                 .await

@@ -634,3 +634,40 @@ pub fn decode_signature(signature: proto::Signature) -> Result<Signature, ProtoE
         .map_err(|_| ProtoError::Other("Invalid signature length".to_string()))?;
     Ok(Signature::from_bytes(bytes))
 }
+
+impl Codec<malachitebft_core_types::ValidatorProof<Ctx>> for ProtobufCodec {
+    type Error = ProtoError;
+
+    fn decode(
+        &self,
+        bytes: Bytes,
+    ) -> Result<malachitebft_core_types::ValidatorProof<Ctx>, Self::Error> {
+        let proto = proto::ValidatorProof::decode(bytes.as_ref())?;
+        let signature = decode_signature(
+            proto
+                .signature
+                .ok_or_else(|| ProtoError::Other("Missing signature".to_string()))?,
+        )?;
+        Ok(malachitebft_core_types::ValidatorProof::new(
+            proto.consensus_pub_key.to_vec(),
+            proto.peer_id.to_vec(),
+            signature,
+        ))
+    }
+
+    fn encode(
+        &self,
+        msg: &malachitebft_core_types::ValidatorProof<Ctx>,
+    ) -> Result<Bytes, Self::Error> {
+        Ok(Bytes::from(
+            proto::ValidatorProof {
+                consensus_pub_key: Bytes::copy_from_slice(&msg.public_key),
+                peer_id: Bytes::copy_from_slice(&msg.peer_id),
+                signature: Some(proto::Signature {
+                    bytes: Bytes::copy_from_slice(msg.signature.to_bytes().as_ref()),
+                }),
+            }
+            .encode_to_vec(),
+        ))
+    }
+}

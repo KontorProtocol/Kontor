@@ -7,6 +7,7 @@ pub use resources::{
 
 wasmtime::component::bindgen!({
     path: "src/runtime/wit",
+    anyhow: true,
     with: {
         "kontor:built-in/context.signer": Signer,
         "kontor:built-in/context.view-context": ViewContext,

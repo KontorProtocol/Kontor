@@ -1,4 +1,6 @@
-use indexer::consensus::Height;
+use bitcoin::{BlockHash, Txid};
+
+use super::{Height, Value};
 
 pub const FINALITY_WINDOW: u64 = 6;
 
@@ -6,7 +8,8 @@ pub const FINALITY_WINDOW: u64 = 6;
 pub struct PendingBatch {
     pub consensus_height: Height,
     pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+    pub anchor_hash: BlockHash,
+    pub txids: Vec<Txid>,
     pub deadline: u64, // anchor_height + FINALITY_WINDOW
 }
 
@@ -19,7 +22,7 @@ pub enum FinalityEvent {
     Rollback {
         from_anchor: u64,
         invalidated_batches: Vec<Height>,
-        missing_txids: Vec<[u8; 32]>,
+        missing_txids: Vec<Txid>,
     },
 }
 
@@ -28,17 +31,25 @@ pub enum StateEvent {
     BlockProcessed {
         height: u64,
         unbatched_count: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
     BatchApplied {
         consensus_height: Height,
         anchor_height: u64,
         txid_count: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
     RollbackExecuted {
         to_anchor: u64,
         entries_removed: usize,
-        checkpoint: [u8; 32],
+        checkpoint: Option<[u8; 32]>,
     },
+}
+
+/// A decided batch observed from a node.
+#[derive(Debug, Clone)]
+pub struct DecidedBatch {
+    pub node_index: usize,
+    pub consensus_height: Height,
+    pub value: Value,
 }

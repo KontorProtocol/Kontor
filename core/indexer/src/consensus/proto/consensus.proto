@@ -64,7 +64,9 @@ message ProposalInit {
 
 message ProposalData {
     uint64 anchor_height = 1;
-    repeated bytes txids = 2;
+    repeated bytes transactions = 2;
+    bytes anchor_hash = 3;
+    bool is_block = 4;
 }
 
 message ProposalFin {
@@ -83,4 +85,10 @@ message StreamMessage {
         bytes data = 3;
         bool fin = 4;
     }
+}
+
+message ValidatorProof {
+    bytes consensus_pub_key = 1;
+    bytes peer_id = 2;
+    Signature signature = 3;
 }

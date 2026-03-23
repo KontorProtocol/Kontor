@@ -72,7 +72,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
 
     let storage = Storage::builder().height(0).conn(conn.clone()).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts().await?;
+    runtime.publish_native_contracts(&[]).await?;
 
     insert_processed_block(
         &conn,
@@ -257,7 +257,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
 
     let storage = Storage::builder().height(0).conn(conn.clone()).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts().await?;
+    runtime.publish_native_contracts(&[]).await?;
 
     insert_processed_block(
         &conn,
