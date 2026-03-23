@@ -4,7 +4,6 @@ pub mod consensus;
 pub mod engine;
 pub mod executor;
 pub mod mock_bitcoin;
-pub mod mock_executor;
 pub mod types;
 
 use anyhow::{Result, bail};
@@ -57,6 +56,7 @@ pub struct ConsensusHandle {
 
 pub struct Reactor<E: Executor> {
     executor: E,
+    runtime: Runtime,
     conn: libsql::Connection,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
@@ -74,6 +74,7 @@ pub struct Reactor<E: Executor> {
 impl<E: Executor> Reactor<E> {
     pub fn new(
         executor: E,
+        runtime: Runtime,
         conn: libsql::Connection,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
@@ -88,6 +89,7 @@ impl<E: Executor> Reactor<E> {
     ) -> Self {
         Self {
             executor,
+            runtime,
             conn,
             cancel_token,
             block_rx,
@@ -118,7 +120,14 @@ impl<E: Executor> Reactor<E> {
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
         rollback_to_height(&self.conn, height).await?;
-        self.executor.on_rollback().await;
+        if let Err(e) = self
+            .runtime
+            .file_ledger
+            .force_resync_from_db(&self.runtime.storage.conn)
+            .await
+        {
+            error!("file_ledger resync after rollback failed: {e}");
+        }
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
@@ -134,6 +143,54 @@ impl<E: Executor> Reactor<E> {
         }
 
         Ok(())
+    }
+
+    /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
+    async fn run_block_lifecycle(&mut self, block: &Block) {
+        use crate::runtime::wit::Signer;
+
+        let core_signer = Signer::Core(Box::new(Signer::Nobody));
+        let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
+        self.runtime
+            .set_context(block.height as i64, None, None, None)
+            .await;
+        crate::runtime::filestorage::api::expire_challenges(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+        )
+        .await
+        .expect("Failed to expire challenges");
+        let challenges = crate::runtime::filestorage::api::generate_challenges_for_block(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+            block_hash,
+        )
+        .await
+        .expect("Failed to generate challenges");
+        if !challenges.is_empty() {
+            info!(
+                "Generated {} challenges at block height {}",
+                challenges.len(),
+                block.height
+            );
+        }
+
+        let epoch_result = crate::runtime::staking::api::transition_epoch(
+            &mut self.runtime,
+            &core_signer,
+            block.height,
+        )
+        .await
+        .expect("Failed to call transition_epoch")
+        .expect("transition_epoch returned error");
+        if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
+            info!(
+                "Epoch {} transition: {} activated, {} deactivated",
+                epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
+            );
+        }
     }
 
     async fn handle_block(&mut self, block: Block) -> Result<()> {
@@ -216,11 +273,11 @@ impl<E: Executor> Reactor<E> {
             };
 
             self.executor
-                .execute_transaction(block.height as i64, tx_id, t)
+                .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
                 .await;
         }
 
-        self.executor.on_block_completed(&block).await;
+        self.run_block_lifecycle(&block).await;
         let _ = set_block_processed(&self.conn, block.height as i64).await;
 
         if let Some(tx) = &self.event_tx {
@@ -274,7 +331,8 @@ impl<E: Executor> Reactor<E> {
                     handle
                         .state
                         .process_decided_batch(
-                            &mut self.executor,
+                            &self.executor,
+                            &mut self.runtime,
                             &mut self.bitcoin_state,
                             *anchor_height,
                             *anchor_hash,
@@ -395,7 +453,8 @@ impl<E: Executor> Reactor<E> {
                     let node_index = handle.node_index;
                     let decided_block = consensus::handle_consensus_msg(
                         &mut handle.state,
-                        &mut self.executor,
+                        &self.executor,
+                        &mut self.runtime,
                         &mut self.bitcoin_state,
                         &mut handle.channels,
                         msg,
@@ -434,7 +493,9 @@ impl<E: Executor> Reactor<E> {
                 }
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
-                        let _ = ret_tx.send(self.executor.simulate(btx).await);
+                        let _ = ret_tx.send(
+                            simulate_handler(&mut self.runtime, btx).await
+                        );
                     }
                 }
 
@@ -486,7 +547,7 @@ pub async fn create_runtime_executor(
     bitcoin_client: Option<&crate::bitcoin_client::Client>,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
-) -> Result<(executor::RuntimeExecutor, u64, Option<BlockHash>)> {
+) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let conn = writer.connection();
     let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
         Some(block) => {
@@ -539,7 +600,7 @@ pub async fn create_runtime_executor(
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(genesis_validators).await?;
 
-    let mut exec = executor::RuntimeExecutor::new(runtime, writer.clone(), cancel_token);
+    let mut exec = executor::RuntimeExecutor::new(cancel_token);
 
     if let Some(client) = bitcoin_client {
         exec = exec.with_bitcoin_client(client.clone());
@@ -548,7 +609,7 @@ pub async fn create_runtime_executor(
         exec = exec.with_replay_tx(tx);
     }
 
-    Ok((exec, last_height, option_last_hash))
+    Ok((exec, runtime, last_height, option_last_hash))
 }
 
 pub async fn start_consensus(
@@ -603,7 +664,7 @@ pub fn run(
     tokio::spawn({
         async move {
             let result: Result<()> = async {
-                let (mut exec, last_height, option_last_hash) = create_runtime_executor(
+                let (exec, mut runtime, last_height, option_last_hash) = create_runtime_executor(
                     starting_block_height,
                     &writer,
                     cancel_token.clone(),
@@ -619,16 +680,14 @@ pub fn run(
                 }
 
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
-                    Some(
-                        start_consensus(engine_cfg, &mut exec.runtime, observation_channels)
-                            .await?,
-                    )
+                    Some(start_consensus(engine_cfg, &mut runtime, observation_channels).await?)
                 } else {
                     None
                 };
 
                 let mut reactor = Reactor::new(
                     exec,
+                    runtime,
                     writer.connection(),
                     block_rx,
                     mempool_rx,

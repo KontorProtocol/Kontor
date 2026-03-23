@@ -1,15 +1,9 @@
-use anyhow::Result;
 use bitcoin::Txid;
-use bitcoin::hashes::Hash;
-use indexer_types::OpWithResult;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::bitcoin_client::Client;
-use crate::database::{self};
 use crate::runtime::Runtime;
-
-use super::block_handler::simulate_handler;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
@@ -48,30 +42,18 @@ pub trait Executor {
     /// Execute a single transaction's operations at the given height.
     /// Called by the reactor after DB row insertion. Sets context and runs ops.
     async fn execute_transaction(
-        &mut self,
+        &self,
+        runtime: &mut Runtime,
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
     );
-
-    /// Run block lifecycle operations after all transactions are processed.
-    /// Includes challenge expiry/generation and epoch transitions.
-    async fn on_block_completed(&mut self, _block: &indexer_types::Block) {}
-
-    /// Called after DB truncation during rollback. Allows the executor to
-    /// resync internal state (e.g. file_ledger) with the DB.
-    async fn on_rollback(&mut self) {}
 
     /// Signal the block source to re-deliver blocks starting from `height`.
     async fn replay_blocks_from(&mut self, height: u64);
 
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
-
-    /// Simulate executing a transaction without committing state changes.
-    async fn simulate(&mut self, _btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
-        anyhow::bail!("Simulation not supported on this executor")
-    }
 }
 
 /// Placeholder executor that does nothing. Used by the production reactor until
@@ -89,7 +71,8 @@ impl Executor for NoopExecutor {
         None
     }
     async fn execute_transaction(
-        &mut self,
+        &self,
+        _runtime: &mut Runtime,
         _height: i64,
         _tx_id: i64,
         _tx: &indexer_types::Transaction,
@@ -101,24 +84,17 @@ impl Executor for NoopExecutor {
     }
 }
 
-/// Production executor: real WASM execution via Runtime + DB persistence.
+/// Production executor: handles transaction validation, resolution, and op execution.
+/// Does NOT own the Runtime — the reactor owns it and passes &mut Runtime when needed.
 pub struct RuntimeExecutor {
-    pub runtime: Runtime,
-    pub writer: database::Writer,
     pub bitcoin_client: Option<Client>,
     pub replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
     pub cancel_token: CancellationToken,
 }
 
 impl RuntimeExecutor {
-    pub fn new(
-        runtime: Runtime,
-        writer: database::Writer,
-        cancel_token: CancellationToken,
-    ) -> Self {
+    pub fn new(cancel_token: CancellationToken) -> Self {
         Self {
-            runtime,
-            writer,
             bitcoin_client: None,
             replay_tx: None,
             cancel_token,
@@ -181,7 +157,8 @@ impl Executor for RuntimeExecutor {
         }
     }
     async fn execute_transaction(
-        &mut self,
+        &self,
+        runtime: &mut Runtime,
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
@@ -192,7 +169,7 @@ impl Executor for RuntimeExecutor {
             let input_index = metadata.input_index;
             let op_return_data = tx.op_return_data.get(&(input_index as u64)).cloned();
 
-            self.runtime
+            runtime
                 .set_context(
                     height,
                     Some(TransactionContext {
@@ -207,63 +184,7 @@ impl Executor for RuntimeExecutor {
                 )
                 .await;
 
-            super::block_handler::execute_op(&mut self.runtime, op, op_return_data).await;
-        }
-    }
-    async fn on_block_completed(&mut self, block: &indexer_types::Block) {
-        use crate::runtime::wit::Signer;
-
-        let core_signer = Signer::Core(Box::new(Signer::Nobody));
-        let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-        self.runtime
-            .set_context(block.height as i64, None, None, None)
-            .await;
-        crate::runtime::filestorage::api::expire_challenges(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-        )
-        .await
-        .expect("Failed to expire challenges");
-        let challenges = crate::runtime::filestorage::api::generate_challenges_for_block(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-            block_hash,
-        )
-        .await
-        .expect("Failed to generate challenges");
-        if !challenges.is_empty() {
-            info!(
-                "Generated {} challenges at block height {}",
-                challenges.len(),
-                block.height
-            );
-        }
-
-        let epoch_result = crate::runtime::staking::api::transition_epoch(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-        )
-        .await
-        .expect("Failed to call transition_epoch")
-        .expect("transition_epoch returned error");
-        if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
-            info!(
-                "Epoch {} transition: {} activated, {} deactivated",
-                epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
-            );
-        }
-    }
-    async fn on_rollback(&mut self) {
-        if let Err(e) = self
-            .runtime
-            .file_ledger
-            .force_resync_from_db(&self.runtime.storage.conn)
-            .await
-        {
-            tracing::error!("file_ledger resync after rollback failed: {e}");
+            super::block_handler::execute_op(runtime, op, op_return_data).await;
         }
     }
     async fn replay_blocks_from(&mut self, height: u64) {
@@ -277,9 +198,5 @@ impl Executor for RuntimeExecutor {
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
         use crate::block::filter_map;
         filter_map((0, tx.clone()))
-    }
-
-    async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
-        simulate_handler(&mut self.runtime, btx).await
     }
 }

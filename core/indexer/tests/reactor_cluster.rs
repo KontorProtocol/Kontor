@@ -122,9 +122,11 @@ impl ReactorCluster {
             let mock_btc = mock_bitcoin.clone();
 
             join_set.spawn(async move {
-                let executor = LiteExecutor::new(mock_btc)
+                let (executor, runtime) = LiteExecutor::new(mock_btc)
                     .await
                     .expect("LiteExecutor setup failed");
+
+                let conn = runtime.get_storage_conn();
 
                 let engine_output = match engine::start(engine_config, &genesis).await {
                     Ok(o) => o,
@@ -143,7 +145,6 @@ impl ReactorCluster {
                     .position(|v| v.address == engine_output.address)
                     .unwrap_or(i);
 
-                let conn = executor.connection();
                 let mut state = ConsensusState::new(
                     conn.clone(),
                     engine_output.signing_provider,
@@ -168,6 +169,7 @@ impl ReactorCluster {
 
                 let mut reactor = Reactor::new(
                     executor,
+                    runtime,
                     conn,
                     node_block_rx,
                     node_mempool_rx,

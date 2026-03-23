@@ -14,7 +14,6 @@ use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractReader;
 
 pub struct LiteExecutor {
-    runtime: Runtime,
     _db_dir: tempfile::TempDir,
     counter_address: ContractAddress,
     signer: Signer,
@@ -23,7 +22,7 @@ pub struct LiteExecutor {
 }
 
 impl LiteExecutor {
-    pub async fn new(mock_bitcoin: Arc<Mutex<MockBitcoin>>) -> Result<Self> {
+    pub async fn new(mock_bitcoin: Arc<Mutex<MockBitcoin>>) -> Result<(Self, Runtime)> {
         use indexer::database::queries::{
             contract_has_state, insert_contract, insert_processed_block,
         };
@@ -113,28 +112,17 @@ impl LiteExecutor {
                 .await?;
         }
 
-        Ok(Self {
+        let _conn = runtime.get_storage_conn();
+        Ok((
+            Self {
+                _db_dir: db_dir,
+                counter_address,
+                signer,
+                mock_bitcoin,
+                replay_requests: Vec::new(),
+            },
             runtime,
-            _db_dir: db_dir,
-            counter_address,
-            signer,
-            mock_bitcoin,
-            replay_requests: Vec::new(),
-        })
-    }
-
-    pub fn connection(&self) -> libsql::Connection {
-        self.runtime.get_storage_conn()
-    }
-
-    /// Read counter value via the WASM contract
-    #[allow(dead_code)]
-    pub async fn counter_value(&mut self) -> Result<u64> {
-        let result = self
-            .runtime
-            .execute(None, &self.counter_address, "get()")
-            .await?;
-        Ok(result.parse::<u64>()?)
+        ))
     }
 }
 
@@ -157,12 +145,13 @@ impl Executor for LiteExecutor {
     }
 
     async fn execute_transaction(
-        &mut self,
+        &self,
+        runtime: &mut Runtime,
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) {
-        self.runtime
+        runtime
             .set_context(
                 height,
                 Some(
@@ -177,8 +166,7 @@ impl Executor for LiteExecutor {
             )
             .await;
 
-        if let Err(e) = self
-            .runtime
+        if let Err(e) = runtime
             .execute(Some(&self.signer), &self.counter_address, "increment()")
             .await
         {

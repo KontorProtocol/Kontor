@@ -569,7 +569,8 @@ impl ConsensusState {
     /// consensus decisions — no block draining or timeout race detection needed.
     pub async fn process_decided_batch(
         &mut self,
-        executor: &mut impl Executor,
+        executor: &impl Executor,
+        runtime: &mut crate::runtime::Runtime,
         _bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
@@ -637,7 +638,7 @@ impl ConsensusState {
             };
 
             executor
-                .execute_transaction(anchor_height as i64, tx_id, t)
+                .execute_transaction(runtime, anchor_height as i64, tx_id, t)
                 .await;
         }
 
@@ -663,7 +664,7 @@ impl ConsensusState {
 /// Validate a received proposal and accept it. Returns None if validation fails.
 async fn validate_and_accept_proposal(
     state: &mut ConsensusState,
-    executor: &mut impl Executor,
+    executor: &impl Executor,
     data: &ProposalData,
     height: Height,
     round: Round,
@@ -722,7 +723,8 @@ async fn validate_and_accept_proposal(
 /// decided and the block should be executed by the reactor via `handle_block`.
 pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
-    executor: &mut impl Executor,
+    executor: &impl Executor,
+    runtime: &mut crate::runtime::Runtime,
     bitcoin_state: &mut BitcoinState,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
@@ -957,6 +959,7 @@ pub async fn handle_consensus_msg(
                         state
                             .process_decided_batch(
                                 executor,
+                                runtime,
                                 bitcoin_state,
                                 *anchor_height,
                                 *anchor_hash,
