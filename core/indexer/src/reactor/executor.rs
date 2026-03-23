@@ -123,19 +123,42 @@ impl Executor for RuntimeExecutor {
             return None;
         }
 
-        // Push to local bitcoind mempool (idempotent, succeeds if already present)
+        // Push to local bitcoind mempool (idempotent, succeeds if already present).
+        // -25 (RPC_VERIFY_ERROR): general validation error (missing inputs) — invalid
+        // -26 (RPC_VERIFY_REJECTED): rejected by mempool policy — invalid
+        // -27 (RPC_VERIFY_ALREADY_IN_UTXO_SET): tx already confirmed — treat as success
+        // All other errors (network, node loading) are retried via unlimited backoff.
         if let Some(client) = &self.bitcoin_client {
             let raw_hex = bitcoin::consensus::encode::serialize_hex(tx);
             let result = retry(
-                || client.send_raw_transaction(&raw_hex),
+                || async {
+                    match client.send_raw_transaction(&raw_hex).await {
+                        Ok(_) => Ok(true),
+                        Err(crate::bitcoin_client::error::Error::BitcoinRpc {
+                            code: -27, ..
+                        }) => Ok(true),
+                        Err(crate::bitcoin_client::error::Error::BitcoinRpc {
+                            code: -25 | -26,
+                            ..
+                        }) => Ok(false),
+                        Err(e) => Err(e),
+                    }
+                },
                 "send_raw_transaction",
                 new_backoff_unlimited(),
                 self.cancel_token.clone(),
             )
             .await;
-            if let Err(e) = result {
-                warn!(txid = %tx.compute_txid(), %e, "Transaction rejected by bitcoind");
-                return None;
+            match result {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn!(txid = %tx.compute_txid(), "Transaction rejected by bitcoind");
+                    return None;
+                }
+                Err(e) => {
+                    warn!(txid = %tx.compute_txid(), %e, "send_raw_transaction failed");
+                    return None;
+                }
             }
         }
 

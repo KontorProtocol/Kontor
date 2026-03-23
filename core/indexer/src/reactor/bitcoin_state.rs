@@ -40,9 +40,10 @@ impl BitcoinState {
     }
 
     pub async fn track_mempool_remove(&mut self, txid: &Txid) {
-        if let Some(cache) = &self.tx_cache {
-            cache.invalidate(txid).await;
-        }
+        // Only remove from mempool, NOT from tx_cache. The cache is shared
+        // with BitcoinClient and may hold the tx from a block fetch. Mempool
+        // remove events can arrive after block insert due to channel ordering,
+        // which would evict a freshly cached confirmed tx.
         self.mempool.remove(txid);
     }
 
