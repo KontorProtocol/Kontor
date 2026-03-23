@@ -30,8 +30,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, OpWithResult, ResultRow,
-    RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstructionEnvelope, InstructionQuery, OpWithResult,
+    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -269,8 +269,17 @@ impl RegTesterInner {
             .address(ident.address.to_string())
             .x_only_public_key(ident.x_only_public_key().to_string())
             .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .instruction(inst)
+            .instruction_envelope(InstructionEnvelope::single(inst))
             .build();
+        self.compose_instruction_envelope_query(ident, instructions)
+            .await
+    }
+
+    async fn compose_instruction_envelope_query(
+        &mut self,
+        ident: &mut Identity,
+        instructions: InstructionQuery,
+    ) -> Result<(ComposeOutputs, String, String)> {
         let query = ComposeQuery::builder()
             .instructions(vec![instructions])
             .sat_per_vbyte(2)
@@ -309,6 +318,21 @@ impl RegTesterInner {
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
     }
 
+    pub async fn compose_instruction_envelope(
+        &mut self,
+        ident: &mut Identity,
+        instruction_envelope: InstructionEnvelope,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        let instructions = InstructionQuery::builder()
+            .address(ident.address.to_string())
+            .x_only_public_key(ident.x_only_public_key().to_string())
+            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
+            .instruction_envelope(instruction_envelope)
+            .build();
+        self.compose_instruction_envelope_query(ident, instructions)
+            .await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -316,6 +340,55 @@ impl RegTesterInner {
     ) -> Result<InstructionResult> {
         let (compose_res, commit_tx_hex, reveal_tx_hex) =
             self.compose_instruction(ident, inst).await?;
+        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
+        let txids = self
+            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .await?;
+        self.mine(1).await?;
+
+        ident.next_funding_utxo = (
+            OutPoint {
+                txid: txids[0],
+                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+            },
+            compose_res
+                .commit_transaction
+                .output
+                .last()
+                .unwrap()
+                .clone(),
+        );
+        self.ws_client
+            .next()
+            .await
+            .context("Failed to receive response from websocket")?;
+
+        let result = self
+            .kontor_client
+            .result(&id)
+            .await?
+            .ok_or(anyhow!("Could not find op result"))?;
+        tracing::info!("Instruction result: {:?}", result);
+        if result.value.is_some() {
+            Ok(InstructionResult {
+                result,
+                commit_tx_hex,
+                reveal_tx_hex,
+            })
+        } else {
+            Err(anyhow!("Instruction failed in processing"))
+        }
+    }
+
+    pub async fn instruction_envelope(
+        &mut self,
+        ident: &mut Identity,
+        instruction_envelope: InstructionEnvelope,
+    ) -> Result<InstructionResult> {
+        let (compose_res, commit_tx_hex, reveal_tx_hex) = self
+            .compose_instruction_envelope(ident, instruction_envelope)
+            .await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
         let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
         let txids = self
@@ -732,12 +805,36 @@ impl RegTester {
             .await
     }
 
+    pub async fn compose_instruction_envelope(
+        &mut self,
+        ident: &mut Identity,
+        instruction_envelope: InstructionEnvelope,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        self.inner
+            .lock()
+            .await
+            .compose_instruction_envelope(ident, instruction_envelope)
+            .await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
         self.inner.lock().await.instruction(ident, inst).await
+    }
+
+    pub async fn instruction_envelope(
+        &mut self,
+        ident: &mut Identity,
+        instruction_envelope: InstructionEnvelope,
+    ) -> Result<InstructionResult> {
+        self.inner
+            .lock()
+            .await
+            .instruction_envelope(ident, instruction_envelope)
+            .await
     }
 
     pub async fn unregistered_identity(&mut self) -> Result<Identity> {

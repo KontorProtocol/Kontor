@@ -352,6 +352,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     Inst::Call {
                         gas_limit: 10_000,
                         contract: contract_address.clone().into(),
+                        nonce: None,
                         expr: expr.to_string(),
                     },
                 )

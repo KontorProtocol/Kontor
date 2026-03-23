@@ -24,7 +24,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::BlsBulkOp;
+use indexer_types::{AggregateInst, Inst, InstructionEnvelope, SignerRef};
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
@@ -72,10 +72,10 @@ pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"
 /// Compressed BLS12-381 MinSig signature length in bytes.
 pub const BLS_SIGNATURE_BYTES: usize = 48;
 
-/// Hard cap on number of operations per `Inst::BlsBulk`.
+/// Hard cap on number of operations per aggregate instruction envelope.
 pub const MAX_BLS_BULK_OPS: usize = 10_000;
 
-/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
+/// Hard cap on total signed message bytes per aggregate instruction envelope.
 pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ enum SignerKey {
     RawPubkey(Vec<u8>),
 }
 
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_bls_bulk`]
+/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_instruction_envelope`]
 /// so the reactor can look up signers without redundant registry calls.
 pub type SignerMap = HashMap<u64, String>;
 
@@ -169,11 +169,16 @@ impl SignerResolver {
         }
     }
 
-    async fn resolve(&mut self, runtime: &mut Runtime, op: &BlsBulkOp) -> Result<BlsPublicKey> {
-        let key = match op {
-            BlsBulkOp::Call { signer_id, .. } => SignerKey::RegistryId(*signer_id),
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
+    async fn resolve(&mut self, runtime: &mut Runtime, op: &AggregateInst) -> Result<BlsPublicKey> {
+        let key = match (&op.signer, &op.inst) {
+            (SignerRef::SignerId { id }, _) => SignerKey::RegistryId(*id),
+            (_, Inst::RegisterBlsKey { bls_pubkey, .. }) => {
                 SignerKey::RawPubkey(bls_pubkey.clone())
+            }
+            _ => {
+                return Err(anyhow!(
+                    "aggregate signer must be a registry id unless registering a BLS key"
+                ));
             }
         };
 
@@ -181,17 +186,21 @@ impl SignerResolver {
             return Ok(*pk);
         }
 
-        let raw_bytes = match op {
-            BlsBulkOp::Call { signer_id, .. } => {
-                let entry = get_entry_by_id(runtime, *signer_id).await?;
-                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-                self.signer_map
-                    .insert(*signer_id, entry.x_only_pubkey.clone());
+        let raw_bytes = match (&op.signer, &op.inst) {
+            (SignerRef::SignerId { id }, _) => {
+                let entry = get_entry_by_id(runtime, *id).await?;
+                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {id}"))?;
+                self.signer_map.insert(*id, entry.x_only_pubkey.clone());
                 entry
                     .bls_pubkey
-                    .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?
+                    .ok_or_else(|| anyhow!("signer_id {id} has no BLS pubkey registered"))?
             }
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
+            (_, Inst::RegisterBlsKey { bls_pubkey, .. }) => bls_pubkey.clone(),
+            _ => {
+                return Err(anyhow!(
+                    "aggregate signer must be a registry id unless registering a BLS key"
+                ));
+            }
         };
 
         let pk = BlsPublicKey::key_validate(&raw_bytes)
@@ -201,19 +210,28 @@ impl SignerResolver {
     }
 }
 
-pub async fn verify_bls_bulk(
+pub async fn verify_instruction_envelope(
     runtime: &mut Runtime,
-    ops: &[BlsBulkOp],
-    signature: &[u8],
+    envelope: &InstructionEnvelope,
 ) -> Result<SignerMap> {
+    let (ops, signature) = match envelope {
+        InstructionEnvelope::Aggregate { ops, signature } => (ops.as_slice(), signature.as_slice()),
+        InstructionEnvelope::Direct { .. } => {
+            return Err(anyhow!(
+                "verify_instruction_envelope requires an aggregate instruction envelope"
+            ));
+        }
+    };
     // 1) Basic sanity: empty bundles are not meaningful and should be rejected.
     if ops.is_empty() {
-        return Err(anyhow!("BlsBulk must contain at least one operation"));
+        return Err(anyhow!(
+            "aggregate instruction envelope must contain at least one operation"
+        ));
     }
     // 2) DoS hardening: cap per-bundle work (pubkey lookups + hashing + pairing checks).
     if ops.len() > MAX_BLS_BULK_OPS {
         return Err(anyhow!(
-            "BlsBulk contains {} operations (max {})",
+            "aggregate instruction envelope contains {} operations (max {})",
             ops.len(),
             MAX_BLS_BULK_OPS
         ));
@@ -246,7 +264,7 @@ pub async fn verify_bls_bulk(
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
-                "BlsBulk signed message bytes exceed max {}",
+                "aggregate envelope signed message bytes exceed max {}",
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
@@ -365,7 +383,7 @@ mod tests {
     use crate::runtime::{ComponentCache, Storage};
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use indexer_types::{ContractAddress, Signer};
+    use indexer_types::ContractAddress;
     use tempfile::TempDir;
 
     async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -431,10 +449,41 @@ mod tests {
         assert!(proof.verify().is_err());
     }
 
+    fn aggregate_call_op(signer_id: u64) -> AggregateInst {
+        AggregateInst {
+            signer: SignerRef::SignerId { id: signer_id },
+            inst: Inst::Call {
+                gas_limit: 50_000,
+                contract: ContractAddress {
+                    name: "test".into(),
+                    height: 1,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
+            },
+        }
+    }
+
+    fn aggregate_register_op(bls_pubkey: Vec<u8>) -> AggregateInst {
+        AggregateInst {
+            signer: SignerRef::XOnlyPubKey("aa".repeat(32)),
+            inst: Inst::RegisterBlsKey {
+                bls_pubkey,
+                schnorr_sig: vec![0u8; 64],
+                bls_sig: vec![0u8; 48],
+            },
+        }
+    }
+
+    fn aggregate_envelope(ops: Vec<AggregateInst>, signature: Vec<u8>) -> InstructionEnvelope {
+        InstructionEnvelope::Aggregate { ops, signature }
+    }
+
     #[tokio::test]
     async fn verify_bls_bulk_rejects_empty_bundle() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let err = verify_bls_bulk(&mut runtime, &[], &[])
+        let err = verify_instruction_envelope(&mut runtime, &aggregate_envelope(vec![], vec![]))
             .await
             .expect_err("empty bundle must be rejected");
         assert!(err.to_string().contains("at least one operation"));
@@ -443,21 +492,13 @@ mod tests {
     #[tokio::test]
     async fn verify_bls_bulk_rejects_wrong_signature_length() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr: String::new(),
-        }];
         let short_sig = vec![0u8; BLS_SIGNATURE_BYTES - 1];
-        let err = verify_bls_bulk(&mut runtime, &ops, &short_sig)
-            .await
-            .expect_err("wrong signature length must be rejected");
+        let err = verify_instruction_envelope(
+            &mut runtime,
+            &aggregate_envelope(vec![aggregate_call_op(0)], short_sig),
+        )
+        .await
+        .expect_err("wrong signature length must be rejected");
         assert!(
             err.to_string()
                 .contains("invalid aggregate signature length")
@@ -467,25 +508,14 @@ mod tests {
     #[tokio::test]
     async fn verify_bls_bulk_rejects_invalid_signature_bytes() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr: String::new(),
-        }];
         let bad_sig = [0u8; BLS_SIGNATURE_BYTES];
-        assert!(
-            BlsSignature::sig_validate(&bad_sig, true).is_err(),
-            "expected test signature bytes to be invalid"
-        );
-        let err = verify_bls_bulk(&mut runtime, &ops, &bad_sig)
-            .await
-            .expect_err("invalid signature bytes must be rejected");
+        assert!(BlsSignature::sig_validate(&bad_sig, true).is_err());
+        let err = verify_instruction_envelope(
+            &mut runtime,
+            &aggregate_envelope(vec![aggregate_call_op(0)], bad_sig.to_vec()),
+        )
+        .await
+        .expect_err("invalid signature bytes must be rejected");
         assert!(
             err.to_string()
                 .contains("invalid aggregate signature bytes")
@@ -495,21 +525,11 @@ mod tests {
     #[tokio::test]
     async fn verify_bls_bulk_enforces_op_count_cap() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let mut ops: Vec<BlsBulkOp> = Vec::with_capacity(MAX_BLS_BULK_OPS + 1);
+        let mut ops = Vec::with_capacity(MAX_BLS_BULK_OPS + 1);
         for _ in 0..=MAX_BLS_BULK_OPS {
-            ops.push(BlsBulkOp::Call {
-                signer_id: 0,
-                nonce: 0,
-                gas_limit: 0,
-                contract: ContractAddress {
-                    name: String::new(),
-                    height: 0,
-                    tx_index: 0,
-                },
-                expr: String::new(),
-            });
+            ops.push(aggregate_call_op(0));
         }
-        let err = verify_bls_bulk(&mut runtime, &ops, &[])
+        let err = verify_instruction_envelope(&mut runtime, &aggregate_envelope(ops, vec![]))
             .await
             .expect_err("bundle op cap must be enforced");
         assert!(err.to_string().contains("max"));
@@ -519,21 +539,23 @@ mod tests {
     async fn verify_bls_bulk_enforces_total_message_bytes_cap() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
+        let ops = vec![AggregateInst {
+            signer: SignerRef::SignerId { id: 0 },
+            inst: Inst::Call {
+                gas_limit: 0,
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr,
             },
-            expr,
         }];
 
         let sk = BlsSecretKey::key_gen(&[7u8; 32], &[]).expect("BLS key_gen");
         let sig = sk.sign(b"cap-test", KONTOR_BLS_DST, &[]).to_bytes();
-        let err = verify_bls_bulk(&mut runtime, &ops, &sig)
+        let err = verify_instruction_envelope(&mut runtime, &aggregate_envelope(ops, sig.to_vec()))
             .await
             .expect_err("message bytes cap must be enforced");
         assert!(err.to_string().contains("signed message bytes exceed max"));
@@ -543,22 +565,15 @@ mod tests {
     async fn verify_bls_bulk_rejects_invalid_register_pubkey_bytes() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let bad_pubkey = vec![0u8; 96];
-        assert!(
-            BlsPublicKey::key_validate(bad_pubkey.as_slice()).is_err(),
-            "expected test pubkey bytes to be invalid"
-        );
-        let ops = vec![BlsBulkOp::RegisterBlsKey {
-            signer: Signer::XOnlyPubKey("00".repeat(32)),
-            bls_pubkey: bad_pubkey,
-            schnorr_sig: vec![0u8; 64],
-            bls_sig: vec![0u8; 48],
-        }];
-
+        assert!(BlsPublicKey::key_validate(bad_pubkey.as_slice()).is_err());
         let sk = BlsSecretKey::key_gen(&[9u8; 32], &[]).expect("BLS key_gen");
         let sig = sk.sign(b"bad-pk-test", KONTOR_BLS_DST, &[]).to_bytes();
-        let err = verify_bls_bulk(&mut runtime, &ops, &sig)
-            .await
-            .expect_err("invalid pubkey bytes must be rejected");
+        let err = verify_instruction_envelope(
+            &mut runtime,
+            &aggregate_envelope(vec![aggregate_register_op(bad_pubkey)], sig.to_vec()),
+        )
+        .await
+        .expect_err("invalid pubkey bytes must be rejected");
         assert!(err.to_string().contains("invalid BLS pubkey"));
     }
 
@@ -566,53 +581,26 @@ mod tests {
     async fn verify_bls_bulk_rejects_wrong_length_register_pubkey() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let sk = BlsSecretKey::key_gen(&[11u8; 32], &[]).expect("BLS key_gen");
-        let sig_bytes = sk.sign(b"len-test", KONTOR_BLS_DST, &[]).to_bytes();
+        let sig_bytes = sk
+            .sign(b"len-test", KONTOR_BLS_DST, &[])
+            .to_bytes()
+            .to_vec();
 
         for (label, bad_pubkey) in [
             ("too short (48 bytes)", vec![0xABu8; 48]),
             ("too long (128 bytes)", vec![0xCDu8; 128]),
             ("empty", vec![]),
         ] {
-            let ops = vec![BlsBulkOp::RegisterBlsKey {
-                signer: Signer::XOnlyPubKey("aa".repeat(32)),
-                bls_pubkey: bad_pubkey,
-                schnorr_sig: vec![0u8; 64],
-                bls_sig: vec![0u8; 48],
-            }];
-            let err = verify_bls_bulk(&mut runtime, &ops, &sig_bytes)
-                .await
-                .expect_err(&format!("{label}: wrong-length pubkey must be rejected"));
+            let err = verify_instruction_envelope(
+                &mut runtime,
+                &aggregate_envelope(vec![aggregate_register_op(bad_pubkey)], sig_bytes.clone()),
+            )
+            .await
+            .expect_err(&format!("{label}: wrong-length pubkey must be rejected"));
             assert!(
                 err.to_string().contains("invalid BLS pubkey"),
                 "{label}: expected 'invalid BLS pubkey', got: {err}"
             );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // SignerResolver unit tests
-    // -----------------------------------------------------------------------
-
-    fn make_register_op(bls_pubkey: Vec<u8>) -> BlsBulkOp {
-        BlsBulkOp::RegisterBlsKey {
-            signer: Signer::XOnlyPubKey("aa".repeat(32)),
-            bls_pubkey,
-            schnorr_sig: vec![0u8; 64],
-            bls_sig: vec![0u8; 48],
-        }
-    }
-
-    fn make_call_op(signer_id: u64) -> BlsBulkOp {
-        BlsBulkOp::Call {
-            signer_id,
-            nonce: 0,
-            gas_limit: 50_000,
-            contract: ContractAddress {
-                name: "test".into(),
-                height: 1,
-                tx_index: 0,
-            },
-            expr: String::new(),
         }
     }
 
@@ -625,7 +613,7 @@ mod tests {
     async fn resolver_returns_valid_pubkey_for_register_op() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let pubkey_bytes = valid_bls_pubkey(&[1u8; 32]);
-        let op = make_register_op(pubkey_bytes.clone());
+        let op = aggregate_register_op(pubkey_bytes.clone());
 
         let mut resolver = SignerResolver::new();
         let pk = resolver.resolve(&mut runtime, &op).await.unwrap();
@@ -638,7 +626,7 @@ mod tests {
     async fn resolver_caches_register_pubkey() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let pubkey_bytes = valid_bls_pubkey(&[2u8; 32]);
-        let op = make_register_op(pubkey_bytes);
+        let op = aggregate_register_op(pubkey_bytes);
 
         let mut resolver = SignerResolver::new();
         let first = resolver.resolve(&mut runtime, &op).await.unwrap();
@@ -651,8 +639,8 @@ mod tests {
     #[tokio::test]
     async fn resolver_distinguishes_different_register_pubkeys() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let op_a = make_register_op(valid_bls_pubkey(&[3u8; 32]));
-        let op_b = make_register_op(valid_bls_pubkey(&[4u8; 32]));
+        let op_a = aggregate_register_op(valid_bls_pubkey(&[3u8; 32]));
+        let op_b = aggregate_register_op(valid_bls_pubkey(&[4u8; 32]));
 
         let mut resolver = SignerResolver::new();
         let pk_a = resolver.resolve(&mut runtime, &op_a).await.unwrap();
@@ -665,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn resolver_rejects_invalid_register_pubkey() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let op = make_register_op(vec![0u8; 96]);
+        let op = aggregate_register_op(vec![0u8; 96]);
 
         let mut resolver = SignerResolver::new();
         let err = resolver
@@ -679,7 +667,7 @@ mod tests {
     #[tokio::test]
     async fn resolver_errors_on_unresolvable_call_and_does_not_cache() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let op = make_call_op(999_999);
+        let op = aggregate_call_op(999_999);
 
         let mut resolver = SignerResolver::new();
         resolver

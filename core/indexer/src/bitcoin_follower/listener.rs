@@ -515,7 +515,7 @@ mod tests {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: index as i64,
-            ops: vec![],
+            inputs: vec![],
             op_return_data: Default::default(),
         })
     }
@@ -566,7 +566,7 @@ mod tests {
                 Some(indexer_types::Transaction {
                     txid: tx.compute_txid(),
                     index: index as i64,
-                    ops: vec![],
+                    inputs: vec![],
                     op_return_data: Default::default(),
                 })
             } else {

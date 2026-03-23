@@ -19,7 +19,7 @@ use indexer::bls::{
     BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX,
     bls_derivation_path, derive_bls_secret_key_eip2333,
 };
-use indexer_types::{BlsBulkOp, Inst, Signer};
+use indexer_types::{AggregateInst, Inst, InstructionEnvelope, Signer, SignerRef};
 use testlib::{
     AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
     RuntimeConfig, import, serial_test,
@@ -368,11 +368,13 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
         .to_bytes();
 
     // Submit via BlsBulk: Eve targets alice_xonly as the signer.
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(alice_xonly.to_string()),
-        bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
-        schnorr_sig: eve_schnorr_sig.to_vec(),
-        bls_sig: eve_bls_binding_sig.to_vec(),
+    let op = AggregateInst {
+        signer: SignerRef::XOnlyPubKey(alice_xonly.to_string()),
+        inst: Inst::RegisterBlsKey {
+            bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+            schnorr_sig: eve_schnorr_sig.to_vec(),
+            bls_sig: eve_bls_binding_sig.to_vec(),
+        },
     };
 
     let msg = op.signing_message()?;
@@ -381,9 +383,9 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
     let agg_sig = agg.to_signature();
 
     let _ = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
+            InstructionEnvelope::Aggregate {
                 ops: vec![op],
                 signature: agg_sig.to_bytes().to_vec(),
             },

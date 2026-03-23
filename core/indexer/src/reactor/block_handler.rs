@@ -1,6 +1,9 @@
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::Hash;
-use indexer_types::{Block, Op, OpWithResult, Transaction, TransactionRow};
+use indexer_types::{
+    AggregateInst, Block, Inst, InstructionEnvelope, Op, OpMetadata, OpWithResult, ParsedInput,
+    SignerRef, Transaction, TransactionRow,
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -8,7 +11,7 @@ use crate::{
     database::queries::{
         insert_block, insert_transaction, select_block_latest, set_block_processed,
     },
-    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -103,37 +106,164 @@ pub async fn process_transaction(
     )
     .await?;
 
-    for op in &t.ops {
-        let metadata = op.metadata();
-        let input_index = metadata.input_index;
-        let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
+    for input in &t.inputs {
+        let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
         info!("Op return data: {:#?}", op_return_data);
 
-        runtime
-            .set_context(
-                block_height as i64,
-                Some(TransactionContext {
-                    tx_index: t.index,
-                    input_index,
-                    op_index: 0,
-                    txid: t.txid,
-                }),
-                Some(metadata.previous_output),
-                op_return_data.clone().map(Into::into),
-            )
-            .await;
+        let normalized_ops = normalize_parsed_input(runtime, input).await?;
+        for (op_index, op) in normalized_ops.iter().enumerate() {
+            let metadata = op.metadata();
+            runtime
+                .set_context(
+                    block_height as i64,
+                    Some(TransactionContext {
+                        tx_index: t.index,
+                        input_index: metadata.input_index,
+                        op_index: op_index as i64,
+                        txid: t.txid,
+                    }),
+                    Some(metadata.previous_output),
+                    op_return_data.clone().map(Into::into),
+                )
+                .await;
 
-        execute_op(runtime, op, op_return_data).await;
+            execute_op(runtime, op).await;
+        }
     }
 
     Ok(())
 }
 
-async fn execute_op(
-    runtime: &mut Runtime,
-    op: &Op,
-    op_return_data: Option<indexer_types::OpReturnData>,
-) {
+fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
+    match inst {
+        Inst::Publish {
+            gas_limit,
+            name,
+            bytes,
+        } => Op::Publish {
+            metadata,
+            gas_limit,
+            name,
+            bytes,
+        },
+        Inst::Call {
+            gas_limit,
+            contract,
+            nonce,
+            expr,
+        } => Op::Call {
+            metadata,
+            gas_limit,
+            contract,
+            nonce,
+            expr,
+        },
+        Inst::Issuance => Op::Issuance { metadata },
+        Inst::RegisterBlsKey {
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        } => Op::RegisterBlsKey {
+            metadata,
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        },
+    }
+}
+
+fn resolve_aggregate_signer(
+    signer: &SignerRef,
+    signer_map: &crate::bls::SignerMap,
+) -> Result<Signer> {
+    match signer {
+        SignerRef::XOnlyPubKey(x_only) => Ok(Signer::XOnlyPubKey(x_only.clone())),
+        SignerRef::SignerId { id } => signer_map
+            .get(id)
+            .cloned()
+            .map(Signer::XOnlyPubKey)
+            .ok_or_else(|| anyhow!("signer_id {id} missing from verified aggregate signer map")),
+    }
+}
+
+fn direct_ops(input: &ParsedInput) -> Vec<Op> {
+    let InstructionEnvelope::Direct { ops } = &input.instruction_envelope else {
+        unreachable!("direct_ops only called for direct envelopes");
+    };
+    ops.iter()
+        .cloned()
+        .map(|inst| {
+            op_from_inst(
+                inst,
+                OpMetadata {
+                    previous_output: input.previous_output,
+                    input_index: input.input_index,
+                    signer: input.witness_signer.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+async fn aggregate_ops(runtime: &mut Runtime, input: &ParsedInput) -> Result<Vec<Op>> {
+    let signer_map =
+        crate::bls::verify_instruction_envelope(runtime, &input.instruction_envelope).await?;
+    let InstructionEnvelope::Aggregate { ops, .. } = &input.instruction_envelope else {
+        unreachable!("aggregate_ops only called for aggregate envelopes");
+    };
+
+    let mut normalized = Vec::with_capacity(ops.len());
+    for AggregateInst { signer, inst } in ops {
+        let resolved_signer = resolve_aggregate_signer(signer, &signer_map)?;
+
+        if let Inst::Call { nonce, .. } = inst {
+            let SignerRef::SignerId { id } = signer else {
+                return Err(anyhow!("aggregate Call requires SignerRef::SignerId"));
+            };
+            let Some(nonce) = nonce else {
+                return Err(anyhow!("aggregate Call requires a nonce"));
+            };
+            let nonce_result = registry::api::advance_nonce(
+                runtime,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                *id,
+                *nonce,
+            )
+            .await;
+            match nonce_result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    warn!("Aggregate nonce check failed for signer {id}: {e:?}");
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Aggregate nonce advance error for signer {id}: {e}");
+                    continue;
+                }
+            }
+        }
+
+        normalized.push(op_from_inst(
+            inst.clone(),
+            OpMetadata {
+                previous_output: input.previous_output,
+                input_index: input.input_index,
+                signer: resolved_signer,
+            },
+        ));
+    }
+
+    Ok(normalized)
+}
+
+async fn normalize_parsed_input(runtime: &mut Runtime, input: &ParsedInput) -> Result<Vec<Op>> {
+    match &input.instruction_envelope {
+        InstructionEnvelope::Direct { .. } => Ok(direct_ops(input)),
+        InstructionEnvelope::Aggregate { .. } => aggregate_ops(runtime, input).await,
+    }
+}
+
+async fn execute_op(runtime: &mut Runtime, op: &Op) {
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {
@@ -158,6 +288,7 @@ async fn execute_op(
             metadata,
             gas_limit,
             contract,
+            nonce: _,
             expr,
         } => {
             runtime.set_gas_limit(*gas_limit);
@@ -190,24 +321,6 @@ async fn execute_op(
                 .await
             {
                 warn!("RegisterBlsKey failed: {e}");
-            }
-        }
-        Op::BlsBulk {
-            metadata,
-            ops,
-            signature,
-        } => {
-            if let Err(e) = runtime
-                .execute_bls_bulk(
-                    ops,
-                    signature,
-                    metadata.previous_output,
-                    metadata.input_index,
-                    op_return_data,
-                )
-                .await
-            {
-                warn!("BlsBulk failed: {e}");
             }
         }
     }

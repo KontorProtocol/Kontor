@@ -9,7 +9,9 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use indexer::block::filter_map;
 use indexer::test_utils::{PublicKey as TestPublicKey, build_inscription};
-use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, Signer, serialize};
+use indexer_types::{
+    AggregateInst, ContractAddress, Inst, InstructionEnvelope, Signer, SignerRef, serialize,
+};
 
 fn tx_with_taproot_script_witness(
     tap_script: ScriptBuf,
@@ -55,50 +57,41 @@ fn random_xonly() -> bitcoin::XOnlyPublicKey {
 }
 
 #[test]
-fn filter_map_parses_valid_blsbulk_envelope() {
+fn filter_map_parses_valid_aggregate_envelope() {
     let xonly = random_xonly();
-    let contract = ContractAddress {
-        name: "c".to_string(),
-        height: 1,
-        tx_index: 2,
-    };
-    let op = BlsBulkOp::Call {
-        signer_id: 7,
-        nonce: 0,
-        gas_limit: 123,
-        contract,
-        expr: "noop()".to_string(),
-    };
-    let inst = Inst::BlsBulk {
-        ops: vec![op.clone()],
+    let envelope = InstructionEnvelope::Aggregate {
+        ops: vec![AggregateInst {
+            signer: SignerRef::SignerId { id: 7 },
+            inst: Inst::Call {
+                gas_limit: 123,
+                contract: ContractAddress {
+                    name: "c".to_string(),
+                    height: 1,
+                    tx_index: 2,
+                },
+                nonce: Some(0),
+                expr: "noop()".to_string(),
+            },
+        }],
         signature: vec![9u8; 48],
     };
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload = serialize(&envelope).expect("serialize envelope");
     let tap_script =
         build_inscription(payload, TestPublicKey::Taproot(&xonly)).expect("build tap script");
     let tx = tx_with_taproot_script_witness(tap_script, xonly);
 
     let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
-    assert_eq!(parsed.ops.len(), 1);
-    match &parsed.ops[0] {
-        Op::BlsBulk {
-            metadata,
-            ops,
-            signature,
-        } => {
-            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
-            assert_eq!(ops.as_slice(), &[op]);
-            assert_eq!(signature.as_slice(), &[9u8; 48]);
-        }
-        other => panic!("expected Op::BlsBulk, got {other:?}"),
-    }
+    assert_eq!(parsed.inputs.len(), 1);
+    let input = &parsed.inputs[0];
+    assert_eq!(input.witness_signer, Signer::XOnlyPubKey(xonly.to_string()));
+    assert_eq!(input.instruction_envelope, envelope);
 }
 
 #[test]
 fn filter_map_rejects_wrong_marker() {
     let xonly = random_xonly();
     let inst = Inst::Issuance;
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload = serialize(&InstructionEnvelope::single(inst)).expect("serialize envelope");
 
     let tap_script = Builder::new()
         .push_slice(xonly.serialize())
@@ -119,7 +112,7 @@ fn filter_map_rejects_wrong_marker() {
 fn filter_map_rejects_trailing_instructions_after_endif() {
     let xonly = random_xonly();
     let inst = Inst::Issuance;
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload = serialize(&InstructionEnvelope::single(inst)).expect("serialize envelope");
 
     let tap_script = Builder::new()
         .push_slice(xonly.serialize())
@@ -148,9 +141,11 @@ fn filter_map_concatenates_multi_push_payload() {
             height: 1,
             tx_index: 0,
         },
+        nonce: None,
         expr: "eval(10, id)".to_string(),
     };
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload =
+        serialize(&InstructionEnvelope::single(inst.clone())).expect("serialize envelope");
 
     let mid = payload.len() / 2;
     let (p0, p1) = payload.split_at(mid);
@@ -169,30 +164,20 @@ fn filter_map_concatenates_multi_push_payload() {
 
     let tx = tx_with_taproot_script_witness(tap_script, xonly);
     let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
-    assert_eq!(parsed.ops.len(), 1);
-    match &parsed.ops[0] {
-        Op::Call {
-            metadata,
-            gas_limit,
-            contract,
-            expr,
-        } => {
-            assert_eq!(metadata.signer, Signer::XOnlyPubKey(xonly.to_string()));
-            assert_eq!(*gas_limit, 7);
-            assert_eq!(contract.name, "arith");
-            assert_eq!(contract.height, 1);
-            assert_eq!(contract.tx_index, 0);
-            assert_eq!(expr, "eval(10, id)");
-        }
-        other => panic!("expected Op::Call, got {other:?}"),
-    }
+    assert_eq!(parsed.inputs.len(), 1);
+    let input = &parsed.inputs[0];
+    assert_eq!(input.witness_signer, Signer::XOnlyPubKey(xonly.to_string()));
+    assert_eq!(
+        input.instruction_envelope,
+        InstructionEnvelope::single(inst)
+    );
 }
 
 #[test]
 fn filter_map_rejects_non_pushbytes_inside_envelope() {
     let xonly = random_xonly();
     let inst = Inst::Issuance;
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload = serialize(&InstructionEnvelope::single(inst)).expect("serialize envelope");
 
     let tap_script = Builder::new()
         .push_slice(xonly.serialize())
@@ -215,7 +200,7 @@ fn filter_map_rejects_non_pushbytes_inside_envelope() {
 fn filter_map_rejects_invalid_xonly_pubkey_bytes() {
     let internal_key = random_xonly();
     let inst = Inst::Issuance;
-    let payload = serialize(&inst).expect("serialize Inst");
+    let payload = serialize(&InstructionEnvelope::single(inst)).expect("serialize envelope");
 
     let tap_script = Builder::new()
         .push_slice([0u8; 32])

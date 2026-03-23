@@ -2,7 +2,7 @@ use anyhow::Result;
 use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
-use indexer_types::{BlsBulkOp, Inst, Signer};
+use indexer_types::{AggregateInst, Inst, InstructionEnvelope, SignerRef};
 use testlib::*;
 
 import!(
@@ -11,6 +11,22 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/registry/wit",
 );
+
+//TODO
+fn aggregate_register_op(x_only: String, proof: &RegistrationProof) -> AggregateInst {
+    AggregateInst {
+        signer: SignerRef::XOnlyPubKey(x_only),
+        inst: Inst::RegisterBlsKey {
+            bls_pubkey: proof.bls_pubkey.to_vec(),
+            schnorr_sig: proof.schnorr_sig.to_vec(),
+            bls_sig: proof.bls_sig.to_vec(),
+        },
+    }
+}
+
+fn aggregate_envelope(ops: Vec<AggregateInst>, signature: Vec<u8>) -> InstructionEnvelope {
+    InstructionEnvelope::Aggregate { ops, signature }
+}
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_register_direct_regtest() -> Result<()> {
@@ -47,18 +63,8 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
     let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
     let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
 
-    let op0 = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user1.x_only_public_key().to_string()),
-        bls_pubkey: proof1.bls_pubkey.to_vec(),
-        schnorr_sig: proof1.schnorr_sig.to_vec(),
-        bls_sig: proof1.bls_sig.to_vec(),
-    };
-    let op1 = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user2.x_only_public_key().to_string()),
-        bls_pubkey: proof2.bls_pubkey.to_vec(),
-        schnorr_sig: proof2.schnorr_sig.to_vec(),
-        bls_sig: proof2.bls_sig.to_vec(),
-    };
+    let op0 = aggregate_register_op(user1.x_only_public_key().to_string(), &proof1);
+    let op1 = aggregate_register_op(user2.x_only_public_key().to_string(), &proof2);
 
     let msg0 = op0.signing_message()?;
     let msg1 = op1.signing_message()?;
@@ -72,12 +78,9 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
     let aggregate_sig = aggregate.to_signature();
 
     let _res = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op0, op1],
-                signature: aggregate_sig.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op0, op1], aggregate_sig.to_bytes().to_vec()),
         )
         .await?;
 
@@ -207,12 +210,7 @@ async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> 
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof.bls_pubkey.to_vec(),
-        schnorr_sig: proof.schnorr_sig.to_vec(),
-        bls_sig: proof.bls_sig.to_vec(),
-    };
+    let op = aggregate_register_op(user_xonly.clone(), &proof);
 
     let msg = op.signing_message()?;
     let bls_sk = BlsSecretKey::from_bytes(&user.bls_secret_key).unwrap();
@@ -220,12 +218,9 @@ async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> 
     let agg = AggregateSignature::aggregate(&[&sig, &sig], true).unwrap();
 
     let _ = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op.clone(), op],
-                signature: agg.to_signature().to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op.clone(), op], agg.to_signature().to_bytes().to_vec()),
         )
         .await;
 
@@ -290,18 +285,8 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
 
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op_a = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof_a.bls_pubkey.to_vec(),
-        schnorr_sig: proof_a.schnorr_sig.to_vec(),
-        bls_sig: proof_a.bls_sig.to_vec(),
-    };
-    let op_b = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof_b.bls_pubkey.to_vec(),
-        schnorr_sig: proof_b.schnorr_sig.to_vec(),
-        bls_sig: proof_b.bls_sig.to_vec(),
-    };
+    let op_a = aggregate_register_op(user_xonly.clone(), &proof_a);
+    let op_b = aggregate_register_op(user_xonly.clone(), &proof_b);
 
     let msg_a = op_a.signing_message()?;
     let msg_b = op_b.signing_message()?;
@@ -312,12 +297,9 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
     let agg = AggregateSignature::aggregate(&[&sig_a, &sig_b], true).unwrap();
 
     let _ = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op_a, op_b],
-                signature: agg.to_signature().to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op_a, op_b], agg.to_signature().to_bytes().to_vec()),
         )
         .await;
 
@@ -382,23 +364,22 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
     ];
 
     for (label, schnorr_sig, bls_sig) in cases {
-        let op = BlsBulkOp::RegisterBlsKey {
-            signer: Signer::XOnlyPubKey(user_xonly.clone()),
-            bls_pubkey: bls_pk_bytes.clone(),
-            schnorr_sig,
-            bls_sig,
+        let op = AggregateInst {
+            signer: SignerRef::XOnlyPubKey(user_xonly.clone()),
+            inst: Inst::RegisterBlsKey {
+                bls_pubkey: bls_pk_bytes.clone(),
+                schnorr_sig,
+                bls_sig,
+            },
         };
         let msg = op.signing_message()?;
         let sig = bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
         let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
 
         let _ = reg_tester
-            .instruction(
+            .instruction_envelope(
                 &mut publisher,
-                Inst::BlsBulk {
-                    ops: vec![op],
-                    signature: agg.to_signature().to_bytes().to_vec(),
-                },
+                aggregate_envelope(vec![op], agg.to_signature().to_bytes().to_vec()),
             )
             .await;
 

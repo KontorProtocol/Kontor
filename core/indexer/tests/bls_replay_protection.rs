@@ -8,7 +8,9 @@ use bitcoin::consensus::encode::deserialize_hex;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
+use indexer_types::{
+    AggregateInst, ContractAddress as IndexerContractAddress, Inst, InstructionEnvelope, SignerRef,
+};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -18,6 +20,29 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/registry/wit",
 );
+
+// TODO
+fn aggregate_call(
+    signer_id: u64,
+    nonce: u64,
+    gas_limit: u64,
+    contract: IndexerContractAddress,
+    expr: String,
+) -> AggregateInst {
+    AggregateInst {
+        signer: SignerRef::SignerId { id: signer_id },
+        inst: Inst::Call {
+            gas_limit,
+            contract,
+            nonce: Some(nonce),
+            expr,
+        },
+    }
+}
+
+fn aggregate_envelope(ops: Vec<AggregateInst>, signature: Vec<u8>) -> InstructionEnvelope {
+    InstructionEnvelope::Aggregate { ops, signature }
+}
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()> {
@@ -56,20 +81,20 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let nonce = 0u64;
-    let op0 = BlsBulkOp::Call {
+    let op0 = aggregate_call(
         signer_id,
         nonce,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(1, arith::Op::Id),
-    };
-    let op1 = BlsBulkOp::Call {
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(1, arith::Op::Id),
+    );
+    let op1 = aggregate_call(
         signer_id,
         nonce,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(2, arith::Op::Id),
-    };
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(2, arith::Op::Id),
+    );
     let msg0 = op0.signing_message()?;
     let msg1 = op1.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
@@ -80,12 +105,9 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
 
     let res = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op0, op1],
-                signature: aggregate.to_signature().to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op0, op1], aggregate.to_signature().to_bytes().to_vec()),
         )
         .await?;
 
@@ -109,22 +131,19 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     );
 
     // Follow-up op must use nonce=1 (op0 consumed nonce=0).
-    let op2 = BlsBulkOp::Call {
+    let op2 = aggregate_call(
         signer_id,
-        nonce: 1,
-        gas_limit: 50_000,
-        contract: arith_contract,
-        expr: arith::wave::eval_call_expr(3, arith::Op::Id),
-    };
+        1,
+        50_000,
+        arith_contract,
+        arith::wave::eval_call_expr(3, arith::Op::Id),
+    );
     let msg2 = op2.signing_message()?;
     let sig2 = sk.sign(&msg2, KONTOR_BLS_DST, &[]);
     let ok = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op2],
-                signature: sig2.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op2], sig2.to_bytes().to_vec()),
         )
         .await?;
     let v = ok
@@ -175,24 +194,21 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let nonce = 0u64;
-    let op0 = BlsBulkOp::Call {
+    let op0 = aggregate_call(
         signer_id,
         nonce,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(5, arith::Op::Id),
-    };
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(5, arith::Op::Id),
+    );
     let msg0 = op0.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
     reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op0],
-                signature: sig0.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op0], sig0.to_bytes().to_vec()),
         )
         .await?;
 
@@ -205,22 +221,19 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         .await?;
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
-    let op1 = BlsBulkOp::Call {
+    let op1 = aggregate_call(
         signer_id,
         nonce,
-        gas_limit: 50_000,
-        contract: arith_contract,
-        expr: arith::wave::eval_call_expr(6, arith::Op::Id),
-    };
+        50_000,
+        arith_contract,
+        arith::wave::eval_call_expr(6, arith::Op::Id),
+    );
     let msg1 = op1.signing_message()?;
     let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
     let _replay = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op1],
-                signature: sig1.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![op1], sig1.to_bytes().to_vec()),
         )
         .await;
 
@@ -261,25 +274,22 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         height: 999_999,
         tx_index: 0,
     };
-    let failing_op = BlsBulkOp::Call {
+    let failing_op = aggregate_call(
         signer_id,
-        nonce: 0,
-        gas_limit: 50_000,
-        contract: missing_contract,
-        expr: arith::wave::eval_call_expr(9, arith::Op::Id),
-    };
+        0,
+        50_000,
+        missing_contract,
+        arith::wave::eval_call_expr(9, arith::Op::Id),
+    );
     let failing_msg = failing_op.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let failing_sig = sk.sign(&failing_msg, KONTOR_BLS_DST, &[]);
 
     let _failed = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![failing_op],
-                signature: failing_sig.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![failing_op], failing_sig.to_bytes().to_vec()),
         )
         .await;
 
@@ -315,22 +325,19 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         )
     })?;
 
-    let recovery_op = BlsBulkOp::Call {
+    let recovery_op = aggregate_call(
         signer_id,
-        nonce: 1,
-        gas_limit: 50_000,
-        contract: arith_contract,
-        expr: arith::wave::eval_call_expr(12, arith::Op::Id),
-    };
+        1,
+        50_000,
+        arith_contract,
+        arith::wave::eval_call_expr(12, arith::Op::Id),
+    );
     let recovery_msg = recovery_op.signing_message()?;
     let recovery_sig = sk.sign(&recovery_msg, KONTOR_BLS_DST, &[]);
     let recovery = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![recovery_op],
-                signature: recovery_sig.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![recovery_op], recovery_sig.to_bytes().to_vec()),
         )
         .await?;
     let v = recovery
@@ -392,34 +399,34 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
-    let op0 = BlsBulkOp::Call {
-        signer_id: signer1_id,
-        nonce: 0,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(1, arith::Op::Id),
-    };
-    let op1 = BlsBulkOp::Call {
-        signer_id: signer2_id,
-        nonce: 0,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(2, arith::Op::Id),
-    };
-    let op2 = BlsBulkOp::Call {
-        signer_id: signer1_id,
-        nonce: 1,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(3, arith::Op::Sum(arith::Operand { y: 4 })),
-    };
-    let op3 = BlsBulkOp::Call {
-        signer_id: signer2_id,
-        nonce: 1,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(5, arith::Op::Sum(arith::Operand { y: 6 })),
-    };
+    let op0 = aggregate_call(
+        signer1_id,
+        0,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(1, arith::Op::Id),
+    );
+    let op1 = aggregate_call(
+        signer2_id,
+        0,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(2, arith::Op::Id),
+    );
+    let op2 = aggregate_call(
+        signer1_id,
+        1,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(3, arith::Op::Sum(arith::Operand { y: 4 })),
+    );
+    let op3 = aggregate_call(
+        signer2_id,
+        1,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(5, arith::Op::Sum(arith::Operand { y: 6 })),
+    );
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
@@ -437,12 +444,12 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
 
     let res = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op0, op1, op2, op3],
-                signature: aggregate.to_signature().to_bytes().to_vec(),
-            },
+            aggregate_envelope(
+                vec![op0, op1, op2, op3],
+                aggregate.to_signature().to_bytes().to_vec(),
+            ),
         )
         .await?;
 
@@ -527,25 +534,22 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
     );
 
     // Submit nonce=1 when next_nonce=0 — skipping ahead must be rejected.
-    let skipped_op = BlsBulkOp::Call {
+    let skipped_op = aggregate_call(
         signer_id,
-        nonce: 1,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(99, arith::Op::Id),
-    };
+        1,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(99, arith::Op::Id),
+    );
     let msg = skipped_op.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
     let _ = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![skipped_op],
-                signature: sig.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![skipped_op], sig.to_bytes().to_vec()),
         )
         .await;
 
@@ -560,22 +564,19 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
     );
 
     // Confirm the correct nonce=0 still works after the rejected attempt.
-    let valid_op = BlsBulkOp::Call {
+    let valid_op = aggregate_call(
         signer_id,
-        nonce: 0,
-        gas_limit: 50_000,
-        contract: arith_contract,
-        expr: arith::wave::eval_call_expr(42, arith::Op::Id),
-    };
+        0,
+        50_000,
+        arith_contract,
+        arith::wave::eval_call_expr(42, arith::Op::Id),
+    );
     let valid_msg = valid_op.signing_message()?;
     let valid_sig = sk.sign(&valid_msg, KONTOR_BLS_DST, &[]);
     let res = reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![valid_op],
-                signature: valid_sig.to_bytes().to_vec(),
-            },
+            aggregate_envelope(vec![valid_op], valid_sig.to_bytes().to_vec()),
         )
         .await?;
     let v = res
@@ -638,13 +639,13 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     // Build and submit the original operation.
-    let op = BlsBulkOp::Call {
+    let op = aggregate_call(
         signer_id,
-        nonce: 0,
-        gas_limit: 50_000,
-        contract: arith_contract.clone(),
-        expr: arith::wave::eval_call_expr(7, arith::Op::Id),
-    };
+        0,
+        50_000,
+        arith_contract.clone(),
+        arith::wave::eval_call_expr(7, arith::Op::Id),
+    );
     let msg = op.signing_message()?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
@@ -652,12 +653,9 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
     let sig_bytes = sig.to_bytes().to_vec();
 
     reg_tester
-        .instruction(
+        .instruction_envelope(
             &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op.clone()],
-                signature: sig_bytes.clone(),
-            },
+            aggregate_envelope(vec![op.clone()], sig_bytes.clone()),
         )
         .await?;
 
@@ -681,13 +679,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
 
     // Replay the exact same op + signature bytes in a new bundle.
     let _ = reg_tester
-        .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op],
-                signature: sig_bytes,
-            },
-        )
+        .instruction_envelope(&mut publisher, aggregate_envelope(vec![op], sig_bytes))
         .await;
 
     // Nonce unchanged — the replayed op was rejected.

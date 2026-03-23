@@ -69,6 +69,7 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
             height: 0,
             tx_index: 0,
         },
+        nonce: None,
         expr: "attach(0)".to_string(),
     };
 
@@ -81,6 +82,7 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
             height: 0,
             tx_index: 0,
         },
+        nonce: None,
         expr: "detach()".to_string(),
     };
     let serialized_detach_data = serialize(&chained_instructions)?;

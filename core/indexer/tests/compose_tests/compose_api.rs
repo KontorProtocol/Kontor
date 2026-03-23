@@ -9,8 +9,8 @@ use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_r
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    ComposeQuery, ContractAddress, Inst, InstructionQuery, OpReturnData, RevealInputs,
-    RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
+    ComposeQuery, ContractAddress, Inst, InstructionEnvelope, InstructionQuery, OpReturnData,
+    RevealInputs, RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
 };
 use testlib::RegTester;
 
@@ -43,7 +43,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
                 .address(seller_address.to_string())
                 .x_only_public_key(internal_key.to_string())
                 .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
-                .instruction(instruction.clone())
+                .instruction_envelope(InstructionEnvelope::single(instruction.clone()))
                 .build(),
         ])
         .sat_per_vbyte(2)
@@ -58,7 +58,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         .script
         .clone();
 
-    let derived_token_data = serialize(&instruction)?;
+    let derived_token_data = serialize(&InstructionEnvelope::single(instruction.clone()))?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -180,8 +180,10 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: instruction.clone(),
-            chained_instruction: Some(chained_instructions.clone()),
+            instruction_envelope: InstructionEnvelope::single(instruction.clone()),
+            chained_instruction_envelope: Some(InstructionEnvelope::single(
+                chained_instructions.clone(),
+            )),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
@@ -196,7 +198,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .script
         .clone();
 
-    let derived_token_data = serialize(&instruction)?;
+    let derived_token_data = serialize(&InstructionEnvelope::single(instruction.clone()))?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -382,15 +384,15 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 address: seller_address.to_string(),
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-                instruction: instruction.clone(),
-                chained_instruction: None,
+                instruction_envelope: InstructionEnvelope::single(instruction.clone()),
+                chained_instruction_envelope: None,
             },
             InstructionQuery {
                 address: seller_address.to_string(),
                 x_only_public_key: internal_key.to_string(),
                 funding_utxo_ids: format!("{}:{}", out_point1.txid, out_point1.vout).to_string(),
-                instruction: instruction.clone(),
-                chained_instruction: None,
+                instruction_envelope: InstructionEnvelope::single(instruction.clone()),
+                chained_instruction_envelope: None,
             },
         ])
         .sat_per_vbyte(2)
@@ -413,8 +415,8 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
                 "{}:{},{}:{}",
                 out_point1.txid, out_point1.vout, out_point1.txid, out_point1.vout
             ),
-            instruction,
-            chained_instruction: None,
+            instruction_envelope: InstructionEnvelope::single(instruction),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -447,8 +449,8 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout).to_string(),
-            instruction: oversized_inst,
-            chained_instruction: None,
+            instruction_envelope: InstructionEnvelope::single(oversized_inst),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -469,12 +471,12 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: Inst::Publish {
+            instruction_envelope: InstructionEnvelope::single(Inst::Publish {
                 gas_limit: 50_000,
                 name: "chain-oversized".to_string(),
                 bytes: b"x".to_vec(),
-            },
-            chained_instruction: Some(chained_oversized_inst),
+            }),
+            chained_instruction_envelope: Some(InstructionEnvelope::single(chained_oversized_inst)),
         }])
         .sat_per_vbyte(2)
         .build();
@@ -490,12 +492,12 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: Inst::Publish {
+            instruction_envelope: InstructionEnvelope::single(Inst::Publish {
                 gas_limit: 50_000,
                 name: "fee-rate".to_string(),
                 bytes: b"x".to_vec(),
-            },
-            chained_instruction: None,
+            }),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(0)
         .build();
@@ -634,8 +636,8 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
             // Ensure a guaranteed-nonexistent txid in regtest
             funding_utxo_ids: "0000000000000000000000000000000000000000000000000000000000000001:0"
                 .to_string(),
-            instruction,
-            chained_instruction: None,
+            instruction_envelope: InstructionEnvelope::single(instruction),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -676,8 +678,8 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction,
-            chained_instruction: None,
+            instruction_envelope: InstructionEnvelope::single(instruction),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(2)
         .build();
@@ -714,8 +716,8 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction,
-            chained_instruction: None,
+            instruction_envelope: InstructionEnvelope::single(instruction),
+            chained_instruction_envelope: None,
         }])
         .sat_per_vbyte(4)
         .envelope(5_000_000_001)
@@ -749,6 +751,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             height: 0,
             tx_index: 1,
         },
+        nonce: None,
         expr: "attach(0)".to_string(), // token data??
     };
 
@@ -759,6 +762,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             height: 0,
             tx_index: 1,
         },
+        nonce: None,
         expr: "detach()".to_string(),
     };
 
@@ -767,8 +771,10 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            instruction: instruction.clone(),
-            chained_instruction: Some(chained_instructions.clone()),
+            instruction_envelope: InstructionEnvelope::single(instruction.clone()),
+            chained_instruction_envelope: Some(InstructionEnvelope::single(
+                chained_instructions.clone(),
+            )),
         }])
         .sat_per_vbyte(2)
         .envelope(600)
@@ -783,7 +789,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
         .script
         .clone();
 
-    let derived_token_data = serialize(&instruction)?;
+    let derived_token_data = serialize(&InstructionEnvelope::single(instruction.clone()))?;
 
     let derived_tap_script = Builder::new()
         .push_slice(internal_key.serialize())
@@ -835,6 +841,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             height: 0,
             tx_index: 1,
         },
+        nonce: None,
         expr: "detach()".to_string(),
     };
 
@@ -846,7 +853,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
         .push_slice(b"kon")
         .push_opcode(OP_0)
         .push_slice(PushBytesBuf::try_from(serialize(
-            &derived_chained_instruction,
+            &InstructionEnvelope::single(derived_chained_instruction.clone()),
         )?)?)
         .push_opcode(OP_ENDIF)
         .into_script();
@@ -913,7 +920,8 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
     // Second reveal (detach)
-    let chained_script_data_bytes = serialize(&chained_instructions)?;
+    let chained_script_data_bytes =
+        serialize(&InstructionEnvelope::single(chained_instructions.clone()))?;
 
     let reveal_query = RevealQuery {
         commit_tx_hex: reveal_tx_hex.clone(),
