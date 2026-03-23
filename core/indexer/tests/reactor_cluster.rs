@@ -603,34 +603,31 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         )
         .await;
 
-    // Insert 3 mempool txs and wait for batch at anchor 1
-    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
+    // Insert 3 mempool txs — we know the txids upfront
+    let mempool_events = cluster.mock_bitcoin().generate_mempool_txs(3);
+    let all_txids: Vec<bitcoin::Txid> = mempool_events
+        .iter()
+        .filter_map(|e| match e {
+            MempoolEvent::Insert(tx) => Some(tx.compute_txid()),
+            _ => None,
+        })
+        .collect();
+    for event in mempool_events {
         cluster.send_mempool_event(event);
     }
 
-    let decisions = cluster
-        .wait_for_decision_matching(
-            |d| {
-                !d.value.is_block()
-                    && d.value.block_height() == 1
-                    && !d.value.batch_txids().is_empty()
-            },
+    // Wait for all 3 txids to be batched (may be across multiple batches)
+    cluster
+        .wait_for_n_state_events_matching(
+            4, // 4 nodes each emit BatchApplied
+            |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count > 0),
             Duration::from_secs(30),
         )
         .await;
-    let batch = decisions
-        .iter()
-        .find(|d| !d.value.batch_txids().is_empty())
-        .expect("Expected a batch decision with txids");
-    let decided_txids = batch.value.batch_txids().to_vec();
-    assert!(
-        decided_txids.len() >= 3,
-        "Expected at least 3 txids in decided batch"
-    );
 
     // Confirm only first 2 txids — 3rd will be missing at finality deadline
-    let confirm_txids: Vec<bitcoin::Txid> = decided_txids[..2].to_vec();
-    let missing_txid = decided_txids[2];
+    let confirm_txids: Vec<bitcoin::Txid> = all_txids[..2].to_vec();
+    let missing_txid = all_txids[2];
 
     // Mine block 2 with only 2 of the 3 txids
     {
