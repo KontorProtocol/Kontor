@@ -378,8 +378,6 @@ impl ConsensusState {
         }
     }
 
-    // --- DB query helpers (moved from Executor trait) ---
-
     async fn get_checkpoint(&self) -> Option<[u8; 32]> {
         match get_checkpoint_latest(&self.conn).await {
             Ok(Some(row)) => {
@@ -486,8 +484,6 @@ impl ConsensusState {
             .map(|h| Height::new(h as u64))
     }
 
-    /// Initiate a rollback: query decided batches from the rollback point,
-    /// truncate executor state, populate the replay queue, and signal block replay.
     /// Prepare consensus state for rollback: query decided batches for replay,
     /// populate the replay queue, and clear pending batches. Does NOT truncate the DB —
     /// that is handled by the reactor's `rollback()` method.
@@ -713,7 +709,6 @@ async fn validate_and_accept_proposal(
     Some(proposed)
 }
 
-/// Handle a consensus message from the Malachite engine.
 /// Handle a consensus message. Returns `Some(block)` if a `Value::Block` was
 /// decided and the block should be executed by the reactor via `handle_block`.
 pub async fn handle_consensus_msg(

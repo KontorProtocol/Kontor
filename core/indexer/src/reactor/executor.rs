@@ -25,8 +25,6 @@ pub fn is_batchable(ops: &[indexer_types::Op]) -> bool {
 ///
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
-/// This allows different backends: `StateLog` (mock, used by consensus-sim)
-/// and `RuntimeExecutor` (production, WASM execution + DB).
 #[allow(async_fn_in_trait)]
 pub trait Executor {
     /// Validate a transaction and parse its Kontor ops.
@@ -58,8 +56,7 @@ pub trait Executor {
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
 }
 
-/// Placeholder executor that does nothing. Used by the production reactor until
-/// `RuntimeExecutor` is implemented in Phase 7.
+/// Placeholder executor that does nothing.
 pub struct NoopExecutor;
 
 impl Executor for NoopExecutor {
