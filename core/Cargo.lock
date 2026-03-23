@@ -219,7 +219,7 @@ checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 [[package]]
 name = "arc-malachitebft-app"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -247,7 +247,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-app-channel"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-app",
  "arc-malachitebft-config",
@@ -265,7 +265,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-codec"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "bytes",
 ]
@@ -273,7 +273,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-config"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "bytesize 1.3.3",
@@ -287,7 +287,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-consensus"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-driver",
  "arc-malachitebft-core-types",
@@ -307,7 +307,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-driver"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "arc-malachitebft-core-types",
@@ -320,7 +320,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-state-machine"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -330,7 +330,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-types"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-peer",
  "async-trait",
@@ -343,7 +343,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-votekeeper"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -354,7 +354,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-discovery"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-metrics",
  "either",
@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-engine"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -401,7 +401,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-metrics"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "prometheus-client",
@@ -410,30 +410,36 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-network"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-discovery",
  "arc-malachitebft-metrics",
  "arc-malachitebft-peer",
  "arc-malachitebft-sync",
+ "async-trait",
+ "asynchronous-codec",
  "bytes",
  "either",
  "eyre",
  "futures",
+ "hex",
+ "itertools 0.14.0",
  "libp2p",
  "libp2p-gossipsub",
  "libp2p-scatter",
+ "libp2p-stream",
  "seahash",
  "serde",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
 name = "arc-malachitebft-peer"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "bs58",
  "multihash",
@@ -443,7 +449,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-proto"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "prost 0.13.5",
  "prost-types",
@@ -453,7 +459,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-signing"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "async-trait",
@@ -463,7 +469,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-signing-ed25519"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "base64 0.22.1",
@@ -476,7 +482,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-sync"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "arc-malachitebft-core-types",
  "arc-malachitebft-metrics",
@@ -498,7 +504,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-wal"
 version = "0.7.0-pre"
-source = "git+https://github.com/circlefin/malachite#33702c7c97534e04a11f04435bb2a11b2af0890c"
+source = "git+https://github.com/circlefin/malachite#fabbbc1332ed3803baea2b1844bdcea4bbd20588"
 dependencies = [
  "advisory-lock",
  "bytes",
@@ -2499,7 +2505,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4402,6 +4408,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-stream"
+version = "0.4.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d6bd8025c80205ec2810cfb28b02f362ab48a01bee32c50ab5f12761e033464"
+dependencies = [
+ "futures",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-swarm",
+ "rand 0.8.5",
+ "tracing",
+]
+
+[[package]]
 name = "libp2p-swarm"
 version = "0.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5138,7 +5158,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5722,7 +5742,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
@@ -5755,7 +5775,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.115",
@@ -5924,7 +5944,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.1",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6360,7 +6380,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6454,7 +6474,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7366,7 +7386,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8201,6 +8221,11 @@ name = "unsigned-varint"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb066959b24b5196ae73cb057f45598450d2c5f71460e98c49b738086eff9c06"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "tokio-util",
+]
 
 [[package]]
 name = "untrusted"
@@ -8870,7 +8895,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
