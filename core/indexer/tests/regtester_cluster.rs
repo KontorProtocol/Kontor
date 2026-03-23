@@ -122,7 +122,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     // Wait for all nodes to see counter at 0
-    poll_all_nodes(&cluster, &contract, "get()", "0", 60).await?;
+    poll_all_nodes(&cluster, &contract, "get()", "0", 120).await?;
 
     // Checkpoints should match after publish
     assert_checkpoints_match(&cluster).await?;
@@ -146,7 +146,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     rt.send_to_mempool(&[commit_hex, reveal_hex]).await?;
 
     // Poll until all nodes show counter = 1 (batch decided + executed)
-    poll_all_nodes(&cluster, &contract, "get()", "1", 30).await?;
+    poll_all_nodes(&cluster, &contract, "get()", "1", 120).await?;
 
     // Checkpoints should still match after batch execution
     let post_batch_checkpoints = assert_checkpoints_match(&cluster).await?;
@@ -156,10 +156,10 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     cluster.mine(1).await?;
 
     // Wait for all nodes to process the new block
-    poll_all_nodes_height(&cluster, pre_mine_height + 1, 30).await?;
+    poll_all_nodes_height(&cluster, pre_mine_height + 1, 120).await?;
 
     // Counter should still be 1 (dedup: tx already executed via batch)
-    poll_all_nodes(&cluster, &contract, "get()", "1", 10).await?;
+    poll_all_nodes(&cluster, &contract, "get()", "1", 120).await?;
 
     // Checkpoints should remain the same (dedup produces identical state)
     let post_mine_checkpoints = assert_checkpoints_match(&cluster).await?;

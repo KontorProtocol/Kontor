@@ -68,6 +68,11 @@ pub struct ConsensusState {
     // popped from the front when Value::Block decisions are finalized.
     pub pending_blocks: VecDeque<(u64, bitcoin::BlockHash)>,
 
+    // Block heights that were decided by consensus but not yet in block_cache
+    // (block arrived via poller after the decision). When the block arrives,
+    // it should be executed immediately without re-proposing.
+    pub missed_block_decisions: HashSet<u64>,
+
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
     pub block_cache: HashMap<u64, indexer_types::Block>,
@@ -104,6 +109,7 @@ impl ConsensusState {
             tx_cache: HashMap::new(),
             parsed_tx_cache: HashMap::new(),
             pending_blocks: VecDeque::new(),
+            missed_block_decisions: HashSet::new(),
             block_cache: HashMap::new(),
             observation: None,
         }
@@ -200,10 +206,10 @@ impl ConsensusState {
         bitcoin_state: &BitcoinState,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
-    ) -> Value {
+    ) -> Option<Value> {
         // If blocks are pending, always propose the next one first
         if let Some(&(height, hash)) = self.pending_blocks.front() {
-            return Value::new_block(height, hash);
+            return Some(Value::new_block(height, hash));
         }
 
         // Collect candidate txids from the mempool
@@ -235,10 +241,16 @@ impl ConsensusState {
                 txs.push(tx.clone());
             }
         }
+        // Don't propose empty batches — avoids flooding consensus heights
+        // and allows lagging nodes to catch up via sync
+        if txs.is_empty() {
+            return None;
+        }
+
         let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
         let value = Value::new_batch(last_height, last_hash, txids);
         self.tx_cache.insert(value.id(), txs);
-        value
+        Some(value)
     }
 
     // --- Finality tracking ---
@@ -778,12 +790,25 @@ pub async fn handle_consensus_msg(
         } => {
             info!(%height, %round, "Building value to propose");
 
-            let proposal = if let Some(existing) = state.undecided.get(&(height, round)) {
-                LocallyProposedValue::new(existing.height, existing.round, existing.value.clone())
-            } else {
-                let value = state
-                    .make_value(executor, bitcoin_state, last_height, last_hash)
-                    .await;
+            if let Some(existing) = state.undecided.get(&(height, round)) {
+                let proposal = LocallyProposedValue::new(
+                    existing.height,
+                    existing.round,
+                    existing.value.clone(),
+                );
+                for stream_msg in state.stream_proposal(&proposal, Round::Nil) {
+                    channels
+                        .network
+                        .send(NetworkMsg::PublishProposalPart(stream_msg))
+                        .await?;
+                }
+                if reply.send(proposal).is_err() {
+                    error!("Failed to send GetValue reply");
+                }
+            } else if let Some(value) = state
+                .make_value(executor, bitcoin_state, last_height, last_hash)
+                .await
+            {
                 let proposed = ProposedValue {
                     height,
                     round,
@@ -793,18 +818,20 @@ pub async fn handle_consensus_msg(
                     validity: Validity::Valid,
                 };
                 state.undecided.insert((height, round), proposed);
-                LocallyProposedValue::new(height, round, value)
-            };
-
-            if reply.send(proposal.clone()).is_err() {
-                error!("Failed to send GetValue reply");
-            }
-
-            for stream_msg in state.stream_proposal(&proposal, Round::Nil) {
-                channels
-                    .network
-                    .send(NetworkMsg::PublishProposalPart(stream_msg))
-                    .await?;
+                let proposal = LocallyProposedValue::new(height, round, value);
+                for stream_msg in state.stream_proposal(&proposal, Round::Nil) {
+                    channels
+                        .network
+                        .send(NetworkMsg::PublishProposalPart(stream_msg))
+                        .await?;
+                }
+                if reply.send(proposal).is_err() {
+                    error!("Failed to send GetValue reply");
+                }
+            } else {
+                // Nothing to propose — drop reply so Malachite times out the round
+                info!(%height, %round, "Nothing to propose, skipping round");
+                drop(reply);
             }
         }
 
@@ -958,15 +985,20 @@ pub async fn handle_consensus_msg(
                             .await;
                     }
                     Value::Block { height, hash } => {
-                        state.pending_blocks.pop_front();
+                        // Remove from pending if present (may not be if we received
+                        // the decision via sync before the block arrived from poller)
+                        state.pending_blocks.retain(|(h, _)| *h != *height);
                         if let Some(block) = state.block_cache.remove(height) {
                             decided_block = Some(block);
                         } else {
-                            warn!(
+                            // Block not yet received from poller — record for
+                            // immediate execution when it arrives
+                            info!(
                                 block_height = height,
                                 block_hash = %hash,
-                                "Block decided but not found in block_cache"
+                                "Block decided but not yet cached — will execute on arrival"
                             );
+                            state.missed_block_decisions.insert(*height);
                         }
                     }
                 }

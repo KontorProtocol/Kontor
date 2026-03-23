@@ -956,8 +956,40 @@ impl RegTesterCluster {
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        // Brief delay for Malachite peer discovery
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Mine a block and wait for all nodes to process it.
+        // This ensures Malachite peers are connected and consensus is working.
+        bitcoin_client
+            .generate_to_address(1, &identity.address.to_string())
+            .await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let mut all_synced = true;
+            for node in &nodes {
+                match node.index().await {
+                    Ok(info) if info.height >= 102 => {}
+                    _ => {
+                        all_synced = false;
+                        break;
+                    }
+                }
+            }
+            if all_synced {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let mut heights = Vec::new();
+                for node in &nodes {
+                    if let Ok(info) = node.index().await {
+                        heights.push(info.height);
+                    }
+                }
+                anyhow::bail!(
+                    "Cluster nodes failed to sync after mining block. Heights: {:?}",
+                    heights
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
 
         Ok(Self {
             bitcoin_client,

@@ -315,17 +315,25 @@ impl<E: Executor> Reactor<E> {
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
-                    handle.state.block_cache.insert(block.height, block.clone());
-                    handle
-                        .state
-                        .pending_blocks
-                        .push_back((block.height, block.hash));
+                    // Check if this block was already decided (arrived late)
+                    if handle.state.missed_block_decisions.remove(&block.height) {
+                        info!(
+                            "Block {} arrived after consensus decision — executing immediately",
+                            block.height
+                        );
+                        self.handle_block(block).await?;
+                    } else {
+                        handle.state.block_cache.insert(block.height, block.clone());
+                        handle
+                            .state
+                            .pending_blocks
+                            .push_back((block.height, block.hash));
+                    }
+                } else {
+                    self.handle_block(block).await?;
                 }
                 // Process replay queue entries whose anchor has been reached
                 self.process_replay_queue().await;
-                if self.consensus_handle.is_none() {
-                    self.handle_block(block).await?;
-                }
             }
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
