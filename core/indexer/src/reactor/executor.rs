@@ -3,7 +3,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::bitcoin_client::Client;
-use crate::runtime::Runtime;
+use crate::block::filter_map;
+use crate::retry::{new_backoff_unlimited, retry};
+use crate::runtime::{Runtime, TransactionContext};
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
@@ -117,9 +119,6 @@ impl Executor for RuntimeExecutor {
         &self,
         tx: &bitcoin::Transaction,
     ) -> Option<indexer_types::Transaction> {
-        use crate::block::filter_map;
-        use crate::retry::{new_backoff_unlimited, retry};
-
         // Parse Kontor ops — reject if no valid ops
         let parsed = filter_map((0, tx.clone()))?;
 
@@ -163,7 +162,6 @@ impl Executor for RuntimeExecutor {
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) {
-        use crate::runtime::TransactionContext;
         for op in &tx.ops {
             let metadata = op.metadata();
             let input_index = metadata.input_index;
@@ -196,7 +194,6 @@ impl Executor for RuntimeExecutor {
     }
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        use crate::block::filter_map;
         filter_map((0, tx.clone()))
     }
 }

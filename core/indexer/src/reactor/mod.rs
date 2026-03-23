@@ -22,18 +22,26 @@ use tokio_util::sync::CancellationToken;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::Channels;
+use malachitebft_app_channel::app::types::core::VotingPower;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
-    consensus::Ctx,
+    consensus::{Ctx, Genesis, Validator, ValidatorSet, signing::PublicKey},
     database::{
         self,
         queries::{
-            insert_processed_block, rollback_to_height, select_block_at_height, select_block_latest,
+            confirm_transaction, get_transaction_by_txid, insert_block, insert_processed_block,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
+            select_unconfirmed_batch_tx, set_block_processed,
         },
     },
-    runtime::{ComponentCache, Runtime, Storage},
+    runtime::{
+        ComponentCache, Runtime, Storage,
+        filestorage::api::{expire_challenges, generate_challenges_for_block},
+        staking::api::{get_active_set, transition_epoch},
+        wit::Signer,
+    },
     test_utils::new_mock_block_hash,
 };
 
@@ -109,7 +117,6 @@ impl<E: Executor> Reactor<E> {
         conn: &libsql::Connection,
         txid: &Txid,
     ) -> Option<bitcoin::Transaction> {
-        use crate::database::queries::select_unconfirmed_batch_tx;
         if let Ok(Some(raw_bytes)) = select_unconfirmed_batch_tx(conn, &txid.to_string()).await
             && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
         {
@@ -147,21 +154,15 @@ impl<E: Executor> Reactor<E> {
 
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
     async fn run_block_lifecycle(&mut self, block: &Block) {
-        use crate::runtime::wit::Signer;
-
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
         self.runtime
             .set_context(block.height as i64, None, None, None)
             .await;
-        crate::runtime::filestorage::api::expire_challenges(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-        )
-        .await
-        .expect("Failed to expire challenges");
-        let challenges = crate::runtime::filestorage::api::generate_challenges_for_block(
+        expire_challenges(&mut self.runtime, &core_signer, block.height)
+            .await
+            .expect("Failed to expire challenges");
+        let challenges = generate_challenges_for_block(
             &mut self.runtime,
             &core_signer,
             block.height,
@@ -177,14 +178,10 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        let epoch_result = crate::runtime::staking::api::transition_epoch(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-        )
-        .await
-        .expect("Failed to call transition_epoch")
-        .expect("transition_epoch returned error");
+        let epoch_result = transition_epoch(&mut self.runtime, &core_signer, block.height)
+            .await
+            .expect("Failed to call transition_epoch")
+            .expect("transition_epoch returned error");
         if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
             info!(
                 "Epoch {} transition: {} activated, {} deactivated",
@@ -224,12 +221,6 @@ impl<E: Executor> Reactor<E> {
 
         self.last_height = height;
         self.option_last_hash = Some(hash);
-
-        // DB orchestration for block execution
-        use crate::database::queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
-            set_block_processed,
-        };
 
         let _ = insert_block(
             &self.conn,
@@ -510,12 +501,8 @@ impl<E: Executor> Reactor<E> {
 }
 
 /// Build a Genesis from the staking contract's active validator set.
-async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::consensus::Genesis> {
-    use crate::consensus::signing::PublicKey;
-    use crate::consensus::{Validator, ValidatorSet};
-    use malachitebft_app_channel::app::types::core::VotingPower;
-
-    let active_set = crate::runtime::staking::api::get_active_set(runtime).await?;
+async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
+    let active_set = get_active_set(runtime).await?;
 
     let validators: Vec<Validator> = active_set
         .into_iter()
@@ -537,7 +524,7 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<crate::cons
         .collect();
 
     let validator_set = ValidatorSet::new(validators);
-    Ok(crate::consensus::Genesis { validator_set })
+    Ok(Genesis { validator_set })
 }
 
 pub async fn create_runtime_executor(

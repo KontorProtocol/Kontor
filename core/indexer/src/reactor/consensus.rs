@@ -16,6 +16,7 @@ use malachitebft_core_types::{HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
 use prost::Message;
+use sha3::Digest;
 
 use crate::consensus::codec::{
     ProtobufCodec, decode_commit_certificate, encode_commit_certificate,
@@ -28,8 +29,9 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
-    insert_unconfirmed_batch_tx, select_batches_from_anchor, select_block_at_height,
-    select_existing_txids, select_min_batch_height, set_batch_processed,
+    insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor, select_block_at_height,
+    select_block_latest, select_existing_txids, select_min_batch_height,
+    select_unconfirmed_batch_txs, set_batch_processed,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -135,8 +137,6 @@ impl ConsensusState {
         value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
     ) -> Vec<StreamMessage<ProposalPart>> {
-        use sha3::Digest;
-
         let mut hasher = sha3::Keccak256::new();
         hasher.update(value.height.as_u64().to_be_bytes());
         hasher.update(value.round.as_i64().to_be_bytes());
@@ -431,11 +431,6 @@ impl ConsensusState {
         &self,
         height: Height,
     ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
-        use crate::consensus::finality_types::FINALITY_WINDOW;
-        use crate::database::queries::{
-            select_batch, select_block_latest, select_unconfirmed_batch_txs,
-        };
-
         let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
             select_batch(&self.conn, height.as_u64() as i64)
                 .await

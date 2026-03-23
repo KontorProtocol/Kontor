@@ -3,12 +3,16 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use bitcoin::Txid;
 
-use indexer::database::queries::{get_transaction_by_txid, insert_transaction};
+use indexer::database::queries::{
+    contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
+    insert_transaction,
+};
+use indexer::database::types::ContractRow;
 use indexer::reactor::executor::Executor;
 use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::runtime::wit::Signer;
-use indexer::runtime::{ContractAddress, Runtime, TransactionContext};
-use indexer::test_utils::{new_mock_transaction, new_test_db};
+use indexer::runtime::{ComponentCache, ContractAddress, Runtime, Storage, TransactionContext};
+use indexer::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
 
 use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractReader;
@@ -23,12 +27,6 @@ pub struct LiteExecutor {
 
 impl LiteExecutor {
     pub async fn new(mock_bitcoin: Arc<Mutex<MockBitcoin>>) -> Result<(Self, Runtime)> {
-        use indexer::database::queries::{
-            contract_has_state, insert_contract, insert_processed_block,
-        };
-        use indexer::runtime::{ComponentCache, Storage};
-        use indexer::test_utils::new_mock_block_hash;
-
         let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
 
@@ -84,7 +82,7 @@ impl LiteExecutor {
 
         let contract_id = insert_contract(
             &conn,
-            indexer::database::types::ContractRow::builder()
+            ContractRow::builder()
                 .height(0)
                 .tx_index(0)
                 .name("counter".to_string())
