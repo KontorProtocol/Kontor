@@ -118,6 +118,7 @@ impl<E: Executor> Reactor<E> {
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
         rollback_to_height(&self.conn, height).await?;
+        self.executor.on_rollback().await;
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
@@ -410,9 +411,19 @@ impl<E: Executor> Reactor<E> {
                             .pending_batches
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
-                            && let Some(rollback_anchor) = handle.state.run_finality_checks(&mut self.executor, self.last_height).await {
-                                self.last_height = rollback_anchor;
-                                self.option_last_hash = handle.state.block_hash_at_height(rollback_anchor).await;
+                            && let Some((rollback_anchor, excluded)) = handle.state.run_finality_checks(self.last_height).await {
+                                // DB truncation + executor resync + notify clients
+                                self.rollback(rollback_anchor).await?;
+
+                                // Consensus state rollback (replay queue, pending batches)
+                                let removed = 0;
+                                let handle = self.consensus_handle.as_mut().unwrap();
+                                handle.state.initiate_rollback(
+                                    &mut self.executor,
+                                    rollback_anchor,
+                                    removed,
+                                    excluded,
+                                ).await;
 
                                 // Process replay queue entries using already-cached blocks
                                 self.process_replay_queue().await;

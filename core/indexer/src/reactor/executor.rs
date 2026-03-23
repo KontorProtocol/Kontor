@@ -58,6 +58,10 @@ pub trait Executor {
     /// Includes challenge expiry/generation and epoch transitions.
     async fn on_block_completed(&mut self, _block: &indexer_types::Block) {}
 
+    /// Called after DB truncation during rollback. Allows the executor to
+    /// resync internal state (e.g. file_ledger) with the DB.
+    async fn on_rollback(&mut self) {}
+
     /// Signal the block source to re-deliver blocks starting from `height`.
     async fn replay_blocks_from(&mut self, height: u64);
 
@@ -250,6 +254,16 @@ impl Executor for RuntimeExecutor {
                 "Epoch {} transition: {} activated, {} deactivated",
                 epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
             );
+        }
+    }
+    async fn on_rollback(&mut self) {
+        if let Err(e) = self
+            .runtime
+            .file_ledger
+            .force_resync_from_db(&self.runtime.storage.conn)
+            .await
+        {
+            tracing::error!("file_ledger resync after rollback failed: {e}");
         }
     }
     async fn replay_blocks_from(&mut self, height: u64) {

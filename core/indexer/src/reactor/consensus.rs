@@ -28,8 +28,8 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
-    insert_unconfirmed_batch_tx, rollback_to_height, select_batches_from_anchor,
-    select_block_at_height, select_existing_txids, select_min_batch_height, set_batch_processed,
+    insert_unconfirmed_batch_tx, select_batches_from_anchor, select_block_at_height,
+    select_existing_txids, select_min_batch_height, set_batch_processed,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -493,20 +493,17 @@ impl ConsensusState {
 
     /// Initiate a rollback: query decided batches from the rollback point,
     /// truncate executor state, populate the replay queue, and signal block replay.
+    /// Prepare consensus state for rollback: query decided batches for replay,
+    /// populate the replay queue, and clear pending batches. Does NOT truncate the DB —
+    /// that is handled by the reactor's `rollback()` method.
     pub async fn initiate_rollback(
         &mut self,
         executor: &mut impl Executor,
         from_anchor: u64,
+        removed: usize,
         excluded_txids: HashSet<Txid>,
     ) {
         let replay_batches = self.get_decided_from_anchor(from_anchor).await;
-        let removed = match rollback_to_height(&self.conn, from_anchor).await {
-            Ok(n) => n as usize,
-            Err(e) => {
-                error!(%e, "rollback_to_height failed");
-                0
-            }
-        };
 
         info!(
             from_anchor,
@@ -548,15 +545,11 @@ impl ConsensusState {
         None
     }
 
-    /// Run finality checks and execute any rollbacks.
-    /// Returns the rollback anchor height if a rollback was initiated.
-    pub async fn run_finality_checks(
-        &mut self,
-        executor: &mut impl Executor,
-        last_height: u64,
-    ) -> Option<u64> {
+    /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
+    /// The reactor is responsible for DB truncation and calling `initiate_rollback`.
+    pub async fn run_finality_checks(&mut self, last_height: u64) -> Option<(u64, HashSet<Txid>)> {
         let finality_events = self.check_finality(last_height).await;
-        let mut rollback_to = None;
+        let mut result = None;
         for event in &finality_events {
             if let FinalityEvent::Rollback {
                 from_anchor,
@@ -565,13 +558,11 @@ impl ConsensusState {
             } = event
             {
                 let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
-                self.initiate_rollback(executor, *from_anchor, excluded)
-                    .await;
-                rollback_to = Some(*from_anchor);
+                result = Some((*from_anchor, excluded));
             }
         }
         self.emit_finality_events(&finality_events);
-        rollback_to
+        result
     }
 
     /// Execute a decided batch. Blocks are executed separately via Value::Block
