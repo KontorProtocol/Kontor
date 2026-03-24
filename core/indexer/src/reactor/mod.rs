@@ -69,14 +69,14 @@ pub struct Reactor<E: Executor> {
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
-    init_tx: Option<oneshot::Sender<bool>>,
+    ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     bitcoin_state: bitcoin_state::BitcoinState,
     consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
-    option_last_hash: Option<BlockHash>,
+    last_hash: Option<BlockHash>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -87,13 +87,13 @@ impl<E: Executor> Reactor<E> {
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
-        init_tx: Option<oneshot::Sender<bool>>,
+        ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
         bitcoin_state: bitcoin_state::BitcoinState,
         consensus_handle: Option<ConsensusHandle>,
         last_height: u64,
-        option_last_hash: Option<BlockHash>,
+        last_hash: Option<BlockHash>,
     ) -> Self {
         Self {
             executor,
@@ -105,8 +105,8 @@ impl<E: Executor> Reactor<E> {
             simulate_rx,
             bitcoin_state,
             last_height,
-            option_last_hash,
-            init_tx,
+            last_hash,
+            ready_tx,
             event_tx,
             consensus_handle,
         }
@@ -138,10 +138,10 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
-            self.option_last_hash = Some(row.hash);
+            self.last_hash = Some(row.hash);
             info!("Rollback to height {} ({})", height, row.hash);
         } else {
-            self.option_last_hash = None;
+            self.last_hash = None;
             warn!("Rollback to height {}, no previous block found", height);
         }
 
@@ -203,7 +203,7 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        if let Some(last_hash) = self.option_last_hash {
+        if let Some(last_hash) = self.last_hash {
             if prev_hash != last_hash {
                 bail!(
                     "Block at height {} has prev_hash {} but expected {}",
@@ -220,7 +220,7 @@ impl<E: Executor> Reactor<E> {
         }
 
         self.last_height = height;
-        self.option_last_hash = Some(hash);
+        self.last_hash = Some(hash);
 
         let _ = insert_block(
             &self.conn,
@@ -324,7 +324,6 @@ impl<E: Executor> Reactor<E> {
                         .process_decided_batch(
                             &self.executor,
                             &mut self.runtime,
-                            &mut self.bitcoin_state,
                             *anchor_height,
                             *anchor_hash,
                             height,
@@ -388,7 +387,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn run_event_loop(&mut self) -> Result<()> {
-        self.init_tx.take().map(|tx| tx.send(true));
+        self.ready_tx.take().map(|tx| tx.send(true));
 
         loop {
             // Drain pending block events before entering select
@@ -451,7 +450,7 @@ impl<E: Executor> Reactor<E> {
                         msg,
                         node_index,
                         self.last_height,
-                        self.option_last_hash.unwrap_or(BlockHash::all_zeros()),
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
                     ).await?;
                     if let Some(block) = decided_block {
                         self.handle_block(block).await?;
@@ -536,7 +535,7 @@ pub async fn create_runtime_executor(
     genesis_validators: &[crate::runtime::GenesisValidator],
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let conn = writer.connection();
-    let (last_height, option_last_hash) = match select_block_latest(&conn).await? {
+    let (last_height, last_hash) = match select_block_latest(&conn).await? {
         Some(block) => {
             let block_height = block.height as u64;
             if block_height < starting_block_height - 1 {
@@ -596,7 +595,7 @@ pub async fn create_runtime_executor(
         exec = exec.with_replay_tx(tx);
     }
 
-    Ok((exec, runtime, last_height, option_last_hash))
+    Ok((exec, runtime, last_height, last_hash))
 }
 
 pub async fn start_consensus(
@@ -639,7 +638,7 @@ pub fn run(
     writer: database::Writer,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
-    init_tx: Option<oneshot::Sender<bool>>,
+    ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: Option<engine::EngineConfig>,
@@ -651,7 +650,7 @@ pub fn run(
     tokio::spawn({
         async move {
             let result: Result<()> = async {
-                let (exec, mut runtime, last_height, option_last_hash) = create_runtime_executor(
+                let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
                     starting_block_height,
                     &writer,
                     cancel_token.clone(),
@@ -679,13 +678,13 @@ pub fn run(
                     block_rx,
                     mempool_rx,
                     cancel_token.clone(),
-                    init_tx,
+                    ready_tx,
                     event_tx,
                     simulate_rx,
                     bs,
                     consensus_handle,
                     last_height,
-                    option_last_hash,
+                    last_hash,
                 );
 
                 reactor.run().await

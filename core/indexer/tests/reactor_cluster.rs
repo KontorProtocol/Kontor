@@ -27,7 +27,33 @@ fn allocate_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-/// Handle to a running cluster of validators using the prod reactor + StateLog.
+/// Collect events from a channel until `n` events match the predicate, or timeout.
+async fn wait_matching<T>(
+    rx: &mut mpsc::Receiver<T>,
+    pred: impl Fn(&T) -> bool,
+    n: usize,
+    timeout: Duration,
+) -> Vec<T> {
+    let mut events = Vec::new();
+    let mut matched = 0;
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    loop {
+        if matched >= n {
+            break;
+        }
+        tokio::select! {
+            _ = &mut deadline => break,
+            Some(event) = rx.recv() => {
+                if pred(&event) { matched += 1; }
+                events.push(event);
+            }
+        }
+    }
+    events
+}
+
+/// Handle to a running cluster of validators using the prod reactor + LiteExecutor.
 #[allow(dead_code)]
 struct ReactorCluster {
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
@@ -226,62 +252,30 @@ impl ReactorCluster {
         self.mock_bitcoin.lock().unwrap()
     }
 
-    async fn wait_for_decisions(&mut self, count: usize, timeout: Duration) -> Vec<DecidedBatch> {
-        let mut batches = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            if batches.len() >= count {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(batch) = self.decided_rx.recv() => {
-                    batches.push(batch);
-                }
-            }
+    /// Mine a block (optionally containing specific txids), broadcast events to all nodes.
+    fn mine_and_send(&self, txids: &[bitcoin::Txid]) {
+        let (blk_events, mem_events) = if txids.is_empty() {
+            self.mock_bitcoin().mine_block_all()
+        } else {
+            self.mock_bitcoin().mine_block(txids)
+        };
+        for event in mem_events {
+            self.send_mempool_event(event);
         }
-        batches
+        for event in blk_events {
+            self.send_block_event(event);
+        }
     }
 
-    async fn wait_for_state_events(&mut self, count: usize, timeout: Duration) -> Vec<StateEvent> {
-        let mut events = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            if events.len() >= count {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(event) = self.state_rx.recv() => {
-                    events.push(event);
-                }
-            }
+    /// Mine an empty block and broadcast to all nodes.
+    fn mine_empty_and_send(&self) {
+        let (blk_events, mem_events) = self.mock_bitcoin().mine_block(&[]);
+        for event in mem_events {
+            self.send_mempool_event(event);
         }
-        events
-    }
-
-    async fn wait_for_finality_events(
-        &mut self,
-        count: usize,
-        timeout: Duration,
-    ) -> Vec<FinalityEvent> {
-        let mut events = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            if events.len() >= count {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(event) = self.finality_rx.recv() => {
-                    events.push(event);
-                }
-            }
+        for event in blk_events {
+            self.send_block_event(event);
         }
-        events
     }
 
     /// Wait until a decision matching the predicate is found. Returns all collected decisions.
@@ -290,20 +284,7 @@ impl ReactorCluster {
         pred: impl Fn(&DecidedBatch) -> bool,
         timeout: Duration,
     ) -> Vec<DecidedBatch> {
-        let mut batches = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(batch) = self.decided_rx.recv() => {
-                    let matched = pred(&batch);
-                    batches.push(batch);
-                    if matched { break; }
-                }
-            }
-        }
-        batches
+        wait_matching(&mut self.decided_rx, pred, 1, timeout).await
     }
 
     /// Wait until a state event matching the predicate is found. Returns all collected events.
@@ -312,20 +293,7 @@ impl ReactorCluster {
         pred: impl Fn(&StateEvent) -> bool,
         timeout: Duration,
     ) -> Vec<StateEvent> {
-        let mut events = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(event) = self.state_rx.recv() => {
-                    let matched = pred(&event);
-                    events.push(event);
-                    if matched { break; }
-                }
-            }
-        }
-        events
+        wait_matching(&mut self.state_rx, pred, 1, timeout).await
     }
 
     /// Wait until a finality event matching the predicate is found. Returns all collected events.
@@ -334,20 +302,7 @@ impl ReactorCluster {
         pred: impl Fn(&FinalityEvent) -> bool,
         timeout: Duration,
     ) -> Vec<FinalityEvent> {
-        let mut events = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(event) = self.finality_rx.recv() => {
-                    let matched = pred(&event);
-                    events.push(event);
-                    if matched { break; }
-                }
-            }
-        }
-        events
+        wait_matching(&mut self.finality_rx, pred, 1, timeout).await
     }
 
     /// Wait until N state events matching the predicate are found.
@@ -357,23 +312,7 @@ impl ReactorCluster {
         pred: impl Fn(&StateEvent) -> bool,
         timeout: Duration,
     ) -> Vec<StateEvent> {
-        let mut events = Vec::new();
-        let mut count = 0;
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            if count >= n {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => break,
-                Some(event) = self.state_rx.recv() => {
-                    if pred(&event) { count += 1; }
-                    events.push(event);
-                }
-            }
-        }
-        events
+        wait_matching(&mut self.state_rx, pred, n, timeout).await
     }
 
     async fn shutdown(mut self) {
@@ -464,15 +403,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     );
 
     // Mine a block — this should trigger a Value::Block decision
-    {
-        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block_all();
-        for event in mem_events {
-            cluster.send_mempool_event(event);
-        }
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_and_send(&[]);
 
     // Wait for block decision at height 1
     let block_decisions = cluster
@@ -541,22 +472,11 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     );
 
     // Mine block 1 confirming all txs
-    {
-        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block_all();
-        for event in mem_events {
-            cluster.send_mempool_event(event);
-        }
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_and_send(&[]);
 
     // Mine blocks 2-6 (empty) to reach finality deadline (anchor 0 + 6 = 6)
     for _ in 0..5 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
+        cluster.mine_empty_and_send();
     }
 
     // Wait for BatchFinalized at anchor 0
@@ -589,12 +509,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     cluster.wait_for_ready().await;
 
     // Mine block 1 (empty) so the batch anchors at height 1 (not 0)
-    {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_empty_and_send();
     // Wait for block 1 to be decided
     cluster
         .wait_for_decision_matching(
@@ -630,22 +545,11 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let missing_txid = all_txids[2];
 
     // Mine block 2 with only 2 of the 3 txids
-    {
-        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block(&confirm_txids);
-        for event in mem_events {
-            cluster.send_mempool_event(event);
-        }
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_and_send(&confirm_txids);
 
     // Mine blocks 3-7 (empty) to reach deadline (anchor 1 + 6 = 7)
     for _ in 0..5 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
+        cluster.mine_empty_and_send();
     }
 
     // Wait for finality rollback event
@@ -717,12 +621,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
         .await;
 
     // Mine block 1 (empty — batch 1 txids intentionally NOT confirmed)
-    {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_empty_and_send();
 
     // Wait for block decision at height 1
     cluster
@@ -749,10 +648,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 
     // Mine blocks 2-6 to reach deadline for anchor 0 (0 + 6 = 6)
     for _ in 0..5 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
+        cluster.mine_empty_and_send();
     }
 
     // Wait for Rollback with cascade
@@ -816,15 +712,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .to_vec();
 
     // Mine block 1 confirming batch 0's txids
-    {
-        let (blk_events, mem_events) = cluster.mock_bitcoin().mine_block(&batch0_txids);
-        for event in mem_events {
-            cluster.send_mempool_event(event);
-        }
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_and_send(&batch0_txids);
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
@@ -848,12 +736,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .await;
 
     // Mine block 2 (empty — batch at anchor 1 not confirmed)
-    {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_empty_and_send();
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
@@ -877,19 +760,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .await;
 
     // Mine block 3
-    {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
-    }
+    cluster.mine_empty_and_send();
 
     // Mine blocks 4-7 to reach deadline for anchor 1 (1 + 6 = 7)
     for _ in 0..4 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
-        }
+        cluster.mine_empty_and_send();
     }
 
     // Wait for Rollback from anchor 1

@@ -425,49 +425,44 @@ impl ConsensusState {
         }
     }
 
+    async fn load_raw_txs_if_unfinalized(
+        &self,
+        anchor_height: i64,
+        consensus_height: i64,
+    ) -> Option<Vec<bitcoin::Transaction>> {
+        let tip = select_block_latest(&self.conn).await.ok().flatten()?;
+        if (anchor_height as u64) + FINALITY_WINDOW <= tip.height as u64 {
+            return None;
+        }
+        let raw_bytes = select_unconfirmed_batch_txs(&self.conn, consensus_height)
+            .await
+            .ok()?;
+        let txs: Vec<bitcoin::Transaction> = raw_bytes
+            .iter()
+            .filter_map(|raw| bitcoin::consensus::deserialize(raw).ok())
+            .collect();
+        if txs.is_empty() { None } else { Some(txs) }
+    }
+
     async fn get_decided(
         &self,
         height: Height,
     ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
+        let consensus_height = height.as_u64() as i64;
         let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
-            select_batch(&self.conn, height.as_u64() as i64)
+            select_batch(&self.conn, consensus_height)
                 .await
                 .ok()
                 .flatten()?;
 
         let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
         let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-
-        let raw_txs = if let Ok(Some(tip)) = select_block_latest(&self.conn).await {
-            if (anchor_height as u64) + FINALITY_WINDOW > tip.height as u64 {
-                if let Ok(raw_bytes_list) =
-                    select_unconfirmed_batch_txs(&self.conn, height.as_u64() as i64).await
-                {
-                    let txs: Vec<bitcoin::Transaction> = raw_bytes_list
-                        .iter()
-                        .filter_map(|raw| {
-                            bitcoin::consensus::deserialize::<bitcoin::Transaction>(raw).ok()
-                        })
-                        .collect();
-                    if txs.is_empty() { None } else { Some(txs) }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let raw_txs = self
+            .load_raw_txs_if_unfinalized(anchor_height, consensus_height)
+            .await;
 
         let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
-        if let Value::Batch {
-            raw_txs: ref mut rt,
-            ..
-        } = value
-        {
-            *rt = raw_txs;
-        }
+        value.set_raw_txs(raw_txs);
 
         let proto =
             crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
@@ -557,12 +552,10 @@ impl ConsensusState {
     }
 
     /// Execute a decided batch. Blocks are executed separately via Value::Block
-    /// consensus decisions — no block draining or timeout race detection needed.
     pub async fn process_decided_batch(
         &mut self,
         executor: &impl Executor,
         runtime: &mut crate::runtime::Runtime,
-        _bitcoin_state: &mut BitcoinState,
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         consensus_height: Height,
@@ -950,7 +943,6 @@ pub async fn handle_consensus_msg(
                             .process_decided_batch(
                                 executor,
                                 runtime,
-                                bitcoin_state,
                                 *anchor_height,
                                 *anchor_hash,
                                 certificate.height,

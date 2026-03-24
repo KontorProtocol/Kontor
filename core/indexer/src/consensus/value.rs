@@ -145,6 +145,12 @@ impl Value {
     pub fn is_batch(&self) -> bool {
         matches!(self, Value::Batch { .. })
     }
+
+    pub fn set_raw_txs(&mut self, txs: Option<Vec<bitcoin::Transaction>>) {
+        if let Value::Batch { raw_txs, .. } = self {
+            *raw_txs = txs;
+        }
+    }
 }
 
 impl malachitebft_core_types::Value for Value {
