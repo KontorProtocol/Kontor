@@ -73,6 +73,7 @@ export type Info = {
   available: boolean;
   height: number;
   checkpoint: string | null;
+  consensus_height: number | null;
 };
 
 export type Inst =
@@ -243,7 +244,9 @@ export type TransactionRow = {
   id: number;
   txid: string;
   height: number;
-  tx_index: number;
+  confirmed_height: number | null;
+  tx_index: number | null;
+  batch_height: number | null;
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };

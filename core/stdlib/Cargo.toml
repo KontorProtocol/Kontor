@@ -12,5 +12,5 @@ wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]
-macrotest = "=1.2.0"
+macrotest = "=1.2.1"
 trybuild = "=1.0.116"
