@@ -1316,20 +1316,20 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
             .await;
     }
 
-    // Send reorg rollback to height 1 (blocks 2-3 deleted)
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
+    // Send reorg rollback to height 1 (blocks 2-3 deleted) and immediately
+    // send the new block 2 so it's queued in block_rx before Malachite can
+    // cycle through empty round timeouts.
     cluster.mock_bitcoin().reset_to(1);
+    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
+    cluster.mine_empty_and_send(); // new block 2
 
-    // Wait for rollback to process on all nodes
+    // Wait for rollback, then block 2
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::RollbackExecuted { to_anchor: 1, .. }),
             Duration::from_secs(30),
         )
         .await;
-
-    // Mine new block 2 (simulating the reorg's new chain — different hash)
-    cluster.mine_empty_and_send();
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,

@@ -1006,14 +1006,27 @@ pub async fn handle_consensus_msg(
                         if let Some(block) = state.block_cache.remove(height) {
                             decided_block = Some(block);
                         } else {
-                            // Block not yet received from poller — record for
-                            // immediate execution when it arrives
-                            info!(
-                                block_height = height,
-                                block_hash = %hash,
-                                "Block decided but not yet cached — will execute on arrival"
-                            );
-                            state.missed_block_decisions.insert(*height);
+                            // Only record if this block height is relevant (not stale from
+                            // a pre-rollback decision that arrived late)
+                            let is_stale =
+                                match select_block_at_height(&state.conn, *height as i64).await {
+                                    Ok(Some(row)) => row.hash != *hash,
+                                    _ => false,
+                                };
+                            if !is_stale {
+                                info!(
+                                    block_height = height,
+                                    block_hash = %hash,
+                                    "Block decided but not yet cached — will execute on arrival"
+                                );
+                                state.missed_block_decisions.insert(*height);
+                            } else {
+                                warn!(
+                                    block_height = height,
+                                    block_hash = %hash,
+                                    "Ignoring stale block decision (post-rollback)"
+                                );
+                            }
                         }
                     }
                 }

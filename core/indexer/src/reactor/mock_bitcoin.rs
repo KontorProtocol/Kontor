@@ -153,7 +153,7 @@ impl MockBitcoin {
             }
         }
         self.tip_height = height;
-        self.prev_hash = new_mock_block_hash(height as u32 + 1000);
+        self.prev_hash = new_mock_block_hash(height as u32);
         self.mined_blocks.retain(|e| match e {
             BlockEvent::BlockInsert { target_height, .. } => *target_height <= height,
             _ => true,
