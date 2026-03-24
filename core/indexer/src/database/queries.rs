@@ -598,12 +598,12 @@ pub async fn select_batch(
     let mut result: Option<BatchQueryResult> = None;
 
     while let Some(row) = rows.next().await? {
-        let batch = result.get_or_insert_with(|| BatchQueryResult {
+        let batch = result.get_or_insert(BatchQueryResult {
             consensus_height,
-            anchor_height: row.get(0).unwrap_or(0),
-            anchor_hash: row.get(1).unwrap_or_default(),
-            certificate: row.get(2).unwrap_or_default(),
-            is_block: row.get::<i64>(3).unwrap_or(0) != 0,
+            anchor_height: row.get(0)?,
+            anchor_hash: row.get(1)?,
+            certificate: row.get(2)?,
+            is_block: row.get::<i64>(3)? != 0,
             txids: Vec::new(),
         });
         if let Ok(txid) = row.get::<String>(4) {
@@ -660,7 +660,7 @@ pub async fn select_batches_from_anchor(
                 anchor_height: row.get(1)?,
                 anchor_hash: row.get(2)?,
                 certificate: Vec::new(),
-                is_block: row.get::<i64>(3).unwrap_or(0) != 0,
+                is_block: row.get::<i64>(3)? != 0,
                 txids: txid.into_iter().collect(),
             });
         }

@@ -23,13 +23,6 @@ impl BatchTx {
             BatchTx::Raw(tx) => tx.compute_txid(),
         }
     }
-
-    pub fn raw_tx(&self) -> Option<&bitcoin::Transaction> {
-        match self {
-            BatchTx::Id(_) => None,
-            BatchTx::Raw(tx) => Some(tx),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize)]
@@ -149,14 +142,6 @@ impl Value {
     pub fn batch_txids(&self) -> Vec<Txid> {
         match self {
             Value::Batch { txs, .. } => txs.iter().map(|tx| tx.txid()).collect(),
-            Value::Block { .. } => vec![],
-        }
-    }
-
-    /// Returns the raw transactions if available (for sync of unfinalized batches).
-    pub fn batch_raw_txs(&self) -> Vec<&bitcoin::Transaction> {
-        match self {
-            Value::Batch { txs, .. } => txs.iter().filter_map(|tx| tx.raw_tx()).collect(),
             Value::Block { .. } => vec![],
         }
     }
