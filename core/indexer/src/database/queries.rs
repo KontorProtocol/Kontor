@@ -584,34 +584,13 @@ pub async fn select_batch(
     conn: &Connection,
     consensus_height: i64,
 ) -> Result<Option<BatchQueryResult>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT b.anchor_height, b.anchor_hash, b.certificate, b.is_block, t.txid \
-             FROM batches b \
-             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
-             WHERE b.consensus_height = ? \
-             ORDER BY t.id",
-            params![consensus_height],
-        )
-        .await?;
-
-    let mut result: Option<BatchQueryResult> = None;
-
-    while let Some(row) = rows.next().await? {
-        let batch = result.get_or_insert(BatchQueryResult {
-            consensus_height,
-            anchor_height: row.get(0)?,
-            anchor_hash: row.get(1)?,
-            certificate: row.get(2)?,
-            is_block: row.get::<i64>(3)? != 0,
-            txids: Vec::new(),
-        });
-        if let Ok(txid) = row.get::<String>(4) {
-            batch.txids.push(txid);
-        }
-    }
-
-    Ok(result)
+    let results = query_batches(
+        conn,
+        "WHERE b.consensus_height = ?",
+        vec![libsql::Value::from(consensus_height)],
+    )
+    .await?;
+    Ok(results.into_iter().next())
 }
 
 pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
@@ -630,22 +609,33 @@ pub async fn select_batches_from_anchor(
     conn: &Connection,
     from_anchor: i64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, t.txid \
-             FROM batches b \
-             LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
-             WHERE b.anchor_height >= ? \
-             ORDER BY b.consensus_height, t.id",
-            params![from_anchor],
-        )
-        .await?;
+    query_batches(
+        conn,
+        "WHERE b.anchor_height >= ?",
+        vec![libsql::Value::from(from_anchor)],
+    )
+    .await
+}
+
+async fn query_batches(
+    conn: &Connection,
+    where_clause: &str,
+    params: Vec<libsql::Value>,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    let sql = format!(
+        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, b.certificate, t.txid \
+         FROM batches b \
+         LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+         {where_clause} \
+         ORDER BY b.consensus_height, t.id"
+    );
+    let mut rows = conn.query(&sql, params).await?;
 
     let mut results: Vec<BatchQueryResult> = Vec::new();
 
     while let Some(row) = rows.next().await? {
         let consensus_height: i64 = row.get(0)?;
-        let txid: Option<String> = row.get(4).ok();
+        let txid: Option<String> = row.get(5).ok();
 
         if results
             .last()
@@ -659,7 +649,7 @@ pub async fn select_batches_from_anchor(
                 consensus_height,
                 anchor_height: row.get(1)?,
                 anchor_hash: row.get(2)?,
-                certificate: Vec::new(),
+                certificate: row.get(4)?,
                 is_block: row.get::<i64>(3)? != 0,
                 txids: txid.into_iter().collect(),
             });
