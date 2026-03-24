@@ -153,16 +153,17 @@ pub fn decode_round_certificate(
         cert_type: match proto::RoundCertificateType::try_from(certificate.cert_type)
             .map_err(|_| ProtoError::Other("Unknown RoundCertificateType".into()))?
         {
-            proto::RoundCertificateType::Precommit | proto::RoundCertificateType::Unspecified => {
-                RoundCertificateType::Precommit
-            }
+            proto::RoundCertificateType::Precommit => RoundCertificateType::Precommit,
             proto::RoundCertificateType::Skip => RoundCertificateType::Skip,
+            proto::RoundCertificateType::Unspecified => {
+                return Err(ProtoError::Other("Unspecified RoundCertificateType".into()));
+            }
         },
         round_signatures: certificate
             .signatures
             .into_iter()
             .map(|sig| -> Result<RoundSignature<Ctx>, ProtoError> {
-                let vote_type = decode_votetype(sig.vote_type());
+                let vote_type = decode_votetype(sig.vote_type())?;
                 let address = sig.validator_address.ok_or_else(|| {
                     ProtoError::missing_field::<proto::RoundCertificate>("validator_address")
                 })?;
