@@ -271,7 +271,7 @@ async fn collect_all_transactions_with_offset(
 async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test with different page sizes
     for limit in [1, 2, 3, 5, 7, 10] {
@@ -344,7 +344,7 @@ async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
 async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test pagination for height 800000 (5 transactions)
     for limit in [1, 2, 3, 4, 5, 6] {
@@ -413,7 +413,7 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
 async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test pagination for height 800002 (7 transactions)
     for limit in [1, 2, 3, 4, 5, 6, 7, 8] {
@@ -462,7 +462,7 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
 async fn test_cursor_pagination_edge_cases() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test with limit=1 to ensure every transaction is returned exactly once
     let transactions =
@@ -506,7 +506,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test that cursor pagination works correctly when page size equals total count
     let height_800001_all =
@@ -543,7 +543,7 @@ async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
 async fn test_cursor_consistency_across_different_limits() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Collect all transactions with different page sizes
     let results_limit_1 =
@@ -592,7 +592,7 @@ async fn test_cursor_consistency_across_different_limits() -> Result<()> {
 async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test that total_count decreases as we paginate (showing remaining items)
     let mut cursor: Option<i64> = None;
@@ -651,7 +651,7 @@ async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
 async fn test_cursor_pagination_contract_address() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let url = "/api/transactions?limit=1&contract=token_800000_1";
     let response: TestResponse = server.get(url).await;
@@ -706,7 +706,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";
     let response: TestResponse = server.get(url).await;

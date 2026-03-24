@@ -102,7 +102,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
 #[tokio::test]
 async fn test_get_registry_entry_by_pubkey() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let response: TestResponse = server
         .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
@@ -121,7 +121,7 @@ async fn test_get_registry_entry_by_pubkey() -> Result<()> {
 #[tokio::test]
 async fn test_get_registry_entry_by_signer_id() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let response: TestResponse = server.get("/api/registry/entry/0").await;
     assert_eq!(response.status_code(), StatusCode::OK);
@@ -138,7 +138,7 @@ async fn test_get_registry_entry_by_signer_id() -> Result<()> {
 #[tokio::test]
 async fn test_get_registry_entry_not_found_by_pubkey() -> Result<()> {
     let (app, _, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let fake_xonly = "ab".repeat(32);
     let response: TestResponse = server
@@ -155,7 +155,7 @@ async fn test_get_registry_entry_not_found_by_pubkey() -> Result<()> {
 #[tokio::test]
 async fn test_get_registry_entry_not_found_by_id() -> Result<()> {
     let (app, _, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let response: TestResponse = server.get("/api/registry/entry/999999").await;
     assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
@@ -169,7 +169,7 @@ async fn test_get_registry_entry_not_found_by_id() -> Result<()> {
 #[tokio::test]
 async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let by_pk: TestResponse = server
         .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
@@ -193,7 +193,7 @@ async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
 #[tokio::test]
 async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
     let (app, users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let response: TestResponse = server
         .get(&format!("/api/registry/entry/{}", users[1].x_only_pubkey))
@@ -220,7 +220,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
 #[tokio::test]
 async fn test_two_users_have_distinct_entries() -> Result<()> {
     let (app, _users, _db) = create_test_app().await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let resp0: TestResponse = server.get("/api/registry/entry/0").await;
     let resp1: TestResponse = server.get("/api/registry/entry/1").await;
