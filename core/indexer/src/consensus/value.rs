@@ -119,7 +119,16 @@ impl Value {
 
     pub fn size_bytes(&self) -> usize {
         match self {
-            Value::Batch { txs, .. } => 1 + 8 + 32 + txs.len() * 32,
+            Value::Batch { txs, .. } => {
+                let tx_size: usize = txs
+                    .iter()
+                    .map(|tx| match tx {
+                        BatchTx::Id(_) => 32,
+                        BatchTx::Raw(raw) => bitcoin::consensus::serialize(raw).len(),
+                    })
+                    .sum();
+                1 + 8 + 32 + tx_size
+            }
             Value::Block { .. } => 1 + 8 + 32,
         }
     }

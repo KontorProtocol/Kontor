@@ -525,13 +525,6 @@ impl ConsensusState {
             .retain(|b| b.anchor_height < from_anchor);
         self.last_processed_anchor = from_anchor.saturating_sub(1);
 
-        let checkpoint = self.get_checkpoint().await;
-        self.emit_state_event(StateEvent::RollbackExecuted {
-            to_anchor: from_anchor,
-            entries_removed: removed,
-            checkpoint,
-        });
-
         executor.replay_blocks_from(from_anchor).await;
     }
 

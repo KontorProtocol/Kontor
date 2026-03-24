@@ -146,23 +146,9 @@ impl<E: Executor> Reactor<E> {
             warn!("Rollback to height {}, no previous block found", height);
         }
 
-        if let Some(handle) = &mut self.consensus_handle {
-            handle.state.clear_on_rollback();
-            let checkpoint = get_checkpoint_latest(&self.conn)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|r| {
-                    let bytes = hex::decode(&r.hash).ok()?;
-                    let arr: [u8; 32] = bytes.try_into().ok()?;
-                    Some(arr)
-                });
-            handle.state.emit_state_event(StateEvent::RollbackExecuted {
-                to_anchor: height,
-                entries_removed: 0,
-                checkpoint,
-            });
-        }
+        // Callers handle consensus state cleanup:
+        // - Reorg: clear_on_rollback + emit RollbackExecuted
+        // - Finality: initiate_rollback (selective retain + replay queue)
 
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(Event::Rolledback { height }).await;
@@ -411,6 +397,23 @@ impl<E: Executor> Reactor<E> {
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
                 self.rollback(to_height).await?;
+                if let Some(handle) = &mut self.consensus_handle {
+                    handle.state.clear_on_rollback();
+                    let checkpoint = get_checkpoint_latest(&self.conn)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|r| {
+                            let bytes = hex::decode(&r.hash).ok()?;
+                            let arr: [u8; 32] = bytes.try_into().ok()?;
+                            Some(arr)
+                        });
+                    handle.state.emit_state_event(StateEvent::RollbackExecuted {
+                        to_anchor: to_height,
+                        entries_removed: 0,
+                        checkpoint,
+                    });
+                }
             }
         }
         Ok(())
@@ -493,6 +496,23 @@ impl<E: Executor> Reactor<E> {
                             && let Some((rollback_anchor, excluded)) = handle.state.run_finality_checks(self.last_height).await {
                                 // DB truncation + executor resync + notify clients
                                 self.rollback(rollback_anchor).await?;
+
+                                // Emit rollback event
+                                let handle = self.consensus_handle.as_mut().unwrap();
+                                let checkpoint = get_checkpoint_latest(&self.conn)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|r| {
+                                        let bytes = hex::decode(&r.hash).ok()?;
+                                        let arr: [u8; 32] = bytes.try_into().ok()?;
+                                        Some(arr)
+                                    });
+                                handle.state.emit_state_event(StateEvent::RollbackExecuted {
+                                    to_anchor: rollback_anchor,
+                                    entries_removed: 0,
+                                    checkpoint,
+                                });
 
                                 // Consensus state rollback (replay queue, pending batches)
                                 let removed = 0;
