@@ -506,14 +506,12 @@ impl ConsensusState {
         &mut self,
         executor: &mut impl Executor,
         from_anchor: u64,
-        removed: usize,
         excluded_txids: HashSet<Txid>,
     ) {
         let replay_batches = self.get_decided_from_anchor(from_anchor).await;
 
         info!(
             from_anchor,
-            removed,
             replay_batches = replay_batches.len(),
             excluded = excluded_txids.len(),
             "Initiating rollback"

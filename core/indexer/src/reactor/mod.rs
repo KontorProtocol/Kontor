@@ -515,12 +515,10 @@ impl<E: Executor> Reactor<E> {
                                 });
 
                                 // Consensus state rollback (replay queue, pending batches)
-                                let removed = 0;
                                 let handle = self.consensus_handle.as_mut().unwrap();
                                 handle.state.initiate_rollback(
                                     &mut self.executor,
                                     rollback_anchor,
-                                    removed,
                                     excluded,
                                 ).await;
 
