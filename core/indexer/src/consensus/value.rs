@@ -169,10 +169,23 @@ impl Value {
         matches!(self, Value::Batch { .. })
     }
 
-    /// Upgrade all txs to Raw variant using provided transactions.
+    /// Upgrade BatchTx::Id entries to BatchTx::Raw where a matching raw tx
+    /// is available. Entries without a match keep their BatchTx::Id — this
+    /// preserves the Value's identity (id() hash) even if some raw txs
+    /// failed to deserialize.
     pub fn set_raw_txs(&mut self, raw_txs: Vec<bitcoin::Transaction>) {
         if let Value::Batch { txs, .. } = self {
-            *txs = raw_txs.into_iter().map(BatchTx::Raw).collect();
+            let raw_map: std::collections::HashMap<Txid, bitcoin::Transaction> = raw_txs
+                .into_iter()
+                .map(|tx| (tx.compute_txid(), tx))
+                .collect();
+            for entry in txs.iter_mut() {
+                if let BatchTx::Id(txid) = entry
+                    && let Some(raw) = raw_map.get(txid)
+                {
+                    *entry = BatchTx::Raw(raw.clone());
+                }
+            }
         }
     }
 }

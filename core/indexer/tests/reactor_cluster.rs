@@ -1404,7 +1404,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     let pre_join_checkpoints: Vec<_> = pre_join_events
         .iter()
         .filter_map(|e| match e {
-            StateEvent::BlockProcessed { checkpoint, .. } => checkpoint.clone(),
+            StateEvent::BlockProcessed { checkpoint, .. } => *checkpoint,
             _ => None,
         })
         .collect();
@@ -1432,7 +1432,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         )
         .await;
     let late_checkpoint = late_events.iter().find_map(|e| match e {
-        StateEvent::BlockProcessed { checkpoint, .. } => checkpoint.clone(),
+        StateEvent::BlockProcessed { checkpoint, .. } => *checkpoint,
         _ => None,
     });
 

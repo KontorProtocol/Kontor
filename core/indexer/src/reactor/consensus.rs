@@ -424,8 +424,7 @@ impl ConsensusState {
                 let value = if b.is_block {
                     Value::new_block(b.anchor_height as u64, anchor_hash)
                 } else {
-                    let txids: Vec<Txid> =
-                        b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+                    let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
                     Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
                 };
                 Some((Height::new(b.consensus_height as u64), value))
@@ -474,8 +473,7 @@ impl ConsensusState {
         let value = if b.is_block {
             Value::new_block(b.anchor_height as u64, anchor_hash)
         } else {
-            let txids: Vec<Txid> =
-                b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+            let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
             let raw_txs = self
                 .load_raw_txs_if_unfinalized(b.anchor_height, consensus_height)
                 .await;
@@ -991,11 +989,9 @@ pub async fn handle_consensus_msg(
                         {
                             error!("insert_batch (block) error: {e}");
                         }
-                        if let Err(e) = set_batch_processed(
-                            &state.conn,
-                            certificate.height.as_u64() as i64,
-                        )
-                        .await
+                        if let Err(e) =
+                            set_batch_processed(&state.conn, certificate.height.as_u64() as i64)
+                                .await
                         {
                             error!("set_batch_processed (block) error: {e}");
                         }
@@ -1077,22 +1073,11 @@ pub async fn handle_consensus_msg(
             value_bytes,
             reply,
         } => {
+            // Malachite verifies the ValueId from the certificate matches
+            // the decoded Value's id() — this catches any tampered raw txs
+            // since id() hashes the txids derived from each BatchTx variant.
             let result: Option<ProposedValue<Ctx>> =
                 if let Ok(value) = ProtobufCodec.decode(value_bytes) {
-                    // Verify raw txs have consistent txids if present
-                    if let Value::Batch { ref txs, .. } = value {
-                        let valid = txs.iter().all(|tx| match tx {
-                            crate::consensus::BatchTx::Raw(raw) => raw.compute_txid() == tx.txid(),
-                            crate::consensus::BatchTx::Id(_) => true,
-                        });
-                        if !valid {
-                            warn!("Synced value has mismatched raw_txs, rejecting");
-                            if reply.send(None).is_err() {
-                                error!("Failed to send ProcessSyncedValue reply");
-                            }
-                            return Ok(None);
-                        }
-                    }
                     let proposed = ProposedValue {
                         height,
                         round,
