@@ -76,6 +76,16 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct BatchQueryResult {
+    pub consensus_height: i64,
+    pub anchor_height: i64,
+    pub anchor_hash: String,
+    pub certificate: Vec<u8>,
+    pub is_block: bool,
+    pub txids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
     pub contract_id: i64,

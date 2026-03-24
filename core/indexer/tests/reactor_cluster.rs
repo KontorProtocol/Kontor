@@ -66,12 +66,24 @@ struct ReactorCluster {
     node_count: usize,
     ready_rx: mpsc::Receiver<usize>,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
+    // Stored for add_node
+    genesis: Genesis,
+    private_keys: Vec<PrivateKey>,
+    ports: Vec<u16>,
+    shared_pubkey: String,
+    decided_tx: mpsc::Sender<DecidedBatch>,
+    finality_tx: mpsc::Sender<FinalityEvent>,
+    state_tx: mpsc::Sender<StateEvent>,
+    ready_tx: mpsc::Sender<usize>,
+    started_nodes: Vec<bool>,
 }
 
 #[allow(dead_code)]
 impl ReactorCluster {
-    async fn start(n: usize) -> Result<Self> {
-        let private_keys: Vec<PrivateKey> = (0..n)
+    /// Start a cluster with `initial` nodes running out of `total` validators in genesis.
+    /// Use `add_node()` to start remaining nodes later.
+    async fn start_with(total: usize, initial: usize) -> Result<Self> {
+        let private_keys: Vec<PrivateKey> = (0..total)
             .map(|i| {
                 let mut seed = [0u8; 32];
                 seed[0] = i as u8;
@@ -88,7 +100,7 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = (0..n)
+        let ports: Vec<u16> = (0..total)
             .map(|_| allocate_port().expect("Failed to allocate port"))
             .collect();
 
@@ -101,122 +113,34 @@ impl ReactorCluster {
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
         let (state_tx, state_rx) = mpsc::channel(1024);
-        let (ready_tx, ready_rx) = mpsc::channel(n);
+        let (ready_tx, ready_rx) = mpsc::channel(total);
 
         let mut join_set = JoinSet::new();
+        let mut started_nodes = vec![false; total];
 
-        for (i, private_key) in private_keys.into_iter().enumerate() {
-            let genesis = genesis.clone();
-            let engine_config = EngineConfig {
-                private_key,
-                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[i]),
-                persistent_peers: ports
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                    .collect(),
-            };
-            let cancel = cancel.clone();
-
+        for i in 0..initial {
             let (node_block_tx, node_block_rx) = mpsc::channel(256);
             block_txs.push(node_block_tx);
 
-            let node_mempool_rx = {
-                let (tx, rx) = mpsc::channel(256);
-                let mut brx = mempool_tx.subscribe();
-                let cancel = cancel.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = cancel.cancelled() => break,
-                            result = brx.recv() => {
-                                match result {
-                                    Ok(event) => { if tx.send(event).await.is_err() { break; } }
-                                    Err(_) => break,
-                                }
-                            }
-                        }
-                    }
-                });
-                rx
-            };
+            let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
 
-            let dtx = decided_tx.clone();
-            let ftx = finality_tx.clone();
-            let stx = state_tx.clone();
-            let rtx = ready_tx.clone();
-            let mock_btc = mock_bitcoin.clone();
-            let pubkey = shared_pubkey.clone();
-
-            join_set.spawn(async move {
-                let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey)
-                    .await
-                    .expect("LiteExecutor setup failed");
-
-                let conn = runtime.get_storage_conn();
-
-                let engine_output = match engine::start(engine_config, &genesis).await {
-                    Ok(o) => o,
-                    Err(e) => {
-                        tracing::error!(node = i, %e, "Failed to start engine");
-                        return;
-                    }
-                };
-
-                info!(node = i, address = %engine_output.address, "Engine started");
-
-                let node_index = genesis
-                    .validator_set
-                    .validators
-                    .iter()
-                    .position(|v| v.address == engine_output.address)
-                    .unwrap_or(i);
-
-                let mut state = ConsensusState::new(
-                    conn.clone(),
-                    engine_output.signing_provider,
-                    genesis,
-                    engine_output.address,
-                );
-                state.observation = Some(ObservationChannels {
-                    decided_tx: dtx,
-                    finality_tx: ftx,
-                    state_tx: stx,
-                });
-
-                let consensus_handle = ConsensusHandle {
-                    state,
-                    channels: engine_output.channels,
-                    _engine_handle: engine_output._handle,
-                    _wal_dir: engine_output._wal_dir,
-                    node_index,
-                };
-
-                let bitcoin_state = BitcoinState::new();
-
-                let mut reactor = Reactor::new(
-                    executor,
-                    runtime,
-                    conn,
-                    node_block_rx,
-                    node_mempool_rx,
-                    cancel.clone(),
-                    None,
-                    None,
-                    None,
-                    bitcoin_state,
-                    Some(consensus_handle),
-                    0,
-                    None,
-                );
-
-                let _ = rtx.send(i).await;
-
-                if let Err(e) = reactor.run().await {
-                    tracing::error!(node = i, %e, "Reactor error");
-                }
-            });
+            Self::spawn_node(
+                i,
+                private_keys[i].clone(),
+                &genesis,
+                &ports,
+                node_block_rx,
+                node_mempool_rx,
+                cancel.clone(),
+                decided_tx.clone(),
+                finality_tx.clone(),
+                state_tx.clone(),
+                ready_tx.clone(),
+                mock_bitcoin.clone(),
+                shared_pubkey.clone(),
+                &mut join_set,
+            );
+            started_nodes[i] = true;
         }
 
         Ok(Self {
@@ -227,10 +151,184 @@ impl ReactorCluster {
             state_rx,
             cancel,
             join_set,
-            node_count: n,
+            node_count: initial,
             ready_rx,
             mock_bitcoin,
+            genesis,
+            private_keys,
+            ports,
+            shared_pubkey,
+            decided_tx,
+            finality_tx,
+            state_tx,
+            ready_tx,
+            started_nodes,
         })
+    }
+
+    async fn start(n: usize) -> Result<Self> {
+        Self::start_with(n, n).await
+    }
+
+    fn bridge_mempool(
+        mempool_tx: &broadcast::Sender<MempoolEvent>,
+        cancel: &CancellationToken,
+    ) -> mpsc::Receiver<MempoolEvent> {
+        let (tx, rx) = mpsc::channel(256);
+        let mut brx = mempool_tx.subscribe();
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    result = brx.recv() => {
+                        match result {
+                            Ok(event) => { if tx.send(event).await.is_err() { break; } }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+        rx
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_node(
+        i: usize,
+        private_key: PrivateKey,
+        genesis: &Genesis,
+        ports: &[u16],
+        node_block_rx: mpsc::Receiver<BlockEvent>,
+        node_mempool_rx: mpsc::Receiver<MempoolEvent>,
+        cancel: CancellationToken,
+        dtx: mpsc::Sender<DecidedBatch>,
+        ftx: mpsc::Sender<FinalityEvent>,
+        stx: mpsc::Sender<StateEvent>,
+        rtx: mpsc::Sender<usize>,
+        mock_btc: Arc<Mutex<MockBitcoin>>,
+        pubkey: String,
+        join_set: &mut JoinSet<()>,
+    ) {
+        let genesis = genesis.clone();
+        let engine_config = EngineConfig {
+            private_key,
+            listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[i]),
+            persistent_peers: ports
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
+                .collect(),
+        };
+
+        join_set.spawn(async move {
+            let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey)
+                .await
+                .expect("LiteExecutor setup failed");
+
+            let conn = runtime.get_storage_conn();
+
+            let engine_output = match engine::start(engine_config, &genesis).await {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::error!(node = i, %e, "Failed to start engine");
+                    return;
+                }
+            };
+
+            info!(node = i, address = %engine_output.address, "Engine started");
+
+            let node_index = genesis
+                .validator_set
+                .validators
+                .iter()
+                .position(|v| v.address == engine_output.address)
+                .unwrap_or(i);
+
+            let mut state = ConsensusState::new(
+                conn.clone(),
+                engine_output.signing_provider,
+                genesis,
+                engine_output.address,
+            );
+            state.observation = Some(ObservationChannels {
+                decided_tx: dtx,
+                finality_tx: ftx,
+                state_tx: stx,
+            });
+
+            let consensus_handle = ConsensusHandle {
+                state,
+                channels: engine_output.channels,
+                _engine_handle: engine_output._handle,
+                _wal_dir: engine_output._wal_dir,
+                node_index,
+            };
+
+            let bitcoin_state = BitcoinState::new();
+
+            let mut reactor = Reactor::new(
+                executor,
+                runtime,
+                conn,
+                node_block_rx,
+                node_mempool_rx,
+                cancel.clone(),
+                None,
+                None,
+                None,
+                bitcoin_state,
+                Some(consensus_handle),
+                0,
+                None,
+            );
+
+            let _ = rtx.send(i).await;
+
+            if let Err(e) = reactor.run().await {
+                tracing::error!(node = i, %e, "Reactor error");
+            }
+        });
+    }
+
+    /// Add and start a previously-unstartd node.
+    async fn add_node(&mut self) -> Result<usize> {
+        let i = self
+            .started_nodes
+            .iter()
+            .position(|&started| !started)
+            .ok_or_else(|| anyhow::anyhow!("All nodes already started"))?;
+
+        let (node_block_tx, node_block_rx) = mpsc::channel(256);
+        self.block_txs.push(node_block_tx);
+
+        let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
+
+        Self::spawn_node(
+            i,
+            self.private_keys[i].clone(),
+            &self.genesis,
+            &self.ports,
+            node_block_rx,
+            node_mempool_rx,
+            self.cancel.clone(),
+            self.decided_tx.clone(),
+            self.finality_tx.clone(),
+            self.state_tx.clone(),
+            self.ready_tx.clone(),
+            self.mock_bitcoin.clone(),
+            self.shared_pubkey.clone(),
+            &mut self.join_set,
+        );
+
+        self.started_nodes[i] = true;
+        self.node_count += 1;
+
+        // Wait for the new node to be ready
+        let _ = self.ready_rx.recv().await;
+
+        Ok(i)
     }
 
     async fn wait_for_ready(&mut self) {
@@ -1259,6 +1357,93 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
             Duration::from_secs(30),
         )
         .await;
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// Late joiner: start 3 of 4 validators, process batches + blocks,
+/// then start the 4th. It syncs via Malachite and reaches the same checkpoint.
+#[tokio::test]
+#[serial_test::serial]
+async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
+    indexer::logging::setup();
+
+    // Start 3 of 4 validators
+    let mut cluster = ReactorCluster::start_with(4, 3).await?;
+    cluster.wait_for_ready().await;
+
+    // Batch at anchor 0
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    cluster
+        .wait_for_decision_matching(
+            |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
+            Duration::from_secs(30),
+        )
+        .await;
+
+    // Mine block 1 (confirms the batch txs)
+    cluster.mine_and_send(&[]);
+    cluster
+        .wait_for_decision_matching(
+            |d| d.value.is_block() && d.value.block_height() == 1,
+            Duration::from_secs(30),
+        )
+        .await;
+
+    // Wait for all 3 nodes to process block 1
+    let pre_join_events = cluster
+        .wait_for_n_state_events_matching(
+            3,
+            |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
+            Duration::from_secs(30),
+        )
+        .await;
+    let pre_join_checkpoints: Vec<_> = pre_join_events
+        .iter()
+        .filter_map(|e| match e {
+            StateEvent::BlockProcessed { checkpoint, .. } => checkpoint.clone(),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !pre_join_checkpoints.is_empty(),
+        "Should have checkpoints from initial nodes"
+    );
+
+    // Start the 4th node — it syncs decided values via Malachite
+    info!("Starting late joiner node");
+    let node_idx = cluster.add_node().await?;
+    info!(node = node_idx, "Late joiner started");
+
+    // Send block events to the late joiner (its poller wasn't running when blocks were mined)
+    let block_events = cluster.mock_bitcoin().get_all_block_events();
+    for event in block_events {
+        let _ = cluster.block_txs[node_idx].try_send(event);
+    }
+
+    // Wait for the late joiner to process block 1 via sync
+    let late_events = cluster
+        .wait_for_state_event_matching(
+            |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
+            Duration::from_secs(60),
+        )
+        .await;
+    let late_checkpoint = late_events.iter().find_map(|e| match e {
+        StateEvent::BlockProcessed { checkpoint, .. } => checkpoint.clone(),
+        _ => None,
+    });
+
+    assert!(
+        late_checkpoint.is_some(),
+        "Late joiner should produce a checkpoint"
+    );
+    assert!(
+        pre_join_checkpoints.contains(&late_checkpoint.unwrap()),
+        "Late joiner checkpoint should match existing nodes"
+    );
 
     cluster.shutdown().await;
     Ok(())

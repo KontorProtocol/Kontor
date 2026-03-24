@@ -36,6 +36,8 @@ pub struct MockBitcoin {
     mined_txs: HashMap<Txid, bitcoin::Transaction>,
     /// Track which txids were mined at which height, for rollback cleanup.
     block_txids: HashMap<u64, Vec<Txid>>,
+    /// History of mined blocks for late joiners.
+    mined_blocks: Vec<BlockEvent>,
 }
 
 impl MockBitcoin {
@@ -47,6 +49,7 @@ impl MockBitcoin {
             tx_counter: 0,
             mined_txs: HashMap::new(),
             block_txids: HashMap::new(),
+            mined_blocks: Vec::new(),
         }
     }
 
@@ -116,12 +119,13 @@ impl MockBitcoin {
                 .collect(),
         };
 
-        let block_events = vec![BlockEvent::BlockInsert {
+        let block_event = BlockEvent::BlockInsert {
             target_height: height,
             block,
-        }];
+        };
+        self.mined_blocks.push(block_event.clone());
 
-        (block_events, remove_events)
+        (vec![block_event], remove_events)
     }
 
     pub fn mine_block_all(&mut self) -> (Vec<BlockEvent>, Vec<MempoolEvent>) {
@@ -150,6 +154,15 @@ impl MockBitcoin {
         }
         self.tip_height = height;
         self.prev_hash = new_mock_block_hash(height as u32 + 1000);
+        self.mined_blocks.retain(|e| match e {
+            BlockEvent::BlockInsert { target_height, .. } => *target_height <= height,
+            _ => true,
+        });
+    }
+
+    /// Get all block events for late joiners that missed earlier blocks.
+    pub fn get_all_block_events(&self) -> Vec<BlockEvent> {
+        self.mined_blocks.clone()
     }
 
     /// Look up a raw transaction from mined blocks (RPC stand-in for tests).

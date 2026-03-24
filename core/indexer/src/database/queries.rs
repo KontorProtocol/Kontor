@@ -7,8 +7,9 @@ use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        BatchQueryResult, BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow,
+        ContractRow, FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery,
+        TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -548,10 +549,11 @@ pub async fn insert_batch(
     anchor_height: i64,
     anchor_hash: &str,
     certificate: &[u8],
+    is_block: bool,
 ) -> Result<(), Error> {
     conn.execute(
-        "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate) VALUES (?, ?, ?, ?)",
-        params![consensus_height, anchor_height, anchor_hash, certificate],
+        "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (?, ?, ?, ?, ?)",
+        params![consensus_height, anchor_height, anchor_hash, certificate, is_block as i64],
     )
     .await?;
     Ok(())
@@ -581,10 +583,10 @@ pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<
 pub async fn select_batch(
     conn: &Connection,
     consensus_height: i64,
-) -> Result<Option<(i64, String, Vec<u8>, Vec<String>)>, Error> {
+) -> Result<Option<BatchQueryResult>, Error> {
     let mut rows = conn
         .query(
-            "SELECT b.anchor_height, b.anchor_hash, b.certificate, t.txid \
+            "SELECT b.anchor_height, b.anchor_hash, b.certificate, b.is_block, t.txid \
              FROM batches b \
              LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
              WHERE b.consensus_height = ? \
@@ -593,26 +595,23 @@ pub async fn select_batch(
         )
         .await?;
 
-    let mut anchor_height = None;
-    let mut anchor_hash = None;
-    let mut certificate = None;
-    let mut txids = Vec::new();
+    let mut result: Option<BatchQueryResult> = None;
 
     while let Some(row) = rows.next().await? {
-        if anchor_height.is_none() {
-            anchor_height = Some(row.get::<i64>(0)?);
-            anchor_hash = Some(row.get::<String>(1)?);
-            certificate = Some(row.get::<Vec<u8>>(2)?);
-        }
-        if let Ok(txid) = row.get::<String>(3) {
-            txids.push(txid);
+        let batch = result.get_or_insert_with(|| BatchQueryResult {
+            consensus_height,
+            anchor_height: row.get(0).unwrap_or(0),
+            anchor_hash: row.get(1).unwrap_or_default(),
+            certificate: row.get(2).unwrap_or_default(),
+            is_block: row.get::<i64>(3).unwrap_or(0) != 0,
+            txids: Vec::new(),
+        });
+        if let Ok(txid) = row.get::<String>(4) {
+            batch.txids.push(txid);
         }
     }
 
-    match (anchor_height, anchor_hash, certificate) {
-        (Some(ah), Some(hash), Some(cert)) => Ok(Some((ah, hash, cert, txids))),
-        _ => Ok(None),
-    }
+    Ok(result)
 }
 
 pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
@@ -630,10 +629,10 @@ pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, E
 pub async fn select_batches_from_anchor(
     conn: &Connection,
     from_anchor: i64,
-) -> Result<Vec<(i64, i64, String, Vec<String>)>, Error> {
+) -> Result<Vec<BatchQueryResult>, Error> {
     let mut rows = conn
         .query(
-            "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, t.txid \
+            "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, t.txid \
              FROM batches b \
              LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
              WHERE b.anchor_height >= ? \
@@ -642,24 +641,28 @@ pub async fn select_batches_from_anchor(
         )
         .await?;
 
-    let mut results: Vec<(i64, i64, String, Vec<String>)> = Vec::new();
+    let mut results: Vec<BatchQueryResult> = Vec::new();
 
     while let Some(row) = rows.next().await? {
         let consensus_height: i64 = row.get(0)?;
-        let anchor_height: i64 = row.get(1)?;
-        let anchor_hash: String = row.get(2)?;
-        let txid: Option<String> = row.get(3).ok();
+        let txid: Option<String> = row.get(4).ok();
 
         if results
             .last()
-            .is_some_and(|(ch, _, _, _)| *ch == consensus_height)
+            .is_some_and(|b| b.consensus_height == consensus_height)
         {
             if let Some(txid) = txid {
-                results.last_mut().unwrap().3.push(txid);
+                results.last_mut().unwrap().txids.push(txid);
             }
         } else {
-            let txids = txid.into_iter().collect();
-            results.push((consensus_height, anchor_height, anchor_hash, txids));
+            results.push(BatchQueryResult {
+                consensus_height,
+                anchor_height: row.get(1)?,
+                anchor_hash: row.get(2)?,
+                certificate: Vec::new(),
+                is_block: row.get::<i64>(3).unwrap_or(0) != 0,
+                txids: txid.into_iter().collect(),
+            });
         }
     }
 

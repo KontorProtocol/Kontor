@@ -409,7 +409,7 @@ impl ConsensusState {
     }
 
     async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
-        let rows = match select_batches_from_anchor(&self.conn, from_anchor as i64).await {
+        let batches = match select_batches_from_anchor(&self.conn, from_anchor as i64).await {
             Ok(r) => r,
             Err(e) => {
                 error!(%e, "Failed to query batches from anchor");
@@ -417,18 +417,19 @@ impl ConsensusState {
             }
         };
 
-        rows.into_iter()
-            .filter_map(
-                |(consensus_height, anchor_height, anchor_hash_str, txid_strs)| {
-                    let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
+        batches
+            .into_iter()
+            .filter_map(|b| {
+                let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
+                let value = if b.is_block {
+                    Value::new_block(b.anchor_height as u64, anchor_hash)
+                } else {
                     let txids: Vec<Txid> =
-                        txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-                    Some((
-                        Height::new(consensus_height as u64),
-                        Value::new_batch(anchor_height as u64, anchor_hash, txids),
-                    ))
-                },
-            )
+                        b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+                    Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
+                };
+                Some((Height::new(b.consensus_height as u64), value))
+            })
             .collect()
     }
 
@@ -463,25 +464,30 @@ impl ConsensusState {
         height: Height,
     ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
         let consensus_height = height.as_u64() as i64;
-        let (anchor_height, anchor_hash_str, cert_bytes, txid_strs) =
-            select_batch(&self.conn, consensus_height)
-                .await
-                .ok()
-                .flatten()?;
+        let b = select_batch(&self.conn, consensus_height)
+            .await
+            .ok()
+            .flatten()?;
 
-        let anchor_hash = anchor_hash_str.parse::<bitcoin::BlockHash>().ok()?;
-        let txids: Vec<Txid> = txid_strs.iter().filter_map(|s| s.parse().ok()).collect();
-        let raw_txs = self
-            .load_raw_txs_if_unfinalized(anchor_height, consensus_height)
-            .await;
+        let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
 
-        let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
-        if let Some(raw_txs) = raw_txs {
-            value.set_raw_txs(raw_txs);
-        }
+        let value = if b.is_block {
+            Value::new_block(b.anchor_height as u64, anchor_hash)
+        } else {
+            let txids: Vec<Txid> =
+                b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+            let raw_txs = self
+                .load_raw_txs_if_unfinalized(b.anchor_height, consensus_height)
+                .await;
+            let mut v = Value::new_batch(b.anchor_height as u64, anchor_hash, txids);
+            if let Some(raw_txs) = raw_txs {
+                v.set_raw_txs(raw_txs);
+            }
+            v
+        };
 
         let proto =
-            crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
+            crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice()).ok()?;
         let certificate = decode_commit_certificate(proto).ok()?;
 
         Some((value, certificate))
@@ -599,6 +605,7 @@ impl ConsensusState {
             anchor_height as i64,
             &anchor_hash.to_string(),
             certificate,
+            false,
         )
         .await
         {
@@ -968,6 +975,31 @@ pub async fn handle_consensus_msg(
                             .await;
                     }
                     Value::Block { height, hash } => {
+                        // Store block decision for sync protocol
+                        let cert_bytes = encode_commit_certificate(&certificate)
+                            .map(|p| p.encode_to_vec())
+                            .unwrap_or_default();
+                        if let Err(e) = insert_batch(
+                            &state.conn,
+                            certificate.height.as_u64() as i64,
+                            *height as i64,
+                            &hash.to_string(),
+                            &cert_bytes,
+                            true,
+                        )
+                        .await
+                        {
+                            error!("insert_batch (block) error: {e}");
+                        }
+                        if let Err(e) = set_batch_processed(
+                            &state.conn,
+                            certificate.height.as_u64() as i64,
+                        )
+                        .await
+                        {
+                            error!("set_batch_processed (block) error: {e}");
+                        }
+
                         // Remove from pending if present (may not be if we received
                         // the decision via sync before the block arrived from poller)
                         state.pending_blocks.retain(|(h, _)| *h != *height);
