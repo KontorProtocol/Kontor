@@ -332,11 +332,12 @@ impl<E: Executor> Reactor<E> {
                 crate::consensus::Value::Batch {
                     anchor_height,
                     anchor_hash,
-                    txids,
+                    txs,
                     ..
                 } => {
+                    let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
                     let mut resolved_txs = Vec::with_capacity(txids.len());
-                    for txid in txids {
+                    for txid in &txids {
                         if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
                             resolved_txs.push(tx.clone());
                         } else if let Some(tx) = Self::resolve_tx_from_db(&self.conn, txid).await {

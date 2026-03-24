@@ -7,7 +7,28 @@ message Address {
 }
 
 message Value {
-    optional bytes value = 1;
+    oneof kind {
+        BatchValue batch = 1;
+        BlockValue block = 2;
+    }
+}
+
+message BatchValue {
+    uint64 anchor_height = 1;
+    bytes anchor_hash = 2;
+    repeated BatchTx txs = 3;
+}
+
+message BatchTx {
+    oneof tx {
+        bytes txid = 1;
+        bytes raw_tx = 2;
+    }
+}
+
+message BlockValue {
+    uint64 height = 1;
+    bytes hash = 2;
 }
 
 message ValueId {

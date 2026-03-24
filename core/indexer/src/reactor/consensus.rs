@@ -158,13 +158,13 @@ impl ConsensusState {
             Value::Batch {
                 anchor_height,
                 anchor_hash,
-                txids,
+                txs,
                 ..
             } => {
                 hasher.update(anchor_height.to_be_bytes());
                 hasher.update(anchor_hash.to_byte_array());
-                for txid in txids {
-                    hasher.update(txid.to_byte_array());
+                for tx in txs {
+                    hasher.update(tx.txid().to_byte_array());
                 }
                 let txs = self
                     .tx_cache
@@ -273,9 +273,10 @@ impl ConsensusState {
             Value::Batch {
                 anchor_height,
                 anchor_hash,
-                txids,
+                txs,
                 ..
             } => {
+                let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
                 let pending = PendingBatch {
                     consensus_height,
                     anchor_height: *anchor_height,
@@ -475,7 +476,9 @@ impl ConsensusState {
             .await;
 
         let mut value = Value::new_batch(anchor_height as u64, anchor_hash, txids);
-        value.set_raw_txs(raw_txs);
+        if let Some(raw_txs) = raw_txs {
+            value.set_raw_txs(raw_txs);
+        }
 
         let proto =
             crate::consensus::proto::CommitCertificate::decode(cert_bytes.as_slice()).ok()?;
@@ -533,9 +536,9 @@ impl ConsensusState {
     pub fn next_replay_batch(&mut self) -> Option<(Height, Value)> {
         if let Some((height, mut value)) = self.replay_queue.pop_front() {
             if !self.replay_excluded_txids.is_empty()
-                && let Value::Batch { ref mut txids, .. } = value
+                && let Value::Batch { ref mut txs, .. } = value
             {
-                txids.retain(|txid| !self.replay_excluded_txids.contains(txid));
+                txs.retain(|tx| !self.replay_excluded_txids.contains(&tx.txid()));
             }
             return Some((height, value));
         }
@@ -1031,6 +1034,22 @@ pub async fn handle_consensus_msg(
         } => {
             let result: Option<ProposedValue<Ctx>> =
                 if let Ok(value) = ProtobufCodec.decode(value_bytes) {
+                    // Verify raw txs have consistent txids if present
+                    if let Value::Batch { ref txs, .. } = value {
+                        let valid = txs.iter().all(|tx| match tx {
+                            crate::consensus::BatchTx::Raw(raw) => {
+                                raw.compute_txid() == tx.txid()
+                            }
+                            crate::consensus::BatchTx::Id(_) => true,
+                        });
+                        if !valid {
+                            warn!("Synced value has mismatched raw_txs, rejecting");
+                            if reply.send(None).is_err() {
+                                error!("Failed to send ProcessSyncedValue reply");
+                            }
+                            return Ok(None);
+                        }
+                    }
                     let proposed = ProposedValue {
                         height,
                         round,
