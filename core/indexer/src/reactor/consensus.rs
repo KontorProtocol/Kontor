@@ -1037,9 +1037,7 @@ pub async fn handle_consensus_msg(
                     // Verify raw txs have consistent txids if present
                     if let Value::Batch { ref txs, .. } = value {
                         let valid = txs.iter().all(|tx| match tx {
-                            crate::consensus::BatchTx::Raw(raw) => {
-                                raw.compute_txid() == tx.txid()
-                            }
+                            crate::consensus::BatchTx::Raw(raw) => raw.compute_txid() == tx.txid(),
                             crate::consensus::BatchTx::Id(_) => true,
                         });
                         if !valid {

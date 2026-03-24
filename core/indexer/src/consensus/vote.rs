@@ -146,7 +146,7 @@ pub fn encode_votetype(vote_type: VoteType) -> proto::VoteType {
 
 pub fn decode_votetype(vote_type: proto::VoteType) -> VoteType {
     match vote_type {
-        proto::VoteType::Prevote => VoteType::Prevote,
+        proto::VoteType::Prevote | proto::VoteType::Unspecified => VoteType::Prevote,
         proto::VoteType::Precommit => VoteType::Precommit,
     }
 }

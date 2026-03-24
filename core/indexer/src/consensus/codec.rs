@@ -122,10 +122,8 @@ pub fn encode_round_certificate(
         height: certificate.height.as_u64(),
         round: certificate.round.as_u32().expect("round should not be nil"),
         cert_type: match certificate.cert_type {
-            RoundCertificateType::Precommit => {
-                proto::RoundCertificateType::RoundCertPrecommit.into()
-            }
-            RoundCertificateType::Skip => proto::RoundCertificateType::RoundCertSkip.into(),
+            RoundCertificateType::Precommit => proto::RoundCertificateType::Precommit.into(),
+            RoundCertificateType::Skip => proto::RoundCertificateType::Skip.into(),
         },
         signatures: certificate
             .round_signatures
@@ -155,8 +153,10 @@ pub fn decode_round_certificate(
         cert_type: match proto::RoundCertificateType::try_from(certificate.cert_type)
             .map_err(|_| ProtoError::Other("Unknown RoundCertificateType".into()))?
         {
-            proto::RoundCertificateType::RoundCertPrecommit => RoundCertificateType::Precommit,
-            proto::RoundCertificateType::RoundCertSkip => RoundCertificateType::Skip,
+            proto::RoundCertificateType::Precommit | proto::RoundCertificateType::Unspecified => {
+                RoundCertificateType::Precommit
+            }
+            proto::RoundCertificateType::Skip => RoundCertificateType::Skip,
         },
         round_signatures: certificate
             .signatures

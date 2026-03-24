@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package consensus;
+package consensus.v1;
 
 message Address {
     bytes value = 1;
@@ -36,8 +36,9 @@ message ValueId {
 }
 
 enum VoteType {
-   PREVOTE = 0;
-   PRECOMMIT = 1;
+   VOTE_TYPE_UNSPECIFIED = 0;
+   VOTE_TYPE_PREVOTE = 1;
+   VOTE_TYPE_PRECOMMIT = 2;
 }
 
 message Vote {

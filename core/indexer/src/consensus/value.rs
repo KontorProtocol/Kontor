@@ -196,49 +196,75 @@ impl Protobuf for Value {
         match kind {
             proto::value::Kind::Batch(batch) => {
                 let anchor_height = batch.anchor_height;
-                let anchor_hash_arr: [u8; 32] = (&*batch.anchor_hash).try_into()
+                let anchor_hash_arr: [u8; 32] = (&*batch.anchor_hash)
+                    .try_into()
                     .map_err(|_| ProtoError::Other("Invalid anchor_hash length".to_string()))?;
                 let anchor_hash = BlockHash::from_byte_array(anchor_hash_arr);
 
-                let txs: Vec<BatchTx> = batch.txs.into_iter().map(|btx| {
-                    let tx = btx.tx.ok_or_else(|| ProtoError::missing_field::<proto::BatchTx>("tx"))?;
-                    match tx {
-                        proto::batch_tx::Tx::Txid(bytes) => {
-                            let arr: [u8; 32] = (&*bytes).try_into()
-                                .map_err(|_| ProtoError::Other("Invalid txid length".to_string()))?;
-                            Ok(BatchTx::Id(Txid::from_byte_array(arr)))
+                let txs: Vec<BatchTx> = batch
+                    .txs
+                    .into_iter()
+                    .map(|btx| {
+                        let tx = btx
+                            .tx
+                            .ok_or_else(|| ProtoError::missing_field::<proto::BatchTx>("tx"))?;
+                        match tx {
+                            proto::batch_tx::Tx::Txid(bytes) => {
+                                let arr: [u8; 32] = (&*bytes).try_into().map_err(|_| {
+                                    ProtoError::Other("Invalid txid length".to_string())
+                                })?;
+                                Ok(BatchTx::Id(Txid::from_byte_array(arr)))
+                            }
+                            proto::batch_tx::Tx::RawTx(bytes) => {
+                                let tx = bitcoin::consensus::deserialize(&bytes).map_err(|e| {
+                                    ProtoError::Other(format!("Invalid raw tx: {e}"))
+                                })?;
+                                Ok(BatchTx::Raw(tx))
+                            }
                         }
-                        proto::batch_tx::Tx::RawTx(bytes) => {
-                            let tx = bitcoin::consensus::deserialize(&bytes)
-                                .map_err(|e| ProtoError::Other(format!("Invalid raw tx: {e}")))?;
-                            Ok(BatchTx::Raw(tx))
-                        }
-                    }
-                }).collect::<Result<Vec<_>, ProtoError>>()?;
+                    })
+                    .collect::<Result<Vec<_>, ProtoError>>()?;
 
-                Ok(Value::Batch { anchor_height, anchor_hash, txs })
+                Ok(Value::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    txs,
+                })
             }
             proto::value::Kind::Block(block) => {
-                let hash_arr: [u8; 32] = (&*block.hash).try_into()
+                let hash_arr: [u8; 32] = (&*block.hash)
+                    .try_into()
                     .map_err(|_| ProtoError::Other("Invalid block hash length".to_string()))?;
                 let hash = BlockHash::from_byte_array(hash_arr);
-                Ok(Value::Block { height: block.height, hash })
+                Ok(Value::Block {
+                    height: block.height,
+                    hash,
+                })
             }
         }
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
         let kind = match self {
-            Value::Batch { anchor_height, anchor_hash, txs } => {
-                let proto_txs = txs.iter().map(|tx| {
-                    let inner = match tx {
-                        BatchTx::Id(txid) => proto::batch_tx::Tx::Txid(txid.to_byte_array().to_vec().into()),
-                        BatchTx::Raw(raw) => proto::batch_tx::Tx::RawTx(
-                            bitcoin::consensus::serialize(raw).into(),
-                        ),
-                    };
-                    proto::BatchTx { tx: Some(inner) }
-                }).collect();
+            Value::Batch {
+                anchor_height,
+                anchor_hash,
+                txs,
+            } => {
+                let proto_txs = txs
+                    .iter()
+                    .map(|tx| {
+                        let inner = match tx {
+                            BatchTx::Id(txid) => {
+                                proto::batch_tx::Tx::Txid(txid.to_byte_array().to_vec().into())
+                            }
+                            BatchTx::Raw(raw) => proto::batch_tx::Tx::RawTx(
+                                bitcoin::consensus::serialize(raw).into(),
+                            ),
+                        };
+                        proto::BatchTx { tx: Some(inner) }
+                    })
+                    .collect();
 
                 proto::value::Kind::Batch(proto::BatchValue {
                     anchor_height: *anchor_height,
@@ -246,12 +272,10 @@ impl Protobuf for Value {
                     txs: proto_txs,
                 })
             }
-            Value::Block { height, hash } => {
-                proto::value::Kind::Block(proto::BlockValue {
-                    height: *height,
-                    hash: hash.to_byte_array().to_vec().into(),
-                })
-            }
+            Value::Block { height, hash } => proto::value::Kind::Block(proto::BlockValue {
+                height: *height,
+                hash: hash.to_byte_array().to_vec().into(),
+            }),
         };
         Ok(proto::Value { kind: Some(kind) })
     }

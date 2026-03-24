@@ -904,7 +904,15 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     // Wait for batch at anchor 0 to be applied
     cluster
         .wait_for_state_event_matching(
-            |e| matches!(e, StateEvent::BatchApplied { anchor_height: 0, .. }),
+            |e| {
+                matches!(
+                    e,
+                    StateEvent::BatchApplied {
+                        anchor_height: 0,
+                        ..
+                    }
+                )
+            },
             Duration::from_secs(30),
         )
         .await;
@@ -959,7 +967,11 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     assert!(
         matches!(
             rollback_event,
-            Some(StateEvent::RollbackExecuted { to_anchor: 1, checkpoint: Some(_), .. })
+            Some(StateEvent::RollbackExecuted {
+                to_anchor: 1,
+                checkpoint: Some(_),
+                ..
+            })
         ),
         "Expected RollbackExecuted to anchor 1 with checkpoint, got: {rollback_event:?}"
     );

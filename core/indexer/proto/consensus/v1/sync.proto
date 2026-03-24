@@ -1,9 +1,8 @@
 syntax = "proto3";
 
-import "consensus.proto";
-import "liveness.proto";
+import "consensus/v1/consensus.proto";
 
-package consensus;
+package consensus.v1;
 
 message PeerId {
     bytes id = 1;

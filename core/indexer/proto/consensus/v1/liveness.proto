@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package consensus;
+package consensus.v1;
 
-import "consensus.proto";
+import "consensus/v1/consensus.proto";
 
 message PolkaSignature {
     Address validator_address = 1;
@@ -24,8 +24,9 @@ message RoundSignature {
 }
 
 enum RoundCertificateType {
-    ROUND_CERT_PRECOMMIT = 0;
-    ROUND_CERT_SKIP = 1;
+    ROUND_CERTIFICATE_TYPE_UNSPECIFIED = 0;
+    ROUND_CERTIFICATE_TYPE_PRECOMMIT = 1;
+    ROUND_CERTIFICATE_TYPE_SKIP = 2;
 }
 
 message RoundCertificate {

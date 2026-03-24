@@ -13,7 +13,7 @@ mod vote;
 
 #[allow(clippy::all)]
 pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/consensus.rs"));
+    include!(concat!(env!("OUT_DIR"), "/consensus.v1.rs"));
 }
 
 pub use address::Address;

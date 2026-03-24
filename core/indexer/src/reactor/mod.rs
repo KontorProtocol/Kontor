@@ -33,9 +33,8 @@ use crate::{
         self,
         queries::{
             confirm_transaction, get_checkpoint_latest, get_transaction_by_txid, insert_block,
-            insert_processed_block, insert_transaction, rollback_to_height,
-            select_block_at_height, select_block_latest, select_unconfirmed_batch_tx,
-            set_block_processed,
+            insert_processed_block, insert_transaction, rollback_to_height, select_block_at_height,
+            select_block_latest, select_unconfirmed_batch_tx, set_block_processed,
         },
     },
     runtime::{
