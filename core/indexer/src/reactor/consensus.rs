@@ -117,6 +117,19 @@ impl ConsensusState {
         }
     }
 
+    /// Clear consensus state that is invalidated by a reorg rollback.
+    /// Pending blocks, cached blocks, and in-flight batch data are all stale.
+    pub fn clear_on_rollback(&mut self) {
+        self.pending_blocks.clear();
+        self.block_cache.clear();
+        self.missed_block_decisions.clear();
+        self.pending_batches.clear();
+        self.tx_cache.clear();
+        self.parsed_tx_cache.clear();
+        self.replay_queue.clear();
+        self.replay_excluded_txids.clear();
+    }
+
     fn validator_set(&self) -> ValidatorSet {
         self.genesis.validator_set.clone()
     }
@@ -378,7 +391,7 @@ impl ConsensusState {
         }
     }
 
-    async fn get_checkpoint(&self) -> Option<[u8; 32]> {
+    pub async fn get_checkpoint(&self) -> Option<[u8; 32]> {
         match get_checkpoint_latest(&self.conn).await {
             Ok(Some(row)) => {
                 if let Ok(decoded) = hex::decode(&row.hash)

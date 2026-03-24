@@ -25,15 +25,17 @@ use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use tracing::{debug, error, info, warn};
 
+use crate::consensus::finality_types::StateEvent;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     consensus::{Ctx, Genesis, Validator, ValidatorSet, signing::PublicKey},
     database::{
         self,
         queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_processed_block,
-            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
-            select_unconfirmed_batch_tx, set_block_processed,
+            confirm_transaction, get_checkpoint_latest, get_transaction_by_txid, insert_block,
+            insert_processed_block, insert_transaction, rollback_to_height,
+            select_block_at_height, select_block_latest, select_unconfirmed_batch_tx,
+            set_block_processed,
         },
     },
     runtime::{
@@ -145,6 +147,24 @@ impl<E: Executor> Reactor<E> {
             warn!("Rollback to height {}, no previous block found", height);
         }
 
+        if let Some(handle) = &mut self.consensus_handle {
+            handle.state.clear_on_rollback();
+            let checkpoint = get_checkpoint_latest(&self.conn)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| {
+                    let bytes = hex::decode(&r.hash).ok()?;
+                    let arr: [u8; 32] = bytes.try_into().ok()?;
+                    Some(arr)
+                });
+            handle.state.emit_state_event(StateEvent::RollbackExecuted {
+                to_anchor: height,
+                entries_removed: 0,
+                checkpoint,
+            });
+        }
+
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(Event::Rolledback { height }).await;
         }
@@ -232,8 +252,8 @@ impl<E: Executor> Reactor<E> {
         )
         .await;
 
+        let mut unbatched_count = 0;
         for (i, t) in block.transactions.iter().enumerate() {
-            // Dedup: skip execution for already-batched txs
             if let Ok(Some(_)) = get_transaction_by_txid(&self.conn, &t.txid.to_string()).await {
                 let _ = confirm_transaction(
                     &self.conn,
@@ -245,6 +265,7 @@ impl<E: Executor> Reactor<E> {
                 continue;
             }
 
+            unbatched_count += 1;
             let tx_id = match insert_transaction(
                 &self.conn,
                 indexer_types::TransactionRow::builder()
@@ -271,6 +292,15 @@ impl<E: Executor> Reactor<E> {
         self.run_block_lifecycle(&block).await;
         let _ = set_block_processed(&self.conn, block.height as i64).await;
 
+        if let Some(handle) = &self.consensus_handle {
+            let checkpoint = handle.state.get_checkpoint().await;
+            handle.state.emit_state_event(StateEvent::BlockProcessed {
+                height,
+                unbatched_count,
+                checkpoint,
+            });
+        }
+
         if let Some(tx) = &self.event_tx {
             let _ = tx
                 .send(Event::Processed {
@@ -278,7 +308,7 @@ impl<E: Executor> Reactor<E> {
                 })
                 .await;
         }
-        info!("Block processed");
+        info!("Block processed (unbatched_count={unbatched_count})");
 
         Ok(())
     }
