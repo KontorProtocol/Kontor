@@ -32,9 +32,9 @@ use crate::{
     database::{
         self,
         queries::{
-            confirm_transaction, get_checkpoint_latest, get_transaction_by_txid, insert_block,
-            insert_processed_block, insert_transaction, rollback_to_height, select_block_at_height,
-            select_block_latest, select_unconfirmed_batch_tx, set_block_processed,
+            confirm_transaction, get_transaction_by_txid, insert_block, insert_processed_block,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
+            select_unconfirmed_batch_tx, set_block_processed,
         },
     },
     runtime::{
@@ -399,15 +399,7 @@ impl<E: Executor> Reactor<E> {
                 self.rollback(to_height).await?;
                 if let Some(handle) = &mut self.consensus_handle {
                     handle.state.clear_on_rollback();
-                    let checkpoint = get_checkpoint_latest(&self.conn)
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|r| {
-                            let bytes = hex::decode(&r.hash).ok()?;
-                            let arr: [u8; 32] = bytes.try_into().ok()?;
-                            Some(arr)
-                        });
+                    let checkpoint = handle.state.get_checkpoint().await;
                     handle.state.emit_state_event(StateEvent::RollbackExecuted {
                         to_anchor: to_height,
                         entries_removed: 0,
@@ -499,15 +491,7 @@ impl<E: Executor> Reactor<E> {
 
                                 // Emit rollback event
                                 let handle = self.consensus_handle.as_mut().unwrap();
-                                let checkpoint = get_checkpoint_latest(&self.conn)
-                                    .await
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|r| {
-                                        let bytes = hex::decode(&r.hash).ok()?;
-                                        let arr: [u8; 32] = bytes.try_into().ok()?;
-                                        Some(arr)
-                                    });
+                                let checkpoint = handle.state.get_checkpoint().await;
                                 handle.state.emit_state_event(StateEvent::RollbackExecuted {
                                     to_anchor: rollback_anchor,
                                     entries_removed: 0,
