@@ -26,7 +26,10 @@ pub struct LiteExecutor {
 }
 
 impl LiteExecutor {
-    pub async fn new(mock_bitcoin: Arc<Mutex<MockBitcoin>>) -> Result<(Self, Runtime)> {
+    pub async fn new(
+        mock_bitcoin: Arc<Mutex<MockBitcoin>>,
+        shared_pubkey: String,
+    ) -> Result<(Self, Runtime)> {
         let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
 
@@ -45,9 +48,8 @@ impl LiteExecutor {
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         runtime.publish_native_contracts(&[]).await?;
 
-        // Create identity
-        let x_only_pubkey = indexer::reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        // Create identity using shared key so all nodes have the same state
+        let signer = Signer::XOnlyPubKey(shared_pubkey);
         runtime.issuance(&signer).await?;
 
         // Publish counter contract

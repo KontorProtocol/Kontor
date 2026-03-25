@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS batches (
   anchor_height INTEGER NOT NULL,
   anchor_hash TEXT NOT NULL,
   certificate BLOB NOT NULL,
-  processed BOOLEAN NOT NULL DEFAULT 0
+  processed BOOLEAN NOT NULL DEFAULT 0,
+  is_block BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transactions (

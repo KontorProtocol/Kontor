@@ -1,13 +1,34 @@
 syntax = "proto3";
 
-package consensus;
+package consensus.v1;
 
 message Address {
     bytes value = 1;
 }
 
 message Value {
-    optional bytes value = 1;
+    oneof kind {
+        BatchValue batch = 1;
+        BlockValue block = 2;
+    }
+}
+
+message BatchValue {
+    uint64 anchor_height = 1;
+    bytes anchor_hash = 2;
+    repeated BatchTx txs = 3;
+}
+
+message BatchTx {
+    oneof tx {
+        bytes txid = 1;
+        bytes raw_tx = 2;
+    }
+}
+
+message BlockValue {
+    uint64 height = 1;
+    bytes hash = 2;
 }
 
 message ValueId {
@@ -15,8 +36,9 @@ message ValueId {
 }
 
 enum VoteType {
-   PREVOTE = 0;
-   PRECOMMIT = 1;
+   VOTE_TYPE_UNSPECIFIED = 0;
+   VOTE_TYPE_PREVOTE = 1;
+   VOTE_TYPE_PRECOMMIT = 2;
 }
 
 message Vote {

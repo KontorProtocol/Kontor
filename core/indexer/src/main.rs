@@ -102,14 +102,14 @@ async fn main() -> Result<()> {
         }
     });
 
-    let (init_tx, init_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel();
     handles.push(reactor::run(
         config.starting_block_height,
         cancel_token.clone(),
         writer,
         block_rx,
         mempool_rx,
-        Some(init_tx),
+        Some(ready_tx),
         Some(event_tx),
         Some(simulate_rx),
         engine_config,
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
         load_genesis_validators(&config)?,
         None,
     ));
-    init_rx.await?;
+    ready_rx.await?;
     {
         let mut available = available.write().await;
         *available = true;

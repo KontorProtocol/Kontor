@@ -786,7 +786,7 @@ async fn test_insert_and_select_batch() -> Result<()> {
     let hash = new_mock_block_hash(height as u32);
     insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
-    insert_batch(&conn, 1, height, &hash.to_string(), b"cert1").await?;
+    insert_batch(&conn, 1, height, &hash.to_string(), b"cert1", false).await?;
 
     // Insert two batch transactions
     insert_transaction(
@@ -810,13 +810,13 @@ async fn test_insert_and_select_batch() -> Result<()> {
 
     let result = select_batch(&conn, 1).await?;
     assert!(result.is_some());
-    let (anchor_height, anchor_hash, certificate, txids) = result.unwrap();
-    assert_eq!(anchor_height, height);
-    assert_eq!(anchor_hash, hash.to_string());
-    assert_eq!(certificate, b"cert1");
-    assert_eq!(txids.len(), 2);
-    assert_eq!(txids[0], "aa".repeat(32));
-    assert_eq!(txids[1], "bb".repeat(32));
+    let batch = result.unwrap();
+    assert_eq!(batch.anchor_height, height);
+    assert_eq!(batch.anchor_hash, hash.to_string());
+    assert_eq!(batch.certificate, b"cert1");
+    assert_eq!(batch.txids.len(), 2);
+    assert_eq!(batch.txids[0], "aa".repeat(32));
+    assert_eq!(batch.txids[1], "bb".repeat(32));
 
     // Non-existent batch
     assert!(select_batch(&conn, 999).await?.is_none());
@@ -835,9 +835,9 @@ async fn test_select_min_batch_height() -> Result<()> {
     let hash = new_mock_block_hash(height as u32);
     insert_processed_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
-    insert_batch(&conn, 5, height, &hash.to_string(), b"cert5").await?;
-    insert_batch(&conn, 3, height, &hash.to_string(), b"cert3").await?;
-    insert_batch(&conn, 8, height, &hash.to_string(), b"cert8").await?;
+    insert_batch(&conn, 5, height, &hash.to_string(), b"cert5", false).await?;
+    insert_batch(&conn, 3, height, &hash.to_string(), b"cert3", false).await?;
+    insert_batch(&conn, 8, height, &hash.to_string(), b"cert8", false).await?;
 
     assert_eq!(select_min_batch_height(&conn).await?, Some(3));
 
@@ -859,7 +859,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     let hash200 = new_mock_block_hash(200);
 
     // Batch at anchor 100
-    insert_batch(&conn, 1, 100, &hash100.to_string(), b"cert1").await?;
+    insert_batch(&conn, 1, 100, &hash100.to_string(), b"cert1", false).await?;
     insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -871,7 +871,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     .await?;
 
     // Batch at anchor 200
-    insert_batch(&conn, 2, 200, &hash200.to_string(), b"cert2").await?;
+    insert_batch(&conn, 2, 200, &hash200.to_string(), b"cert2", false).await?;
     insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -894,17 +894,17 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     // Query from anchor 200 — should only return the second batch
     let results = select_batches_from_anchor(&conn, 200).await?;
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, 2); // consensus_height
-    assert_eq!(results[0].1, 200); // anchor_height
-    assert_eq!(results[0].3.len(), 2); // txids
+    assert_eq!(results[0].consensus_height, 2);
+    assert_eq!(results[0].anchor_height, 200);
+    assert_eq!(results[0].txids.len(), 2);
 
     // Query from anchor 100 — should return both
     let results = select_batches_from_anchor(&conn, 100).await?;
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].0, 1);
-    assert_eq!(results[0].3.len(), 1);
-    assert_eq!(results[1].0, 2);
-    assert_eq!(results[1].3.len(), 2);
+    assert_eq!(results[0].consensus_height, 1);
+    assert_eq!(results[0].txids.len(), 1);
+    assert_eq!(results[1].consensus_height, 2);
+    assert_eq!(results[1].txids.len(), 2);
 
     Ok(())
 }
@@ -947,6 +947,7 @@ async fn test_select_existing_txids() -> Result<()> {
         100,
         &new_mock_block_hash(100).to_string(),
         b"cert",
+        false,
     )
     .await?;
     insert_transaction(

@@ -106,6 +106,7 @@ pub async fn batch_handler(
         anchor_height as i64,
         &anchor_hash.to_string(),
         certificate,
+        false,
     )
     .await?;
 
