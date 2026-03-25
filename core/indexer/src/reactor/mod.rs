@@ -59,7 +59,6 @@ pub struct ConsensusHandle {
     pub state: consensus::ConsensusState,
     pub channels: Channels<Ctx>,
     pub _engine_handle: malachitebft_app_channel::EngineHandle,
-    pub _wal_dir: tempfile::TempDir,
     pub node_index: usize,
 }
 
@@ -659,7 +658,6 @@ pub async fn start_consensus(
         state,
         channels: engine_output.channels,
         _engine_handle: engine_output._handle,
-        _wal_dir: engine_output._wal_dir,
         node_index,
     })
 }
