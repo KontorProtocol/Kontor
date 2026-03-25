@@ -586,8 +586,7 @@ pub async fn select_batch(
 ) -> Result<Option<BatchQueryResult>, Error> {
     let results = query_batches(
         conn,
-        "WHERE b.consensus_height = ?",
-        vec![libsql::Value::from(consensus_height)],
+        &format!("WHERE b.consensus_height = {consensus_height}"),
     )
     .await?;
     Ok(results.into_iter().next())
@@ -609,51 +608,38 @@ pub async fn select_batches_from_anchor(
     conn: &Connection,
     from_anchor: i64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
-    query_batches(
-        conn,
-        "WHERE b.anchor_height >= ?",
-        vec![libsql::Value::from(from_anchor)],
-    )
-    .await
+    query_batches(conn, &format!("WHERE b.anchor_height >= {from_anchor}")).await
 }
 
 async fn query_batches(
     conn: &Connection,
     where_clause: &str,
-    params: Vec<libsql::Value>,
 ) -> Result<Vec<BatchQueryResult>, Error> {
     let sql = format!(
-        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, b.certificate, t.txid \
+        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, b.certificate, \
+                GROUP_CONCAT(t.txid) as txids \
          FROM batches b \
          LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
          {where_clause} \
-         ORDER BY b.consensus_height, t.id"
+         GROUP BY b.consensus_height \
+         ORDER BY b.consensus_height"
     );
-    let mut rows = conn.query(&sql, params).await?;
+    let mut rows = conn.query(&sql, ()).await?;
 
-    let mut results: Vec<BatchQueryResult> = Vec::new();
-
+    let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
-        let consensus_height: i64 = row.get(0)?;
-        let txid: Option<String> = row.get(5).ok();
-
-        if results
-            .last()
-            .is_some_and(|b| b.consensus_height == consensus_height)
-        {
-            if let Some(txid) = txid {
-                results.last_mut().unwrap().txids.push(txid);
-            }
-        } else {
-            results.push(BatchQueryResult {
-                consensus_height,
-                anchor_height: row.get(1)?,
-                anchor_hash: row.get(2)?,
-                certificate: row.get(4)?,
-                is_block: row.get::<i64>(3)? != 0,
-                txids: txid.into_iter().collect(),
-            });
-        }
+        let txids: Vec<String> = row
+            .get::<Option<String>>(5)?
+            .map(|s| s.split(',').map(String::from).collect())
+            .unwrap_or_default();
+        results.push(BatchQueryResult {
+            consensus_height: row.get(0)?,
+            anchor_height: row.get(1)?,
+            anchor_hash: row.get(2)?,
+            is_block: row.get::<i64>(3)? != 0,
+            certificate: row.get(4)?,
+            txids,
+        });
     }
 
     Ok(results)
