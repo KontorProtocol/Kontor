@@ -139,6 +139,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
             indexer_types::Inst::Call {
                 gas_limit: 10_000,
                 contract: contract_addr,
+                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         )

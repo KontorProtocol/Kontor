@@ -706,7 +706,6 @@ pub fn estimate_key_spend_fee(tx: &Transaction, fee_rate: FeeRate) -> Option<u64
 /// a fixed transaction structure.
 ///
 /// Returns (selected_utxos, participant_fee) or errors if insufficient funds.
-/// // TODO: is this necessary???
 pub fn select_utxos_for_commit(
     current_tx: &Transaction,
     utxos: Vec<(OutPoint, TxOut)>,

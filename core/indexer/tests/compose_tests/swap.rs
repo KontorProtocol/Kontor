@@ -26,7 +26,7 @@ use indexer::test_utils;
 use indexer_types::OpReturnData;
 use indexer_types::RevealInputs;
 use indexer_types::RevealParticipantInputs;
-use indexer_types::{ContractAddress, Inst, serialize};
+use indexer_types::{ContractAddress, Inst, Insts, serialize};
 use testlib::RegTester;
 use tracing::info;
 
@@ -69,10 +69,14 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
             height: 0,
             tx_index: 0,
         },
+        nonce: None,
         expr: "attach(0)".to_string(),
     };
 
-    let serialized_instruction = serialize(&instruction)?;
+    let serialized_instruction = serialize(&Insts {
+        ops: vec![instruction.clone()],
+        aggregate: None,
+    })?;
 
     let chained_instructions = Inst::Call {
         gas_limit: 50_000,
@@ -81,9 +85,13 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
             height: 0,
             tx_index: 0,
         },
+        nonce: None,
         expr: "detach()".to_string(),
     };
-    let serialized_detach_data = serialize(&chained_instructions)?;
+    let serialized_detach_data = serialize(&Insts {
+        ops: vec![chained_instructions.clone()],
+        aggregate: None,
+    })?;
 
     let compose_params = ComposeInputs::builder()
         .instructions(vec![

@@ -134,7 +134,7 @@ impl Executor for LiteExecutor {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: 0,
-            ops: Vec::new(),
+            inputs: vec![],
             op_return_data: Default::default(),
         })
     }
@@ -182,7 +182,7 @@ impl Executor for LiteExecutor {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: 0,
-            ops: vec![],
+            inputs: vec![],
             op_return_data: Default::default(),
         })
     }

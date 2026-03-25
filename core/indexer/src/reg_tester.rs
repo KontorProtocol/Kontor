@@ -30,7 +30,7 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, OpWithResult, ResultRow,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, Insts, OpWithResult, ResultRow,
     RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
@@ -302,7 +302,10 @@ impl RegTesterInner {
             .address(ident.address.to_string())
             .x_only_public_key(ident.x_only_public_key().to_string())
             .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .instruction(inst)
+            .insts(Insts {
+                ops: vec![inst],
+                aggregate: None,
+            })
             .build();
         let query = ComposeQuery::builder()
             .instructions(vec![instructions])
@@ -340,6 +343,102 @@ impl RegTesterInner {
         self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
+    }
+
+    pub async fn compose_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        let instructions = InstructionQuery::builder()
+            .address(ident.address.to_string())
+            .x_only_public_key(ident.x_only_public_key().to_string())
+            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
+            .insts(insts)
+            .build();
+        let query = ComposeQuery::builder()
+            .instructions(vec![instructions])
+            .sat_per_vbyte(2)
+            .build();
+        let mut compose_res = self.kontor_client.compose(query).await?;
+        let secp = Secp256k1::new();
+        test_utils::sign_key_spend(
+            &secp,
+            &mut compose_res.commit_transaction,
+            std::slice::from_ref(&ident.next_funding_utxo.1),
+            &ident.keypair,
+            0,
+            None,
+        )?;
+        let tap_script = &compose_res.per_participant[0].commit_tap_leaf_script.script;
+        let taproot_spend_info = TaprootBuilder::new()
+            .add_leaf(0, tap_script.clone())
+            .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
+            .finalize(&secp, ident.x_only_public_key())
+            .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
+        test_utils::sign_script_spend(
+            &secp,
+            &taproot_spend_info,
+            &compose_res.per_participant[0].commit_tap_leaf_script.script,
+            &mut compose_res.reveal_transaction,
+            &[compose_res.commit_transaction.output[0].clone()],
+            &ident.keypair,
+            0,
+        )?;
+
+        let commit_tx_hex = hex::encode(serialize_tx(&compose_res.commit_transaction));
+        let reveal_tx_hex = hex::encode(serialize_tx(&compose_res.reveal_transaction));
+
+        self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .await?;
+        Ok((compose_res, commit_tx_hex, reveal_tx_hex))
+    }
+
+    pub async fn insts_instruction(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<InstructionResult> {
+        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
+        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
+        let txids = self
+            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .await?;
+        self.mine(1).await?;
+
+        ident.next_funding_utxo = (
+            OutPoint {
+                txid: txids[0],
+                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+            },
+            compose_res
+                .commit_transaction
+                .output
+                .last()
+                .unwrap()
+                .clone(),
+        );
+        self.ws_client
+            .next()
+            .await
+            .context("Failed to receive response from websocket")?;
+
+        let result = self
+            .kontor_client
+            .result(&id)
+            .await?
+            .ok_or(anyhow!("Could not find op result"))?;
+        tracing::info!("Instruction result: {:?}", result);
+        if result.value.is_some() {
+            Ok(InstructionResult {
+                result,
+                commit_tx_hex,
+                reveal_tx_hex,
+            })
+        } else {
+            Err(anyhow!("Instruction failed in processing"))
+        }
     }
 
     pub async fn instruction(
@@ -762,6 +861,26 @@ impl RegTester {
             .lock()
             .await
             .compose_instruction(ident, inst)
+            .await
+    }
+
+    pub async fn compose_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        self.inner.lock().await.compose_insts(ident, insts).await
+    }
+
+    pub async fn insts_instruction(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<InstructionResult> {
+        self.inner
+            .lock()
+            .await
+            .insts_instruction(ident, insts)
             .await
     }
 

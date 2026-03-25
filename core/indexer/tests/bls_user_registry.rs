@@ -1,8 +1,7 @@
 use anyhow::Result;
-use blst::min_sig::AggregateSignature;
 use blst::min_sig::SecretKey as BlsSecretKey;
-use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
-use indexer_types::{BlsBulkOp, Inst, Signer};
+use indexer::bls::RegistrationProof;
+use indexer_types::Inst;
 use testlib::*;
 
 import!(
@@ -38,64 +37,52 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
     Ok(())
 }
 
+/// Two users register via the direct path (separate transactions). `RegisterBlsKey`
+/// is not available on the aggregate path; sequential direct registration replaces
+/// the old single-tx `BlsBulk` with two `RegisterBlsKey` ops.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
-    let user1 = reg_tester.unregistered_identity().await?;
-    let user2 = reg_tester.unregistered_identity().await?;
-    let mut publisher = reg_tester.unregistered_identity().await?;
+    let mut user1 = reg_tester.unregistered_identity().await?;
+    let mut user2 = reg_tester.unregistered_identity().await?;
 
     let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
     let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
 
-    let op0 = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user1.x_only_public_key().to_string()),
-        bls_pubkey: proof1.bls_pubkey.to_vec(),
-        schnorr_sig: proof1.schnorr_sig.to_vec(),
-        bls_sig: proof1.bls_sig.to_vec(),
-    };
-    let op1 = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user2.x_only_public_key().to_string()),
-        bls_pubkey: proof2.bls_pubkey.to_vec(),
-        schnorr_sig: proof2.schnorr_sig.to_vec(),
-        bls_sig: proof2.bls_sig.to_vec(),
-    };
-
-    let msg0 = op0.signing_message()?;
-    let msg1 = op1.signing_message()?;
-
-    let sk1 = blst::min_sig::SecretKey::from_bytes(&user1.bls_secret_key).unwrap();
-    let sk2 = blst::min_sig::SecretKey::from_bytes(&user2.bls_secret_key).unwrap();
-    let sig0 = sk1.sign(&msg0, KONTOR_BLS_DST, &[]);
-    let sig1 = sk2.sign(&msg1, KONTOR_BLS_DST, &[]);
-
-    let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true).unwrap();
-    let aggregate_sig = aggregate.to_signature();
-
-    let _res = reg_tester
+    reg_tester
         .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op0, op1],
-                signature: aggregate_sig.to_bytes().to_vec(),
+            &mut user1,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof1.bls_pubkey.to_vec(),
+                schnorr_sig: proof1.schnorr_sig.to_vec(),
+                bls_sig: proof1.bls_sig.to_vec(),
             },
         )
         .await?;
 
-    // The Taproot envelope signer (publisher) is auto-registered by the indexer.
-    let publisher_xonly = publisher.x_only_public_key().to_string();
-    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
-        .await?
-        .expect("publisher must have a signer_id");
+    reg_tester
+        .instruction(
+            &mut user2,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof2.bls_pubkey.to_vec(),
+                schnorr_sig: proof2.schnorr_sig.to_vec(),
+                bls_sig: proof2.bls_sig.to_vec(),
+            },
+        )
+        .await?;
 
     let xonly1 = user1.x_only_public_key().to_string();
     let xonly2 = user2.x_only_public_key().to_string();
+    let user1_id = registry::get_signer_id(runtime, &xonly1)
+        .await?
+        .expect("user1 must have a signer_id");
+    let user2_id = registry::get_signer_id(runtime, &xonly2)
+        .await?
+        .expect("user2 must have a signer_id");
+
     assert_eq!(
-        registry::get_signer_id(runtime, &xonly1).await?,
-        Some(publisher_id + 1)
-    );
-    assert_eq!(
-        registry::get_signer_id(runtime, &xonly2).await?,
-        Some(publisher_id + 2)
+        user2_id,
+        user1_id + 1,
+        "second registration must get sequential signer_id"
     );
     assert_eq!(
         registry::get_bls_pubkey(runtime, &xonly1).await?,
@@ -194,54 +181,42 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     Ok(())
 }
 
-/// Two `RegisterBlsKey` ops for the same x-only with the SAME BLS key in one
-/// bundle. The first creates the registry entry; the second hits the
-/// idempotent early-return. The result must be exactly one entry with one
-/// signer ID, and a subsequent registration must get the next sequential ID
-/// (no gap).
+/// Two direct `RegisterBlsKey` submissions for the same x-only with the SAME BLS key.
+/// The first creates the registry entry; the second hits the idempotent early-return.
+/// The result must be exactly one entry with one signer ID, and a subsequent
+/// registration must get the next sequential ID (no gap).
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> Result<()> {
-    let user = reg_tester.unregistered_identity().await?;
-    let mut publisher = reg_tester.unregistered_identity().await?;
+    let mut user = reg_tester.unregistered_identity().await?;
 
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof.bls_pubkey.to_vec(),
-        schnorr_sig: proof.schnorr_sig.to_vec(),
-        bls_sig: proof.bls_sig.to_vec(),
-    };
-
-    let msg = op.signing_message()?;
-    let bls_sk = BlsSecretKey::from_bytes(&user.bls_secret_key).unwrap();
-    let sig = bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
-    let agg = AggregateSignature::aggregate(&[&sig, &sig], true).unwrap();
+    reg_tester
+        .instruction(
+            &mut user,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof.bls_pubkey.to_vec(),
+                schnorr_sig: proof.schnorr_sig.to_vec(),
+                bls_sig: proof.bls_sig.to_vec(),
+            },
+        )
+        .await?;
 
     let _ = reg_tester
         .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op.clone(), op],
-                signature: agg.to_signature().to_bytes().to_vec(),
+            &mut user,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof.bls_pubkey.to_vec(),
+                schnorr_sig: proof.schnorr_sig.to_vec(),
+                bls_sig: proof.bls_sig.to_vec(),
             },
         )
         .await;
 
-    let publisher_xonly = publisher.x_only_public_key().to_string();
-    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
-        .await?
-        .expect("publisher must have a signer_id");
-
     let user_id = registry::get_signer_id(runtime, &user_xonly)
         .await?
         .expect("user must have a signer_id");
-    assert_eq!(
-        user_id,
-        publisher_id + 1,
-        "duplicate same-key register must produce exactly one entry"
-    );
     assert_eq!(
         registry::get_bls_pubkey(runtime, &user_xonly).await?,
         Some(proof.bls_pubkey.to_vec()),
@@ -272,14 +247,13 @@ async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> 
     Ok(())
 }
 
-/// Two `RegisterBlsKey` ops for the same x-only with DIFFERENT BLS keys in one
-/// bundle. The first registration succeeds; the second is rejected by the
-/// registry ("BLS pubkey already registered for signer"). The original key
-/// must remain, and no ID gap is created.
+/// Two direct `RegisterBlsKey` submissions for the same x-only with DIFFERENT BLS keys.
+/// The first registration succeeds; the second is rejected by the registry
+/// ("BLS pubkey already registered for signer"). The original key must remain,
+/// and no ID gap is created.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtest() -> Result<()> {
-    let user = reg_tester.unregistered_identity().await?;
-    let mut publisher = reg_tester.unregistered_identity().await?;
+    let mut user = reg_tester.unregistered_identity().await?;
 
     let proof_a = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
 
@@ -290,46 +264,31 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
 
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op_a = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof_a.bls_pubkey.to_vec(),
-        schnorr_sig: proof_a.schnorr_sig.to_vec(),
-        bls_sig: proof_a.bls_sig.to_vec(),
-    };
-    let op_b = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(user_xonly.clone()),
-        bls_pubkey: proof_b.bls_pubkey.to_vec(),
-        schnorr_sig: proof_b.schnorr_sig.to_vec(),
-        bls_sig: proof_b.bls_sig.to_vec(),
-    };
-
-    let msg_a = op_a.signing_message()?;
-    let msg_b = op_b.signing_message()?;
-
-    let sk_a = BlsSecretKey::from_bytes(&user.bls_secret_key).unwrap();
-    let sig_a = sk_a.sign(&msg_a, KONTOR_BLS_DST, &[]);
-    let sig_b = alt_sk.sign(&msg_b, KONTOR_BLS_DST, &[]);
-    let agg = AggregateSignature::aggregate(&[&sig_a, &sig_b], true).unwrap();
+    reg_tester
+        .instruction(
+            &mut user,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof_a.bls_pubkey.to_vec(),
+                schnorr_sig: proof_a.schnorr_sig.to_vec(),
+                bls_sig: proof_a.bls_sig.to_vec(),
+            },
+        )
+        .await?;
 
     let _ = reg_tester
         .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op_a, op_b],
-                signature: agg.to_signature().to_bytes().to_vec(),
+            &mut user,
+            Inst::RegisterBlsKey {
+                bls_pubkey: proof_b.bls_pubkey.to_vec(),
+                schnorr_sig: proof_b.schnorr_sig.to_vec(),
+                bls_sig: proof_b.bls_sig.to_vec(),
             },
         )
         .await;
 
-    let publisher_xonly = publisher.x_only_public_key().to_string();
-    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
-        .await?
-        .expect("publisher must have a signer_id");
-
     let user_id = registry::get_signer_id(runtime, &user_xonly)
         .await?
         .expect("user must have a signer_id");
-    assert_eq!(user_id, publisher_id + 1, "first key must win registration");
     assert_eq!(
         registry::get_bls_pubkey(runtime, &user_xonly).await?,
         Some(proof_a.bls_pubkey.to_vec()),
@@ -361,14 +320,11 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
     Ok(())
 }
 
-/// Wrong-length `schnorr_sig` and `bls_sig` in a `BlsBulkOp::RegisterBlsKey`
-/// pass aggregate verification (those fields aren't used for BLS pubkey
-/// resolution) but must be rejected by `register_bls_key`'s length checks
-/// with no registry entry created.
+/// Wrong-length `schnorr_sig` and `bls_sig` on a direct `RegisterBlsKey` must be
+/// rejected by `register_bls_key`'s length checks with no registry entry created.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() -> Result<()> {
-    let user = reg_tester.unregistered_identity().await?;
-    let mut publisher = reg_tester.unregistered_identity().await?;
+    let mut user = reg_tester.unregistered_identity().await?;
 
     let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
     let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
@@ -382,22 +338,13 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
     ];
 
     for (label, schnorr_sig, bls_sig) in cases {
-        let op = BlsBulkOp::RegisterBlsKey {
-            signer: Signer::XOnlyPubKey(user_xonly.clone()),
-            bls_pubkey: bls_pk_bytes.clone(),
-            schnorr_sig,
-            bls_sig,
-        };
-        let msg = op.signing_message()?;
-        let sig = bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
-        let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
-
         let _ = reg_tester
             .instruction(
-                &mut publisher,
-                Inst::BlsBulk {
-                    ops: vec![op],
-                    signature: agg.to_signature().to_bytes().to_vec(),
+                &mut user,
+                Inst::RegisterBlsKey {
+                    bls_pubkey: bls_pk_bytes.clone(),
+                    schnorr_sig,
+                    bls_sig,
                 },
             )
             .await;
