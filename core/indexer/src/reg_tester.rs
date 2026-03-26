@@ -859,12 +859,15 @@ fn poll_backoff() -> backon::ExponentialBuilder {
 }
 
 macro_rules! poll_nodes {
-    ($self:expr, $timeout:expr, $label:expr, |$node:ident| $check:expr) => {{
+    ($self:expr, $timeout:expr, $skip:expr, $label:expr, |$node:ident| $check:expr) => {{
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs($timeout);
         let mut backoff = poll_backoff().build();
         loop {
             let mut all_pass = true;
-            for $node in &$self.nodes {
+            for (idx, $node) in $self.nodes.iter().enumerate() {
+                if $skip.contains(&idx) {
+                    continue;
+                }
                 if !$check {
                     all_pass = false;
                     break;
@@ -891,6 +894,9 @@ pub struct RegTesterCluster {
     pub nodes: Vec<KontorClient>,
     pub identity: Identity,
     api_ports: Vec<u16>,
+    consensus_ports: Vec<u16>,
+    genesis_path: std::path::PathBuf,
+    ed25519_keys: Vec<crate::consensus::signing::PrivateKey>,
     _bitcoin_child: Child,
     _kontor_children: Vec<Child>,
     _bitcoin_data_dir: TempDir,
@@ -1066,6 +1072,9 @@ impl RegTesterCluster {
             nodes,
             identity,
             api_ports,
+            consensus_ports,
+            genesis_path,
+            ed25519_keys,
             _bitcoin_child: bitcoin_child,
             _kontor_children: kontor_children,
             _bitcoin_data_dir: bitcoin_data_dir,
@@ -1077,6 +1086,53 @@ impl RegTesterCluster {
     /// Get the primary Kontor client (node 0).
     pub fn client(&self) -> &KontorClient {
         &self.nodes[0]
+    }
+
+    /// Kill a node's process.
+    pub async fn kill_node(&mut self, index: usize) -> Result<()> {
+        self._kontor_children[index].start_kill()?;
+        self._kontor_children[index].wait().await?;
+        Ok(())
+    }
+
+    /// Restart a previously killed node using the same config (ports, DB, keys).
+    pub async fn restart_node(&mut self, index: usize) -> Result<()> {
+        let consensus_config = ConsensusNodeConfig {
+            private_key_hex: hex::encode(self.ed25519_keys[index].inner().to_bytes()),
+            listen_addr: format!("/ip4/127.0.0.1/tcp/{}", self.consensus_ports[index]),
+            peers: self
+                .consensus_ports
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != index)
+                .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
+                .collect(),
+            genesis_file: self.genesis_path.to_string_lossy().into_owned(),
+        };
+
+        let (child, client) = run_kontor(
+            self._kontor_data_dirs[index].path(),
+            self.api_ports[index],
+            Some(&consensus_config),
+        )
+        .await?;
+
+        self._kontor_children[index] = child;
+        self.nodes[index] = client;
+
+        // Wait for the restarted node to be available
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if self.nodes[index].index().await.is_ok() {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                bail!("Restarted node {index} failed to become available within 30s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        Ok(())
     }
 
     /// Create a `RegTester` targeting a specific node in the cluster.
@@ -1112,44 +1168,58 @@ impl RegTesterCluster {
     }
 
     /// Poll all nodes until they all return the expected value for a view call.
+    /// Nodes at indices in `skip` are excluded from polling.
     pub async fn poll_all_nodes(
         &self,
         contract: &ContractAddress,
         expr: &str,
         expected: &str,
         timeout_secs: u64,
-    ) -> Result<()> {
-        poll_nodes!(self, timeout_secs, format!("{expr} = {expected}"), |node| {
-            matches!(
-                node.view(contract, expr).await?,
-                indexer_types::ViewResult::Ok { value } if value == expected
-            )
-        })
-    }
-
-    /// Poll all nodes until they all reach at least the expected height.
-    pub async fn poll_all_nodes_height(
-        &self,
-        expected_height: i64,
-        timeout_secs: u64,
+        skip: &[usize],
     ) -> Result<()> {
         poll_nodes!(
             self,
             timeout_secs,
+            skip,
+            format!("{expr} = {expected}"),
+            |node| {
+                matches!(
+                    node.view(contract, expr).await?,
+                    indexer_types::ViewResult::Ok { value } if value == expected
+                )
+            }
+        )
+    }
+
+    /// Poll all nodes until they all reach at least the expected height.
+    /// Nodes at indices in `skip` are excluded from polling.
+    pub async fn poll_all_nodes_height(
+        &self,
+        expected_height: i64,
+        timeout_secs: u64,
+        skip: &[usize],
+    ) -> Result<()> {
+        poll_nodes!(
+            self,
+            timeout_secs,
+            skip,
             format!("height >= {expected_height}"),
             |node| { node.index().await?.height >= expected_height }
         )
     }
 
     /// Poll all nodes until they all reach at least the expected consensus height.
+    /// Nodes at indices in `skip` are excluded from polling.
     pub async fn poll_all_nodes_consensus_height(
         &self,
         expected: i64,
         timeout_secs: u64,
+        skip: &[usize],
     ) -> Result<()> {
         poll_nodes!(
             self,
             timeout_secs,
+            skip,
             format!("consensus_height >= {expected}"),
             |node| { node.index().await?.consensus_height.unwrap_or(0) >= expected }
         )
