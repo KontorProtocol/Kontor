@@ -1043,60 +1043,12 @@ impl RegTesterCluster {
             nodes.insert(i, ClusterNode { client, child });
         }
 
-        // Wait for all active nodes to be available via API before returning.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            let mut all_ready = true;
-            for node in nodes.values() {
-                if node.client.index().await.is_err() {
-                    all_ready = false;
-                    break;
-                }
-            }
-            if all_ready {
-                break;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                anyhow::bail!("Cluster nodes failed to become available within 30s");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-        // Mine a block and wait for all nodes to process it.
-        // This ensures Malachite peers are connected and consensus is working.
+        // Mine a block so we can verify all nodes process it (proves peer connectivity).
         bitcoin_client
             .generate_to_address(1, &identity.address.to_string())
             .await?;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-        loop {
-            let mut all_synced = true;
-            for node in nodes.values() {
-                match node.client.index().await {
-                    Ok(info) if info.height >= 102 => {}
-                    _ => {
-                        all_synced = false;
-                        break;
-                    }
-                }
-            }
-            if all_synced {
-                break;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                let mut heights = Vec::new();
-                for node in nodes.values() {
-                    if let Ok(info) = node.client.index().await {
-                        heights.push(info.height);
-                    }
-                }
-                anyhow::bail!(
-                    "Cluster nodes failed to sync after mining block. Heights: {:?}",
-                    heights
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
 
-        Ok(Self {
+        let cluster = Self {
             bitcoin_client,
             nodes,
             identity,
@@ -1108,7 +1060,13 @@ impl RegTesterCluster {
             _bitcoin_data_dir: bitcoin_data_dir,
             _kontor_data_dirs: kontor_data_dirs,
             _genesis_dir: genesis_dir,
-        })
+        };
+
+        // Wait for all nodes to process the mined block — proves API availability
+        // and Malachite peer connectivity in one check.
+        cluster.poll_all_nodes_height(102, 60, &[]).await?;
+
+        Ok(cluster)
     }
 
     /// Get the client for a specific node.
