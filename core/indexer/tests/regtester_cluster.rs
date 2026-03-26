@@ -278,7 +278,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .await?;
 
     // Restart node 3
-    cluster.restart_node(3).await?;
+    cluster.start_node(3).await?;
 
     // Wait for ALL nodes (including restarted) to show counter = 4
     cluster
@@ -286,6 +286,95 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .await?;
 
     // All nodes (including restarted) should agree on checkpoints
+    cluster.assert_checkpoints_match().await?;
+
+    cluster.teardown().await?;
+    Ok(())
+}
+
+/// Late joiner: start 3 of 4 validators, process batches + blocks,
+/// then start the 4th from scratch. It syncs via Malachite and converges.
+#[tokio::test]
+#[serial_test::serial]
+async fn cluster_late_joiner_sync() -> Result<()> {
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+
+    // 4 validators in genesis, only 3 started
+    let mut cluster = RegTesterCluster::setup_with(4, 3).await?;
+
+    let contracts = ContractReader::new("../../test-contracts").await?;
+    let contract_bytes = contracts
+        .read("counter")
+        .await?
+        .expect("counter contract not found");
+
+    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let result = rt
+        .instruction(
+            &mut ident,
+            indexer_types::Inst::Publish {
+                gas_limit: 10_000,
+                name: "counter".to_string(),
+                bytes: contract_bytes,
+            },
+        )
+        .await?;
+    let contract: ContractAddress = result
+        .result
+        .contract
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    // Wait for 3 active nodes to see counter = 0
+    cluster
+        .poll_all_nodes(&contract, "get()", "0", 120, &[])
+        .await?;
+
+    // Batch 3 increments on the 3 active nodes
+    let contract_addr = indexer_types::ContractAddress {
+        name: contract.name.clone(),
+        height: contract.height,
+        tx_index: contract.tx_index,
+    };
+    let initial_consensus_height = cluster.nodes[0]
+        .index()
+        .await?
+        .consensus_height
+        .unwrap_or(0);
+    for i in 0..3 {
+        rt.send_instruction(
+            &mut ident,
+            indexer_types::Inst::Call {
+                gas_limit: 10_000,
+                contract: contract_addr.clone(),
+                expr: counter::wave::increment_call_expr(),
+            },
+        )
+        .await?;
+        cluster
+            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120, &[])
+            .await?;
+    }
+    cluster
+        .poll_all_nodes(&contract, "get()", "3", 120, &[])
+        .await?;
+
+    // Mine a block to confirm the batched txs
+    cluster.mine(1).await?;
+    let pre_join_height = cluster.nodes[0].index().await?.height;
+    cluster
+        .poll_all_nodes_height(pre_join_height, 120, &[])
+        .await?;
+
+    // Start the 4th node (late joiner — fresh DB, never started)
+    cluster.start_node(3).await?;
+
+    // Wait for the late joiner to sync and reach the same state
+    cluster
+        .poll_all_nodes(&contract, "get()", "3", 120, &[])
+        .await?;
+
+    // All 4 nodes should agree on checkpoints
     cluster.assert_checkpoints_match().await?;
 
     cluster.teardown().await?;

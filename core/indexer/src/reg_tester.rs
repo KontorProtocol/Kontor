@@ -916,9 +916,38 @@ fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
     Ok(ports)
 }
 
+async fn launch_node(
+    data_dir: &std::path::Path,
+    api_port: u16,
+    consensus_ports: &[u16],
+    ed25519_key: &crate::consensus::signing::PrivateKey,
+    index: usize,
+    genesis_path: &std::path::Path,
+) -> Result<(Child, KontorClient)> {
+    let consensus_config = ConsensusNodeConfig {
+        private_key_hex: hex::encode(ed25519_key.inner().to_bytes()),
+        listen_addr: format!("/ip4/127.0.0.1/tcp/{}", consensus_ports[index]),
+        peers: consensus_ports
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != index)
+            .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
+            .collect(),
+        genesis_file: genesis_path.to_string_lossy().into_owned(),
+    };
+    run_kontor(data_dir, api_port, Some(&consensus_config)).await
+}
+
 impl RegTesterCluster {
     /// Start a cluster of `n` Kontor validators sharing one regtest bitcoind.
     pub async fn setup(n: usize) -> Result<Self> {
+        Self::setup_with(n, n).await
+    }
+
+    /// Create a cluster with `total` validators in genesis but only start `active` of them.
+    /// Remaining nodes can be started later with `start_node`.
+    pub async fn setup_with(total: usize, active: usize) -> Result<Self> {
+        assert!(active <= total, "active must be <= total");
         use crate::config::{GenesisConfig, GenesisValidatorConfig};
         use crate::consensus::signing::PrivateKey as Ed25519PrivateKey;
 
@@ -957,8 +986,8 @@ impl RegTesterCluster {
             bls_pubkey,
         };
 
-        // Generate Ed25519 keypairs for consensus validators
-        let ed25519_keys: Vec<Ed25519PrivateKey> = (0..n)
+        // Generate Ed25519 keypairs for all validators (including inactive)
+        let ed25519_keys: Vec<Ed25519PrivateKey> = (0..total)
             .map(|i| {
                 let mut key_seed = [0u8; 32];
                 key_seed[0] = i as u8;
@@ -983,38 +1012,38 @@ impl RegTesterCluster {
         let genesis_path = genesis_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, serde_json::to_string(&genesis_config)?)?;
 
-        // Allocate ports: N api ports + N consensus ports
-        let api_ports = allocate_ports(n)?;
-        let consensus_ports = allocate_ports(n)?;
+        // Allocate ports for all validators (including inactive)
+        let api_ports = allocate_ports(total)?;
+        let consensus_ports = allocate_ports(total)?;
 
-        // Start N Kontor instances
-        let mut kontor_children = Vec::with_capacity(n);
-        let mut kontor_data_dirs = Vec::with_capacity(n);
-        let mut nodes = Vec::with_capacity(n);
+        // Start active Kontor instances
+        let mut kontor_children = Vec::with_capacity(total);
+        let mut kontor_data_dirs = Vec::with_capacity(total);
+        let mut nodes = Vec::with_capacity(total);
 
-        for i in 0..n {
+        for i in 0..active {
             let data_dir = TempDir::new()?;
-            let consensus_config = ConsensusNodeConfig {
-                private_key_hex: hex::encode(ed25519_keys[i].inner().to_bytes()),
-                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", consensus_ports[i]),
-                peers: consensus_ports
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                    .collect(),
-                genesis_file: genesis_path.to_string_lossy().into_owned(),
-            };
-
-            let (child, client) =
-                run_kontor(data_dir.path(), api_ports[i], Some(&consensus_config)).await?;
+            let (child, client) = launch_node(
+                data_dir.path(),
+                api_ports[i],
+                &consensus_ports,
+                &ed25519_keys[i],
+                i,
+                &genesis_path,
+            )
+            .await?;
 
             kontor_children.push(child);
             nodes.push(client);
             kontor_data_dirs.push(data_dir);
         }
 
-        // Wait for all nodes to be available via API before returning.
+        // Create placeholder data dirs for inactive nodes (no process started yet)
+        for _ in active..total {
+            kontor_data_dirs.push(TempDir::new()?);
+        }
+
+        // Wait for all active nodes to be available via API before returning.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let mut all_ready = true;
@@ -1095,44 +1124,47 @@ impl RegTesterCluster {
         Ok(())
     }
 
-    /// Restart a previously killed node using the same config (ports, DB, keys).
-    pub async fn restart_node(&mut self, index: usize) -> Result<()> {
-        let consensus_config = ConsensusNodeConfig {
-            private_key_hex: hex::encode(self.ed25519_keys[index].inner().to_bytes()),
-            listen_addr: format!("/ip4/127.0.0.1/tcp/{}", self.consensus_ports[index]),
-            peers: self
-                .consensus_ports
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != index)
-                .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                .collect(),
-            genesis_file: self.genesis_path.to_string_lossy().into_owned(),
-        };
+    /// Start or restart a node. For late joiners (never started), pushes new entries.
+    /// For killed nodes (already have entries), replaces them.
+    pub async fn start_node(&mut self, index: usize) -> Result<()> {
+        assert!(
+            index < self.api_ports.len(),
+            "Node {index} not in genesis — only {} validators configured",
+            self.api_ports.len()
+        );
 
-        let (child, client) = run_kontor(
+        let (child, client) = launch_node(
             self._kontor_data_dirs[index].path(),
             self.api_ports[index],
-            Some(&consensus_config),
+            &self.consensus_ports,
+            &self.ed25519_keys[index],
+            index,
+            &self.genesis_path,
         )
         .await?;
 
-        self._kontor_children[index] = child;
-        self.nodes[index] = client;
+        if index < self.nodes.len() {
+            self._kontor_children[index] = child;
+            self.nodes[index] = client;
+        } else {
+            self._kontor_children.push(child);
+            self.nodes.push(client);
+        }
 
-        // Wait for the restarted node to be available
+        self.wait_for_node(index).await
+    }
+
+    async fn wait_for_node(&self, index: usize) -> Result<()> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if self.nodes[index].index().await.is_ok() {
-                break;
+                return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
-                bail!("Restarted node {index} failed to become available within 30s");
+                bail!("Node {index} failed to become available within 30s");
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-
-        Ok(())
     }
 
     /// Create a `RegTester` targeting a specific node in the cluster.
