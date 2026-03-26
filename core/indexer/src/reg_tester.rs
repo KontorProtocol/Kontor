@@ -1221,11 +1221,12 @@ impl RegTesterCluster {
                 .unwrap_or_else(|| panic!("Node {i} should have a checkpoint"));
             checkpoints.push((i, info.height, info.consensus_height, checkpoint));
         }
-        let first_cp = &checkpoints[0].3;
+        checkpoints.sort_by_key(|(i, ..)| *i);
+        let (ref_node, _, _, ref_cp) = &checkpoints[0];
         for (i, height, consensus_height, cp) in &checkpoints[1..] {
             assert_eq!(
-                cp, first_cp,
-                "Node {i} checkpoint mismatch with node 0 (height={height}, consensus_height={consensus_height:?})"
+                cp, ref_cp,
+                "Node {i} checkpoint mismatch with node {ref_node} (height={height}, consensus_height={consensus_height:?})"
             );
         }
         Ok(checkpoints.into_iter().next().unwrap().3)
