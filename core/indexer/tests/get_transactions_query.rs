@@ -2,8 +2,8 @@ use anyhow::Result;
 use indexer::{
     database::{
         queries::{
-            get_transactions_paginated, insert_contract, insert_contract_state,
-            insert_processed_block, insert_transaction,
+            get_transactions_paginated, insert_block, insert_contract, insert_contract_state,
+            insert_transaction,
         },
         types::{ContractRow, ContractStateRow, OrderDirection, TransactionQuery},
     },
@@ -21,7 +21,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         )
         .parse()?;
         let block = BlockRow::builder().height(height).hash(hash).build();
-        insert_processed_block(conn, block).await?;
+        insert_block(conn, block).await?;
     }
 
     insert_contract(

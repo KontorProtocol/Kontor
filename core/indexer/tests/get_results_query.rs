@@ -3,7 +3,7 @@ use indexer::{
     database::{
         queries::{
             get_results_paginated, insert_block, insert_contract, insert_contract_result,
-            insert_processed_block, insert_transaction,
+            insert_transaction,
         },
         types::{ContractResultRow, ContractRow, OrderDirection, ResultQuery},
     },
@@ -17,7 +17,7 @@ async fn test_get_results_query() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(1)
@@ -95,7 +95,7 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(2)
@@ -150,7 +150,7 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(3)

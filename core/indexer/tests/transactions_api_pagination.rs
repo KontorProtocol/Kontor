@@ -12,9 +12,7 @@ use indexer::{
     config::Config,
     database::{
         Reader, Writer,
-        queries::{
-            insert_contract, insert_contract_state, insert_processed_block, insert_transaction,
-        },
+        queries::{insert_block, insert_contract, insert_contract_state, insert_transaction},
         types::{ContractRow, ContractStateRow},
     },
     event::EventSubscriber,
@@ -46,7 +44,7 @@ async fn create_test_app(
             .height(height)
             .hash(format!("{:064x}", height).parse()?)
             .build();
-        insert_processed_block(&conn, block).await?;
+        insert_block(&conn, block).await?;
     }
 
     insert_contract(

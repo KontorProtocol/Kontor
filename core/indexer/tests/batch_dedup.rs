@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexer::{
     consensus::Height,
-    database::queries::{get_transaction_by_txid, insert_processed_block},
+    database::queries::{get_transaction_by_txid, insert_block},
     reactor::block_handler::{batch_handler, block_handler},
     test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime},
 };
@@ -39,7 +39,7 @@ async fn batch_then_block_deduplicates_transaction() -> Result<()> {
     );
 
     // Process a block at height 2 containing the same transaction
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(2)

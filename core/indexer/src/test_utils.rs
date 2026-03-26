@@ -311,13 +311,13 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
 }
 
 pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
-    use crate::database::queries::insert_processed_block;
+    use crate::database::queries::insert_block;
     use crate::runtime::{ComponentCache, Runtime, Storage};
 
     let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(0)
@@ -326,7 +326,7 @@ pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
             .build(),
     )
     .await?;
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(1)
@@ -416,7 +416,7 @@ pub fn new_random_blockchain(n: u64) -> Vec<Block> {
 
 pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
     loop {
-        match queries::select_processed_block_at_height(conn, height).await {
+        match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,
             Ok(None) => {}
             Err(e) => panic!("error: {:?}", e),

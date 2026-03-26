@@ -41,15 +41,6 @@ pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Err
     Ok(conn.last_insert_rowid())
 }
 
-pub async fn insert_processed_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
-    conn.execute(
-        "INSERT OR REPLACE INTO blocks (height, hash, relevant, processed) VALUES (?, ?, ?, 1)",
-        (block.height, block.hash.to_string(), block.relevant),
-    )
-    .await?;
-    Ok(conn.last_insert_rowid())
-}
-
 pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, Error> {
     let num_rows = conn
         .execute("DELETE FROM blocks WHERE height > ?", [height])
@@ -61,7 +52,7 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
 pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT 1",
+            "SELECT height, hash, relevant FROM blocks ORDER BY height DESC LIMIT 1",
             params![],
         )
         .await?;
@@ -71,7 +62,7 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
 pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT ?",
+            "SELECT height, hash, relevant FROM blocks ORDER BY height DESC LIMIT ?",
             params![limit],
         )
         .await?;
@@ -82,28 +73,13 @@ pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<B
     Ok(results)
 }
 
-pub async fn set_block_processed(conn: &Connection, height: i64) -> Result<(), Error> {
-    conn.execute(
-        "UPDATE blocks SET processed = 1 WHERE height = ?",
-        params![height],
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<u64, Error> {
-    Ok(conn
-        .execute("DELETE FROM blocks WHERE processed = 0", params![])
-        .await?)
-}
-
-pub async fn select_processed_block_by_height_or_hash(
+pub async fn select_block_by_height_or_hash(
     conn: &Connection,
     identifier: &str,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE (height = ? OR hash = ?) AND processed = 1",
+            "SELECT height, hash, relevant FROM blocks WHERE height = ? OR hash = ?",
             params![identifier, identifier],
         )
         .await?;
@@ -117,19 +93,6 @@ pub async fn select_block_at_height(
     let mut rows = conn
         .query(
             "SELECT height, hash, relevant FROM blocks WHERE height = ?",
-            params![height],
-        )
-        .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
-}
-
-pub async fn select_processed_block_at_height(
-    conn: &Connection,
-    height: i64,
-) -> Result<Option<BlockRow>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT height, hash, relevant FROM blocks WHERE height = ? AND processed = 1",
             params![height],
         )
         .await?;
@@ -154,7 +117,7 @@ pub async fn get_blocks_paginated(
     query: BlockQuery,
 ) -> Result<(Vec<BlockRow>, PaginationMeta), Error> {
     let var = "b";
-    let mut where_clauses = vec!["processed = 1".to_string()];
+    let mut where_clauses = vec![];
     let mut params = vec![];
     if let Some(relevant) = query.relevant {
         where_clauses.push("b.relevant = :relevant".to_string());
@@ -559,21 +522,9 @@ pub async fn insert_batch(
     Ok(())
 }
 
-pub async fn set_batch_processed(conn: &Connection, consensus_height: i64) -> Result<(), Error> {
-    conn.execute(
-        "UPDATE batches SET processed = 1 WHERE consensus_height = ?",
-        params![consensus_height],
-    )
-    .await?;
-    Ok(())
-}
-
 pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
     Ok(conn
-        .query(
-            "SELECT MAX(consensus_height) FROM batches WHERE processed = 1",
-            (),
-        )
+        .query("SELECT MAX(consensus_height) FROM batches", ())
         .await?
         .next()
         .await?
@@ -894,7 +845,7 @@ pub async fn get_transactions_paginated(
     let mut selects =
         "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
     let mut from = "transactions t JOIN blocks b USING (height)".to_string();
-    let mut where_clauses = vec!["b.processed = 1".to_string()];
+    let mut where_clauses = vec![];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
             .await?
@@ -952,7 +903,7 @@ pub async fn get_results_paginated(
         LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
-    let mut where_clauses = vec!["b.processed = 1".to_string()];
+    let mut where_clauses = vec![];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
             .await?
@@ -1021,7 +972,7 @@ pub async fn get_op_result(
             JOIN blocks b ON r.height = b.height
             LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
-            WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
+            WHERE t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
             ORDER BY r.result_index DESC
             LIMIT 1
             "#,

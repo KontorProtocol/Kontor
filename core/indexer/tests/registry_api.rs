@@ -7,7 +7,7 @@ use indexer::runtime::registry::api::{advance_nonce, get_entry, get_entry_by_id}
 use indexer::{
     api::{Env, handlers::get_registry_entry},
     bls::RegistrationProof,
-    database::queries::{insert_processed_block, rollback_to_height},
+    database::queries::{insert_block, rollback_to_height},
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
@@ -61,7 +61,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(0)
@@ -74,7 +74,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(&[]).await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(1)
@@ -246,7 +246,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(0)
@@ -259,7 +259,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(&[]).await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(1)
@@ -275,7 +275,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
         .expect("entry must exist");
     assert_eq!(entry.next_nonce, 0);
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(2)
@@ -309,7 +309,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
         "nonce must revert to 0 after rolling back height 2"
     );
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(2)

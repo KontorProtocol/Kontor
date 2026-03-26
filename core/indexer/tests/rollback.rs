@@ -23,7 +23,7 @@ use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
     loop {
-        if let Ok(Some(block)) = queries::select_processed_block_at_height(conn, height).await
+        if let Ok(Some(block)) = queries::select_block_at_height(conn, height).await
             && block.hash == hash
         {
             return;
@@ -81,7 +81,7 @@ async fn test_reactor_fetching() -> Result<()> {
     }
 
     for (i, expected) in blocks.iter().enumerate() {
-        let block = queries::select_processed_block_at_height(conn, (i + 1) as i64)
+        let block = queries::select_block_at_height(conn, (i + 1) as i64)
             .await?
             .unwrap();
         assert_eq!(block.hash, expected.hash);
@@ -136,16 +136,12 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     }
 
     // Block 3 should have a different hash now
-    let block = queries::select_processed_block_at_height(conn, 3)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 3).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
     assert_ne!(block.hash, initial_block_3_hash);
 
     // Blocks 4-5 should exist with new hashes
-    let block = queries::select_processed_block_at_height(conn, 5)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 5).await?.unwrap();
     assert_eq!(block.hash, new_blocks[2].hash);
 
     cancel_token.cancel();
@@ -196,15 +192,11 @@ async fn test_reactor_deep_rollback() -> Result<()> {
     }
 
     // Block 1 should be preserved
-    let block = queries::select_processed_block_at_height(conn, 1)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 1).await?.unwrap();
     assert_eq!(block.hash, blocks[0].hash);
 
     // Block 2 should have new hash
-    let block = queries::select_processed_block_at_height(conn, 2)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 2).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
 
     cancel_token.cancel();
@@ -251,9 +243,7 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         send_block_and_wait(&event_tx, conn, block, target).await;
     }
 
-    let block = queries::select_processed_block_at_height(conn, 4)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 4).await?.unwrap();
     assert_eq!(block.hash, more_blocks[1].hash);
 
     // Roll back to height 1, insert entirely new chain
@@ -266,15 +256,11 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
     }
 
     // Verify block 2 has new hash
-    let block = queries::select_processed_block_at_height(conn, 2)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 2).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
 
     // Verify block 4 has new hash
-    let block = queries::select_processed_block_at_height(conn, 4)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 4).await?.unwrap();
     assert_eq!(block.hash, new_blocks[2].hash);
 
     cancel_token.cancel();
