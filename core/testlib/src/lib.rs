@@ -5,8 +5,8 @@ use glob::Paths;
 use indexer::{
     database::{
         queries::{
-            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
-            insert_block, insert_transaction,
+            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_block,
+            insert_contract, insert_transaction,
         },
         types::ContractRow,
     },

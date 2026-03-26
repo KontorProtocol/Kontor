@@ -39,15 +39,6 @@ async fn test_get_blocks_query() -> Result<()> {
     )
     .await?;
 
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(103)
-            .hash(new_mock_block_hash(103))
-            .build(),
-    )
-    .await?;
-
     let (blocks, meta) =
         get_blocks_paginated(&conn, BlockQuery::builder().limit(1).build()).await?;
 

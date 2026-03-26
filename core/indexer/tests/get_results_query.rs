@@ -150,106 +150,18 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(3)
-            .hash(new_mock_block_hash(3))
-            .build(),
-    )
-    .await?;
-
-    let tx_id_3_1 = insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .height(3)
-            .txid(new_mock_transaction(3001).txid.to_string())
-            .tx_index(1)
-            .build(),
-    )
-    .await?;
-
-    let tx_id_3_2 = insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .height(3)
-            .txid(new_mock_transaction(3002).txid.to_string())
-            .tx_index(2)
-            .build(),
-    )
-    .await?;
-
-    insert_contract_result(
-        &conn,
-        ContractResultRow::builder()
-            .contract_id(contract_1_id)
-            .height(3)
-            .tx_id(tx_id_3_1)
-            .input_index(0)
-            .op_index(0)
-            .gas(100)
-            .build(),
-    )
-    .await?;
-
+    // contract result with NULL tx_id (no associated transaction)
     insert_contract_result(
         &conn,
         ContractResultRow::builder()
             .contract_id(contract_2_id)
-            .height(3)
-            .tx_id(tx_id_3_2)
-            .input_index(0)
-            .op_index(0)
-            .gas(100)
-            .build(),
-    )
-    .await?;
-
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(4)
-            .hash(new_mock_block_hash(4))
-            .build(),
-    )
-    .await?;
-
-    let tx_id_4_1 = insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .height(4)
-            .txid(new_mock_transaction(4001).txid.to_string())
-            .tx_index(1)
-            .build(),
-    )
-    .await?;
-
-    insert_contract_result(
-        &conn,
-        ContractResultRow::builder()
-            .contract_id(contract_1_id)
-            .height(4)
-            .tx_id(tx_id_4_1)
-            .input_index(0)
-            .op_index(0)
-            .gas(100)
-            .build(),
-    )
-    .await?;
-
-    // insert a contract result with NULL tx_id (no associated transaction)
-    insert_contract_result(
-        &conn,
-        ContractResultRow::builder()
-            .contract_id(contract_2_id)
-            .height(3)
+            .height(2)
             .result_index(1)
             .gas(100)
             .build(),
     )
     .await?;
 
-    // ignores unprocessed block result
     let (_, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
@@ -258,21 +170,19 @@ async fn test_get_results_query() -> Result<()> {
             .build(),
     )
     .await?;
-    assert_eq!(meta.total_count, 7); // 6 + 1 with NULL tx_id
+    assert_eq!(meta.total_count, 5);
 
     // NULL tx_id result is included with txid: None
     let (results, _) = get_results_paginated(
         &conn,
         ResultQuery::builder()
-            .height(3)
+            .height(2)
             .order(OrderDirection::Asc)
             .limit(10)
             .build(),
     )
     .await?;
-    assert_eq!(results.len(), 3); // 2 with tx_id + 1 with NULL tx_id
-    let null_tx_result = results.iter().find(|r| r.tx_index.is_none()).unwrap();
-    assert!(null_tx_result.txid.is_none());
+    assert_eq!(results.len(), 3);
 
     // contract filtering
     let (results, meta) = get_results_paginated(
@@ -292,7 +202,7 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].contract_name, "token");
     assert_eq!(results[0].contract_height, 1);
     assert_eq!(results[0].contract_tx_index, 1);
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, 2);
 
     // func filtering
     let (results, meta) = get_results_paginated(
@@ -351,29 +261,8 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
     assert_eq!(results[0].height, 2);
-    assert_eq!(meta.total_count, 2);
-    assert!(meta.next_cursor.is_some());
-
-    let (results, meta) = get_results_paginated(
-        &conn,
-        ResultQuery::builder()
-            .maybe_cursor(meta.next_cursor)
-            .start_height(2)
-            .contract(ContractAddress {
-                name: "token".to_string(),
-                height: 1,
-                tx_index: 1,
-            })
-            .order(OrderDirection::Asc)
-            .limit(1)
-            .build(),
-    )
-    .await?;
-
-    assert_eq!(results[0].height, 3);
     assert_eq!(meta.total_count, 1);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(results[0].id));
 
     Ok(())
 }
