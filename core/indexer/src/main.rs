@@ -99,6 +99,7 @@ async fn main() -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
             persistent_peers: config.consensus_peers.clone(),
+            data_dir: config.data_dir.clone(),
         }
     });
 

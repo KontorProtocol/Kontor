@@ -26,6 +26,10 @@ pub struct LiteExecutor {
 }
 
 impl LiteExecutor {
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        self._db_dir.path().to_path_buf()
+    }
+
     pub async fn new(
         mock_bitcoin: Arc<Mutex<MockBitcoin>>,
         shared_pubkey: String,

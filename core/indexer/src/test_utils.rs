@@ -583,6 +583,7 @@ pub mod reactor_harness {
                 private_key,
                 listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[0]),
                 persistent_peers: vec![],
+                data_dir: db_dir.path().to_path_buf(),
             };
 
             let (block_tx, block_rx) = mpsc::channel(256);

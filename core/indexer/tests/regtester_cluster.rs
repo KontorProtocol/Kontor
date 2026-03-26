@@ -94,7 +94,7 @@ async fn assert_checkpoints_match(cluster: &RegTesterCluster) -> Result<String> 
 async fn cluster_counter_increment_via_consensus() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let cluster = RegTesterCluster::setup(3).await?;
+    let cluster = RegTesterCluster::setup(4).await?;
 
     // Load counter contract bytes
     let contracts = ContractReader::new("../../test-contracts").await?;
