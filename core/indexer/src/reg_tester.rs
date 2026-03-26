@@ -816,6 +816,40 @@ impl RegTester {
     }
 }
 
+fn poll_backoff() -> backon::ExponentialBuilder {
+    backon::ExponentialBuilder::new()
+        .with_jitter()
+        .with_min_delay(std::time::Duration::from_millis(100))
+        .with_max_delay(std::time::Duration::from_secs(1))
+        .without_max_times()
+}
+
+macro_rules! poll_nodes {
+    ($self:expr, $timeout:expr, $label:expr, |$node:ident| $check:expr) => {{
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs($timeout);
+        let mut backoff = poll_backoff().build();
+        loop {
+            let mut all_pass = true;
+            for $node in &$self.nodes {
+                if !$check {
+                    all_pass = false;
+                    break;
+                }
+            }
+            if all_pass {
+                break Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break Err(anyhow!("Timed out: {}", $label));
+            }
+            match backoff.next() {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => break Err(anyhow!("Backoff exhausted: {}", $label)),
+            }
+        }
+    }};
+}
+
 /// A cluster of N Kontor instances sharing one regtest bitcoind,
 /// each with consensus enabled and its own DB.
 pub struct RegTesterCluster {
@@ -1051,37 +1085,12 @@ impl RegTesterCluster {
         expected: &str,
         timeout_secs: u64,
     ) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let backoff = backon::ExponentialBuilder::new()
-            .with_jitter()
-            .with_min_delay(std::time::Duration::from_millis(100))
-            .with_max_delay(std::time::Duration::from_secs(5));
-        let mut retry = backoff.build();
-        loop {
-            let mut all_match = true;
-            for node in &self.nodes {
-                match node.view(contract, expr).await? {
-                    indexer_types::ViewResult::Ok { value } if value == expected => {}
-                    _ => {
-                        all_match = false;
-                        break;
-                    }
-                }
-            }
-            if all_match {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                for (i, node) in self.nodes.iter().enumerate() {
-                    let value = node.view(contract, expr).await?;
-                    eprintln!("Node {i}: {value:?}");
-                }
-                bail!("Timed out waiting for all nodes to return {expected} for {expr}");
-            }
-            if let Some(delay) = retry.next() {
-                tokio::time::sleep(delay).await;
-            }
-        }
+        poll_nodes!(self, timeout_secs, format!("{expr} = {expected}"), |node| {
+            matches!(
+                node.view(contract, expr).await?,
+                indexer_types::ViewResult::Ok { value } if value == expected
+            )
+        })
     }
 
     /// Poll all nodes until they all reach at least the expected height.
@@ -1090,35 +1099,12 @@ impl RegTesterCluster {
         expected_height: i64,
         timeout_secs: u64,
     ) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let backoff = backon::ExponentialBuilder::new()
-            .with_jitter()
-            .with_min_delay(std::time::Duration::from_millis(100))
-            .with_max_delay(std::time::Duration::from_secs(5));
-        let mut retry = backoff.build();
-        loop {
-            let mut all_reached = true;
-            for node in &self.nodes {
-                let info = node.index().await?;
-                if info.height < expected_height {
-                    all_reached = false;
-                    break;
-                }
-            }
-            if all_reached {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                for (i, node) in self.nodes.iter().enumerate() {
-                    let info = node.index().await?;
-                    eprintln!("Node {i} height: {}", info.height);
-                }
-                bail!("Timed out waiting for all nodes to reach height {expected_height}");
-            }
-            if let Some(delay) = retry.next() {
-                tokio::time::sleep(delay).await;
-            }
-        }
+        poll_nodes!(
+            self,
+            timeout_secs,
+            format!("height >= {expected_height}"),
+            |node| { node.index().await?.height >= expected_height }
+        )
     }
 
     /// Poll all nodes until they all reach at least the expected consensus height.
@@ -1127,35 +1113,12 @@ impl RegTesterCluster {
         expected: i64,
         timeout_secs: u64,
     ) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let backoff = backon::ExponentialBuilder::new()
-            .with_jitter()
-            .with_min_delay(std::time::Duration::from_millis(100))
-            .with_max_delay(std::time::Duration::from_secs(5));
-        let mut retry = backoff.build();
-        loop {
-            let mut all_reached = true;
-            for node in &self.nodes {
-                let info = node.index().await?;
-                if info.consensus_height.unwrap_or(0) < expected {
-                    all_reached = false;
-                    break;
-                }
-            }
-            if all_reached {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                for (i, node) in self.nodes.iter().enumerate() {
-                    let info = node.index().await?;
-                    eprintln!("Node {i} consensus_height: {:?}", info.consensus_height);
-                }
-                bail!("Timed out waiting for all nodes to reach consensus height {expected}");
-            }
-            if let Some(delay) = retry.next() {
-                tokio::time::sleep(delay).await;
-            }
-        }
+        poll_nodes!(
+            self,
+            timeout_secs,
+            format!("consensus_height >= {expected}"),
+            |node| { node.index().await?.consensus_height.unwrap_or(0) >= expected }
+        )
     }
 
     /// Assert all nodes have matching non-empty checkpoints. Returns the checkpoint value.
