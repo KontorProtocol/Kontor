@@ -219,6 +219,12 @@ pub struct RegTesterInner {
     pub height: i64,
 }
 
+pub struct SendInstructionResult {
+    pub reveal_txid: bitcoin::Txid,
+    pub commit_tx_hex: String,
+    pub reveal_tx_hex: String,
+}
+
 pub struct InstructionResult {
     pub result: ResultRow,
     pub commit_tx_hex: String,
@@ -344,19 +350,19 @@ impl RegTesterInner {
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
     }
 
-    pub async fn instruction(
+    /// Compose, sign, and send an instruction to the mempool without mining.
+    /// Updates the identity's funding UTXO for chaining subsequent calls.
+    pub async fn send_instruction(
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<InstructionResult> {
+    ) -> Result<SendInstructionResult> {
         let (compose_res, commit_tx_hex, reveal_tx_hex) =
             self.compose_instruction(ident, inst).await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
-        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
         let txids = self
             .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
-        self.mine(1).await?;
 
         ident.next_funding_utxo = (
             OutPoint {
@@ -370,6 +376,26 @@ impl RegTesterInner {
                 .unwrap()
                 .clone(),
         );
+
+        Ok(SendInstructionResult {
+            reveal_txid,
+            commit_tx_hex,
+            reveal_tx_hex,
+        })
+    }
+
+    /// Compose, sign, send an instruction to the mempool, mine a block, and wait for the result.
+    pub async fn instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<InstructionResult> {
+        let sent = self.send_instruction(ident, inst).await?;
+        let id = OpResultId::builder()
+            .txid(sent.reveal_txid.to_string())
+            .build();
+
+        self.mine(1).await?;
         self.ws_client
             .next()
             .await
@@ -384,8 +410,8 @@ impl RegTesterInner {
         if result.value.is_some() {
             Ok(InstructionResult {
                 result,
-                commit_tx_hex,
-                reveal_tx_hex,
+                commit_tx_hex: sent.commit_tx_hex,
+                reveal_tx_hex: sent.reveal_tx_hex,
             })
         } else {
             Err(anyhow!("Instruction failed in processing"))
@@ -765,6 +791,14 @@ impl RegTester {
             .await
             .compose_instruction(ident, inst)
             .await
+    }
+
+    pub async fn send_instruction(
+        &mut self,
+        ident: &mut Identity,
+        inst: Inst,
+    ) -> Result<SendInstructionResult> {
+        self.inner.lock().await.send_instruction(ident, inst).await
     }
 
     pub async fn instruction(
