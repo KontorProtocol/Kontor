@@ -1,5 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
+use backon::BackoffBuilder;
+
 use crate::{
     api::{client::Client as KontorClient, ws_client::WebSocketClient},
     bitcoin_client::{
@@ -814,6 +816,40 @@ impl RegTester {
     }
 }
 
+fn poll_backoff() -> backon::ExponentialBuilder {
+    backon::ExponentialBuilder::new()
+        .with_jitter()
+        .with_min_delay(std::time::Duration::from_millis(100))
+        .with_max_delay(std::time::Duration::from_secs(1))
+        .without_max_times()
+}
+
+macro_rules! poll_nodes {
+    ($self:expr, $timeout:expr, $label:expr, |$node:ident| $check:expr) => {{
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs($timeout);
+        let mut backoff = poll_backoff().build();
+        loop {
+            let mut all_pass = true;
+            for $node in &$self.nodes {
+                if !$check {
+                    all_pass = false;
+                    break;
+                }
+            }
+            if all_pass {
+                break Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break Err(anyhow!("Timed out: {}", $label));
+            }
+            match backoff.next() {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => break Err(anyhow!("Backoff exhausted: {}", $label)),
+            }
+        }
+    }};
+}
+
 /// A cluster of N Kontor instances sharing one regtest bitcoind,
 /// each with consensus enabled and its own DB.
 pub struct RegTesterCluster {
@@ -1039,6 +1075,70 @@ impl RegTesterCluster {
             .generate_to_address(count, &self.identity.address.to_string())
             .await?;
         Ok(())
+    }
+
+    /// Poll all nodes until they all return the expected value for a view call.
+    pub async fn poll_all_nodes(
+        &self,
+        contract: &ContractAddress,
+        expr: &str,
+        expected: &str,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        poll_nodes!(self, timeout_secs, format!("{expr} = {expected}"), |node| {
+            matches!(
+                node.view(contract, expr).await?,
+                indexer_types::ViewResult::Ok { value } if value == expected
+            )
+        })
+    }
+
+    /// Poll all nodes until they all reach at least the expected height.
+    pub async fn poll_all_nodes_height(
+        &self,
+        expected_height: i64,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        poll_nodes!(
+            self,
+            timeout_secs,
+            format!("height >= {expected_height}"),
+            |node| { node.index().await?.height >= expected_height }
+        )
+    }
+
+    /// Poll all nodes until they all reach at least the expected consensus height.
+    pub async fn poll_all_nodes_consensus_height(
+        &self,
+        expected: i64,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        poll_nodes!(
+            self,
+            timeout_secs,
+            format!("consensus_height >= {expected}"),
+            |node| { node.index().await?.consensus_height.unwrap_or(0) >= expected }
+        )
+    }
+
+    /// Assert all nodes have matching non-empty checkpoints. Returns the checkpoint value.
+    pub async fn assert_checkpoints_match(&self) -> Result<String> {
+        let mut checkpoints = Vec::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            let info = node.index().await?;
+            let checkpoint = info
+                .checkpoint
+                .unwrap_or_else(|| panic!("Node {i} should have a checkpoint"));
+            checkpoints.push((i, info.height, info.consensus_height, checkpoint));
+        }
+        let first_cp = &checkpoints[0].3;
+        for (i, height, consensus_height, cp) in &checkpoints[1..] {
+            assert_eq!(
+                cp, first_cp,
+                "Node {i} checkpoint mismatch with node 0 (height={height}, consensus_height={consensus_height:?})"
+            );
+        }
+        Ok(checkpoints.into_iter().next().unwrap().3)
     }
 
     /// Shut down all nodes.
