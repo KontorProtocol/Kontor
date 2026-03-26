@@ -31,7 +31,7 @@ use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
     insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor, select_block_at_height,
     select_block_latest, select_existing_txids, select_min_batch_height,
-    select_unconfirmed_batch_txs, set_batch_processed,
+    select_unconfirmed_batch_txs,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -640,8 +640,6 @@ impl ConsensusState {
                 .await;
         }
 
-        let _ = set_batch_processed(&self.conn, consensus_height.as_u64() as i64).await;
-
         runtime
             .storage
             .commit()
@@ -987,12 +985,6 @@ pub async fn handle_consensus_msg(
                         .await
                         {
                             error!("insert_batch (block) error: {e}");
-                        }
-                        if let Err(e) =
-                            set_batch_processed(&state.conn, certificate.height.as_u64() as i64)
-                                .await
-                        {
-                            error!("set_batch_processed (block) error: {e}");
                         }
 
                         // Remove from pending if present (may not be if we received

@@ -32,9 +32,9 @@ use crate::{
     database::{
         self,
         queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_processed_block,
-            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
-            select_unconfirmed_batch_tx, set_block_processed,
+            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
+            rollback_to_height, select_block_at_height, select_block_latest,
+            select_unconfirmed_batch_tx,
         },
     },
     runtime::{
@@ -285,7 +285,6 @@ impl<E: Executor> Reactor<E> {
         }
 
         self.run_block_lifecycle(&block).await;
-        let _ = set_block_processed(&self.db_conn(), block.height as i64).await;
 
         self.runtime
             .storage
@@ -618,7 +617,7 @@ pub async fn create_runtime_executor(
         .is_none()
     {
         info!("Creating native block");
-        insert_processed_block(
+        insert_block(
             &conn,
             BlockRow::builder()
                 .height(0)

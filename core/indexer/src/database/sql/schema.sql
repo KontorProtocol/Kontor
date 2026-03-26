@@ -1,8 +1,7 @@
 CREATE TABLE IF NOT EXISTS blocks (
   height INTEGER PRIMARY KEY,
   hash TEXT NOT NULL UNIQUE,
-  relevant BOOLEAN NOT NULL,
-  processed BOOLEAN NOT NULL DEFAULT 0
+  relevant BOOLEAN NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -16,7 +15,6 @@ CREATE TABLE IF NOT EXISTS batches (
   anchor_height INTEGER NOT NULL,
   anchor_hash TEXT NOT NULL,
   certificate BLOB NOT NULL,
-  processed BOOLEAN NOT NULL DEFAULT 0,
   is_block BOOLEAN NOT NULL DEFAULT 0
 );
 

@@ -4,8 +4,7 @@ use anyhow::Result;
 use bitcoin::Txid;
 
 use indexer::database::queries::{
-    contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
-    insert_transaction,
+    contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use indexer::database::types::ContractRow;
 use indexer::reactor::executor::Executor;
@@ -38,7 +37,7 @@ impl LiteExecutor {
         let conn = writer.connection();
 
         // Insert genesis block only
-        insert_processed_block(
+        insert_block(
             &conn,
             BlockRow::builder()
                 .height(0)
