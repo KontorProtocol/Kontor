@@ -844,7 +844,7 @@ pub async fn get_transactions_paginated(
     let var = "t";
     let mut selects =
         "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
-    let mut from = "transactions t JOIN blocks b USING (height)".to_string();
+    let mut from = "transactions t".to_string();
     let mut where_clauses = vec![];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
@@ -899,7 +899,6 @@ pub async fn get_results_paginated(
     "#;
     let from = r#"
         contract_results r
-        JOIN blocks b ON r.height = b.height
         LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
@@ -969,7 +968,6 @@ pub async fn get_op_result(
                 c.tx_index as contract_tx_index,
                 t.txid
             FROM contract_results r
-            JOIN blocks b ON r.height = b.height
             LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
             WHERE t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
