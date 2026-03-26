@@ -338,7 +338,7 @@ impl RuntimeImpl for RuntimeRegtest {
             )
             .await
             .and_then(|r| {
-                r.result
+                r.results[0]
                     .contract
                     .parse::<ContractAddress>()
                     .map_err(|e| anyhow!("Failed to parse contract address: {}", e))
@@ -372,8 +372,10 @@ impl RuntimeImpl for RuntimeRegtest {
                 )
                 .await
                 .map(|r| {
-                    r.result
-                        .value
+                    r.results
+                        .into_iter()
+                        .next()
+                        .and_then(|row| row.value)
                         .expect("Handling for error should have already occurred")
                 })
         } else {
