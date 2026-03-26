@@ -70,7 +70,7 @@ pub struct GenesisValidator {
 impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
     fn from(v: GenesisValidator) -> Self {
         Self {
-            x_only_pubkey: v.x_only_pubkey,
+            signer_key: v.x_only_pubkey,
             stake: v.stake,
             ed25519_pubkey: v.ed25519_pubkey,
         }
@@ -339,10 +339,21 @@ impl Runtime {
     ) -> Result<()> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
 
-        let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
-            return Err(anyhow!("RegisterBlsKey requires an XOnlyPubKey signer"));
+        let x_only_pubkey = match signer {
+            Signer::XOnlyPubKey(x) => x.clone(),
+            Signer::SignerId { id, .. } => {
+                let entry = registry::api::get_entry_by_id(self, *id)
+                    .await?
+                    .ok_or_else(|| anyhow!("RegisterBlsKey: unknown signer_id {id}"))?;
+                entry.x_only_pubkey
+            }
+            _ => {
+                return Err(anyhow!(
+                    "RegisterBlsKey requires an XOnlyPubKey or SignerId signer"
+                ));
+            }
         };
-        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
+        let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 

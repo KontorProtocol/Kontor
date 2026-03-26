@@ -17,6 +17,7 @@ use crate::runtime::Runtime;
 #[strum_discriminants(derive(Hash))]
 pub enum Fuel {
     SignerToString,
+    SignerId,
     KeysNext(u64),
     Path(String),
     ExtendPathWithMatch(u64),
@@ -78,6 +79,7 @@ impl Fuel {
     pub fn cost(&self) -> u64 {
         match self {
             Self::SignerToString => 50,
+            Self::SignerId => 50,
             Self::KeysNext(key_len) => 100 + 10 * key_len,
             Self::Path(path) => 10 * DotPathBuf::from_str(path).unwrap().num_segments(),
             Self::Get(value_len) => 10 * *value_len as u64,

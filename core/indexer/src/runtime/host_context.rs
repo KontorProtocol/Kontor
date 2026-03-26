@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
@@ -49,6 +49,24 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         Ok(self.table.lock().await.get(&self_)?.to_string())
+    }
+
+    async fn _signer_id<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<u64> {
+        Fuel::SignerId
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let signer = self.table.lock().await.get(&self_)?.clone();
+        match signer {
+            Signer::SignerId { id, .. } => Ok(id),
+            other => Err(anyhow!(
+                "signer_id() called on non-SignerId signer: {:?}",
+                other
+            )),
+        }
     }
 
     async fn _proc_signer<T>(
@@ -410,6 +428,13 @@ impl built_in::context::HostSignerWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._signer_to_string(accessor, self_)
+            .await
+    }
+
+    async fn signer_id<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<u64> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._signer_id(accessor, self_)
             .await
     }
 }

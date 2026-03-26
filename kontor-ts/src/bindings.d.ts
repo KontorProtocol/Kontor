@@ -222,6 +222,8 @@ export type RevealQuery = {
 };
 
 export type Signer = { "Core": Signer } | { "XOnlyPubKey": string } | {
+  "SignerId": { id: number; id_str: string };
+} | {
   "ContractId": { id: number; id_str: string };
 } | "Nobody";
 

@@ -24,7 +24,7 @@ async fn test_register_validator() -> Result<()> {
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
     assert_eq!(result.stake, Decimal::from(5));
     assert_eq!(result.ed25519_pubkey, ed25519_key);
-    assert_eq!(result.x_only_pubkey, validator.to_string());
+    assert_eq!(result.signer_key, validator.to_string());
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
@@ -215,7 +215,7 @@ async fn test_register_and_activate_regtest() -> Result<()> {
 
     let active_set = staking::get_active_set(runtime).await?;
     assert_eq!(active_set.len(), 1);
-    assert_eq!(active_set[0].x_only_pubkey, validator.to_string());
+    assert_eq!(active_set[0].signer_key, validator.to_string());
 
     let epoch = staking::get_epoch_info(runtime).await?;
     assert!(epoch.epoch >= 1);
