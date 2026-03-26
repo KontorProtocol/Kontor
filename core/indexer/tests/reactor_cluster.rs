@@ -272,7 +272,6 @@ impl ReactorCluster {
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
-                conn,
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),
