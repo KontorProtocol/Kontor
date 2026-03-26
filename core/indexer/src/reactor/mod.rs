@@ -230,6 +230,12 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
         self.last_hash = Some(hash);
 
+        self.runtime
+            .storage
+            .savepoint()
+            .await
+            .expect("Failed to begin block transaction");
+
         let _ = insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -242,7 +248,8 @@ impl<E: Executor> Reactor<E> {
 
         let mut unbatched_count = 0;
         for (i, t) in block.transactions.iter().enumerate() {
-            if let Ok(Some(_)) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await {
+            if let Ok(Some(_)) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
+            {
                 let _ = confirm_transaction(
                     &self.db_conn(),
                     &t.txid.to_string(),
@@ -279,6 +286,12 @@ impl<E: Executor> Reactor<E> {
 
         self.run_block_lifecycle(&block).await;
         let _ = set_block_processed(&self.db_conn(), block.height as i64).await;
+
+        self.runtime
+            .storage
+            .commit()
+            .await
+            .expect("Failed to commit block transaction");
 
         if let Some(handle) = &self.consensus_handle {
             let checkpoint = handle.state.get_checkpoint().await;
@@ -328,7 +341,9 @@ impl<E: Executor> Reactor<E> {
                     for txid in &txids {
                         if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
                             resolved_txs.push(tx.clone());
-                        } else if let Some(tx) = Self::resolve_tx_from_db(&self.db_conn(), txid).await {
+                        } else if let Some(tx) =
+                            Self::resolve_tx_from_db(&self.db_conn(), txid).await
+                        {
                             resolved_txs.push(tx);
                         } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
                             resolved_txs.push(tx);

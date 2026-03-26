@@ -587,8 +587,13 @@ impl ConsensusState {
             })
             .collect();
 
-        // DB orchestration for batch execution
-        if let Err(e) = insert_batch(
+        runtime
+            .storage
+            .savepoint()
+            .await
+            .expect("Failed to begin batch transaction");
+
+        insert_batch(
             &self.conn,
             consensus_height.as_u64() as i64,
             anchor_height as i64,
@@ -597,10 +602,7 @@ impl ConsensusState {
             false,
         )
         .await
-        {
-            error!("insert_batch error: {e}");
-            return;
-        }
+        .expect("Failed to insert batch");
 
         // Store raw txs for replay/sync recovery
         for raw_tx in batch_txs {
@@ -639,6 +641,12 @@ impl ConsensusState {
         }
 
         let _ = set_batch_processed(&self.conn, consensus_height.as_u64() as i64).await;
+
+        runtime
+            .storage
+            .commit()
+            .await
+            .expect("Failed to commit batch transaction");
 
         self.last_processed_anchor = anchor_height;
 
