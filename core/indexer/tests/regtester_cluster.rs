@@ -5,88 +5,6 @@ use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
-/// Poll all nodes until they all return the expected value for a view call,
-/// or time out after `timeout_secs`.
-async fn poll_all_nodes(
-    cluster: &RegTesterCluster,
-    contract: &ContractAddress,
-    expr: &str,
-    expected: &str,
-    timeout_secs: u64,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let mut all_match = true;
-        for node in &cluster.nodes {
-            match node.view(contract, expr).await? {
-                indexer_types::ViewResult::Ok { value } if value == expected => {}
-                _ => {
-                    all_match = false;
-                    break;
-                }
-            }
-        }
-        if all_match {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            for (i, node) in cluster.nodes.iter().enumerate() {
-                let value = node.view(contract, expr).await?;
-                eprintln!("Node {i}: {value:?}");
-            }
-            anyhow::bail!("Timed out waiting for all nodes to return {expected} for {expr}");
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-
-/// Poll all nodes until they all reach at least the expected height.
-async fn poll_all_nodes_height(
-    cluster: &RegTesterCluster,
-    expected_height: i64,
-    timeout_secs: u64,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let mut all_reached = true;
-        for node in &cluster.nodes {
-            let info = node.index().await?;
-            if info.height < expected_height {
-                all_reached = false;
-                break;
-            }
-        }
-        if all_reached {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            for (i, node) in cluster.nodes.iter().enumerate() {
-                let info = node.index().await?;
-                eprintln!("Node {i} height: {}", info.height);
-            }
-            anyhow::bail!("Timed out waiting for all nodes to reach height {expected_height}");
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-
-/// Assert all nodes have matching non-empty checkpoints. Returns the checkpoint value.
-async fn assert_checkpoints_match(cluster: &RegTesterCluster) -> Result<String> {
-    let mut checkpoints = Vec::new();
-    for (i, node) in cluster.nodes.iter().enumerate() {
-        let info = node.index().await?;
-        let checkpoint = info
-            .checkpoint
-            .unwrap_or_else(|| panic!("Node {i} should have a checkpoint"));
-        checkpoints.push(checkpoint);
-    }
-    let first = &checkpoints[0];
-    for (i, cp) in checkpoints.iter().enumerate().skip(1) {
-        assert_eq!(cp, first, "Node {i} checkpoint mismatch with node 0");
-    }
-    Ok(checkpoints.into_iter().next().unwrap())
-}
-
 /// Basic cluster test: start 4 validators, publish a counter contract,
 /// increment via consensus batch, verify all nodes agree on state.
 #[tokio::test]
@@ -122,10 +40,10 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     // Wait for all nodes to see counter at 0
-    poll_all_nodes(&cluster, &contract, "get()", "0", 120).await?;
+    cluster.poll_all_nodes(&contract, "get()", "0", 120).await?;
 
     // Checkpoints should match after publish
-    assert_checkpoints_match(&cluster).await?;
+    cluster.assert_checkpoints_match().await?;
 
     // Build an increment transaction and send to mempool (don't mine)
     let contract_addr = indexer_types::ContractAddress {
@@ -146,23 +64,25 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     rt.send_to_mempool(&[commit_hex, reveal_hex]).await?;
 
     // Poll until all nodes show counter = 1 (batch decided + executed)
-    poll_all_nodes(&cluster, &contract, "get()", "1", 120).await?;
+    cluster.poll_all_nodes(&contract, "get()", "1", 120).await?;
 
     // Checkpoints should still match after batch execution
-    let post_batch_checkpoints = assert_checkpoints_match(&cluster).await?;
+    let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
 
     // Get current height, then mine a block containing the batched tx
     let pre_mine_height = cluster.nodes[0].index().await?.height;
     cluster.mine(1).await?;
 
     // Wait for all nodes to process the new block
-    poll_all_nodes_height(&cluster, pre_mine_height + 1, 120).await?;
+    cluster
+        .poll_all_nodes_height(pre_mine_height + 1, 120)
+        .await?;
 
     // Counter should still be 1 (dedup: tx already executed via batch)
-    poll_all_nodes(&cluster, &contract, "get()", "1", 120).await?;
+    cluster.poll_all_nodes(&contract, "get()", "1", 120).await?;
 
     // Checkpoints should remain the same (dedup produces identical state)
-    let post_mine_checkpoints = assert_checkpoints_match(&cluster).await?;
+    let post_mine_checkpoints = cluster.assert_checkpoints_match().await?;
     assert_eq!(
         post_batch_checkpoints, post_mine_checkpoints,
         "Checkpoints changed after mining block with already-batched tx"

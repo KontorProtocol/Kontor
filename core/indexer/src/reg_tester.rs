@@ -1,5 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
+use backon::BackoffBuilder;
+
 use crate::{
     api::{client::Client as KontorClient, ws_client::WebSocketClient},
     bitcoin_client::{
@@ -1039,6 +1041,141 @@ impl RegTesterCluster {
             .generate_to_address(count, &self.identity.address.to_string())
             .await?;
         Ok(())
+    }
+
+    /// Poll all nodes until they all return the expected value for a view call.
+    pub async fn poll_all_nodes(
+        &self,
+        contract: &ContractAddress,
+        expr: &str,
+        expected: &str,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let backoff = backon::ExponentialBuilder::new()
+            .with_jitter()
+            .with_min_delay(std::time::Duration::from_millis(100))
+            .with_max_delay(std::time::Duration::from_secs(5));
+        let mut retry = backoff.build();
+        loop {
+            let mut all_match = true;
+            for node in &self.nodes {
+                match node.view(contract, expr).await? {
+                    indexer_types::ViewResult::Ok { value } if value == expected => {}
+                    _ => {
+                        all_match = false;
+                        break;
+                    }
+                }
+            }
+            if all_match {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                for (i, node) in self.nodes.iter().enumerate() {
+                    let value = node.view(contract, expr).await?;
+                    eprintln!("Node {i}: {value:?}");
+                }
+                bail!("Timed out waiting for all nodes to return {expected} for {expr}");
+            }
+            if let Some(delay) = retry.next() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    /// Poll all nodes until they all reach at least the expected height.
+    pub async fn poll_all_nodes_height(
+        &self,
+        expected_height: i64,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let backoff = backon::ExponentialBuilder::new()
+            .with_jitter()
+            .with_min_delay(std::time::Duration::from_millis(100))
+            .with_max_delay(std::time::Duration::from_secs(5));
+        let mut retry = backoff.build();
+        loop {
+            let mut all_reached = true;
+            for node in &self.nodes {
+                let info = node.index().await?;
+                if info.height < expected_height {
+                    all_reached = false;
+                    break;
+                }
+            }
+            if all_reached {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                for (i, node) in self.nodes.iter().enumerate() {
+                    let info = node.index().await?;
+                    eprintln!("Node {i} height: {}", info.height);
+                }
+                bail!("Timed out waiting for all nodes to reach height {expected_height}");
+            }
+            if let Some(delay) = retry.next() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    /// Poll all nodes until they all reach at least the expected consensus height.
+    pub async fn poll_all_nodes_consensus_height(
+        &self,
+        expected: i64,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let backoff = backon::ExponentialBuilder::new()
+            .with_jitter()
+            .with_min_delay(std::time::Duration::from_millis(100))
+            .with_max_delay(std::time::Duration::from_secs(5));
+        let mut retry = backoff.build();
+        loop {
+            let mut all_reached = true;
+            for node in &self.nodes {
+                let info = node.index().await?;
+                if info.consensus_height.unwrap_or(0) < expected {
+                    all_reached = false;
+                    break;
+                }
+            }
+            if all_reached {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                for (i, node) in self.nodes.iter().enumerate() {
+                    let info = node.index().await?;
+                    eprintln!("Node {i} consensus_height: {:?}", info.consensus_height);
+                }
+                bail!("Timed out waiting for all nodes to reach consensus height {expected}");
+            }
+            if let Some(delay) = retry.next() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    /// Assert all nodes have matching non-empty checkpoints. Returns the checkpoint value.
+    pub async fn assert_checkpoints_match(&self) -> Result<String> {
+        let mut checkpoints = Vec::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            let info = node.index().await?;
+            let checkpoint = info
+                .checkpoint
+                .unwrap_or_else(|| panic!("Node {i} should have a checkpoint"));
+            checkpoints.push((i, info.height, info.consensus_height, checkpoint));
+        }
+        let first_cp = &checkpoints[0].3;
+        for (i, height, consensus_height, cp) in &checkpoints[1..] {
+            assert_eq!(
+                cp, first_cp,
+                "Node {i} checkpoint mismatch with node 0 (height={height}, consensus_height={consensus_height:?})"
+            );
+        }
+        Ok(checkpoints.into_iter().next().unwrap().3)
     }
 
     /// Shut down all nodes.
