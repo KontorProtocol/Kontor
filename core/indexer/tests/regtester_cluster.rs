@@ -72,7 +72,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
 
     // Get current height, then mine a block containing the batched tx
-    let pre_mine_height = cluster.nodes[0].index().await?.height;
+    let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
 
     // Wait for all nodes to process the new block
@@ -138,7 +138,8 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         height: contract.height,
         tx_index: contract.tx_index,
     };
-    let initial_consensus_height = cluster.nodes[0]
+    let initial_consensus_height = cluster
+        .client(0)
         .index()
         .await?
         .consensus_height
@@ -169,7 +170,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
     let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
 
     // Mine a block to confirm all batched txs
-    let pre_mine_height = cluster.nodes[0].index().await?.height;
+    let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
     cluster
         .poll_all_nodes_height(pre_mine_height + 1, 120, &[])
@@ -233,7 +234,8 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         height: contract.height,
         tx_index: contract.tx_index,
     };
-    let initial_consensus_height = cluster.nodes[0]
+    let initial_consensus_height = cluster
+        .client(0)
         .index()
         .await?
         .consensus_height
@@ -336,7 +338,8 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         height: contract.height,
         tx_index: contract.tx_index,
     };
-    let initial_consensus_height = cluster.nodes[0]
+    let initial_consensus_height = cluster
+        .client(0)
         .index()
         .await?
         .consensus_height
@@ -360,10 +363,10 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         .await?;
 
     // Mine a block to confirm the batched txs
+    let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
-    let pre_join_height = cluster.nodes[0].index().await?.height;
     cluster
-        .poll_all_nodes_height(pre_join_height, 120, &[])
+        .poll_all_nodes_height(pre_mine_height + 1, 120, &[])
         .await?;
 
     // Start the 4th node (late joiner — fresh DB, never started)
