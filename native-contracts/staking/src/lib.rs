@@ -77,15 +77,10 @@ impl Guest for Staking {
         let model = ctx.model();
         let signer_key = ctx.signer().to_string();
 
-        if let Some(existing) = model.validators().get(&signer_key) {
-            if existing.status() != STATUS_INACTIVE {
-                return Err(Error::Message("already registered".to_string()));
-            }
-            if existing.stake() > 0.into() {
-                return Err(Error::Message(
-                    "withdraw existing stake before re-registering".to_string(),
-                ));
-            }
+        if let Some(existing) = model.validators().get(&signer_key)
+            && existing.status() != STATUS_INACTIVE
+        {
+            return Err(Error::Message("already registered".to_string()));
         }
 
         if stake_amount < model.min_stake() {
@@ -201,6 +196,16 @@ impl Guest for Staking {
         if model.active_count() > 0 {
             return;
         }
+        // Reject duplicate ed25519 keys in genesis set
+        assert!(
+            validators
+                .iter()
+                .map(|v| &v.ed25519_pubkey)
+                .collect::<alloc::collections::BTreeSet<_>>()
+                .len()
+                == validators.len(),
+            "duplicate ed25519 pubkey in genesis set"
+        );
         let staking_address = ctx.proc_context().contract_signer().to_string();
         for v in &validators {
             token::issue_to(ctx.core_signer(), &staking_address, v.stake)
