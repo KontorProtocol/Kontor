@@ -310,11 +310,11 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
-pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
+pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir, String)> {
     use crate::database::queries::insert_block;
     use crate::runtime::{ComponentCache, Runtime, Storage};
 
-    let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
+    let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
     insert_block(
@@ -340,7 +340,7 @@ pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir)> {
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(&[]).await?;
 
-    Ok((runtime, db_dir))
+    Ok((runtime, db_dir, db_name))
 }
 
 pub fn new_mock_block_hash(i: u32) -> BlockHash {
