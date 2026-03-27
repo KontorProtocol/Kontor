@@ -66,6 +66,7 @@ interface context {
         generate-id: async func() -> string;
         storage: async func() -> proc-storage;
         transaction: async func() -> transaction;
+        block-height: async func() -> u64;
     }
 
     resource fall-context {

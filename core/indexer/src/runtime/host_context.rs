@@ -694,6 +694,14 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             ._proc_storage(accessor, self_)
             .await
     }
+
+    async fn block_height<T>(
+        accessor: &Accessor<T, Self>,
+        _self: Resource<ProcContext>,
+    ) -> Result<u64> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        Ok(runtime.storage.height as u64)
+    }
 }
 
 impl built_in::context::HostKeys for Runtime {}

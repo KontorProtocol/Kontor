@@ -31,7 +31,6 @@ world root {
   record staking-info {
     active-count: u64,
     total-stake: decimal,
-    last-processed-height: u64,
   }
 
   record validator-set-change {

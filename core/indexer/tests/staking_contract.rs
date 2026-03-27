@@ -33,7 +33,6 @@ async fn test_register_validator() -> Result<()> {
     let epoch = staking::get_staking_info(runtime).await?;
     assert_eq!(epoch.active_count, 0);
     assert_eq!(epoch.total_stake, Decimal::from(0));
-    assert_eq!(epoch.last_processed_height, 0);
 
     assert_eq!(staking::get_active_set(runtime).await?.len(), 0);
     assert_eq!(staking::get_active_count(runtime).await?, 0);
@@ -265,7 +264,6 @@ async fn test_register_and_activate_regtest() -> Result<()> {
     assert_eq!(active_set[0].x_only_pubkey, validator.to_string());
 
     let epoch = staking::get_staking_info(runtime).await?;
-    assert!(epoch.last_processed_height >= 1);
     assert_eq!(epoch.active_count, 1);
     assert_eq!(epoch.total_stake, Decimal::from(5));
 

@@ -27,7 +27,6 @@ struct StakingStorage {
     pub validators: Map<String, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
-    pub last_processed_height: u64,
 }
 
 #[allow(dead_code)]
@@ -114,7 +113,7 @@ impl Guest for Staking {
             stake_amount,
         )?;
 
-        let activation_height = model.last_processed_height() + ACTIVATION_DELAY;
+        let activation_height = ctx.block_height() + ACTIVATION_DELAY;
 
         model.validators().set(
             signer_key.clone(),
@@ -181,7 +180,7 @@ impl Guest for Staking {
         match entry.status() {
             STATUS_ACTIVE => {
                 entry.set_status(STATUS_PENDING_EXIT);
-                let deactivation_height = model.last_processed_height() + ACTIVATION_DELAY;
+                let deactivation_height = ctx.block_height() + ACTIVATION_DELAY;
                 entry.set_deactivation_height(deactivation_height);
             }
             // Not yet activated — go straight to inactive and return tokens
@@ -228,7 +227,6 @@ impl Guest for Staking {
         block_height: u64,
     ) -> Result<ValidatorSetChange, Error> {
         let model = ctx.proc_context().model();
-        model.set_last_processed_height(block_height);
 
         let mut activated = 0u64;
         let mut deactivated = 0u64;
@@ -292,7 +290,6 @@ impl Guest for Staking {
         StakingInfo {
             active_count: model.active_count(),
             total_stake: model.total_active_stake(),
-            last_processed_height: model.last_processed_height(),
         }
     }
 
