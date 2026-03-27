@@ -21,6 +21,7 @@ mod host_files;
 mod host_numbers;
 mod host_storage;
 
+use crate::bls::verify_bls_bulk;
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
@@ -326,8 +327,6 @@ impl Runtime {
         input_index: i64,
         op_return_data: Option<indexer_types::OpReturnData>,
     ) -> Result<()> {
-        use crate::bls::verify_bls_bulk;
-
         let signer_map = verify_bls_bulk(self, ops, signature).await?;
 
         let base_ctx = self

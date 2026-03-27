@@ -8,6 +8,8 @@ use malachitebft_core_types::Round;
 use malachitebft_proto::{self as proto_trait, Error as ProtoError, Protobuf};
 
 use crate::consensus::codec::{decode_signature, encode_signature};
+use crate::consensus::proto;
+use crate::consensus::proto::proposal_part::Part;
 use crate::consensus::{Address, Ctx, Height};
 
 /// Proposal data streamed during live consensus.
@@ -141,8 +143,6 @@ impl Protobuf for ProposalPart {
     type Proto = crate::consensus::proto::ProposalPart;
 
     fn from_proto(proto: Self::Proto) -> Result<Self, ProtoError> {
-        use crate::consensus::proto::proposal_part::Part;
-
         let part = proto
             .part
             .ok_or_else(|| ProtoError::missing_field::<Self::Proto>("part"))?;
@@ -198,9 +198,6 @@ impl Protobuf for ProposalPart {
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
-        use crate::consensus::proto;
-        use crate::consensus::proto::proposal_part::Part;
-
         match self {
             Self::Init(init) => Ok(Self::Proto {
                 part: Some(Part::Init(proto::ProposalInit {

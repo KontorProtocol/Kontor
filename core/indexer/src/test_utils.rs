@@ -22,9 +22,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
 
+use crate::database::queries::insert_block;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
-use crate::runtime::RawFileDescriptor;
+use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
 use kontor_crypto::{api::FieldElement, field_from_uniform_bytes};
 
 pub enum PublicKey<'a> {
@@ -310,10 +311,13 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
-pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir, String)> {
-    use crate::database::queries::insert_block;
-    use crate::runtime::{ComponentCache, Runtime, Storage};
+pub async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis(&[]).await
+}
 
+pub async fn test_runtime_with_genesis(
+    genesis_validators: &[GenesisValidator],
+) -> Result<(Runtime, TempDir, String)> {
     let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -338,7 +342,7 @@ pub async fn test_runtime() -> Result<(crate::runtime::Runtime, TempDir, String)
 
     let storage = Storage::builder().height(1).conn(conn).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts(&[]).await?;
+    runtime.publish_native_contracts(genesis_validators).await?;
 
     Ok((runtime, db_dir, db_name))
 }
