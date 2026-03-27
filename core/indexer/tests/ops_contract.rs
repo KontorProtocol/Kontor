@@ -9,6 +9,11 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
     let name = "token";
     let bytes = runtime.contract_reader.read(name).await?.unwrap();
     let mut ident = reg_tester.identity().await?;
+    let registry_entry = reg_tester
+        .kontor_client()
+        .await
+        .registry_entry(&ident.x_only_public_key().to_string())
+        .await?;
     reg_tester.instruction(&mut ident, Inst::Issuance).await?;
     let InstructionResult { reveal_tx_hex, .. } = reg_tester
         .instruction(
@@ -31,7 +36,7 @@ async fn test_get_ops_from_api_regtest() -> Result<()> {
             metadata: OpMetadata {
                 previous_output: reveal_tx.input[0].previous_output,
                 input_index: 0,
-                signer: Signer::XOnlyPubKey(ident.x_only_public_key().to_string()),
+                signer: Signer::new_signer_id(registry_entry.signer_id),
             },
             gas_limit: 10_000,
             name: name.to_string(),

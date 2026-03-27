@@ -239,7 +239,8 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        let signer_id = self.runtime.ensure_signer(&x_only_pubkey).await?;
+        let signer = Signer::new_signer_id(signer_id);
         self.issuance(&signer).await?;
         Ok(signer)
     }
@@ -311,9 +312,26 @@ impl RuntimeRegtest {
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
         let identity = self.reg_tester.identity().await?;
-        let signer = identity.signer();
+        let x_only_signer = identity.signer();
+        self.identities
+            .insert(x_only_signer.clone(), identity.clone());
+        self.issuance(&x_only_signer).await?;
+
+        let x_only_str = match &x_only_signer {
+            Signer::XOnlyPubKey(s) => s.clone(),
+            _ => unreachable!(),
+        };
+        let entry = self
+            .reg_tester
+            .kontor_client()
+            .await
+            .registry_entry(&x_only_str)
+            .await?;
+
+        self.identities.remove(&x_only_signer);
+
+        let signer = Signer::new_signer_id(entry.signer_id);
         self.identities.insert(signer.clone(), identity);
-        self.issuance(&signer).await?;
         Ok(signer)
     }
 

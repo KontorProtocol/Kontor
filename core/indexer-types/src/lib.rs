@@ -256,6 +256,13 @@ impl Signer {
     pub fn is_core(&self) -> bool {
         matches!(self, Signer::Core(_))
     }
+
+    pub fn id(&self) -> Option<u64> {
+        match self {
+            Self::SignerId { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 impl core::ops::Deref for Signer {

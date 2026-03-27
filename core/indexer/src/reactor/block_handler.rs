@@ -304,8 +304,8 @@ async fn process_aggregate_input(
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
-    let signer_map = match bls::verify_aggregate(runtime, &input.insts).await {
-        Ok(map) => map,
+    let verified_signers = match bls::verify_aggregate(runtime, &input.insts).await {
+        Ok(set) => set,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
             return;
@@ -321,8 +321,8 @@ async fn process_aggregate_input(
         .zip(agg.signer_ids.iter())
         .enumerate()
     {
-        if !signer_map.contains_key(&signer_id) {
-            warn!("signer_id {signer_id} not in signer_map after verification");
+        if !verified_signers.contains(&signer_id) {
+            warn!("signer_id {signer_id} not in verified signers after verification");
             continue;
         }
 

@@ -25,7 +25,7 @@ use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
 use indexer_types::{Inst, Insts};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::runtime::Runtime;
 use crate::runtime::registry::api::get_entry_by_id;
@@ -146,20 +146,16 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
 // Aggregate verification — BLS pubkey resolution and signature checking
 // ---------------------------------------------------------------------------
 
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
-/// so the block handler can look up signers without redundant registry calls.
-pub type SignerMap = HashMap<u64, String>;
-
 struct SignerResolver {
     pk_cache: HashMap<u64, BlsPublicKey>,
-    signer_map: SignerMap,
+    verified_ids: HashSet<u64>,
 }
 
 impl SignerResolver {
     fn new() -> Self {
         Self {
             pk_cache: HashMap::new(),
-            signer_map: HashMap::new(),
+            verified_ids: HashSet::new(),
         }
     }
 
@@ -170,8 +166,7 @@ impl SignerResolver {
 
         let entry = get_entry_by_id(runtime, signer_id).await?;
         let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-        self.signer_map
-            .insert(signer_id, entry.x_only_pubkey.clone());
+        self.verified_ids.insert(signer_id);
         let raw_bytes = entry
             .bls_pubkey
             .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?;
@@ -185,9 +180,8 @@ impl SignerResolver {
 
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
-/// signers for execution without redundant registry lookups.
-pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+/// Returns the set of verified signer_ids on success.
+pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<HashSet<u64>> {
     let agg = insts
         .aggregate
         .as_ref()
@@ -255,7 +249,7 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
         ));
     }
 
-    Ok(resolver.signer_map)
+    Ok(resolver.verified_ids)
 }
 
 // ---------------------------------------------------------------------------
