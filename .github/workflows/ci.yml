@@ -20,7 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Cache Cargo things
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
@@ -30,10 +30,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            test-contracts/target
-            native-contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-registry-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ github.job }}-${{ runner.os }}-
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install wasm32-unknown-unknown
@@ -53,8 +52,10 @@ jobs:
       - name: Run clippy (native-contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./native-contracts
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.17.8
       - name: Install wasm-opt
-        run: cargo install wasm-opt
+        run: cargo binstall wasm-opt --no-confirm
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
@@ -62,7 +63,7 @@ jobs:
         run: cargo check -p wit-validator --target wasm32-unknown-unknown
         working-directory: ./core
       - name: Install wasm-tools
-        run: cargo install wasm-tools
+        run: cargo binstall wasm-tools --no-confirm
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -77,7 +78,7 @@ jobs:
         run: npm test
         working-directory: ./kontor-ts
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo binstall cargo-audit --no-confirm
       - name: Audit (test-contracts)
         run: cargo audit
         working-directory: ./test-contracts
@@ -99,7 +100,7 @@ jobs:
       - name: Initial disk usage
         run: df -h
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo things
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
@@ -109,10 +110,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            test-contracts/target
-            native-contracts/target
-            core/target
-          key: cargo-${{ github.job }}-${{ runner.os }}-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-registry-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ github.job }}-${{ runner.os }}-
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -120,29 +120,22 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install zmq boost
-      - name: Cache Bitcoin binaries
-        id: bitcoin-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/bitcoin/build/bin
-          key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v30.0
-      - name: Build Bitcoin
-        if: steps.bitcoin-cache.outputs.cache-hit != 'true'
+      - name: Download Bitcoin Core v30.2
         run: |
-          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.0
-          cd bitcoin
-          cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
-          cmake --build build
-      - name: Add Bitcoin to PATH
-        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v30.2/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          unzip bitcoin.zip -d bitcoin-bin
+          chmod +x bitcoin-bin/*
+          echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
       - name: Test bitcoind
         run: bitcoind --version
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.17.8
       - name: Install cargo expand
-        run: cargo install cargo-expand
+        run: cargo binstall cargo-expand --no-confirm
       - name: Install wasm-opt
-        run: cargo install wasm-opt
+        run: cargo binstall wasm-opt --no-confirm
       - name: Run tests (standard)
         working-directory: ./core
         run: cargo test --workspace
@@ -154,8 +147,8 @@ jobs:
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 600
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    timeout-minutes: 60
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
     strategy:
@@ -180,13 +173,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Sanitize branch name for cache tag
-        id: sanitize
-        run: |
-          BRANCH_NAME="${{ github.ref_name }}"
-          SANITIZED_NAME="${BRANCH_NAME//\//-}"
-          echo "branch_cache_tag=${SANITIZED_NAME}" >> $GITHUB_OUTPUT
-
       - name: Build and cache dependencies only
         uses: docker/build-push-action@v6
         with:
@@ -194,23 +180,19 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           target: cacher
-          tags: kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}-cacher
+          tags: kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}-cacher
           cache-from: |
-            type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}
             type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ matrix.arch }}
           cache-to: |
-            type=gha,mode=max
             type=inline
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ github.ref == 'refs/heads/main' && 'main' || steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }},mode=max
+            type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }},mode=max
 
   docker-build:
     name: Docker - Build Image (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 600
+    timeout-minutes: 60
     needs: docker-cache-deps
-    if: github.event_name == 'pull_request'
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
     strategy:
@@ -241,19 +223,10 @@ jobs:
         with:
           images: kontorprotocol/kontor
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
             type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
           flavor: |
             suffix=-${{ matrix.arch }},onlatest=true
-
-      - name: Sanitize branch name for cache tag
-        id: sanitize
-        run: |
-          BRANCH_NAME="${{ github.ref_name }}"
-          SANITIZED_NAME="${BRANCH_NAME//\//-}"
-          echo "branch_cache_tag=${SANITIZED_NAME}" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         id: build
@@ -264,14 +237,10 @@ jobs:
           push: true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |
-            type=gha
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }}
             type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ matrix.arch }}
           cache-to: |
-            type=gha,mode=max
             type=inline
-            type=registry,ref=kontorprotocol/kontor:buildcache-${{ steps.sanitize.outputs.branch_cache_tag }}-${{ matrix.arch }},mode=max
+            type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }},mode=max
           outputs: type=image,name=kontorprotocol/kontor,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -281,7 +250,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: digests-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -291,16 +260,16 @@ jobs:
   docker-manifest:
     name: Docker - Publish Multi-Arch Image
     runs-on: ubuntu-latest
-    timeout-minutes: 600
+    timeout-minutes: 60
     needs: docker-build
-    if: github.event_name == 'pull_request'
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: /tmp/digests
           pattern: digests-*
@@ -321,10 +290,8 @@ jobs:
         with:
           images: kontorprotocol/kontor
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
             type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Create manifest list and push
         working-directory: /tmp/digests

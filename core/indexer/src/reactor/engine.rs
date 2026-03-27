@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 
 use malachitebft_app_channel::app::config::*;
@@ -16,6 +18,7 @@ pub struct EngineConfig {
     pub private_key: PrivateKey,
     pub listen_addr: String,
     pub persistent_peers: Vec<String>,
+    pub data_dir: PathBuf,
 }
 
 /// NodeConfig implementation for Malachite engine.
@@ -49,7 +52,6 @@ pub struct EngineOutput {
     pub signing_provider: Ed25519Provider,
     pub address: Address,
     pub _handle: EngineHandle,
-    pub _wal_dir: tempfile::TempDir,
 }
 
 /// Start the Malachite consensus engine and return channels + metadata.
@@ -81,8 +83,8 @@ pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOut
     };
 
     let ctx = Ctx::new();
-    let wal_dir = tempfile::tempdir()?;
-    let wal_path = wal_dir.path().join("consensus.wal");
+    std::fs::create_dir_all(&config.data_dir)?;
+    let wal_path = config.data_dir.join("consensus.wal");
 
     let identity = NetworkIdentity::new(
         node_config.moniker.clone(),
@@ -110,6 +112,5 @@ pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOut
         signing_provider: app_provider,
         address,
         _handle: handle,
-        _wal_dir: wal_dir,
     })
 }

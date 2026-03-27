@@ -211,21 +211,23 @@ impl ReactorCluster {
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
-        let engine_config = EngineConfig {
-            private_key,
-            listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[i]),
-            persistent_peers: ports
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                .collect(),
-        };
-
+        let ports = ports.to_vec();
         join_set.spawn(async move {
             let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey)
                 .await
                 .expect("LiteExecutor setup failed");
+
+            let engine_config = EngineConfig {
+                private_key,
+                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[i]),
+                persistent_peers: ports
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
+                    .collect(),
+                data_dir: executor.data_dir(),
+            };
 
             let conn = runtime.get_storage_conn();
 
@@ -262,7 +264,6 @@ impl ReactorCluster {
                 state,
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
-                _wal_dir: engine_output._wal_dir,
                 node_index,
             };
 
@@ -271,7 +272,6 @@ impl ReactorCluster {
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
-                conn,
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),

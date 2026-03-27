@@ -32,9 +32,9 @@ use crate::{
     database::{
         self,
         queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_processed_block,
-            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
-            select_unconfirmed_batch_tx, set_block_processed,
+            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
+            rollback_to_height, select_block_at_height, select_block_latest,
+            select_unconfirmed_batch_tx,
         },
     },
     runtime::{
@@ -59,14 +59,12 @@ pub struct ConsensusHandle {
     pub state: consensus::ConsensusState,
     pub channels: Channels<Ctx>,
     pub _engine_handle: malachitebft_app_channel::EngineHandle,
-    pub _wal_dir: tempfile::TempDir,
     pub node_index: usize,
 }
 
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
-    conn: libsql::Connection,
     cancel_token: CancellationToken,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -84,7 +82,6 @@ impl<E: Executor> Reactor<E> {
     pub fn new(
         executor: E,
         runtime: Runtime,
-        conn: libsql::Connection,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         cancel_token: CancellationToken,
@@ -99,7 +96,6 @@ impl<E: Executor> Reactor<E> {
         Self {
             executor,
             runtime,
-            conn,
             cancel_token,
             block_rx,
             mempool_rx,
@@ -111,6 +107,13 @@ impl<E: Executor> Reactor<E> {
             event_tx,
             consensus_handle,
         }
+    }
+
+    /// Clone of the shared write connection from Runtime.storage.
+    /// All DB connections in the reactor (Reactor, ConsensusState, Storage)
+    /// share the same underlying connection via Arc.
+    fn db_conn(&self) -> libsql::Connection {
+        self.runtime.storage.conn.clone()
     }
 
     /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
@@ -127,7 +130,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn rollback(&mut self, height: u64) -> Result<()> {
-        rollback_to_height(&self.conn, height).await?;
+        rollback_to_height(&self.db_conn(), height).await?;
         if let Err(e) = self
             .runtime
             .file_ledger
@@ -138,7 +141,7 @@ impl<E: Executor> Reactor<E> {
         }
         self.last_height = height;
 
-        if let Ok(Some(row)) = select_block_at_height(&self.conn, height as i64).await {
+        if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height as i64).await {
             self.last_hash = Some(row.hash);
             info!("Rollback to height {} ({})", height, row.hash);
         } else {
@@ -227,8 +230,14 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
         self.last_hash = Some(hash);
 
+        self.runtime
+            .storage
+            .savepoint()
+            .await
+            .expect("Failed to begin block transaction");
+
         let _ = insert_block(
-            &self.conn,
+            &self.db_conn(),
             BlockRow::builder()
                 .height(block.height as i64)
                 .hash(block.hash)
@@ -239,9 +248,10 @@ impl<E: Executor> Reactor<E> {
 
         let mut unbatched_count = 0;
         for (i, t) in block.transactions.iter().enumerate() {
-            if let Ok(Some(_)) = get_transaction_by_txid(&self.conn, &t.txid.to_string()).await {
+            if let Ok(Some(_)) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
+            {
                 let _ = confirm_transaction(
-                    &self.conn,
+                    &self.db_conn(),
                     &t.txid.to_string(),
                     block.height as i64,
                     i as i64,
@@ -252,7 +262,7 @@ impl<E: Executor> Reactor<E> {
 
             unbatched_count += 1;
             let tx_id = match insert_transaction(
-                &self.conn,
+                &self.db_conn(),
                 indexer_types::TransactionRow::builder()
                     .height(block.height as i64)
                     .tx_index(i as i64)
@@ -275,7 +285,12 @@ impl<E: Executor> Reactor<E> {
         }
 
         self.run_block_lifecycle(&block).await;
-        let _ = set_block_processed(&self.conn, block.height as i64).await;
+
+        self.runtime
+            .storage
+            .commit()
+            .await
+            .expect("Failed to commit block transaction");
 
         if let Some(handle) = &self.consensus_handle {
             let checkpoint = handle.state.get_checkpoint().await;
@@ -325,7 +340,9 @@ impl<E: Executor> Reactor<E> {
                     for txid in &txids {
                         if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
                             resolved_txs.push(tx.clone());
-                        } else if let Some(tx) = Self::resolve_tx_from_db(&self.conn, txid).await {
+                        } else if let Some(tx) =
+                            Self::resolve_tx_from_db(&self.db_conn(), txid).await
+                        {
                             resolved_txs.push(tx);
                         } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
                             resolved_txs.push(tx);
@@ -600,7 +617,7 @@ pub async fn create_runtime_executor(
         .is_none()
     {
         info!("Creating native block");
-        insert_processed_block(
+        insert_block(
             &conn,
             BlockRow::builder()
                 .height(0)
@@ -659,7 +676,6 @@ pub async fn start_consensus(
         state,
         channels: engine_output.channels,
         _engine_handle: engine_output._handle,
-        _wal_dir: engine_output._wal_dir,
         node_index,
     })
 }
@@ -706,7 +722,6 @@ pub fn run(
                 let mut reactor = Reactor::new(
                     exec,
                     runtime,
-                    writer.connection(),
                     block_rx,
                     mempool_rx,
                     cancel_token.clone(),

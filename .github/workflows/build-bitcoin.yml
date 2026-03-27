@@ -1,0 +1,43 @@
+name: Build Bitcoin Binaries
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Bitcoin (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-x86-8cpu
+          - runner: macos-latest
+          - runner: ubuntu-arm64-4cpu
+    steps:
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libzmq3-dev libboost-all-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zmq boost
+
+      - name: Build Bitcoin Core v30.2
+        run: |
+          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.2
+          cd bitcoin
+          cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
+          cmake --build build --parallel 4
+
+      - name: Verify build
+        run: |
+          ls -la bitcoin/build/bin/
+          bitcoin/build/bin/bitcoind --version
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: bitcoin-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            bitcoin/build/bin/bitcoind
+            bitcoin/build/bin/bitcoin-cli

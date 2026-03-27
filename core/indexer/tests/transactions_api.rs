@@ -8,7 +8,7 @@ use indexer::{
             get_block, get_block_latest, get_block_transactions, get_transaction, get_transactions,
         },
     },
-    database::queries::{insert_processed_block, insert_transaction},
+    database::queries::{insert_block, insert_transaction},
     test_utils::new_test_db,
 };
 use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
@@ -49,9 +49,9 @@ async fn create_test_app() -> Result<Router> {
         .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
         .build();
 
-    insert_processed_block(&conn, block1).await?;
-    insert_processed_block(&conn, block2).await?;
-    insert_processed_block(&conn, block3).await?;
+    insert_block(&conn, block1).await?;
+    insert_block(&conn, block2).await?;
+    insert_block(&conn, block3).await?;
 
     let reader_conn = reader.connection().await?;
     let mut reader_verify_rows = reader_conn

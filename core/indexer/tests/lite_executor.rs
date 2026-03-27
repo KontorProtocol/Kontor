@@ -4,8 +4,7 @@ use anyhow::Result;
 use bitcoin::Txid;
 
 use indexer::database::queries::{
-    contract_has_state, get_transaction_by_txid, insert_contract, insert_processed_block,
-    insert_transaction,
+    contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use indexer::database::types::ContractRow;
 use indexer::reactor::executor::Executor;
@@ -26,6 +25,10 @@ pub struct LiteExecutor {
 }
 
 impl LiteExecutor {
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        self._db_dir.path().to_path_buf()
+    }
+
     pub async fn new(
         mock_bitcoin: Arc<Mutex<MockBitcoin>>,
         shared_pubkey: String,
@@ -34,7 +37,7 @@ impl LiteExecutor {
         let conn = writer.connection();
 
         // Insert genesis block only
-        insert_processed_block(
+        insert_block(
             &conn,
             BlockRow::builder()
                 .height(0)

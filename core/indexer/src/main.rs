@@ -5,7 +5,7 @@ use std::thread::available_parallelism;
 use crate::api::Env;
 use anyhow::Result;
 use clap::Parser;
-use indexer::database::queries::{delete_unprocessed_blocks, select_recent_blocks};
+use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
@@ -45,9 +45,6 @@ async fn main() -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
-    let deleted_count = delete_unprocessed_blocks(&writer.connection()).await?;
-    info!("Deleted {} unprocessed blocks", deleted_count);
-
     let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
@@ -99,6 +96,7 @@ async fn main() -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
             persistent_peers: config.consensus_peers.clone(),
+            data_dir: config.data_dir.clone(),
         }
     });
 

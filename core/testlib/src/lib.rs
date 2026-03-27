@@ -5,8 +5,8 @@ use glob::Paths;
 use indexer::{
     database::{
         queries::{
-            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
-            insert_processed_block, insert_transaction,
+            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_block,
+            insert_contract, insert_transaction,
         },
         types::ContractRow,
     },
@@ -175,7 +175,7 @@ impl RuntimeLocal {
     pub async fn new(block: Option<&Block>) -> Result<Self> {
         let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
-        insert_processed_block(
+        insert_block(
             &conn,
             BlockRow::builder()
                 .height(0)
@@ -185,10 +185,10 @@ impl RuntimeLocal {
         )
         .await?;
         let (height, tx_index, txid) = if let Some(block) = block {
-            insert_processed_block(&conn, block.into()).await?;
+            insert_block(&conn, block.into()).await?;
             (block.height as i64, 0, new_mock_transaction(0).txid)
         } else {
-            insert_processed_block(
+            insert_block(
                 &conn,
                 BlockRow::builder()
                     .height(1)

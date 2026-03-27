@@ -31,7 +31,7 @@ use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
     insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor, select_block_at_height,
     select_block_latest, select_existing_txids, select_min_batch_height,
-    select_unconfirmed_batch_txs, set_batch_processed,
+    select_unconfirmed_batch_txs,
 };
 
 use super::bitcoin_state::BitcoinState;
@@ -587,8 +587,13 @@ impl ConsensusState {
             })
             .collect();
 
-        // DB orchestration for batch execution
-        if let Err(e) = insert_batch(
+        runtime
+            .storage
+            .savepoint()
+            .await
+            .expect("Failed to begin batch transaction");
+
+        insert_batch(
             &self.conn,
             consensus_height.as_u64() as i64,
             anchor_height as i64,
@@ -597,10 +602,7 @@ impl ConsensusState {
             false,
         )
         .await
-        {
-            error!("insert_batch error: {e}");
-            return;
-        }
+        .expect("Failed to insert batch");
 
         // Store raw txs for replay/sync recovery
         for raw_tx in batch_txs {
@@ -638,7 +640,11 @@ impl ConsensusState {
                 .await;
         }
 
-        let _ = set_batch_processed(&self.conn, consensus_height.as_u64() as i64).await;
+        runtime
+            .storage
+            .commit()
+            .await
+            .expect("Failed to commit batch transaction");
 
         self.last_processed_anchor = anchor_height;
 
@@ -979,12 +985,6 @@ pub async fn handle_consensus_msg(
                         .await
                         {
                             error!("insert_batch (block) error: {e}");
-                        }
-                        if let Err(e) =
-                            set_batch_processed(&state.conn, certificate.height.as_u64() as i64)
-                                .await
-                        {
-                            error!("set_batch_processed (block) error: {e}");
                         }
 
                         // Remove from pending if present (may not be if we received
