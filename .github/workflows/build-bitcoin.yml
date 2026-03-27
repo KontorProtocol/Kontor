@@ -35,7 +35,7 @@ jobs:
           bitcoin/build/bin/bitcoind --version
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bitcoin-${{ runner.os }}-${{ runner.arch }}
           path: |
