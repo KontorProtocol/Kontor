@@ -53,7 +53,7 @@ jobs:
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./native-contracts
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@v1.17.8
       - name: Install wasm-opt
         run: cargo binstall wasm-opt --no-confirm
       - name: Run clippy (core)
@@ -131,7 +131,7 @@ jobs:
       - name: Install wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@v1.17.8
       - name: Install cargo expand
         run: cargo binstall cargo-expand --no-confirm
       - name: Install wasm-opt
