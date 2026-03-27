@@ -74,14 +74,14 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
         );
     }
 
-    let epoch_result = staking::api::transition_epoch(runtime, &core_signer, block.height)
+    let change = staking::api::process_pending_validators(runtime, &core_signer, block.height)
         .await
-        .expect("Failed to call transition_epoch")
-        .expect("transition_epoch returned error");
-    if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
+        .expect("Failed to call process_pending_validators")
+        .expect("process_pending_validators returned error");
+    if change.activated > 0 || change.deactivated > 0 {
         info!(
-            "Epoch {} transition: {} activated, {} deactivated",
-            epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
+            "Validator set change at height {}: {} activated, {} deactivated",
+            block.height, change.activated, change.deactivated
         );
     }
 
