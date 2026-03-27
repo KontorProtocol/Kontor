@@ -234,6 +234,20 @@ impl Runtime {
         })?)
     }
 
+    async fn _core_signer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::CoreProcContext
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let signer = res.signer.clone();
+        Ok(table.push(Signer::Core(Box::new(signer)))?)
+    }
+
     async fn _core_signer_proc_context<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -771,6 +785,16 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._core_signer_proc_context(accessor, self_)
+            .await
+    }
+
+    async fn core_signer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<Signer>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._core_signer(accessor, self_)
             .await
     }
 }

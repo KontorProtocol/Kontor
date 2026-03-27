@@ -77,6 +77,7 @@ interface context {
     resource core-context {
         proc-context: async func() -> proc-context;
         signer-proc-context: async func() -> proc-context;
+        core-signer: async func() -> signer;
     }
 }
 
