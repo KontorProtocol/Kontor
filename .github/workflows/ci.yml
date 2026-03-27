@@ -116,25 +116,16 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev libboost-all-dev
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install zmq boost
-      - name: Cache Bitcoin binaries
-        id: bitcoin-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/bitcoin/build/bin
-          key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v30.2
-      - name: Build Bitcoin
-        if: steps.bitcoin-cache.outputs.cache-hit != 'true'
+        run: brew install zmq
+      - name: Download Bitcoin Core v30.2
         run: |
-          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.2
-          cd bitcoin
-          cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
-          cmake --build build
-      - name: Add Bitcoin to PATH
-        run: echo "${{ github.workspace }}/bitcoin/build/bin" >> $GITHUB_PATH
+          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v30.2/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          unzip bitcoin.zip -d bitcoin-bin
+          chmod +x bitcoin-bin/*
+          echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
       - name: Test bitcoind
         run: bitcoind --version
       - name: Install wasm32-unknown-unknown
