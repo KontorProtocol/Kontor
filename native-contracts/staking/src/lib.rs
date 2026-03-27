@@ -213,7 +213,11 @@ impl Guest for Staking {
         if model.active_count() > 0 {
             return;
         }
+        let staking_address = ctx.proc_context().contract_signer().to_string();
         for v in &validators {
+            // Mint tokens directly to the staking contract
+            token::issue_to(ctx.core_signer(), &staking_address, v.stake)
+                .expect("Failed to mint genesis stake");
             model.validators().set(
                 v.x_only_pubkey.clone(),
                 ValidatorEntry {
@@ -223,6 +227,9 @@ impl Guest for Staking {
                     ed25519_pubkey: v.ed25519_pubkey.clone(),
                 },
             );
+            model
+                .try_update_total_active_stake(|s| s.add(v.stake))
+                .expect("Failed to update total active stake");
         }
         model.set_active_count(validators.len() as u64);
     }
