@@ -116,10 +116,10 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev libboost-all-dev
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install zmq
+        run: brew install zmq boost
       - name: Download Bitcoin Core v30.2
         run: |
           curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v30.2/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
