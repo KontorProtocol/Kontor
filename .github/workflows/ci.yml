@@ -125,11 +125,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/bitcoin/build/bin
-          key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v30.0
+          key: bitcoin-bin-${{ runner.os }}-${{ runner.arch }}-v30.2
       - name: Build Bitcoin
         if: steps.bitcoin-cache.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.0
+          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.2
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
           cmake --build build
