@@ -14,7 +14,7 @@ world root {
   }
 
   record validator-info {
-    x-only-pubkey: string,
+    signer-id: u64,
     stake: decimal,
     status: validator-status,
     joined-epoch: u64,
@@ -22,7 +22,7 @@ world root {
   }
 
   record active-validator-info {
-    x-only-pubkey: string,
+    signer-id: u64,
     stake: decimal,
     ed25519-pubkey: list<u8>,
   }
@@ -56,7 +56,7 @@ world root {
 
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;
-  export get-validator: async func(ctx: borrow<view-context>, x-only-pubkey: string) -> option<validator-info>;
+  export get-validator: async func(ctx: borrow<view-context>, signer-id: u64) -> option<validator-info>;
   export get-epoch-info: async func(ctx: borrow<view-context>) -> epoch-info;
   export get-active-count: async func(ctx: borrow<view-context>) -> u64;
 }

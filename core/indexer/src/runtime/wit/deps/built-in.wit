@@ -3,6 +3,7 @@ package kontor:built-in;
 interface context {
     resource signer {
         to-string: async func() -> string;
+        signer-id: async func() -> option<u64>;
     }
 
     variant op-return-data {

@@ -51,6 +51,21 @@ impl Runtime {
         Ok(self.table.lock().await.get(&self_)?.to_string())
     }
 
+    async fn _signer_id<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<Option<u64>> {
+        Fuel::SignerId
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let signer = self.table.lock().await.get(&self_)?.clone();
+        match signer {
+            Signer::SignerId { id, .. } => Ok(Some(id)),
+            _ => Ok(None),
+        }
+    }
+
     async fn _proc_signer<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -410,6 +425,16 @@ impl built_in::context::HostSignerWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._signer_to_string(accessor, self_)
+            .await
+    }
+
+    async fn signer_id<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<Option<u64>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._signer_id(accessor, self_)
             .await
     }
 }

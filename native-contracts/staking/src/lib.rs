@@ -26,7 +26,7 @@ struct StakingStorage {
     pub epoch_length: u64,
     pub next_epoch_height: u64,
     pub min_stake: Decimal,
-    pub validators: Map<String, ValidatorEntry>,
+    pub validators: Map<u64, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
 }
@@ -46,9 +46,9 @@ fn status_to_enum(status: u64) -> ValidatorStatus {
     }
 }
 
-fn make_validator_info(pubkey: String, entry: &ValidatorEntryModel) -> ValidatorInfo {
+fn make_validator_info(signer_id: u64, entry: &ValidatorEntryModel) -> ValidatorInfo {
     ValidatorInfo {
-        x_only_pubkey: pubkey,
+        signer_id,
         stake: entry.stake(),
         status: status_to_enum(entry.status()),
         joined_epoch: entry.joined_epoch(),
@@ -78,9 +78,12 @@ impl Guest for Staking {
         }
 
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let signer_id = ctx
+            .signer()
+            .signer_id()
+            .ok_or(Error::Message("signer has no id".to_string()))?;
 
-        if let Some(existing) = model.validators().get(&signer_key) {
+        if let Some(existing) = model.validators().get(signer_id) {
             if existing.status() != STATUS_INACTIVE {
                 return Err(Error::Message("already registered".to_string()));
             }
@@ -102,7 +105,7 @@ impl Guest for Staking {
         )?;
 
         model.validators().set(
-            signer_key.clone(),
+            signer_id,
             ValidatorEntry {
                 stake: stake_amount,
                 status: STATUS_PENDING_JOIN,
@@ -112,7 +115,7 @@ impl Guest for Staking {
         );
 
         Ok(ValidatorInfo {
-            x_only_pubkey: signer_key,
+            signer_id,
             stake: stake_amount,
             status: ValidatorStatus::PendingJoin,
             joined_epoch: 0,
@@ -122,11 +125,14 @@ impl Guest for Staking {
 
     fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<ValidatorInfo, Error> {
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let signer_id = ctx
+            .signer()
+            .signer_id()
+            .ok_or(Error::Message("signer has no id".to_string()))?;
 
         let entry = model
             .validators()
-            .get(&signer_key)
+            .get(signer_id)
             .ok_or(Error::Message("not registered".to_string()))?;
 
         if amount <= 0.into() {
@@ -149,39 +155,44 @@ impl Guest for Staking {
             model.try_update_total_active_stake(|s| s.add(amount))?;
         }
 
-        Ok(make_validator_info(signer_key, &entry))
+        Ok(make_validator_info(signer_id, &entry))
     }
 
     fn begin_unstake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let signer_id = ctx
+            .signer()
+            .signer_id()
+            .ok_or(Error::Message("signer has no id".to_string()))?;
 
         let entry = model
             .validators()
-            .get(&signer_key)
+            .get(signer_id)
             .ok_or(Error::Message("not registered".to_string()))?;
 
         match entry.status() {
             STATUS_ACTIVE => {
                 entry.set_status(STATUS_PENDING_EXIT);
             }
-            // Not yet activated — go straight to inactive
             STATUS_PENDING_JOIN => {
                 entry.set_status(STATUS_INACTIVE);
             }
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
         }
 
-        Ok(make_validator_info(signer_key, &entry))
+        Ok(make_validator_info(signer_id, &entry))
     }
 
     fn withdraw_stake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let signer_id = ctx
+            .signer()
+            .signer_id()
+            .ok_or(Error::Message("signer has no id".to_string()))?;
 
         let entry = model
             .validators()
-            .get(&signer_key)
+            .get(signer_id)
             .ok_or(Error::Message("not registered".to_string()))?;
 
         if entry.status() != STATUS_INACTIVE {
@@ -195,12 +206,12 @@ impl Guest for Staking {
             return Err(Error::Message("no stake to withdraw".to_string()));
         }
 
-        token::transfer(ctx.contract_signer(), &signer_key, stake)?;
+        token::transfer(ctx.contract_signer(), &signer_id.to_string(), stake)?;
 
         entry.set_stake(0.into());
 
         Ok(ValidatorInfo {
-            x_only_pubkey: signer_key,
+            signer_id,
             stake: 0.into(),
             status: ValidatorStatus::Inactive,
             joined_epoch: entry.joined_epoch(),
@@ -215,7 +226,7 @@ impl Guest for Staking {
         }
         for v in &validators {
             model.validators().set(
-                v.x_only_pubkey.clone(),
+                v.signer_id,
                 ValidatorEntry {
                     stake: v.stake,
                     status: STATUS_ACTIVE,
@@ -244,9 +255,9 @@ impl Guest for Staking {
         let mut activated = 0u64;
         let mut deactivated = 0u64;
 
-        let keys: Vec<String> = model.validators().keys().collect();
+        let keys: Vec<u64> = model.validators().keys().collect();
         for key in keys {
-            if let Some(entry) = model.validators().get(&key) {
+            if let Some(entry) = model.validators().get(key) {
                 match entry.status() {
                     STATUS_PENDING_JOIN => {
                         entry.set_status(STATUS_ACTIVE);
@@ -282,10 +293,10 @@ impl Guest for Staking {
             .validators()
             .keys()
             .filter_map(|key| {
-                let entry = ctx.model().validators().get(&key)?;
+                let entry = ctx.model().validators().get(key)?;
                 if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {
                     Some(ActiveValidatorInfo {
-                        x_only_pubkey: key,
+                        signer_id: key,
                         stake: entry.stake(),
                         ed25519_pubkey: entry.ed25519_pubkey(),
                     })
@@ -296,9 +307,9 @@ impl Guest for Staking {
             .collect()
     }
 
-    fn get_validator(ctx: &ViewContext, x_only_pubkey: String) -> Option<ValidatorInfo> {
-        let entry = ctx.model().validators().get(&x_only_pubkey)?;
-        Some(make_validator_info(x_only_pubkey, &entry))
+    fn get_validator(ctx: &ViewContext, signer_id: u64) -> Option<ValidatorInfo> {
+        let entry = ctx.model().validators().get(signer_id)?;
+        Some(make_validator_info(signer_id, &entry))
     }
 
     fn get_epoch_info(ctx: &ViewContext) -> EpochInfo {
