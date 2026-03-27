@@ -1,46 +1,72 @@
 import { expect, test } from "vitest";
 import {
-  serializeInst,
-  deserializeInst,
+  serializeInsts,
+  deserializeInsts,
   serializeOpReturnData,
   deserializeOpReturnData,
   validateWit,
+  type Inst,
+  type Insts,
 } from "@kontor/kontor-ts";
 
 test("publish", () => {
-  let inst = {
+  let inst: Inst = {
     Publish: {
       gas_limit: 1000000,
       name: "foo",
       bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
     },
   };
-  const str = JSON.stringify(inst);
-  const bs = serializeInst(str);
-  let result = deserializeInst(bs);
-  expect(inst).toStrictEqual(JSON.parse(result));
+  let insts: Insts = {
+    ops: [inst],
+    aggregate: null,
+  };
+  const str = JSON.stringify(insts);
+  const bs = serializeInsts(str);
+  let result = deserializeInsts(bs);
+  expect(insts).toStrictEqual(JSON.parse(result));
 });
 
 test("call", () => {
-  let inst = {
+  let inst: Inst = {
     Call: {
       gas_limit: 1000000,
       contract: "foo_1_2",
       expr: "foo()",
     },
   };
-  const str = JSON.stringify(inst);
-  const bs = serializeInst(str);
-  let result = deserializeInst(bs);
-  expect(inst).toStrictEqual(JSON.parse(result));
+  let insts: Insts = {
+    ops: [inst],
+    aggregate: null,
+  };
+  const str = JSON.stringify(insts);
+  const bs = serializeInsts(str);
+  let result = JSON.parse(deserializeInsts(bs));
+  expect(result).toStrictEqual({
+    ops: [
+      {
+        Call: {
+          gas_limit: 1000000,
+          contract: "foo_1_2",
+          nonce: null,
+          expr: "foo()",
+        },
+      },
+    ],
+    aggregate: null,
+  });
 });
 
 test("issuance", () => {
-  let inst = "Issuance";
-  const str = JSON.stringify(inst);
-  const bs = serializeInst(str);
-  let result = deserializeInst(bs);
-  expect(inst).toStrictEqual(JSON.parse(result));
+  let inst: Inst = "Issuance";
+  let insts: Insts = {
+    ops: [inst],
+    aggregate: null,
+  };
+  const str = JSON.stringify(insts);
+  const bs = serializeInsts(str);
+  let result = deserializeInsts(bs);
+  expect(insts).toStrictEqual(JSON.parse(result));
 });
 
 test("op_return_data", () => {

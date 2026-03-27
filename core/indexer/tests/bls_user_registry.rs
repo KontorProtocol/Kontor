@@ -321,15 +321,10 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
 }
 
 /// Wrong-length `schnorr_sig` and `bls_sig` on a direct `RegisterBlsKey` must be
-/// rejected by `register_bls_key`'s length checks with no registry entry created.
+/// rejected by `register_bls_key`'s length checks. The signer entry may still be
+/// created by `ensure_signer`, but no BLS key may be bound and nonce must stay 0.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() -> Result<()> {
-    let mut user = reg_tester.unregistered_identity().await?;
-
-    let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
-    let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
-    let user_xonly = user.x_only_public_key().to_string();
-
     let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
         ("short schnorr_sig", vec![0u8; 32], vec![0u8; 48]),
         ("long schnorr_sig", vec![0u8; 128], vec![0u8; 48]),
@@ -338,6 +333,17 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
     ];
 
     for (label, schnorr_sig, bls_sig) in cases {
+        let mut user = reg_tester.unregistered_identity().await?;
+        let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
+        let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
+        let user_xonly = user.x_only_public_key().to_string();
+
+        assert_eq!(
+            registry::get_signer_id(runtime, &user_xonly).await?,
+            None,
+            "{label}: test precondition failed, user must start unregistered"
+        );
+
         let _ = reg_tester
             .instruction(
                 &mut user,
@@ -349,10 +355,82 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
             )
             .await;
 
+        let signer_id = registry::get_signer_id(runtime, &user_xonly).await?;
+        assert!(
+            signer_id.is_some(),
+            "{label}: signer entry should still exist after ensure_signer"
+        );
         assert_eq!(
-            registry::get_signer_id(runtime, &user_xonly).await?,
+            registry::get_bls_pubkey(runtime, &user_xonly).await?,
             None,
-            "{label}: malformed field must prevent registration"
+            "{label}: malformed field must not bind a BLS pubkey"
+        );
+        let entry = registry::get_entry(runtime, &user_xonly)
+            .await?
+            .expect("entry must exist after ensure_signer");
+        assert_eq!(entry.next_nonce, 0, "{label}: malformed field must not advance nonce");
+    }
+
+    Ok(())
+}
+
+/// If a signer entry already exists without a BLS binding, malformed registration
+/// must leave the signer_id, empty BLS binding, and nonce unchanged.
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn bls_user_registry_malformed_sig_lengths_preserve_existing_signer_entry_regtest(
+) -> Result<()> {
+    let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
+        ("short schnorr_sig", vec![0u8; 32], vec![0u8; 48]),
+        ("long schnorr_sig", vec![0u8; 128], vec![0u8; 48]),
+        ("short bls_sig", vec![0u8; 64], vec![0u8; 24]),
+        ("long bls_sig", vec![0u8; 64], vec![0u8; 96]),
+    ];
+
+    for (label, schnorr_sig, bls_sig) in cases {
+        let mut user = reg_tester.unregistered_identity().await?;
+        let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
+        let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
+        let user_xonly = user.x_only_public_key().to_string();
+
+        reg_tester.instruction(&mut user, Inst::Issuance).await?;
+
+        let entry_before = registry::get_entry(runtime, &user_xonly)
+            .await?
+            .expect("issuance should create signer entry");
+        assert_eq!(
+            entry_before.bls_pubkey, None,
+            "{label}: precondition failed, signer entry must not have a BLS key yet"
+        );
+        assert_eq!(
+            entry_before.next_nonce, 0,
+            "{label}: precondition failed, issuance must not advance nonce"
+        );
+
+        let _ = reg_tester
+            .instruction(
+                &mut user,
+                Inst::RegisterBlsKey {
+                    bls_pubkey: bls_pk_bytes.clone(),
+                    schnorr_sig,
+                    bls_sig,
+                },
+            )
+            .await;
+
+        let entry_after = registry::get_entry(runtime, &user_xonly)
+            .await?
+            .expect("signer entry must still exist");
+        assert_eq!(
+            entry_after.signer_id, entry_before.signer_id,
+            "{label}: malformed field must not change signer_id"
+        );
+        assert_eq!(
+            entry_after.bls_pubkey, None,
+            "{label}: malformed field must not bind a BLS pubkey"
+        );
+        assert_eq!(
+            entry_after.next_nonce, 0,
+            "{label}: malformed field must not advance nonce"
         );
     }
 

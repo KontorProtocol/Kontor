@@ -54,3 +54,20 @@ impl Guest for Lib {
 }
 
 export!(Lib);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn call_batch_roundtrip() {
+        let json = r#"{"ops":[{"Call":{"gas_limit":1000000,"contract":"foo_1_2","expr":"foo()"}}],"aggregate":null}"#.to_string();
+        let bytes = insts_json_to_bytes(json.clone());
+        let roundtrip = insts_bytes_to_json(bytes);
+        assert_eq!(
+            roundtrip,
+            r#"{"ops":[{"Call":{"gas_limit":1000000,"contract":"foo_1_2","nonce":null,"expr":"foo()"}}],"aggregate":null}"#
+        );
+    }
+}
