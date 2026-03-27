@@ -27,7 +27,7 @@ jobs:
           git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.2
           cd bitcoin
           cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
-          cmake --build build --parallel
+          cmake --build build --parallel 4
 
       - name: Verify build
         run: |
