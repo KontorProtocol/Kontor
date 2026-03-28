@@ -8,7 +8,7 @@ use bitcoin::consensus::encode::deserialize_hex;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst};
+use indexer_types::{BlsBulkOp, ContractAddress as IndexerContractAddress, Inst, SignerRef};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -57,14 +57,14 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
 
     let nonce = 0u64;
     let op0 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(1, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -110,7 +110,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
 
     // Follow-up op must use nonce=1 (op0 consumed nonce=0).
     let op2 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract,
@@ -176,7 +176,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
 
     let nonce = 0u64;
     let op0 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -206,7 +206,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
     let op1 = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce,
         gas_limit: 50_000,
         contract: arith_contract,
@@ -262,7 +262,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         tx_index: 0,
     };
     let failing_op = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: missing_contract,
@@ -316,7 +316,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     })?;
 
     let recovery_op = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract,
@@ -393,28 +393,28 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     let op0 = BlsBulkOp::Call {
-        signer_id: signer1_id,
+        signer: SignerRef::RegistryId(signer1_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(1, arith::Op::Id),
     };
     let op1 = BlsBulkOp::Call {
-        signer_id: signer2_id,
+        signer: SignerRef::RegistryId(signer2_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(2, arith::Op::Id),
     };
     let op2 = BlsBulkOp::Call {
-        signer_id: signer1_id,
+        signer: SignerRef::RegistryId(signer1_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
         expr: arith::wave::eval_call_expr(3, arith::Op::Sum(arith::Operand { y: 4 })),
     };
     let op3 = BlsBulkOp::Call {
-        signer_id: signer2_id,
+        signer: SignerRef::RegistryId(signer2_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -528,7 +528,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
 
     // Submit nonce=1 when next_nonce=0 — skipping ahead must be rejected.
     let skipped_op = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 1,
         gas_limit: 50_000,
         contract: arith_contract.clone(),
@@ -561,7 +561,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
 
     // Confirm the correct nonce=0 still works after the rejected attempt.
     let valid_op = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract,
@@ -639,7 +639,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
 
     // Build and submit the original operation.
     let op = BlsBulkOp::Call {
-        signer_id,
+        signer: SignerRef::RegistryId(signer_id),
         nonce: 0,
         gas_limit: 50_000,
         contract: arith_contract.clone(),

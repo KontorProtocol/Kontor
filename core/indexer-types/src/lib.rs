@@ -266,13 +266,19 @@ pub struct OpMetadata {
     pub signer: Signer,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum SignerRef {
+    RegistryId(#[ts(type = "number")] u64),
+    BundleIndex(#[ts(type = "number")] u16),
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum BlsBulkOp {
     Call {
-        #[ts(type = "number")]
-        signer_id: u64,
+        signer: SignerRef,
         #[ts(type = "number")]
         nonce: u64,
         #[ts(type = "number")]

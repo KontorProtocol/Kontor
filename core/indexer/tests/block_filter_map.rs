@@ -9,7 +9,7 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use indexer::block::filter_map;
 use indexer::test_utils::{PublicKey as TestPublicKey, build_inscription};
-use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, Signer, serialize};
+use indexer_types::{BlsBulkOp, ContractAddress, Inst, Op, SignerRef, Signer, serialize};
 
 fn tx_with_taproot_script_witness(
     tap_script: ScriptBuf,
@@ -63,7 +63,7 @@ fn filter_map_parses_valid_blsbulk_envelope() {
         tx_index: 2,
     };
     let op = BlsBulkOp::Call {
-        signer_id: 7,
+        signer: SignerRef::RegistryId(7),
         nonce: 0,
         gas_limit: 123,
         contract,

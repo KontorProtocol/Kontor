@@ -18,7 +18,7 @@ use indexer::{
     reg_tester::derive_taproot_keypair_from_seed,
     test_utils::{gen_random_blocks, new_mock_block_hash, new_random_blockchain, new_test_db},
 };
-use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
+use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, SignerRef, Signer, Transaction};
 
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
@@ -468,7 +468,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
 
     // -- Block 2: BlsBulk Call that advances the nonce --
     let call_op = BlsBulkOp::Call {
-        signer_id: 0,
+        signer: SignerRef::RegistryId(0),
         nonce: 0,
         gas_limit: 100_000,
         contract: indexer_types::ContractAddress {
