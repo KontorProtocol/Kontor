@@ -893,7 +893,6 @@ pub struct NodeConfig {
     pub consensus_port: u16,
     pub ed25519_key: Ed25519PrivateKey,
     pub data_dir: TempDir,
-    pub in_genesis: bool,
     pub running: Option<ClusterNode>,
 }
 
@@ -1009,7 +1008,6 @@ impl RegTesterCluster {
                 consensus_port: consensus_ports[i],
                 ed25519_key: ed25519_keys[i].clone(),
                 data_dir: TempDir::new().expect("Failed to create temp dir"),
-                in_genesis: i < genesis_count,
                 running: None,
             })
             .collect();
