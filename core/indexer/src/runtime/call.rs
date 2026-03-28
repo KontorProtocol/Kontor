@@ -96,10 +96,14 @@ impl Runtime {
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
                     is_proc = true;
-                    fuel_limit = self.fuel_limit_for_non_procs();
-                    store
-                        .set_fuel(fuel_limit)
-                        .expect("Failed to set fuel for core context procedure");
+                    if self.stack.is_empty().await {
+                        fuel_limit = self.fuel_limit_for_non_procs();
+                        store
+                            .set_fuel(fuel_limit)
+                            .expect("Failed to set fuel for core context procedure");
+                    } else {
+                        fuel_limit = store.get_fuel().unwrap_or(0);
+                    }
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(

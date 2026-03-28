@@ -30,9 +30,9 @@ async fn test_register_validator() -> Result<()> {
     assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
     assert_eq!(info.stake, Decimal::from(5));
 
-    let epoch = staking::get_epoch_info(runtime).await?;
+    let epoch = staking::get_staking_info(runtime).await?;
     assert_eq!(epoch.active_count, 0);
-    assert_eq!(epoch.epoch, 0);
+    assert_eq!(epoch.total_stake, Decimal::from(0));
 
     assert_eq!(staking::get_active_set(runtime).await?.len(), 0);
     assert_eq!(staking::get_active_count(runtime).await?, 0);
@@ -63,18 +63,8 @@ async fn test_register_validator_errors() -> Result<()> {
         Err(Error::Message("already registered".to_string()))
     );
 
-    // Go inactive, try re-register without withdrawing
+    // Go inactive from PENDING_JOIN — tokens returned automatically, can re-register directly
     staking::begin_unstake(runtime, &validator).await??;
-    let result = staking::register_validator(runtime, &validator, vec![3u8; 32], 2.into()).await?;
-    assert_eq!(
-        result,
-        Err(Error::Message(
-            "withdraw existing stake before re-registering".to_string()
-        ))
-    );
-
-    // Withdraw, then re-register succeeds
-    staking::withdraw_stake(runtime, &validator).await??;
     let result =
         staking::register_validator(runtime, &validator, vec![3u8; 32], 2.into()).await??;
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
@@ -120,7 +110,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     // add_stake while pending_join is fine
     staking::add_stake(runtime, &validator, 1.into()).await??;
 
-    // Simulate activation + begin unstake to get to pending_exit
+    // (local mode cannot trigger activation)
     // (use begin_unstake from pending_join which goes straight to inactive,
     //  then re-register and go through regtest activation path isn't needed —
     //  just test the error directly via local mode workaround)
@@ -142,6 +132,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
 async fn test_begin_unstake_from_pending() -> Result<()> {
     let validator = runtime.identity().await?;
 
+    let balance_before = token::balance(runtime, &validator).await?.unwrap();
     staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
 
     let result = staking::begin_unstake(runtime, &validator).await??;
@@ -149,31 +140,34 @@ async fn test_begin_unstake_from_pending() -> Result<()> {
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::Inactive);
+    assert_eq!(info.stake, Decimal::from(0));
+
+    // Tokens returned automatically when unstaking from PENDING_JOIN
+    let balance_after_unstake = token::balance(runtime, &validator).await?.unwrap();
+    assert!(balance_before - balance_after_unstake < Decimal::from(1)); // only gas cost
 
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_withdraw_stake() -> Result<()> {
+async fn test_unstake_returns_tokens() -> Result<()> {
     let validator = runtime.identity().await?;
 
+    let balance_before = token::balance(runtime, &validator).await?.unwrap();
     staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
 
-    // Can't withdraw while pending
-    let result = staking::withdraw_stake(runtime, &validator).await?;
-    assert!(result.is_err());
-
-    // Go to inactive
+    // Unstake from PENDING_JOIN — tokens returned automatically
     staking::begin_unstake(runtime, &validator).await??;
-
-    // Now can withdraw
-    let result = staking::withdraw_stake(runtime, &validator).await??;
-    assert_eq!(result.status, staking::ValidatorStatus::Inactive);
-    assert_eq!(result.stake, Decimal::from(0));
 
     // Token balance should have mostly recovered (minus gas)
     let balance = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance > Decimal::from(9));
+    assert!(balance_before - balance < Decimal::from(1));
+
+    // Validator entry still exists with ed25519_pubkey retained
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.ed25519_pubkey, vec![1u8; 32]);
+    assert_eq!(info.stake, Decimal::from(0));
+    assert_eq!(info.status, staking::ValidatorStatus::Inactive);
 
     Ok(())
 }
@@ -195,6 +189,58 @@ async fn test_multiple_validators() -> Result<()> {
     Ok(())
 }
 
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
+    let v1 = runtime.identity().await?;
+    let v2 = runtime.identity().await?;
+    let same_key = vec![1u8; 32];
+
+    staking::register_validator(runtime, &v1, same_key.clone(), 5.into()).await??;
+
+    let result = staking::register_validator(runtime, &v2, same_key, 3.into()).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message(
+            "ed25519 pubkey already registered by another validator".to_string()
+        ))
+    );
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
+    let v1 = runtime.identity().await?;
+    let v2 = runtime.identity().await?;
+    let same_key = vec![1u8; 32];
+
+    // v1 registers and then goes inactive (tokens returned automatically from PENDING_JOIN)
+    staking::register_validator(runtime, &v1, same_key.clone(), 5.into()).await??;
+    staking::begin_unstake(runtime, &v1).await??;
+
+    // v2 can now use the same key since v1 is inactive
+    let result = staking::register_validator(runtime, &v2, same_key, 3.into()).await??;
+    assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_register_validator_token_balance() -> Result<()> {
+    let validator = runtime.identity().await?;
+
+    let balance_before = token::balance(runtime, &validator).await?.unwrap();
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+    let balance_after = token::balance(runtime, &validator).await?.unwrap();
+
+    // Difference should be at least 5 (staked amount) plus a small gas cost
+    let diff = balance_before - balance_after;
+    assert!(diff >= Decimal::from(5));
+    assert!(diff < Decimal::from(6));
+
+    Ok(())
+}
+
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn test_register_and_activate_regtest() -> Result<()> {
     let validator = runtime.identity().await?;
@@ -205,7 +251,7 @@ async fn test_register_and_activate_regtest() -> Result<()> {
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
 
-    // Mine blocks past epoch boundary (epoch_length = 10)
+    // Mine blocks past activation delay (ACTIVATION_DELAY = 12)
     for _ in 0..12 {
         runtime.issuance(&validator).await?;
     }
@@ -217,8 +263,7 @@ async fn test_register_and_activate_regtest() -> Result<()> {
     assert_eq!(active_set.len(), 1);
     assert_eq!(active_set[0].x_only_pubkey, validator.to_string());
 
-    let epoch = staking::get_epoch_info(runtime).await?;
-    assert!(epoch.epoch >= 1);
+    let epoch = staking::get_staking_info(runtime).await?;
     assert_eq!(epoch.active_count, 1);
     assert_eq!(epoch.total_stake, Decimal::from(5));
 
@@ -231,7 +276,7 @@ async fn test_add_stake_rejected_during_pending_exit_regtest() -> Result<()> {
 
     staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
 
-    // Activate
+    // Mine past activation delay
     for _ in 0..12 {
         runtime.issuance(&validator).await?;
     }
@@ -275,7 +320,7 @@ async fn test_full_lifecycle_regtest() -> Result<()> {
     // Register
     staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
 
-    // Mine to activation
+    // Mine past activation delay
     for _ in 0..12 {
         runtime.issuance(&validator).await?;
     }
@@ -292,20 +337,26 @@ async fn test_full_lifecycle_regtest() -> Result<()> {
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::PendingExit);
 
-    // Mine to next epoch
+    // Mine past deactivation delay
     for _ in 0..12 {
         runtime.issuance(&validator).await?;
     }
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::Inactive);
 
-    // Withdraw
-    let result = staking::withdraw_stake(runtime, &validator).await??;
-    assert_eq!(result.stake, Decimal::from(0));
+    // After deactivation: active_count and total_stake should be 0
+    let epoch = staking::get_staking_info(runtime).await?;
+    assert_eq!(epoch.active_count, 0);
+    assert_eq!(epoch.total_stake, Decimal::from(0));
+    assert_eq!(staking::get_active_set(runtime).await?.len(), 0);
 
-    // Tokens returned (minus gas)
+    // Tokens returned automatically on deactivation (minus gas)
     let balance = token::balance(runtime, &validator).await?.unwrap();
     assert!(balance > Decimal::from(9));
+
+    // Stake is zeroed
+    let info = staking::get_validator(runtime, &validator).await?.unwrap();
+    assert_eq!(info.stake, Decimal::from(0));
 
     Ok(())
 }

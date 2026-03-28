@@ -28,6 +28,7 @@ world root {
   }
 
   export issuance: async func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
+  export issue-to: async func(ctx: borrow<core-context>, dst: string, amt: decimal) -> result<mint, error>;
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
   export release: async func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
 

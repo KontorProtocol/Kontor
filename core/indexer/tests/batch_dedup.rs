@@ -9,7 +9,7 @@ use indexer_types::{Block, BlockRow};
 
 #[tokio::test]
 async fn batch_then_block_deduplicates_transaction() -> Result<()> {
-    let (mut runtime, _db_dir) = test_runtime().await?;
+    let (mut runtime, _db_dir, _) = test_runtime().await?;
     let conn = runtime.get_storage_conn();
 
     let mock_tx = new_mock_transaction(42);

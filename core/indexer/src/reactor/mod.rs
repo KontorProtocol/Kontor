@@ -40,7 +40,7 @@ use crate::{
     runtime::{
         ComponentCache, Runtime, Storage,
         filestorage::api::{expire_challenges, generate_challenges_for_block},
-        staking::api::{get_active_set, transition_epoch},
+        staking::api::{get_active_set, process_pending_validators},
         wit::Signer,
     },
     test_utils::new_mock_block_hash,
@@ -186,14 +186,14 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        let epoch_result = transition_epoch(&mut self.runtime, &core_signer, block.height)
+        let change = process_pending_validators(&mut self.runtime, &core_signer, block.height)
             .await
-            .expect("Failed to call transition_epoch")
-            .expect("transition_epoch returned error");
-        if epoch_result.activated > 0 || epoch_result.deactivated > 0 {
+            .expect("Failed to call process_pending_validators")
+            .expect("process_pending_validators returned error");
+        if change.activated > 0 || change.deactivated > 0 {
             info!(
-                "Epoch {} transition: {} activated, {} deactivated",
-                epoch_result.new_epoch, epoch_result.activated, epoch_result.deactivated
+                "Validator set change at height {}: {} activated, {} deactivated",
+                block.height, change.activated, change.deactivated
             );
         }
     }

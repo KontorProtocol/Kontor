@@ -1,7 +1,6 @@
 use anyhow::Result;
-use indexer_types::Block;
-
 use bitcoin::{BlockHash, hashes::Hash};
+use indexer_types::Block;
 
 use indexer::{
     reactor,
@@ -11,13 +10,7 @@ use indexer::{
 
 #[tokio::test]
 async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
-    let setup_block = Block {
-        height: 0,
-        hash: BlockHash::from_byte_array([0x00; 32]),
-        prev_hash: BlockHash::from_byte_array([0x00; 32]),
-        transactions: vec![],
-    };
-    let (mut runtime, _temp_dir) = testlib::Runtime::new_local_with_block(&setup_block).await?;
+    let (mut runtime, _temp_dir, _) = indexer::test_utils::test_runtime().await?;
 
     let descriptor = make_descriptor(
         "reactor_lucky".to_string(),
