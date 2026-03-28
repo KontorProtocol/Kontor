@@ -44,6 +44,15 @@ async fn test_register_validator() -> Result<()> {
 async fn test_register_validator_errors() -> Result<()> {
     let validator = runtime.identity().await?;
 
+    // Stake exceeds maximum
+    let result =
+        staking::register_validator(runtime, &validator, vec![1u8; 32], 1_000_000_001u64.into())
+            .await?;
+    assert_eq!(
+        result,
+        Err(Error::Message("stake exceeds maximum".to_string()))
+    );
+
     // Bad ed25519 key length
     let result = staking::register_validator(runtime, &validator, vec![1u8; 16], 5.into()).await?;
     assert_eq!(
@@ -96,6 +105,15 @@ async fn test_add_stake() -> Result<()> {
     assert_eq!(
         result,
         Err(Error::Message("amount must be positive".to_string()))
+    );
+
+    // add_stake that would exceed max
+    let result = staking::add_stake(runtime, &validator, 1_000_000_000u64.into()).await?;
+    assert_eq!(
+        result,
+        Err(Error::Message(
+            "total stake would exceed maximum".to_string()
+        ))
     );
 
     Ok(())

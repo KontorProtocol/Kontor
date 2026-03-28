@@ -38,8 +38,9 @@ use crate::{
         },
     },
     runtime::{
-        ComponentCache, Runtime, Storage,
+        ComponentCache, Decimal, Runtime, Storage,
         filestorage::api::{expire_challenges, generate_challenges_for_block},
+        numerics::decimal_to_string,
         staking::api::{get_active_set, process_pending_validators},
         wit::Signer,
     },
@@ -292,7 +293,13 @@ impl<E: Executor> Reactor<E> {
             .await
             .expect("Failed to commit block transaction");
 
-        if let Some(handle) = &self.consensus_handle {
+        if let Some(handle) = &mut self.consensus_handle {
+            // Update cached validator set after block execution
+            // (process_pending_validators may have activated/deactivated validators)
+            if let Ok(vs) = build_validator_set(&mut self.runtime).await {
+                handle.state.cached_validator_set = vs;
+            }
+
             let checkpoint = handle.state.get_checkpoint().await;
             handle.state.emit_state_event(StateEvent::BlockProcessed {
                 height,
@@ -548,8 +555,8 @@ impl<E: Executor> Reactor<E> {
     }
 }
 
-/// Build a Genesis from the staking contract's active validator set.
-async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
+/// Query the staking contract and build a ValidatorSet from the active validators.
+async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
     let active_set = get_active_set(runtime).await?;
 
     let validators: Vec<Validator> = active_set
@@ -565,13 +572,26 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(&v.ed25519_pubkey);
             let public_key = PublicKey::from_bytes(key_bytes);
-            // Convert stake to voting power (use 1 for now, refine later)
-            let voting_power = 1 as VotingPower;
+            let voting_power = stake_to_voting_power(v.stake);
             Some(Validator::new(public_key, voting_power))
         })
         .collect();
 
-    let validator_set = ValidatorSet::new(validators);
+    Ok(ValidatorSet::new(validators))
+}
+
+fn stake_to_voting_power(stake: Decimal) -> VotingPower {
+    let s = decimal_to_string(stake);
+    s.split('.')
+        .next()
+        .expect("decimal string should have integer part")
+        .parse::<u64>()
+        .expect("stake should be a valid u64")
+}
+
+/// Build a Genesis from the staking contract's active validator set.
+async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
+    let validator_set = build_validator_set(runtime).await?;
     Ok(Genesis { validator_set })
 }
 
