@@ -10,9 +10,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-x86-8cpu
+          - runner: ubuntu-latest
           - runner: macos-latest
-          - runner: ubuntu-arm64-4cpu
+          - runner: ubuntu-24.04-arm
     steps:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'

@@ -13,7 +13,8 @@ use crate::{
         RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
         taproot_derivation_path,
     },
-    config::RegtestConfig,
+    config::{GenesisConfig, GenesisValidatorConfig, RegtestConfig},
+    consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
     retry::retry_simple,
     runtime::{ContractAddress, wit::Signer},
@@ -1069,8 +1070,6 @@ impl RegTesterCluster {
     /// Remaining nodes can be started later with `start_node`.
     pub async fn setup_with(total: usize, active: usize) -> Result<Self> {
         assert!(active <= total, "active must be <= total");
-        use crate::config::{GenesisConfig, GenesisValidatorConfig};
-        use crate::consensus::signing::PrivateKey as Ed25519PrivateKey;
 
         let bitcoin_data_dir = TempDir::new()?;
         let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
