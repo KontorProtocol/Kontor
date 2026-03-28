@@ -524,6 +524,11 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         )
         .await?;
 
+    // Start the 5th node first — it observes as Role::None until activated
+    eprintln!("Starting 5th node (as observer)...");
+    cluster.start_node(4).await?;
+    eprintln!("5th node started and API available");
+
     // Register 5th validator using its ed25519 key
     eprintln!("Registering 5th validator...");
     let ed25519_pubkey = cluster.node_configs[4]
@@ -545,12 +550,10 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     let pre_height = cluster.client(0).index().await?.height;
     eprintln!("Pre-mine height: {pre_height}");
     cluster.mine(13).await?;
-    eprintln!("Mined 13 blocks, polling for height {}", pre_height + 13);
     cluster.poll_all_nodes_height(pre_height + 13, 120).await?;
     eprintln!("All nodes reached height {}", pre_height + 13);
 
-    // Verify 5 active validators
-    eprintln!("Checking active validator count...");
+    // Verify 5 active validators on all nodes (including the 5th)
     cluster
         .poll_all_nodes_view(
             &staking_contract,
@@ -559,11 +562,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             active_count_is(5),
         )
         .await?;
-
-    // Start the 5th node — it syncs and joins consensus
-    eprintln!("Starting 5th node...");
-    cluster.start_node(4).await?;
-    eprintln!("5th node started and API available");
+    eprintln!("All 5 nodes see 5 active validators");
 
     // Increment counter and verify all 5 nodes agree
     let counter_addr = indexer_types::ContractAddress {
@@ -620,6 +619,16 @@ async fn cluster_validator_lifecycle() -> Result<()> {
 
     // Restart node 3 for the unstake phase
     cluster.start_node(3).await?;
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(2),
+        )
+        .await?;
+    cluster.assert_checkpoints_match().await?;
+    eprintln!("Node 3 restarted and caught up");
 
     // --- Unstake the 5th validator ---
     rt.send_instruction(
