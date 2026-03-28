@@ -5,6 +5,10 @@ use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
+fn counter_is(expected: u64) -> impl Fn(&str) -> bool {
+    move |value| counter::wave::get_parse_return_expr(value) == expected
+}
+
 /// Basic cluster test: start 4 validators, publish a counter contract,
 /// increment via consensus batch, verify all nodes agree on state.
 #[tokio::test]
@@ -41,7 +45,12 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
 
     // Wait for all nodes to see counter at 0
     cluster
-        .poll_all_nodes(&contract, "get()", "0", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(0),
+        )
         .await?;
 
     // Checkpoints should match after publish
@@ -65,7 +74,12 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
 
     // Poll until all nodes show counter = 1 (batch decided + executed)
     cluster
-        .poll_all_nodes(&contract, "get()", "1", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(1),
+        )
         .await?;
 
     // Checkpoints should still match after batch execution
@@ -77,12 +91,17 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
 
     // Wait for all nodes to process the new block
     cluster
-        .poll_all_nodes_height(pre_mine_height + 1, 120, &[])
+        .poll_all_nodes_height(pre_mine_height + 1, 120)
         .await?;
 
     // Counter should still be 1 (dedup: tx already executed via batch)
     cluster
-        .poll_all_nodes(&contract, "get()", "1", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(1),
+        )
         .await?;
 
     // Checkpoints should remain the same (dedup produces identical state)
@@ -129,7 +148,12 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     cluster
-        .poll_all_nodes(&contract, "get()", "0", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(0),
+        )
         .await?;
 
     // Submit 5 increments, waiting for each to be batched by consensus before sending the next
@@ -157,13 +181,18 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
 
         // Wait for all nodes to process this batch
         cluster
-            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120, &[])
+            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120)
             .await?;
     }
 
     // All nodes should show counter = 5
     cluster
-        .poll_all_nodes(&contract, "get()", "5", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(5),
+        )
         .await?;
 
     // All nodes should agree on checkpoints
@@ -173,12 +202,17 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
     let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
     cluster
-        .poll_all_nodes_height(pre_mine_height + 1, 120, &[])
+        .poll_all_nodes_height(pre_mine_height + 1, 120)
         .await?;
 
     // Counter should still be 5 (dedup)
     cluster
-        .poll_all_nodes(&contract, "get()", "5", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(5),
+        )
         .await?;
 
     // Checkpoints should be unchanged (dedup produces identical state)
@@ -225,7 +259,12 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     cluster
-        .poll_all_nodes(&contract, "get()", "0", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(0),
+        )
         .await?;
 
     // Batch 2 increments while all 4 nodes are up
@@ -251,11 +290,16 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         )
         .await?;
         cluster
-            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120, &[])
+            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120)
             .await?;
     }
     cluster
-        .poll_all_nodes(&contract, "get()", "2", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(2),
+        )
         .await?;
 
     // Kill node 3
@@ -274,9 +318,14 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .await?;
     }
 
-    // Wait for the 3 remaining nodes to show counter = 4 (skip dead node 3)
+    // Wait for the 3 remaining nodes to show counter = 4 (node 3 is killed)
     cluster
-        .poll_all_nodes(&contract, "get()", "4", 120, &[3])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(4),
+        )
         .await?;
 
     // Restart node 3
@@ -284,7 +333,12 @@ async fn cluster_node_restart_recovery() -> Result<()> {
 
     // Wait for ALL nodes (including restarted) to show counter = 4
     cluster
-        .poll_all_nodes(&contract, "get()", "4", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(4),
+        )
         .await?;
 
     // All nodes (including restarted) should agree on checkpoints
@@ -302,7 +356,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // 4 validators in genesis, only 3 started
-    let mut cluster = RegTesterCluster::setup_with(4, 3).await?;
+    let mut cluster = RegTesterCluster::setup_with(4, 4, 3).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -329,7 +383,12 @@ async fn cluster_late_joiner_sync() -> Result<()> {
 
     // Wait for 3 active nodes to see counter = 0
     cluster
-        .poll_all_nodes(&contract, "get()", "0", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(0),
+        )
         .await?;
 
     // Batch 3 increments on the 3 active nodes
@@ -355,18 +414,23 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         )
         .await?;
         cluster
-            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120, &[])
+            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120)
             .await?;
     }
     cluster
-        .poll_all_nodes(&contract, "get()", "3", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(3),
+        )
         .await?;
 
     // Mine a block to confirm the batched txs
     let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
     cluster
-        .poll_all_nodes_height(pre_mine_height + 1, 120, &[])
+        .poll_all_nodes_height(pre_mine_height + 1, 120)
         .await?;
 
     // Start the 4th node (late joiner — fresh DB, never started)
@@ -374,7 +438,12 @@ async fn cluster_late_joiner_sync() -> Result<()> {
 
     // Wait for the late joiner to sync and reach the same state
     cluster
-        .poll_all_nodes(&contract, "get()", "3", 120, &[])
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(3),
+        )
         .await?;
 
     // All 4 nodes should agree on checkpoints

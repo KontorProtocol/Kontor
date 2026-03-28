@@ -1,9 +1,8 @@
-mod lite_executor;
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
+use bitcoin::Txid;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -13,14 +12,200 @@ use indexer::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use indexer::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use indexer::consensus::signing::PrivateKey;
 use indexer::consensus::{Genesis, Validator, ValidatorSet};
+use indexer::database::queries::{
+    contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
+};
+use indexer::database::types::ContractRow;
 use indexer::reactor::bitcoin_state::BitcoinState;
 use indexer::reactor::consensus::{ConsensusState, ObservationChannels};
 use indexer::reactor::engine::{self, EngineConfig};
+use indexer::reactor::executor::Executor;
 use indexer::reactor::mock_bitcoin::MockBitcoin;
 use indexer::reactor::{ConsensusHandle, Reactor};
+use indexer::runtime::wit::Signer;
+use indexer::runtime::{ComponentCache, ContractAddress, Runtime, Storage, TransactionContext};
+use indexer::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
+use indexer_types::{BlockRow, TransactionRow};
 use malachitebft_app_channel::app::types::core::VotingPower;
+use testlib::ContractReader;
 
-use lite_executor::LiteExecutor;
+use testlib::*;
+interface!(name = "counter", path = "../../test-contracts/counter/wit");
+
+struct LiteExecutor {
+    _db_dir: tempfile::TempDir,
+    counter_address: ContractAddress,
+    signer: Signer,
+    mock_bitcoin: Arc<Mutex<MockBitcoin>>,
+    replay_requests: Vec<u64>,
+}
+
+impl LiteExecutor {
+    fn data_dir(&self) -> std::path::PathBuf {
+        self._db_dir.path().to_path_buf()
+    }
+
+    async fn new(
+        mock_bitcoin: Arc<Mutex<MockBitcoin>>,
+        shared_pubkey: String,
+        genesis_validators: &[indexer::runtime::GenesisValidator],
+    ) -> Result<(Self, Runtime)> {
+        let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
+        let conn = writer.connection();
+
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
+
+        let storage = Storage::builder().height(0).conn(conn).build();
+        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        runtime.publish_native_contracts(genesis_validators).await?;
+
+        let signer = Signer::XOnlyPubKey(shared_pubkey);
+        runtime.issuance(&signer).await?;
+
+        let contract_reader = ContractReader::new("../../test-contracts").await?;
+        let counter_bytes = contract_reader
+            .read("counter")
+            .await?
+            .expect("counter contract WASM not found");
+
+        let mock_tx = new_mock_transaction(1);
+        let conn = runtime.get_storage_conn();
+        if get_transaction_by_txid(&conn, &mock_tx.txid.to_string())
+            .await?
+            .is_none()
+        {
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(0)
+                    .tx_index(0)
+                    .txid(mock_tx.txid.to_string())
+                    .build(),
+            )
+            .await?;
+        }
+
+        let counter_address = ContractAddress {
+            name: "counter".to_string(),
+            height: 0,
+            tx_index: 0,
+        };
+
+        let contract_id = insert_contract(
+            &conn,
+            ContractRow::builder()
+                .height(0)
+                .tx_index(0)
+                .name("counter".to_string())
+                .bytes(counter_bytes)
+                .build(),
+        )
+        .await?;
+
+        if !contract_has_state(&conn, contract_id).await? {
+            runtime
+                .set_context(
+                    0,
+                    Some(
+                        TransactionContext::builder()
+                            .tx_index(0)
+                            .txid(mock_tx.txid)
+                            .build(),
+                    ),
+                    None,
+                    None,
+                )
+                .await;
+            runtime
+                .execute(Some(&signer), &counter_address, "init()")
+                .await?;
+        }
+
+        Ok((
+            Self {
+                _db_dir: db_dir,
+                counter_address,
+                signer,
+                mock_bitcoin,
+                replay_requests: Vec::new(),
+            },
+            runtime,
+        ))
+    }
+}
+
+impl Executor for LiteExecutor {
+    async fn validate_transaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
+        Some(indexer_types::Transaction {
+            txid: tx.compute_txid(),
+            index: 0,
+            ops: Vec::new(),
+            op_return_data: Default::default(),
+        })
+    }
+
+    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
+        self.mock_bitcoin.lock().unwrap().get_raw_transaction(txid)
+    }
+
+    async fn execute_transaction(
+        &self,
+        runtime: &mut Runtime,
+        height: i64,
+        tx_id: i64,
+        tx: &indexer_types::Transaction,
+    ) {
+        runtime
+            .set_context(
+                height,
+                Some(
+                    TransactionContext::builder()
+                        .tx_id(tx_id)
+                        .tx_index(tx.index)
+                        .txid(tx.txid)
+                        .build(),
+                ),
+                None,
+                None,
+            )
+            .await;
+
+        if let Err(e) = runtime
+            .execute(
+                Some(&self.signer),
+                &self.counter_address,
+                &counter::wave::increment_call_expr(),
+            )
+            .await
+        {
+            tracing::error!("counter increment error: {e}");
+        }
+    }
+
+    async fn replay_blocks_from(&mut self, height: u64) {
+        self.replay_requests.push(height);
+    }
+
+    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+        Some(indexer_types::Transaction {
+            txid: tx.compute_txid(),
+            index: 0,
+            ops: vec![],
+            op_return_data: Default::default(),
+        })
+    }
+}
 
 fn allocate_port() -> Result<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
