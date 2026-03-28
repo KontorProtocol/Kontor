@@ -150,9 +150,12 @@ impl<E: Executor> Reactor<E> {
             warn!("Rollback to height {}, no previous block found", height);
         }
 
-        // Callers handle consensus state cleanup:
-        // - Reorg: clear_on_rollback + emit RollbackExecuted
-        // - Finality: initiate_rollback (selective retain + replay queue)
+        // Refresh cached validator set — rolled-back state may have different active set
+        if let Some(handle) = &mut self.consensus_handle
+            && let Ok(vs) = build_validator_set(&mut self.runtime).await
+        {
+            handle.state.cached_validator_set = vs;
+        }
 
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(Event::Rolledback { height }).await;
