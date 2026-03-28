@@ -79,6 +79,10 @@ pub struct ConsensusState {
     // Value::Block decision is finalized.
     pub block_cache: HashMap<u64, indexer_types::Block>,
 
+    // Cached validator set — updated after each block decision.
+    // Used by height_params() to provide Malachite with the current set.
+    pub cached_validator_set: ValidatorSet,
+
     // Observation channels (optional, for testing)
     pub observation: Option<ObservationChannels>,
 }
@@ -96,6 +100,7 @@ impl ConsensusState {
         genesis: Genesis,
         address: Address,
     ) -> Self {
+        let cached_validator_set = genesis.validator_set.clone();
         Self {
             conn,
             signing_provider,
@@ -113,6 +118,7 @@ impl ConsensusState {
             pending_blocks: VecDeque::new(),
             missed_block_decisions: HashSet::new(),
             block_cache: HashMap::new(),
+            cached_validator_set,
             observation: None,
         }
     }
@@ -131,7 +137,7 @@ impl ConsensusState {
     }
 
     fn validator_set(&self) -> ValidatorSet {
-        self.genesis.validator_set.clone()
+        self.cached_validator_set.clone()
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {

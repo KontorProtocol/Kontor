@@ -11,6 +11,7 @@ import!(
 );
 
 const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
+const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
 
 #[derive(Clone, Default, Storage)]
 struct ValidatorEntry {
@@ -86,6 +87,9 @@ impl Guest for Staking {
         if stake_amount < model.min_stake() {
             return Err(Error::Message("stake below minimum".to_string()));
         }
+        if stake_amount > MAX_STAKE.into() {
+            return Err(Error::Message("stake exceeds maximum".to_string()));
+        }
 
         // Reject duplicate ed25519 keys — two validators with the same
         // consensus key would cause conflicts in Malachite.
@@ -102,14 +106,8 @@ impl Guest for Staking {
             }
         }
 
-        token::transfer(
-            ctx.signer(),
-            &ctx.contract_signer().to_string(),
-            stake_amount,
-        )?;
-
+        // Effects before interactions (CEI pattern)
         let activation_height = ctx.block_height() + ACTIVATION_DELAY;
-
         model.validators().set(
             signer_key.clone(),
             ValidatorEntry {
@@ -120,6 +118,12 @@ impl Guest for Staking {
                 ed25519_pubkey: ed25519_pubkey.clone(),
             },
         );
+
+        token::transfer(
+            ctx.signer(),
+            &ctx.contract_signer().to_string(),
+            stake_amount,
+        )?;
 
         Ok(ValidatorInfo {
             x_only_pubkey: signer_key,
@@ -151,14 +155,20 @@ impl Guest for Staking {
             ));
         }
 
-        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;
-
         let new_stake = entry.stake().add(amount)?;
-        entry.set_stake(new_stake);
+        if new_stake > MAX_STAKE.into() {
+            return Err(Error::Message(
+                "total stake would exceed maximum".to_string(),
+            ));
+        }
 
+        // Effects before interactions (CEI pattern)
+        entry.set_stake(new_stake);
         if status == STATUS_ACTIVE {
             model.try_update_total_active_stake(|s| s.add(amount))?;
         }
+
+        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;
 
         Ok(make_validator_info(signer_key, &entry))
     }
@@ -181,9 +191,9 @@ impl Guest for Staking {
             // Not yet activated — go straight to inactive and return tokens
             STATUS_PENDING_JOIN => {
                 let stake = entry.stake();
-                token::transfer(ctx.contract_signer(), &signer_key, stake)?;
                 entry.set_stake(0.into());
                 entry.set_status(STATUS_INACTIVE);
+                token::transfer(ctx.contract_signer(), &signer_key, stake)?;
             }
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
         }
@@ -248,11 +258,11 @@ impl Guest for Staking {
                     }
                     STATUS_PENDING_EXIT if block_height >= entry.deactivation_height() => {
                         let stake = entry.stake();
-                        token::transfer(ctx.proc_context().contract_signer(), &key, stake)?;
                         entry.set_stake(0.into());
                         entry.set_status(STATUS_INACTIVE);
                         model.try_update_total_active_stake(|s| s.sub(stake))?;
                         model.update_active_count(|c| c - 1);
+                        token::transfer(ctx.proc_context().contract_signer(), &key, stake)?;
                         deactivated += 1;
                     }
                     _ => {}
