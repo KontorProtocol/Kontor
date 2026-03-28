@@ -441,12 +441,11 @@ impl ReactorCluster {
 
             info!(node = i, address = %engine_output.address, "Engine started");
 
-            let node_index = genesis
+            let validator_index = genesis
                 .validator_set
                 .validators
                 .iter()
-                .position(|v| v.address == engine_output.address)
-                .unwrap_or(i);
+                .position(|v| v.address == engine_output.address);
 
             let mut state = ConsensusState::new(
                 conn.clone(),
@@ -464,7 +463,7 @@ impl ReactorCluster {
                 state,
                 channels: engine_output.channels,
                 _engine_handle: engine_output._handle,
-                node_index,
+                validator_index,
             };
 
             let bitcoin_state = BitcoinState::new();

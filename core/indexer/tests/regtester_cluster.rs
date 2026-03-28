@@ -4,9 +4,17 @@ use indexer::runtime::ContractAddress;
 use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
+interface!(
+    name = "staking",
+    path = "../../native-contracts/staking/wit"
+);
 
 fn counter_is(expected: u64) -> impl Fn(&str) -> bool {
     move |value| counter::wave::get_parse_return_expr(value) == expected
+}
+
+fn active_count_is(expected: u64) -> impl Fn(&str) -> bool {
+    move |value| staking::wave::get_active_count_parse_return_expr(value) == expected
 }
 
 /// Basic cluster test: start 4 validators, publish a counter contract,
@@ -447,6 +455,229 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         .await?;
 
     // All 4 nodes should agree on checkpoints
+    cluster.assert_checkpoints_match().await?;
+
+    cluster.teardown().await?;
+    Ok(())
+}
+
+/// Validator lifecycle: register a new validator, activate it, verify participation,
+/// then unstake and verify deactivation.
+#[tokio::test]
+#[serial_test::serial]
+async fn cluster_validator_lifecycle() -> Result<()> {
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+
+    // 5 keys, 4 in genesis, 4 started
+    let mut cluster = RegTesterCluster::setup_with(5, 4, 4).await?;
+
+    let contracts = ContractReader::new("../../test-contracts").await?;
+    let contract_bytes = contracts
+        .read("counter")
+        .await?
+        .expect("counter contract not found");
+
+    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let result = rt
+        .instruction(
+            &mut ident,
+            indexer_types::Inst::Publish {
+                gas_limit: 10_000,
+                name: "counter".to_string(),
+                bytes: contract_bytes,
+            },
+        )
+        .await?;
+    let contract: ContractAddress = result
+        .result
+        .contract
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(0),
+        )
+        .await?;
+
+    let staking_addr = indexer_types::ContractAddress {
+        name: "staking".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+    let staking_contract = ContractAddress {
+        name: "staking".to_string(),
+        height: 0,
+        tx_index: 0,
+    };
+
+    // Verify 4 active validators initially
+    cluster
+        .poll_all_nodes_view(
+            &staking_contract,
+            &staking::wave::get_active_count_call_expr(),
+            120,
+            active_count_is(4),
+        )
+        .await?;
+
+    // Start the 5th node first — it observes as Role::None until activated
+    eprintln!("Starting 5th node (as observer)...");
+    cluster.start_node(4).await?;
+    eprintln!("5th node started and API available");
+
+    // Register 5th validator using its ed25519 key
+    eprintln!("Registering 5th validator...");
+    let ed25519_pubkey = cluster.node_configs[4]
+        .ed25519_key
+        .public_key()
+        .as_bytes()
+        .to_vec();
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: staking_addr.clone(),
+            expr: staking::wave::register_validator_call_expr(ed25519_pubkey, 5.into()),
+        },
+    )
+    .await?;
+
+    // Mine past ACTIVATION_DELAY (12 blocks)
+    let pre_height = cluster.client(0).index().await?.height;
+    eprintln!("Pre-mine height: {pre_height}");
+    cluster.mine(13).await?;
+    cluster.poll_all_nodes_height(pre_height + 13, 120).await?;
+    eprintln!("All nodes reached height {}", pre_height + 13);
+
+    // Verify 5 active validators on all nodes (including the 5th)
+    cluster
+        .poll_all_nodes_view(
+            &staking_contract,
+            &staking::wave::get_active_count_call_expr(),
+            120,
+            active_count_is(5),
+        )
+        .await?;
+    eprintln!("All 5 nodes see 5 active validators");
+
+    // Increment counter and verify all 5 nodes agree
+    let counter_addr = indexer_types::ContractAddress {
+        name: contract.name.clone(),
+        height: contract.height,
+        tx_index: contract.tx_index,
+    };
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: counter_addr.clone(),
+            expr: counter::wave::increment_call_expr(),
+        },
+    )
+    .await?;
+
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(1),
+        )
+        .await?;
+    cluster.assert_checkpoints_match().await?;
+
+    // --- Prove the 5th node is actively voting ---
+    // Kill one original validator. With 5-node set, need 4/5 (80%) for quorum.
+    // If the 5th isn't voting, only 3/5 (60%) < 66.7% — consensus stalls.
+    // If consensus continues, the 5th must be voting.
+    eprintln!("Killing node 3 to prove 5th node is voting...");
+    cluster.kill_node(3).await?;
+
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: counter_addr.clone(),
+            expr: counter::wave::increment_call_expr(),
+        },
+    )
+    .await?;
+
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(2),
+        )
+        .await?;
+    eprintln!("Consensus continued with 5th node voting — confirmed active validator");
+
+    // Restart node 3 for the unstake phase
+    cluster.start_node(3).await?;
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(2),
+        )
+        .await?;
+    cluster.assert_checkpoints_match().await?;
+    eprintln!("Node 3 restarted and caught up");
+
+    // --- Unstake the 5th validator ---
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: staking_addr.clone(),
+            expr: staking::wave::begin_unstake_call_expr(),
+        },
+    )
+    .await?;
+
+    // Mine past ACTIVATION_DELAY
+    let pre_height = cluster.client(0).index().await?.height;
+    cluster.mine(13).await?;
+    cluster.poll_all_nodes_height(pre_height + 13, 120).await?;
+
+    // Verify back to 4 active validators
+    cluster
+        .poll_all_nodes_view(
+            &staking_contract,
+            &staking::wave::get_active_count_call_expr(),
+            120,
+            active_count_is(4),
+        )
+        .await?;
+
+    // Kill the deactivated node
+    cluster.kill_node(4).await?;
+
+    // Consensus continues — increment counter again
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: counter_addr,
+            expr: counter::wave::increment_call_expr(),
+        },
+    )
+    .await?;
+
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(3),
+        )
+        .await?;
     cluster.assert_checkpoints_match().await?;
 
     cluster.teardown().await?;

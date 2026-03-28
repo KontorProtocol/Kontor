@@ -49,7 +49,7 @@ pub enum StateEvent {
 /// A decided batch observed from a node.
 #[derive(Debug, Clone)]
 pub struct DecidedBatch {
-    pub node_index: usize,
+    pub validator_index: Option<usize>,
     pub consensus_height: Height,
     pub value: Value,
 }

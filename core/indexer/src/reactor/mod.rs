@@ -60,7 +60,7 @@ pub struct ConsensusHandle {
     pub state: consensus::ConsensusState,
     pub channels: Channels<Ctx>,
     pub _engine_handle: malachitebft_app_channel::EngineHandle,
-    pub node_index: usize,
+    pub validator_index: Option<usize>,
 }
 
 pub struct Reactor<E: Executor> {
@@ -154,6 +154,10 @@ impl<E: Executor> Reactor<E> {
         if let Some(handle) = &mut self.consensus_handle
             && let Ok(vs) = build_validator_set(&mut self.runtime).await
         {
+            handle.validator_index = vs
+                .validators
+                .iter()
+                .position(|v| v.address == handle.state.address);
             handle.state.cached_validator_set = vs;
         }
 
@@ -300,6 +304,10 @@ impl<E: Executor> Reactor<E> {
             // Update cached validator set after block execution
             // (process_pending_validators may have activated/deactivated validators)
             if let Ok(vs) = build_validator_set(&mut self.runtime).await {
+                handle.validator_index = vs
+                    .validators
+                    .iter()
+                    .position(|v| v.address == handle.state.address);
                 handle.state.cached_validator_set = vs;
             }
 
@@ -492,7 +500,7 @@ impl<E: Executor> Reactor<E> {
                 Some(msg) = consensus_rx => {
                     debug!("REACTOR: processing consensus msg");
                     let handle = self.consensus_handle.as_mut().unwrap();
-                    let node_index = handle.node_index;
+                    let validator_index = handle.validator_index;
                     let decided_block = consensus::handle_consensus_msg(
                         &mut handle.state,
                         &self.executor,
@@ -500,7 +508,7 @@ impl<E: Executor> Reactor<E> {
                         &mut self.bitcoin_state,
                         &mut handle.channels,
                         msg,
-                        node_index,
+                        validator_index,
                         self.last_height,
                         self.last_hash.unwrap_or(BlockHash::all_zeros()),
                     ).await?;
@@ -680,12 +688,11 @@ pub async fn start_consensus(
     let engine_output = engine::start(engine_config, &genesis).await?;
     info!(address = %engine_output.address, "Consensus engine started");
 
-    let node_index = genesis
+    let validator_index = genesis
         .validator_set
         .validators
         .iter()
-        .position(|v| v.address == engine_output.address)
-        .expect("Our address not found in genesis validator set");
+        .position(|v| v.address == engine_output.address);
 
     let mut state = consensus::ConsensusState::new(
         runtime.get_storage_conn(),
@@ -699,7 +706,7 @@ pub async fn start_consensus(
         state,
         channels: engine_output.channels,
         _engine_handle: engine_output._handle,
-        node_index,
+        validator_index,
     })
 }
 
