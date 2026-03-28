@@ -591,6 +591,36 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         .await?;
     cluster.assert_checkpoints_match().await?;
 
+    // --- Prove the 5th node is actively voting ---
+    // Kill one original validator. With 5-node set, need 4/5 (80%) for quorum.
+    // If the 5th isn't voting, only 3/5 (60%) < 66.7% — consensus stalls.
+    // If consensus continues, the 5th must be voting.
+    eprintln!("Killing node 3 to prove 5th node is voting...");
+    cluster.kill_node(3).await?;
+
+    rt.send_instruction(
+        &mut ident,
+        indexer_types::Inst::Call {
+            gas_limit: 10_000,
+            contract: counter_addr.clone(),
+            expr: counter::wave::increment_call_expr(),
+        },
+    )
+    .await?;
+
+    cluster
+        .poll_all_nodes_view(
+            &contract,
+            &counter::wave::get_call_expr(),
+            120,
+            counter_is(2),
+        )
+        .await?;
+    eprintln!("Consensus continued with 5th node voting — confirmed active validator");
+
+    // Restart node 3 for the unstake phase
+    cluster.start_node(3).await?;
+
     // --- Unstake the 5th validator ---
     rt.send_instruction(
         &mut ident,
@@ -636,7 +666,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             &contract,
             &counter::wave::get_call_expr(),
             120,
-            counter_is(2),
+            counter_is(3),
         )
         .await?;
     cluster.assert_checkpoints_match().await?;
