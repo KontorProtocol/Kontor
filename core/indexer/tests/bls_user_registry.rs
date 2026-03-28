@@ -368,7 +368,10 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
         let entry = registry::get_entry(runtime, &user_xonly)
             .await?
             .expect("entry must exist after ensure_signer");
-        assert_eq!(entry.next_nonce, 0, "{label}: malformed field must not advance nonce");
+        assert_eq!(
+            entry.next_nonce, 0,
+            "{label}: malformed field must not advance nonce"
+        );
     }
 
     Ok(())
@@ -377,8 +380,8 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
 /// If a signer entry already exists without a BLS binding, malformed registration
 /// must leave the signer_id, empty BLS binding, and nonce unchanged.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_user_registry_malformed_sig_lengths_preserve_existing_signer_entry_regtest(
-) -> Result<()> {
+async fn bls_user_registry_malformed_sig_lengths_preserve_existing_signer_entry_regtest()
+-> Result<()> {
     let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
         ("short schnorr_sig", vec![0u8; 32], vec![0u8; 48]),
         ("long schnorr_sig", vec![0u8; 128], vec![0u8; 48]),
