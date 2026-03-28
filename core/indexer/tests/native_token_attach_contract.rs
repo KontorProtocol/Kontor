@@ -7,7 +7,7 @@ use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
-    ComposeQuery, Inst, InstructionQuery, RevealParticipantQuery, RevealQuery, serialize,
+    ComposeQuery, Inst, InstructionQuery, Insts, RevealParticipantQuery, RevealQuery, serialize,
 };
 use testlib::*;
 
@@ -39,12 +39,14 @@ pub async fn test_compose_token_attach_and_detach(
     let attach_inst = Inst::Call {
         gas_limit: 50_000,
         contract: runtime::token::address().into(),
+        nonce: None,
         expr: token::wave::attach_call_expr(0, Decimal::from(2)),
     };
 
     let detach_inst = Inst::Call {
         gas_limit: 50_000,
         contract: runtime::token::address().into(),
+        nonce: None,
         expr: token::wave::detach_call_expr(),
     };
 
@@ -54,8 +56,14 @@ pub async fn test_compose_token_attach_and_detach(
                 .address(seller_address.to_string())
                 .x_only_public_key(internal_key.to_string())
                 .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
-                .instruction(attach_inst.clone())
-                .chained_instruction(detach_inst.clone())
+                .insts(Insts {
+                    ops: vec![attach_inst.clone()],
+                    aggregate: None,
+                })
+                .chained_insts(Insts {
+                    ops: vec![detach_inst.clone()],
+                    aggregate: None,
+                })
                 .build(),
         ])
         .sat_per_vbyte(2)
@@ -110,7 +118,10 @@ pub async fn test_compose_token_attach_and_detach(
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
-    let chained_script_data_bytes = serialize(&detach_inst)?;
+    let chained_script_data_bytes = serialize(&Insts {
+        ops: vec![detach_inst.clone()],
+        aggregate: None,
+    })?;
 
     let reveal_query = RevealQuery {
         commit_tx_hex: reveal_tx_hex.clone(),

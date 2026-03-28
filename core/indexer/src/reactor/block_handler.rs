@@ -1,16 +1,19 @@
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::Hash;
-use indexer_types::{Block, Op, OpWithResult, Transaction, TransactionRow};
+use indexer_types::{
+    Block, Inst, Op, OpMetadata, OpWithResult, Transaction, TransactionInput, TransactionRow,
+};
 use tracing::{info, warn};
 
 use crate::{
-    block::{filter_map, inspect},
+    block::{filter_map, inspect, op_from_inst},
+    bls,
     consensus::Height,
     database::queries::{
         confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
         insert_transaction, insert_unconfirmed_batch_tx, select_block_latest,
     },
-    runtime::{Runtime, TransactionContext, filestorage, staking, wit::Signer},
+    runtime::{Runtime, TransactionContext, filestorage, registry, staking, wit::Signer},
     test_utils::new_mock_block_hash,
 };
 
@@ -107,7 +110,6 @@ pub async fn batch_handler(
     )
     .await?;
 
-    // Store raw bitcoin txs for unconfirmed batch recovery/sync
     for raw_tx in raw_txs {
         let txid = raw_tx.compute_txid();
         let serialized = bitcoin::consensus::serialize(raw_tx);
@@ -131,27 +133,18 @@ pub async fn batch_handler(
         )
         .await?;
 
-        for op in &t.ops {
-            let metadata = op.metadata();
-            let input_index = metadata.input_index;
-            let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
-
-            runtime
-                .set_context(
-                    anchor_height as i64,
-                    Some(TransactionContext {
-                        tx_id: Some(tx_id),
-                        tx_index: t.index,
-                        input_index,
-                        op_index: 0,
-                        txid: t.txid,
-                    }),
-                    Some(metadata.previous_output),
-                    op_return_data.clone().map(Into::into),
-                )
-                .await;
-
-            execute_op(runtime, op, op_return_data).await;
+        for input in &t.inputs {
+            let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
+            process_input(
+                runtime,
+                input,
+                anchor_height as i64,
+                Some(tx_id),
+                t.index,
+                t.txid,
+                op_return_data,
+            )
+            .await;
         }
     }
 
@@ -197,40 +190,183 @@ pub async fn process_transaction(
     )
     .await?;
 
-    for op in &t.ops {
-        let metadata = op.metadata();
-        let input_index = metadata.input_index;
-        let op_return_data = t.op_return_data.get(&(input_index as u64)).cloned();
-        info!("Op return data: {:#?}", op_return_data);
-
-        runtime
-            .set_context(
-                block_height as i64,
-                Some(TransactionContext {
-                    tx_id: Some(tx_id),
-                    tx_index: t.index,
-                    input_index,
-                    op_index: 0,
-                    txid: t.txid,
-                }),
-                Some(metadata.previous_output),
-                op_return_data.clone().map(Into::into),
-            )
-            .await;
-
-        execute_op(runtime, op, op_return_data).await;
+    for input in &t.inputs {
+        let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
+        process_input(
+            runtime,
+            input,
+            block_height as i64,
+            Some(tx_id),
+            t.index,
+            t.txid,
+            op_return_data,
+        )
+        .await;
     }
 
     Ok(())
 }
 
-pub async fn execute_op(
+pub async fn process_input(
     runtime: &mut Runtime,
-    op: &Op,
+    input: &TransactionInput,
+    height: i64,
+    tx_id: Option<i64>,
+    tx_index: i64,
+    txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
-    let input_index = op.metadata().input_index;
+    if input.insts.is_aggregate() {
+        process_aggregate_input(
+            runtime,
+            input,
+            height,
+            tx_id,
+            tx_index,
+            txid,
+            op_return_data,
+        )
+        .await;
+    } else {
+        process_direct_input(
+            runtime,
+            input,
+            height,
+            tx_id,
+            tx_index,
+            txid,
+            op_return_data,
+        )
+        .await;
+    }
+}
 
+async fn process_direct_input(
+    runtime: &mut Runtime,
+    input: &TransactionInput,
+    height: i64,
+    tx_id: Option<i64>,
+    tx_index: i64,
+    txid: bitcoin::Txid,
+    op_return_data: Option<indexer_types::OpReturnData>,
+) {
+    let metadata = OpMetadata {
+        previous_output: input.previous_output,
+        input_index: input.input_index,
+        signer: input.witness_signer.clone(),
+    };
+
+    for (op_index, inst) in input.insts.ops.iter().enumerate() {
+        let op = op_from_inst(inst.clone(), metadata.clone());
+
+        runtime
+            .set_context(
+                height,
+                Some(TransactionContext {
+                    tx_id,
+                    tx_index,
+                    input_index: input.input_index,
+                    op_index: op_index as i64,
+                    txid,
+                }),
+                Some(input.previous_output),
+                op_return_data.clone().map(Into::into),
+            )
+            .await;
+
+        execute_op(runtime, &op).await;
+    }
+}
+
+async fn process_aggregate_input(
+    runtime: &mut Runtime,
+    input: &TransactionInput,
+    height: i64,
+    tx_id: Option<i64>,
+    tx_index: i64,
+    txid: bitcoin::Txid,
+    op_return_data: Option<indexer_types::OpReturnData>,
+) {
+    let signer_map = match bls::verify_aggregate(runtime, &input.insts).await {
+        Ok(map) => map,
+        Err(e) => {
+            warn!("Aggregate verification failed: {e}");
+            return;
+        }
+    };
+
+    let agg = input.insts.aggregate.as_ref().unwrap();
+
+    for (op_index, (inst, &signer_id)) in input
+        .insts
+        .ops
+        .iter()
+        .zip(agg.signer_ids.iter())
+        .enumerate()
+    {
+        let x_only = match signer_map.get(&signer_id) {
+            Some(x) => x.clone(),
+            None => {
+                warn!("signer_id {signer_id} not in signer_map after verification");
+                continue;
+            }
+        };
+
+        runtime
+            .set_context(
+                height,
+                Some(TransactionContext {
+                    tx_id,
+                    tx_index,
+                    input_index: input.input_index,
+                    op_index: op_index as i64,
+                    txid,
+                }),
+                Some(input.previous_output),
+                op_return_data.clone().map(Into::into),
+            )
+            .await;
+
+        if let Inst::Call { nonce, .. } = inst {
+            let nonce_val = match nonce {
+                Some(n) => *n,
+                None => {
+                    warn!("aggregate Call for signer {signer_id} missing nonce");
+                    continue;
+                }
+            };
+            let nonce_result = registry::api::advance_nonce(
+                runtime,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                signer_id,
+                nonce_val,
+            )
+            .await;
+            match nonce_result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    warn!("aggregate nonce check failed for signer {signer_id}: {e:?}");
+                    continue;
+                }
+                Err(e) => {
+                    warn!("aggregate nonce advance error for signer {signer_id}: {e}");
+                    continue;
+                }
+            }
+        }
+
+        let signer = Signer::XOnlyPubKey(x_only);
+        let metadata = OpMetadata {
+            previous_output: input.previous_output,
+            input_index: input.input_index,
+            signer: signer.clone(), // TODO
+        };
+        let op = op_from_inst(inst.clone(), metadata);
+        execute_op(runtime, &op).await;
+    }
+}
+
+pub async fn execute_op(runtime: &mut Runtime, op: &Op) {
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {
@@ -256,6 +392,7 @@ pub async fn execute_op(
             gas_limit,
             contract,
             expr,
+            ..
         } => {
             runtime.set_gas_limit(*gas_limit);
             let result = runtime
@@ -287,24 +424,6 @@ pub async fn execute_op(
                 .await
             {
                 warn!("RegisterBlsKey failed: {e}");
-            }
-        }
-        Op::BlsBulk {
-            metadata,
-            ops,
-            signature,
-        } => {
-            if let Err(e) = runtime
-                .execute_bls_bulk(
-                    ops,
-                    signature,
-                    metadata.previous_output,
-                    input_index,
-                    op_return_data,
-                )
-                .await
-            {
-                warn!("BlsBulk failed: {e}");
             }
         }
     }

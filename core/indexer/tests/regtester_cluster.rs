@@ -56,6 +56,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     rt.send_instruction(
         &mut ident,
         indexer_types::Inst::Call {
+            nonce: None,
             gas_limit: 10_000,
             contract: contract_addr,
             expr: counter::wave::increment_call_expr(),
@@ -148,6 +149,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             indexer_types::Inst::Call {
+                nonce: None,
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
@@ -244,6 +246,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             indexer_types::Inst::Call {
+                nonce: None,
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
@@ -266,6 +269,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             indexer_types::Inst::Call {
+                nonce: None,
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
@@ -348,6 +352,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             indexer_types::Inst::Call {
+                nonce: None,
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
                 expr: counter::wave::increment_call_expr(),

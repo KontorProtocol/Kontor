@@ -19,7 +19,7 @@ use indexer::bls::{
     BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX,
     bls_derivation_path, derive_bls_secret_key_eip2333,
 };
-use indexer_types::{BlsBulkOp, Inst, Signer};
+use indexer_types::{AggregateInfo, Inst, Insts, Signer};
 use testlib::{
     AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
     RuntimeConfig, import, serial_test,
@@ -324,16 +324,14 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
     Ok(())
 }
 
-/// Identity hijack via BlsBulk: Eve tries to register her own BLS key under
-/// Alice's Taproot identity. Eve CAN produce the BLS binding proof (she signs
-/// `BLS_BINDING_PREFIX || alice_xonly` with `eve_bls_sk`), but CANNOT produce
-/// the Schnorr proof (needs Alice's Taproot secret key to sign over
-/// `SCHNORR_BINDING_PREFIX || eve_bls_pk`).
+/// Identity hijack via aggregate path: previously a bulk op could name a
+/// different Taproot identity for registration. `RegisterBlsKey` is now
+/// direct-path only and is rejected inside an aggregate `Insts` envelope, so
+/// this attack surface is closed at verification.
 ///
-/// | Proof half | Blocks Eve? | Why                                          |
-/// |------------|-------------|----------------------------------------------|
-/// | Schnorr    | **Yes**     | Needs Alice's Taproot sk                     |
-/// | BLS        | No          | Eve can sign alice_xonly with her own BLS key |
+/// Eve still constructs the same split proof (Schnorr over her key; BLS binding
+/// to `alice_xonly`), but she cannot submit it as a bundled aggregate
+/// registration for another identity.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Result<()> {
     let alice = reg_tester.unregistered_identity().await?;
@@ -367,28 +365,27 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
 
-    // Submit via BlsBulk: Eve targets alice_xonly as the signer.
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(alice_xonly.to_string()),
+    let inst = Inst::RegisterBlsKey {
         bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
         schnorr_sig: eve_schnorr_sig.to_vec(),
         bls_sig: eve_bls_binding_sig.to_vec(),
     };
 
-    let msg = op.signing_message()?;
-    let sig = eve_bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
-    let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
-    let agg_sig = agg.to_signature();
+    let insts = Insts {
+        ops: vec![inst],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; 48],
+        }),
+    };
 
-    let _ = reg_tester
-        .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op],
-                signature: agg_sig.to_bytes().to_vec(),
-            },
-        )
-        .await;
+    assert!(
+        reg_tester
+            .insts_instruction(&mut publisher, insts)
+            .await
+            .is_err(),
+        "RegisterBlsKey in aggregate path must be rejected"
+    );
 
     let alice_xonly_str = alice_xonly.to_string();
     assert_eq!(
