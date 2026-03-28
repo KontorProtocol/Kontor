@@ -735,7 +735,7 @@ pub async fn handle_consensus_msg(
     bitcoin_state: &mut BitcoinState,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
-    node_index: usize,
+    validator_index: Option<usize>,
     last_height: u64,
     last_hash: bitcoin::BlockHash,
 ) -> Result<Option<indexer_types::Block>> {
@@ -941,7 +941,7 @@ pub async fn handle_consensus_msg(
             {
                 if let Some(obs) = &state.observation {
                     let _ = obs.decided_tx.try_send(DecidedBatch {
-                        node_index,
+                        validator_index,
                         consensus_height: certificate.height,
                         value: proposal.value.clone(),
                     });
