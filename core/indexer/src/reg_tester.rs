@@ -1150,18 +1150,18 @@ impl RegTesterCluster {
         Ok(())
     }
 
-    /// Poll all running nodes until they all return the expected value for a view call.
-    pub async fn poll_all_nodes(
+    /// Poll all running nodes until a view call satisfies the check function.
+    pub async fn poll_all_nodes_view(
         &self,
         contract: &ContractAddress,
         expr: &str,
-        expected: &str,
         timeout_secs: u64,
+        check: impl Fn(&str) -> bool,
     ) -> Result<()> {
-        poll_nodes!(self, timeout_secs, format!("{expr} = {expected}"), |node| {
+        poll_nodes!(self, timeout_secs, format!("{expr}"), |node| {
             matches!(
                 node.view(contract, expr).await?,
-                indexer_types::ViewResult::Ok { value } if value == expected
+                indexer_types::ViewResult::Ok { value } if check(&value)
             )
         })
     }
