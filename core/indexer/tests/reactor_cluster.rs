@@ -68,6 +68,7 @@ struct ReactorCluster {
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
     // Stored for add_node
     genesis: Genesis,
+    genesis_validators: Vec<indexer::runtime::GenesisValidator>,
     private_keys: Vec<PrivateKey>,
     ports: Vec<u16>,
     shared_pubkey: String,
@@ -94,7 +95,17 @@ impl ReactorCluster {
 
         let validators: Vec<Validator> = private_keys
             .iter()
-            .map(|pk| Validator::new(pk.public_key(), 1 as VotingPower))
+            .map(|pk| Validator::new(pk.public_key(), 100 as VotingPower))
+            .collect();
+
+        let genesis_validators: Vec<indexer::runtime::GenesisValidator> = private_keys
+            .iter()
+            .enumerate()
+            .map(|(i, pk)| indexer::runtime::GenesisValidator {
+                x_only_pubkey: format!("{:064x}", i + 1),
+                stake: indexer::runtime::Decimal::from(100u64),
+                ed25519_pubkey: pk.public_key().as_bytes().to_vec(),
+            })
             .collect();
 
         let validator_set = ValidatorSet::new(validators);
@@ -128,6 +139,7 @@ impl ReactorCluster {
                 i,
                 private_keys[i].clone(),
                 &genesis,
+                &genesis_validators,
                 &ports,
                 node_block_rx,
                 node_mempool_rx,
@@ -155,6 +167,7 @@ impl ReactorCluster {
             ready_rx,
             mock_bitcoin,
             genesis,
+            genesis_validators,
             private_keys,
             ports,
             shared_pubkey,
@@ -198,6 +211,7 @@ impl ReactorCluster {
         i: usize,
         private_key: PrivateKey,
         genesis: &Genesis,
+        genesis_validators: &[indexer::runtime::GenesisValidator],
         ports: &[u16],
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
@@ -211,9 +225,10 @@ impl ReactorCluster {
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
+        let genesis_vals = genesis_validators.to_vec();
         let ports = ports.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey)
+            let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey, &genesis_vals)
                 .await
                 .expect("LiteExecutor setup failed");
 
@@ -309,6 +324,7 @@ impl ReactorCluster {
             i,
             self.private_keys[i].clone(),
             &self.genesis,
+            &self.genesis_validators,
             &self.ports,
             node_block_rx,
             node_mempool_rx,
@@ -418,6 +434,12 @@ impl ReactorCluster {
     async fn shutdown(mut self) {
         self.cancel.cancel();
         while self.join_set.join_next().await.is_some() {}
+    }
+}
+
+impl Drop for ReactorCluster {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 
