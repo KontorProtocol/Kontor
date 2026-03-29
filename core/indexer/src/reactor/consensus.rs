@@ -37,6 +37,16 @@ use crate::database::queries::{
 use super::bitcoin_state::BitcoinState;
 use super::executor::Executor;
 
+/// Result from processing a consensus message.
+pub enum ConsensusResult {
+    /// No action needed by the reactor.
+    None,
+    /// A block was decided — the reactor should execute it.
+    Block(indexer_types::Block),
+    /// A batch was decided and executed — the reactor should emit a websocket event.
+    BatchProcessed { txids: Vec<String> },
+}
+
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
     pub conn: libsql::Connection,
@@ -738,8 +748,8 @@ pub async fn handle_consensus_msg(
     validator_index: Option<usize>,
     last_height: u64,
     last_hash: bitcoin::BlockHash,
-) -> Result<Option<indexer_types::Block>> {
-    let mut decided_block = None;
+) -> Result<ConsensusResult> {
+    let mut result = ConsensusResult::None;
     match msg {
         AppMsg::ConsensusReady { reply } => {
             let start_height = state.current_height;
@@ -974,6 +984,12 @@ pub async fn handle_consensus_msg(
                                 &full_txs,
                             )
                             .await;
+                        result = ConsensusResult::BatchProcessed {
+                            txids: full_txs
+                                .iter()
+                                .map(|tx| tx.compute_txid().to_string())
+                                .collect(),
+                        };
                     }
                     Value::Block { height, hash } => {
                         // Store block decision for sync protocol
@@ -997,7 +1013,7 @@ pub async fn handle_consensus_msg(
                         // the decision via sync before the block arrived from poller)
                         state.pending_blocks.retain(|(h, _)| *h != *height);
                         if let Some(block) = state.block_cache.remove(height) {
-                            decided_block = Some(block);
+                            result = ConsensusResult::Block(block);
                         } else {
                             // Only record if this block height is relevant (not stale from
                             // a pre-rollback decision that arrived late)
@@ -1121,5 +1137,5 @@ pub async fn handle_consensus_msg(
         }
     }
 
-    Ok(decided_block)
+    Ok(result)
 }

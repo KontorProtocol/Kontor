@@ -320,9 +320,15 @@ impl<E: Executor> Reactor<E> {
         }
 
         if let Some(tx) = &self.event_tx {
+            let txids = block
+                .transactions
+                .iter()
+                .map(|t| t.txid.to_string())
+                .collect();
             let _ = tx
                 .send(Event::Processed {
                     block: (&block).into(),
+                    txids,
                 })
                 .await;
         }
@@ -501,7 +507,7 @@ impl<E: Executor> Reactor<E> {
                     debug!("REACTOR: processing consensus msg");
                     let handle = self.consensus_handle.as_mut().unwrap();
                     let validator_index = handle.validator_index;
-                    let decided_block = consensus::handle_consensus_msg(
+                    let consensus_result = consensus::handle_consensus_msg(
                         &mut handle.state,
                         &self.executor,
                         &mut self.runtime,
@@ -512,7 +518,16 @@ impl<E: Executor> Reactor<E> {
                         self.last_height,
                         self.last_hash.unwrap_or(BlockHash::all_zeros()),
                     ).await?;
-                    if let Some(block) = decided_block {
+                    if let consensus::ConsensusResult::BatchProcessed { txids } = &consensus_result
+                        && let Some(tx) = &self.event_tx
+                    {
+                        let _ = tx
+                            .send(Event::BatchProcessed {
+                                txids: txids.clone(),
+                            })
+                            .await;
+                    }
+                    if let consensus::ConsensusResult::Block(block) = consensus_result {
                         self.handle_block(block).await?;
                         // Check finality after block execution — batch txids may now be confirmed
                         let handle = self.consensus_handle.as_mut().unwrap();

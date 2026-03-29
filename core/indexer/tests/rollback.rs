@@ -288,7 +288,7 @@ async fn send_block_and_await_event(
         .await
         .unwrap();
     match output_rx.recv().await.unwrap() {
-        Event::Processed { block } => assert_eq!(block.height, expected_height),
+        Event::Processed { block, .. } => assert_eq!(block.height, expected_height),
         other => panic!("expected Processed at height {expected_height}, got {other:?}"),
     }
 }
