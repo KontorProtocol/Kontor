@@ -33,8 +33,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, Insts, OpWithResult, ResultRow,
-    RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    ComposeOutputs, ComposeQuery, Event, Info, Inst, InstructionQuery, Insts, OpWithResult,
+    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult, WsResponse,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -400,7 +400,9 @@ impl RegTesterInner {
         })
     }
 
-    /// Compose, sign, send an instruction to the mempool, mine a block, and wait for the result.
+    /// Compose, sign, send an instruction to the mempool, and wait for the result.
+    /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) mine a block immediately.
+    /// Batchable ops (Call) wait for consensus to batch them.
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -420,12 +422,33 @@ impl RegTesterInner {
             .input_index(0)
             .op_index(0)
             .build();
+        let target_txid = sent.reveal_txid.to_string();
 
+        // Always mine — the batchable/non-batchable distinction only applies
+        // when an auto-miner is running (RegTesterCluster). For single-node
+        // RegTester (no consensus), mining is always required.
         self.mine(1).await?;
-        self.ws_client
-            .next()
-            .await
-            .context("Failed to receive response from websocket")?;
+
+        // Wait for a websocket event containing our reveal txid
+        loop {
+            let response = self
+                .ws_client
+                .next()
+                .await
+                .context("Failed to receive response from websocket")?;
+            let txids = match &response {
+                WsResponse::Event {
+                    event: Event::Processed { txids, .. },
+                } => txids,
+                WsResponse::Event {
+                    event: Event::BatchProcessed { txids },
+                } => txids,
+                _ => continue,
+            };
+            if txids.contains(&target_txid) {
+                break;
+            }
+        }
 
         let result = self
             .kontor_client
