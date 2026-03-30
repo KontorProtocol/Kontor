@@ -396,6 +396,33 @@ pub fn generate_functions(
         quote! {}
     };
 
+    // Generate the _call constructor for batching (test mode, no fixed contract_id, proc/core context only)
+    let call_constructor = if test && contract_id.is_none() && (is_proc_context || is_core_context)
+    {
+        let call_fn_name = format_ident!("{}_call", fn_name);
+        let ret_ty_inner = make_return_type(resolve, export)?;
+
+        // Params for the call constructor: contract_address + function-specific args (no runtime, no signer)
+        let mut call_params = vec![quote! { contract_address_: &ContractAddress }];
+        for param in export.params.iter().skip(1) {
+            let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+            let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
+            call_params.push(quote! { #param_name: #param_ty });
+        }
+
+        quote! {
+            pub fn #call_fn_name(#(#call_params),*) -> super::TypedCall<#ret_ty_inner> {
+                super::TypedCall {
+                    contract: contract_address_.clone(),
+                    expr: wave::#fn_name_call_expr(#(#call_expr_param_names),*),
+                    parse: wave::#fn_name_parse_return_expr,
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #fn_keywords #fn_name(#(#params),*) -> #ret_ty {
             let expr = wave::#fn_name_call_expr(#(#call_expr_param_names),*);
@@ -406,6 +433,8 @@ pub fn generate_functions(
             )#awaited;
             #ret_expr
         }
+
+        #call_constructor
     })
 }
 

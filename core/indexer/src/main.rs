@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
         Some(replay_tx),
         load_genesis_validators(&config)?,
         None,
+        config.consensus_propose_timeout_ms,
     ));
     ready_rx.await?;
     {

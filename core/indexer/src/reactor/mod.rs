@@ -23,6 +23,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::types::core::VotingPower;
+use malachitebft_core_types::LinearTimeouts;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::finality_types::StateEvent;
@@ -697,6 +698,7 @@ pub async fn start_consensus(
     engine_config: engine::EngineConfig,
     runtime: &mut Runtime,
     observation_channels: Option<consensus::ObservationChannels>,
+    timeouts: Option<LinearTimeouts>,
 ) -> Result<ConsensusHandle> {
     let genesis = build_genesis_from_staking(runtime).await?;
 
@@ -716,6 +718,9 @@ pub async fn start_consensus(
         engine_output.address,
     );
     state.observation = observation_channels;
+    if let Some(t) = timeouts {
+        state.timeouts = t;
+    }
 
     Ok(ConsensusHandle {
         state,
@@ -739,6 +744,7 @@ pub fn run(
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus::ObservationChannels>,
+    consensus_propose_timeout_ms: Option<u64>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -758,8 +764,15 @@ pub fn run(
                     bs = bs.with_tx_cache(client.tx_cache().clone());
                 }
 
+                let timeouts = consensus_propose_timeout_ms.map(|ms| LinearTimeouts {
+                    propose: std::time::Duration::from_millis(ms),
+                    ..LinearTimeouts::default()
+                });
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
-                    Some(start_consensus(engine_cfg, &mut runtime, observation_channels).await?)
+                    Some(
+                        start_consensus(engine_cfg, &mut runtime, observation_channels, timeouts)
+                            .await?,
+                    )
                 } else {
                     None
                 };

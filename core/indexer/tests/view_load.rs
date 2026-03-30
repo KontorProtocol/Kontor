@@ -8,7 +8,7 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
 /// API load test: make many view calls to measure API throughput
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest", logging)]
@@ -20,7 +20,7 @@ async fn test_api_view_calls_load() -> Result<()> {
 
     // Setup: create some data to query
     let minter = runtime.identity().await?;
-    let token = runtime.publish(&minter, "token").await?;
+    let token = runtime.publish(&minter, "test-token").await?;
 
     // Create some state
     token::mint(runtime, &token, &minter, "1000000".into()).await??;

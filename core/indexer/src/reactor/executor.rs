@@ -8,22 +8,19 @@ use crate::retry::{new_backoff_unlimited, retry};
 use crate::runtime::Runtime;
 
 /// Check if a parsed transaction contains only batchable ops.
-/// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
-/// via Value::Block decisions, not consensus batches.
-/// Aggregate inputs are always batchable (RegisterBlsKey is rejected at verification).
+/// Publish must only execute via Value::Block decisions (contract address
+/// depends on block height/tx_index). All other ops are batchable.
+/// Aggregate inputs are always batchable.
 pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
     inputs.iter().all(|input| {
         if input.insts.is_aggregate() {
             return true;
         }
-        !input.insts.ops.iter().any(|inst| {
-            matches!(
-                inst,
-                indexer_types::Inst::Publish { .. }
-                    | indexer_types::Inst::Issuance
-                    | indexer_types::Inst::RegisterBlsKey { .. }
-            )
-        })
+        !input
+            .insts
+            .ops
+            .iter()
+            .any(|inst| matches!(inst, indexer_types::Inst::Publish { .. }))
     })
 }
 

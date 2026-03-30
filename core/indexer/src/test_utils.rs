@@ -619,6 +619,7 @@ pub mod reactor_harness {
                 None,
                 genesis_validators,
                 Some(observation),
+                None,
             );
 
             // Wait a bit for the reactor + Malachite to start up

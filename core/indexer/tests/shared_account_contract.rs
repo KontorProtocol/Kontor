@@ -1,6 +1,6 @@
 use testlib::*;
 
-interface!(name = "token", path = "../../test-contracts/token/wit",);
+interface!(name = "token", path = "../../test-contracts/test-token/wit",);
 
 interface!(
     name = "shared-account",
@@ -13,7 +13,7 @@ async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     let claire = runtime.identity().await?;
     let dara = runtime.identity().await?;
 
-    let token = runtime.publish(&alice, "token").await?;
+    let token = runtime.publish(&alice, "test-token").await?;
     let shared_account = runtime.publish(&alice, "shared-account").await?;
 
     token::mint(runtime, &token, &alice, 100.into()).await??;

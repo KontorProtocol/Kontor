@@ -1,13 +1,13 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
 async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     info!("test_token_contract");
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    let token = runtime.publish(&minter, "token").await?;
+    let token = runtime.publish(&minter, "test-token").await?;
 
     token::mint(runtime, &token, &minter, 900.into()).await??;
     token::mint(runtime, &token, &minter, 100.into()).await??;
@@ -47,7 +47,7 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
     info!("test_token_contract_large_numbers");
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    let token = runtime.publish(&minter, "token").await?;
+    let token = runtime.publish(&minter, "test-token").await?;
 
     token::mint(
         runtime,

@@ -95,6 +95,9 @@ pub struct ConsensusState {
 
     // Observation channels (optional, for testing)
     pub observation: Option<ObservationChannels>,
+
+    // Consensus timeouts — defaults to LinearTimeouts::default() (3s propose).
+    pub timeouts: LinearTimeouts,
 }
 
 pub struct ObservationChannels {
@@ -130,6 +133,7 @@ impl ConsensusState {
             block_cache: HashMap::new(),
             cached_validator_set,
             observation: None,
+            timeouts: LinearTimeouts::default(),
         }
     }
 
@@ -151,7 +155,7 @@ impl ConsensusState {
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
-        HeightParams::new(self.validator_set(), LinearTimeouts::default(), None)
+        HeightParams::new(self.validator_set(), self.timeouts, None)
     }
 
     fn stream_id(&self) -> StreamId {

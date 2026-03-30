@@ -2,7 +2,7 @@ use testlib::*;
 
 interface!(name = "amm", path = "../../test-contracts/amm/wit");
 
-interface!(name = "token", path = "../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     tracing::info!("test_amm_swaps");
@@ -10,8 +10,8 @@ async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
 
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
 
     token::mint(runtime, &token_a, &minter, 1000.into()).await??;
     token::mint(runtime, &token_b, &minter, 1000.into()).await??;
@@ -106,8 +106,8 @@ async fn run_test_amm_swap_fee(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
 
     token::mint(runtime, &token_a, &minter, 1000.into()).await??;
     token::mint(runtime, &token_b, &minter, 1000.into()).await??;
@@ -187,8 +187,8 @@ async fn run_test_amm_swap_low_slippage(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
 
     token::mint(runtime, &token_a, &minter, 110000.into()).await??;
     token::mint(runtime, &token_b, &minter, 510000.into()).await??;
@@ -273,8 +273,8 @@ async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
     let holder = runtime.identity().await?;
 
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
 
     token::mint(runtime, &token_a, &minter, 1000.into()).await??;
     token::mint(runtime, &token_b, &minter, 1000.into()).await??;
@@ -382,8 +382,8 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
 
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
@@ -500,9 +500,9 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
 
     let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
-    let token_c = runtime.publish_as(&admin, "token", "token-c").await?;
+    let token_a = runtime.publish_as(&admin, "test-token", "token-a").await?;
+    let token_b = runtime.publish_as(&admin, "test-token", "token-b").await?;
+    let token_c = runtime.publish_as(&admin, "test-token", "token-c").await?;
 
     token::mint(runtime, &token_a, &minter, 1000.into()).await??;
     token::mint(runtime, &token_b, &minter, 1000.into()).await??;

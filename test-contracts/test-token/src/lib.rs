@@ -1,5 +1,5 @@
 #![no_std]
-contract!(name = "token");
+contract!(name = "test-token");
 
 use stdlib::*;
 
@@ -28,7 +28,7 @@ fn mint(model: &TokenStorageWriteModel, to: String, n: Integer) -> Result<(), Er
     Ok(())
 }
 
-impl Guest for Token {
+impl Guest for TestToken {
     fn init(ctx: &ProcContext) {
         TokenStorage::default().init(ctx);
     }

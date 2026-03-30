@@ -1,4 +1,4 @@
-use std::{path::Path, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use backon::BackoffBuilder;
 
@@ -134,7 +134,9 @@ async fn run_kontor(
             .arg("--consensus-listen-addr")
             .arg(&c.listen_addr)
             .arg("--genesis-file")
-            .arg(&c.genesis_file);
+            .arg(&c.genesis_file)
+            .arg("--consensus-propose-timeout-ms")
+            .arg("500");
         for peer in &c.peers {
             cmd.arg("--consensus-peers").arg(peer);
         }
@@ -218,6 +220,11 @@ pub struct RegTesterInner {
     ws_client: WebSocketClient,
     identity: Identity,
     pub height: i64,
+    /// When true, batchable ops skip mining and rely on consensus batching.
+    /// Set for RegTesters created from a RegTesterCluster (which has an auto-miner).
+    pub cluster_mode: bool,
+    /// Cache of published contracts by name — enables idempotent publish.
+    pub published_contracts: HashMap<String, ContractAddress>,
 }
 
 pub struct SendInstructionResult {
@@ -254,6 +261,8 @@ impl RegTesterInner {
             bitcoin_client,
             kontor_client,
             height: 101,
+            cluster_mode: false,
+            published_contracts: HashMap::new(),
         })
     }
 
@@ -401,8 +410,9 @@ impl RegTesterInner {
     }
 
     /// Compose, sign, send an instruction to the mempool, and wait for the result.
-    /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) mine a block immediately.
-    /// Batchable ops (Call) wait for consensus to batch them.
+    /// In cluster mode, only Publish mines immediately (needs block height for contract address).
+    /// All other ops are batchable and wait for consensus.
+    /// In standalone mode (no consensus), all ops mine immediately.
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -416,6 +426,11 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<InstructionResult> {
+        let needs_mine = !self.cluster_mode
+            || insts
+                .ops
+                .iter()
+                .any(|inst| matches!(inst, Inst::Publish { .. }));
         let sent = self.send_insts(ident, insts).await?;
         let id = OpResultId::builder()
             .txid(sent.reveal_txid.to_string())
@@ -424,31 +439,11 @@ impl RegTesterInner {
             .build();
         let target_txid = sent.reveal_txid.to_string();
 
-        // Always mine — the batchable/non-batchable distinction only applies
-        // when an auto-miner is running (RegTesterCluster). For single-node
-        // RegTester (no consensus), mining is always required.
-        self.mine(1).await?;
-
-        // Wait for a websocket event containing our reveal txid
-        loop {
-            let response = self
-                .ws_client
-                .next()
-                .await
-                .context("Failed to receive response from websocket")?;
-            let txids = match &response {
-                WsResponse::Event {
-                    event: Event::Processed { txids, .. },
-                } => txids,
-                WsResponse::Event {
-                    event: Event::BatchProcessed { txids },
-                } => txids,
-                _ => continue,
-            };
-            if txids.contains(&target_txid) {
-                break;
-            }
+        if needs_mine {
+            self.mine(1).await?;
         }
+
+        self.wait_for_txids(&[target_txid]).await?;
 
         let result = self
             .kontor_client
@@ -535,6 +530,32 @@ impl RegTesterInner {
         })
     }
 
+    /// Wait for multiple txids to appear in websocket events (batch or block).
+    async fn wait_for_txids(&mut self, target_txids: &[String]) -> Result<()> {
+        let mut remaining: std::collections::HashSet<&str> =
+            target_txids.iter().map(|s| s.as_str()).collect();
+        while !remaining.is_empty() {
+            let response = self
+                .ws_client
+                .next()
+                .await
+                .context("Failed to receive response from websocket")?;
+            let txids = match &response {
+                WsResponse::Event {
+                    event: Event::Processed { txids, .. },
+                } => txids,
+                WsResponse::Event {
+                    event: Event::BatchProcessed { txids },
+                } => txids,
+                _ => continue,
+            };
+            for txid in txids {
+                remaining.remove(txid.as_str());
+            }
+        }
+        Ok(())
+    }
+
     pub async fn identity(&mut self) -> Result<Identity> {
         let mut identity = self.unregistered_identity().await?;
         let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
@@ -547,6 +568,33 @@ impl RegTesterInner {
             },
         )
         .await?;
+        Ok(identity)
+    }
+
+    /// Create a new identity with BLS registration and issuance, pipelining
+    /// the batchable ops so they land in the same consensus round.
+    pub async fn identity_with_issuance(&mut self) -> Result<Identity> {
+        let mut identity = self.unregistered_identity().await?;
+        let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
+
+        // Send both RegisterBlsKey and Issuance without waiting — they chain
+        // from unconfirmed UTXOs and should land in the same consensus batch.
+        let reg = self
+            .send_instruction(
+                &mut identity,
+                Inst::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                },
+            )
+            .await?;
+        let iss = self.send_instruction(&mut identity, Inst::Issuance).await?;
+
+        // Wait for both to be processed
+        self.wait_for_txids(&[reg.reveal_txid.to_string(), iss.reveal_txid.to_string()])
+            .await?;
+
         Ok(identity)
     }
 
@@ -866,6 +914,10 @@ impl RegTester {
         self.inner.lock().await.send_insts(ident, insts).await
     }
 
+    pub async fn wait_for_txids(&self, txids: &[String]) -> Result<()> {
+        self.inner.lock().await.wait_for_txids(txids).await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -894,6 +946,14 @@ impl RegTester {
         self.inner.lock().await.identity().await
     }
 
+    pub async fn identity_with_issuance(&mut self) -> Result<Identity> {
+        self.inner.lock().await.identity_with_issuance().await
+    }
+
+    pub async fn cluster_mode(&self) -> bool {
+        self.inner.lock().await.cluster_mode
+    }
+
     pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
         self.inner.lock().await.identity_p2wpkh().await
     }
@@ -912,6 +972,23 @@ impl RegTester {
 
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
+    }
+
+    pub async fn get_published(&self, name: &str) -> Option<ContractAddress> {
+        self.inner
+            .lock()
+            .await
+            .published_contracts
+            .get(name)
+            .cloned()
+    }
+
+    pub async fn set_published(&self, name: String, address: ContractAddress) {
+        self.inner
+            .lock()
+            .await
+            .published_contracts
+            .insert(name, address);
     }
 
     pub async fn height(&self) -> i64 {
@@ -989,6 +1066,12 @@ fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
     Ok(ports)
 }
 
+enum MinerCmd {
+    Pause(tokio::sync::oneshot::Sender<()>),
+    Resume(tokio::sync::oneshot::Sender<()>),
+    Reset,
+}
+
 /// A cluster of N Kontor instances sharing one regtest bitcoind,
 /// each with consensus enabled and its own DB.
 pub struct RegTesterCluster {
@@ -996,6 +1079,8 @@ pub struct RegTesterCluster {
     pub node_configs: Vec<NodeConfig>,
     pub identity: Identity,
     genesis_path: std::path::PathBuf,
+    miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
+    _miner_handle: tokio::task::JoinHandle<()>,
     _bitcoin_child: Child,
     _bitcoin_data_dir: TempDir,
     _genesis_dir: TempDir,
@@ -1091,10 +1176,16 @@ impl RegTesterCluster {
         // Start active nodes
         let all_consensus_ports: Vec<u16> =
             node_configs.iter().map(|nc| nc.consensus_port).collect();
-        for (i, nc) in node_configs.iter_mut().enumerate().take(active) {
-            let (child, client) =
-                Self::launch_node(nc, i, &all_consensus_ports, &genesis_path).await?;
-            nc.running = Some(ClusterNode { client, child });
+        let launch_futures: Vec<_> = node_configs
+            .iter()
+            .enumerate()
+            .take(active)
+            .map(|(i, nc)| Self::launch_node(nc, i, &all_consensus_ports, &genesis_path))
+            .collect();
+        let results = futures_util::future::join_all(launch_futures).await;
+        for (i, result) in results.into_iter().enumerate() {
+            let (child, client) = result?;
+            node_configs[i].running = Some(ClusterNode { client, child });
         }
 
         // Mine a block so we can verify all nodes process it (proves peer connectivity).
@@ -1102,11 +1193,44 @@ impl RegTesterCluster {
             .generate_to_address(1, &identity.address.to_string())
             .await?;
 
+        // Start the auto-miner
+        let (miner_cmd_tx, mut miner_cmd_rx) = tokio::sync::mpsc::channel::<MinerCmd>(16);
+        let miner_client = bitcoin_client.clone();
+        let miner_address = identity.address.to_string();
+        let miner_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                        let _ = miner_client.generate_to_address(1, &miner_address).await;
+                    }
+                    cmd = miner_cmd_rx.recv() => {
+                        match cmd {
+                            Some(MinerCmd::Reset) => continue,
+                            Some(MinerCmd::Pause(done)) => {
+                                let _ = done.send(());
+                                // Wait for Resume
+                                while let Some(cmd) = miner_cmd_rx.recv().await {
+                                    if let MinerCmd::Resume(done) = cmd {
+                                        let _ = done.send(());
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(MinerCmd::Resume(_)) => {}
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+
         let cluster = Self {
             bitcoin_client,
             node_configs,
             identity,
             genesis_path,
+            miner_cmd_tx,
+            _miner_handle: miner_handle,
             _bitcoin_child: bitcoin_child,
             _bitcoin_data_dir: bitcoin_data_dir,
             _genesis_dir: genesis_dir,
@@ -1192,16 +1316,18 @@ impl RegTesterCluster {
     }
 
     /// Create a `RegTester` targeting a specific running node.
+    /// Cluster-created RegTesters skip mining for batchable ops.
     pub async fn reg_tester(&self, node_index: usize) -> Result<RegTester> {
         let nc = &self.node_configs[node_index];
         let client = &nc.running.as_ref().expect("Node not running").client;
-        let inner = RegTesterInner::with_port(
+        let mut inner = RegTesterInner::with_port(
             self.identity.clone(),
             self.bitcoin_client.clone(),
             client.clone(),
             nc.api_port,
         )
         .await?;
+        inner.cluster_mode = true;
         Ok(RegTester {
             inner: Arc::new(Mutex::new(inner)),
         })
@@ -1216,12 +1342,27 @@ impl RegTesterCluster {
         Ok((rt, identity))
     }
 
-    /// Mine blocks using the funded identity.
+    /// Mine blocks using the funded identity. Resets the auto-miner cooldown.
     pub async fn mine(&self, count: u64) -> Result<()> {
         self.bitcoin_client
             .generate_to_address(count, &self.identity.address.to_string())
             .await?;
+        let _ = self.miner_cmd_tx.send(MinerCmd::Reset).await;
         Ok(())
+    }
+
+    /// Pause the auto-miner. Blocks until the miner confirms it's stopped.
+    pub async fn pause_auto_miner(&self) {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let _ = self.miner_cmd_tx.send(MinerCmd::Pause(done_tx)).await;
+        let _ = done_rx.await;
+    }
+
+    /// Resume the auto-miner. Blocks until the miner confirms it's resumed.
+    pub async fn resume_auto_miner(&self) {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let _ = self.miner_cmd_tx.send(MinerCmd::Resume(done_tx)).await;
+        let _ = done_rx.await;
     }
 
     /// Poll all running nodes until a view call satisfies the check function.
@@ -1292,18 +1433,12 @@ impl RegTesterCluster {
 
     /// Shut down all nodes.
     pub async fn teardown(mut self) -> Result<()> {
-        for nc in &self.node_configs {
-            if let Some(cn) = &nc.running {
-                let _ = cn.client.stop().await;
-            }
-        }
         for nc in &mut self.node_configs {
             if let Some(cn) = &mut nc.running {
-                let _ = cn.child.wait().await;
+                cn.child.kill().await?;
             }
         }
-        self.bitcoin_client.stop().await?;
-        self._bitcoin_child.wait().await?;
+        self._bitcoin_child.kill().await?;
         Ok(())
     }
 }

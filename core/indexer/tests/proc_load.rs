@@ -8,7 +8,7 @@
 use testlib::*;
 use tracing::info;
 
-interface!(name = "token", path = "../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
 /// Simple load test: process many blocks with many contract calls
 /// Each contract call creates a transaction and mines a block automatically in regtest
@@ -21,7 +21,7 @@ async fn test_token_contract_load() -> Result<()> {
 
     // Setup: create a token contract and some users
     let minter = runtime.identity().await?;
-    let token = runtime.publish(&minter, "token").await?;
+    let token = runtime.publish(&minter, "test-token").await?;
 
     // Mint a large supply
     token::mint(runtime, &token, &minter, "1000000000".into()).await??;
