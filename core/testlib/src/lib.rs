@@ -214,7 +214,8 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        let signer_id = self.runtime.ensure_signer(&x_only_pubkey).await?;
+        let signer = Signer::new_signer_id(signer_id);
         self.issuance(&signer).await?;
         Ok(signer)
     }
@@ -285,10 +286,15 @@ impl RuntimeRegtest {
 #[async_trait]
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
-        let identity = self.reg_tester.identity().await?;
-        let signer = identity.signer();
+        let mut identity = self.reg_tester.identity().await?;
+        self.reg_tester
+            .instruction(&mut identity, Inst::Issuance)
+            .await?;
+        let signer_id = identity
+            .signer_id
+            .ok_or_else(|| anyhow!("Registered regtest identity missing signer_id"))?;
+        let signer = Signer::new_signer_id(signer_id);
         self.identities.insert(signer.clone(), identity);
-        self.issuance(&signer).await?;
         Ok(signer)
     }
 
@@ -347,10 +353,12 @@ impl RuntimeImpl for RuntimeRegtest {
                     },
                 )
                 .await
-                .map(|r| {
-                    r.result
-                        .value
-                        .expect("Handling for error should have already occurred")
+                .and_then(|r| {
+                    r.result.value.ok_or_else(|| {
+                        anyhow!(
+                            "Contract call returned no value; the operation likely failed during execution"
+                        )
+                    })
                 })
         } else {
             self.reg_tester.view(contract_address, expr).await

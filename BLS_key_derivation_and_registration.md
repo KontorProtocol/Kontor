@@ -2,6 +2,8 @@
 
 This document specifies how Kontor wallets derive a BLS12-381 keypair and produce the two registration proofs that bind it to a Bitcoin Taproot (x-only) identity.
 
+The x-only pubkey is the registration and direct-publication identity input. The canonical execution identity remains the assigned `signer_id`, which is string-visible to contracts as the namespaced signer key `__sid__<id>`.
+
 ## Goals
 
 - **Key separation**: BLS keys MUST be derived using **EIP-2333** (native BLS12-381 key tree), which is an entirely separate derivation scheme from Bitcoin's BIP-32/BIP-86 (secp256k1). This prevents cross-protocol key reuse.
@@ -99,6 +101,8 @@ Then signs with the derived BLS secret key using `KONTOR_BLS_DST` as DST:
   bls_sig:       48 bytes
 }
 ```
+
+After successful verification, the registry returns the stable numeric `signer_id` for that x-only/BLS binding. Contracts should treat that signer ID, not the x-only pubkey, as the canonical execution identity.
 
 ## 5) Example
 

@@ -67,16 +67,6 @@ pub struct GenesisValidator {
     pub ed25519_pubkey: Vec<u8>,
 }
 
-impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
-    fn from(v: GenesisValidator) -> Self {
-        Self {
-            x_only_pubkey: v.x_only_pubkey,
-            stake: v.stake,
-            ed25519_pubkey: v.ed25519_pubkey,
-        }
-    }
-}
-
 impls!(host = true);
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -262,7 +252,19 @@ impl Runtime {
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
         if !genesis_validators.is_empty() {
-            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+            let mut validators = Vec::with_capacity(genesis_validators.len());
+            for validator in genesis_validators {
+                let signer_id = self.ensure_signer(&validator.x_only_pubkey).await?;
+                let signer_key = match Signer::new_signer_id(signer_id) {
+                    Signer::SignerId { signer_key, .. } => signer_key,
+                    _ => unreachable!("new_signer_id must return SignerId"),
+                };
+                validators.push(staking::api::ActiveValidatorInfo {
+                    signer_key,
+                    stake: validator.stake,
+                    ed25519_pubkey: validator.ed25519_pubkey.clone(),
+                });
+            }
             staking::api::set_genesis_set(
                 self,
                 &Signer::Core(Box::new(Signer::Nobody)),

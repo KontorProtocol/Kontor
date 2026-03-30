@@ -211,9 +211,12 @@ export type RevealQuery = {
   envelope: number | null;
 };
 
-export type Signer = { "Core": Signer } | { "XOnlyPubKey": string } | {
-  "ContractId": { id: number; id_str: string };
-} | "Nobody";
+export type Signer =
+  | { "Core": Signer }
+  | { "XOnlyPubKey": string }
+  | { "SignerId": { signer_id: number; signer_key: string } }
+  | { "ContractId": { id: number; id_str: string } }
+  | "Nobody";
 
 export type TapLeafScript = {
   leafVersion: number;

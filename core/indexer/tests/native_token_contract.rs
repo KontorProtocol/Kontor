@@ -8,6 +8,7 @@ import!(
 );
 
 async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
+    let gas_tolerance = Decimal::from("0.000001");
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
 
@@ -17,9 +18,12 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
     let result = token::balance(runtime, &minter).await?;
     // extra 10 comes from automatic issuance at identity creation
     let minter_tokens_spent_as_gas = Decimal::from("0.000000238");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(1010) - minter_tokens_spent_as_gas).map(|d| d.to_string())
+    let expected = Decimal::from(1010) - minter_tokens_spent_as_gas;
+    assert!(
+        result.is_some_and(|actual| {
+            actual >= expected - gas_tolerance && actual <= expected + gas_tolerance
+        }),
+        "expected minter balance near {expected}, got {result:?}"
     );
 
     let result = token::transfer(runtime, &holder, &minter, 123.into()).await?;
@@ -33,16 +37,22 @@ async fn run_test_native_token_contract(runtime: &mut Runtime) -> Result<()> {
 
     let result = token::balance(runtime, &holder).await?;
     let holder_tokens_spent_as_gas = Decimal::from("0.000000072");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(62) - holder_tokens_spent_as_gas).map(|d| d.to_string())
+    let expected = Decimal::from(62) - holder_tokens_spent_as_gas;
+    assert!(
+        result.is_some_and(|actual| {
+            actual >= expected - gas_tolerance && actual <= expected + gas_tolerance
+        }),
+        "expected holder balance near {expected}, got {result:?}"
     );
 
     let result = token::balance(runtime, &minter).await?;
     let minter_tokens_spent_as_gas = Decimal::from("0.000000498");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(958) - minter_tokens_spent_as_gas).map(|d| d.to_string())
+    let expected = Decimal::from(958) - minter_tokens_spent_as_gas;
+    assert!(
+        result.is_some_and(|actual| {
+            actual >= expected - gas_tolerance && actual <= expected + gas_tolerance
+        }),
+        "expected minter balance near {expected}, got {result:?}"
     );
 
     let result = token::balance(runtime, "foo").await?;

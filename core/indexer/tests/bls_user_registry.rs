@@ -321,8 +321,8 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
 }
 
 /// Wrong-length `schnorr_sig` and `bls_sig` on a direct `RegisterBlsKey` must be
-/// rejected by `register_bls_key`'s length checks. The signer entry may still be
-/// created by `ensure_signer`, but no BLS key may be bound and nonce must stay 0.
+/// rejected by `register_bls_key`'s length checks before any registry mutation.
+/// The signer must remain completely unregistered.
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() -> Result<()> {
     let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
@@ -356,21 +356,19 @@ async fn bls_user_registry_malformed_sig_lengths_in_bls_bulk_rejected_regtest() 
             .await;
 
         let signer_id = registry::get_signer_id(runtime, &user_xonly).await?;
-        assert!(
-            signer_id.is_some(),
-            "{label}: signer entry should still exist after ensure_signer"
+        assert_eq!(
+            signer_id, None,
+            "{label}: malformed field must not create a signer entry"
         );
         assert_eq!(
             registry::get_bls_pubkey(runtime, &user_xonly).await?,
             None,
             "{label}: malformed field must not bind a BLS pubkey"
         );
-        let entry = registry::get_entry(runtime, &user_xonly)
-            .await?
-            .expect("entry must exist after ensure_signer");
         assert_eq!(
-            entry.next_nonce, 0,
-            "{label}: malformed field must not advance nonce"
+            registry::get_entry(runtime, &user_xonly).await?,
+            None,
+            "{label}: malformed field must not create a registry entry"
         );
     }
 

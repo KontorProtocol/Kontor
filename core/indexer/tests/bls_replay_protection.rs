@@ -12,12 +12,6 @@ use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, In
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
-import!(
-    name = "registry",
-    height = 0,
-    tx_index = 0,
-    path = "../../native-contracts/registry/wit",
-);
 
 #[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
 async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()> {
@@ -51,8 +45,8 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let nonce = 0u64;
@@ -173,8 +167,8 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let nonce = 0u64;
@@ -260,8 +254,8 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .instruction(&mut publisher, Inst::Issuance)
         .await?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
     let missing_contract = IndexerContractAddress {
         name: "arith".to_string(),
@@ -396,11 +390,11 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         )
     })?;
 
-    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
-        .await?
+    let signer1_id = signer1
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
-        .await?
+    let signer2_id = signer2
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     let inst0 = Inst::Call {
@@ -522,8 +516,8 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let client = reg_tester.kontor_client().await;
@@ -647,8 +641,8 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     // Build and submit the original operation.

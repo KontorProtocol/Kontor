@@ -15,9 +15,8 @@ use crate::{
     },
     config::{GenesisConfig, GenesisValidatorConfig, RegtestConfig},
     consensus::signing::PrivateKey as Ed25519PrivateKey,
-    database::types::OpResultId,
     retry::retry_simple,
-    runtime::{ContractAddress, wit::Signer},
+    runtime::ContractAddress,
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -182,15 +181,12 @@ pub struct Identity {
     pub next_funding_utxo: (OutPoint, TxOut),
     pub bls_secret_key: [u8; 32],
     pub bls_pubkey: [u8; 96],
+    pub signer_id: Option<u64>,
 }
 
 impl Identity {
     pub fn x_only_public_key(&self) -> XOnlyPublicKey {
         self.keypair.x_only_public_key().0
-    }
-
-    pub fn signer(&self) -> Signer {
-        Signer::XOnlyPubKey(self.x_only_public_key().to_string())
     }
 }
 
@@ -228,6 +224,7 @@ pub struct SendInstructionResult {
 
 pub struct InstructionResult {
     pub result: ResultRow,
+    pub ops: Vec<OpWithResult>,
     pub commit_tx_hex: String,
     pub reveal_tx_hex: String,
 }
@@ -302,58 +299,6 @@ impl RegTesterInner {
         Ok(result)
     }
 
-    pub async fn compose_instruction(
-        &mut self,
-        ident: &mut Identity,
-        inst: Inst,
-    ) -> Result<(ComposeOutputs, String, String)> {
-        let instructions = InstructionQuery::builder()
-            .address(ident.address.to_string())
-            .x_only_public_key(ident.x_only_public_key().to_string())
-            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .insts(Insts {
-                ops: vec![inst],
-                aggregate: None,
-            })
-            .build();
-        let query = ComposeQuery::builder()
-            .instructions(vec![instructions])
-            .sat_per_vbyte(2)
-            .build();
-        let mut compose_res = self.kontor_client.compose(query).await?;
-        let secp = Secp256k1::new();
-        test_utils::sign_key_spend(
-            &secp,
-            &mut compose_res.commit_transaction,
-            std::slice::from_ref(&ident.next_funding_utxo.1),
-            &ident.keypair,
-            0,
-            None,
-        )?;
-        let tap_script = &compose_res.per_participant[0].commit_tap_leaf_script.script;
-        let taproot_spend_info = TaprootBuilder::new()
-            .add_leaf(0, tap_script.clone())
-            .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
-            .finalize(&secp, ident.x_only_public_key())
-            .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
-        test_utils::sign_script_spend(
-            &secp,
-            &taproot_spend_info,
-            &compose_res.per_participant[0].commit_tap_leaf_script.script,
-            &mut compose_res.reveal_transaction,
-            &[compose_res.commit_transaction.output[0].clone()],
-            &ident.keypair,
-            0,
-        )?;
-
-        let commit_tx_hex = hex::encode(serialize_tx(&compose_res.commit_transaction));
-        let reveal_tx_hex = hex::encode(serialize_tx(&compose_res.reveal_transaction));
-
-        self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
-            .await?;
-        Ok((compose_res, commit_tx_hex, reveal_tx_hex))
-    }
-
     pub async fn compose_insts(
         &mut self,
         ident: &mut Identity,
@@ -403,51 +348,19 @@ impl RegTesterInner {
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
     }
 
-    pub async fn insts_instruction(
+    pub async fn compose_instruction(
         &mut self,
         ident: &mut Identity,
-        insts: Insts,
-    ) -> Result<InstructionResult> {
-        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
-        let reveal_txid = compose_res.reveal_transaction.compute_txid();
-        let id: OpResultId = OpResultId::builder().txid(reveal_txid.to_string()).build();
-        let txids = self
-            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
-            .await?;
-        self.mine(1).await?;
-
-        ident.next_funding_utxo = (
-            OutPoint {
-                txid: txids[0],
-                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+        inst: Inst,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        self.compose_insts(
+            ident,
+            Insts {
+                ops: vec![inst],
+                aggregate: None,
             },
-            compose_res
-                .commit_transaction
-                .output
-                .last()
-                .unwrap()
-                .clone(),
-        );
-        self.ws_client
-            .next()
-            .await
-            .context("Failed to receive response from websocket")?;
-
-        let result = self
-            .kontor_client
-            .result(&id)
-            .await?
-            .ok_or(anyhow!("Could not find op result"))?;
-        tracing::info!("Instruction result: {:?}", result);
-        if result.value.is_some() {
-            Ok(InstructionResult {
-                result,
-                commit_tx_hex,
-                reveal_tx_hex,
-            })
-        } else {
-            Err(anyhow!("Instruction failed in processing"))
-        }
+        )
+        .await
     }
 
     pub async fn send_instruction(
@@ -482,38 +395,70 @@ impl RegTesterInner {
         })
     }
 
+    pub async fn insts_instruction(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<InstructionResult> {
+        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
+        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let txids = self
+            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .await?;
+        self.mine(1).await?;
+
+        ident.next_funding_utxo = (
+            OutPoint {
+                txid: txids[0],
+                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+            },
+            compose_res
+                .commit_transaction
+                .output
+                .last()
+                .unwrap()
+                .clone(),
+        );
+        self.ws_client
+            .next()
+            .await
+            .context("Failed to receive response from websocket")?;
+
+        let ops = self.kontor_client.transaction_inspect(&reveal_txid).await?;
+        if ops.is_empty() {
+            return Err(anyhow!("Could not find inspected ops for transaction"));
+        }
+        let result = ops[0]
+            .result
+            .clone()
+            .ok_or(anyhow!("Instruction failed in processing"))?;
+        if ops.iter().all(|op| op.result.is_some()) {
+            tracing::info!("Instruction results: {:?}", ops);
+            Ok(InstructionResult {
+                result,
+                ops,
+                commit_tx_hex,
+                reveal_tx_hex,
+            })
+        } else {
+            Err(anyhow!("Instruction failed in processing"))
+        }
+    }
+
     /// Compose, sign, send an instruction to the mempool, mine a block, and wait for the result.
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
-        let sent = self.send_instruction(ident, inst).await?;
-        let id = OpResultId::builder()
-            .txid(sent.reveal_txid.to_string())
-            .build();
-
-        self.mine(1).await?;
-        self.ws_client
-            .next()
-            .await
-            .context("Failed to receive response from websocket")?;
-
-        let result = self
-            .kontor_client
-            .result(&id)
-            .await?
-            .ok_or(anyhow!("Could not find op result"))?;
-        tracing::info!("Instruction result: {:?}", result);
-        if result.value.is_some() {
-            Ok(InstructionResult {
-                result,
-                commit_tx_hex: sent.commit_tx_hex,
-                reveal_tx_hex: sent.reveal_tx_hex,
-            })
-        } else {
-            Err(anyhow!("Instruction failed in processing"))
-        }
+        self.insts_instruction(
+            ident,
+            Insts {
+                ops: vec![inst],
+                aggregate: None,
+            },
+        )
+        .await
     }
 
     /// Create a new randomly-keyed identity with both Taproot and BLS keys, funded on-chain.
@@ -581,11 +526,13 @@ impl RegTesterInner {
             next_funding_utxo,
             bls_secret_key,
             bls_pubkey,
+            signer_id: None,
         })
     }
 
     pub async fn identity(&mut self) -> Result<Identity> {
         let mut identity = self.unregistered_identity().await?;
+        let x_only_pubkey = identity.x_only_public_key().to_string();
         let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
         self.instruction(
             &mut identity,
@@ -596,6 +543,12 @@ impl RegTesterInner {
             },
         )
         .await?;
+        identity.signer_id = Some(
+            self.kontor_client
+                .registry_entry(&x_only_pubkey)
+                .await?
+                .signer_id,
+        );
         Ok(identity)
     }
 
@@ -770,6 +723,7 @@ impl RegTester {
             next_funding_utxo: (out_point, tx_out),
             bls_secret_key,
             bls_pubkey,
+            signer_id: None,
         };
         let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path(), 9333, None).await?;
         Ok((
@@ -1104,6 +1058,7 @@ impl RegTesterCluster {
             ),
             bls_secret_key,
             bls_pubkey,
+            signer_id: None,
         };
 
         // Generate Ed25519 keypairs for all validators (including inactive)

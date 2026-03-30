@@ -7,7 +7,8 @@ use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
-    ComposeQuery, Inst, InstructionQuery, Insts, RevealParticipantQuery, RevealQuery, serialize,
+    ComposeQuery, Inst, InstructionQuery, Insts, RevealParticipantQuery, RevealQuery, Signer,
+    serialize,
 };
 use testlib::*;
 
@@ -33,8 +34,25 @@ pub async fn test_compose_token_attach_and_detach(
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
+    let seller_signer_id = identity.signer_id.expect("seller must be registered");
+    let Signer::SignerId {
+        signer_key: seller_key,
+        ..
+    } = Signer::new_signer_id(seller_signer_id)
+    else {
+        unreachable!("new_signer_id must return SignerId");
+    };
 
     let buyer_identity = reg_tester.identity().await?;
+    let buyer_signer_id = buyer_identity.signer_id.expect("buyer must be registered");
+    let Signer::SignerId {
+        signer_key: buyer_key,
+        ..
+    } = Signer::new_signer_id(buyer_signer_id)
+    else {
+        unreachable!("new_signer_id must return SignerId");
+    };
+    let buyer_xonly = buyer_identity.x_only_public_key().to_string();
 
     let attach_inst = Inst::Call {
         gas_limit: 50_000,
@@ -204,7 +222,7 @@ pub async fn test_compose_token_attach_and_detach(
 
     let utxo_id = format!("{}:{}", reveal_transaction.compute_txid(), 0);
 
-    assert_eq!(transfer.src, internal_key.to_string());
+    assert_eq!(transfer.src, seller_key);
     assert_eq!(transfer.dst, utxo_id);
 
     let balance = token::balance(runtime, &utxo_id).await?;
@@ -232,9 +250,9 @@ pub async fn test_compose_token_attach_and_detach(
         token::wave::detach_parse_return_expr(&detach_result.value.expect("Expected value"))?;
 
     assert_eq!(transfer.src, utxo_id);
-    assert_eq!(transfer.dst, buyer_identity.x_only_public_key().to_string());
+    assert_eq!(transfer.dst, buyer_xonly.clone());
 
-    let balance = token::balance(runtime, &buyer_identity.x_only_public_key().to_string()).await?;
+    let balance = token::balance(runtime, &buyer_xonly).await?;
     assert_eq!(balance, Some(Decimal::from(2)));
 
     Ok(())

@@ -211,10 +211,28 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
         ));
     }
     for inst in &insts.ops {
-        if matches!(inst, Inst::RegisterBlsKey { .. }) {
-            return Err(anyhow!(
-                "RegisterBlsKey is not allowed in aggregate path (use direct)"
-            ));
+        match inst {
+            Inst::Call { nonce: Some(_), .. } => {}
+            Inst::Call { nonce: None, .. } => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (missing nonce)"
+                ));
+            }
+            Inst::RegisterBlsKey { .. } => {
+                return Err(anyhow!(
+                    "RegisterBlsKey is not allowed in aggregate path (use direct)"
+                ));
+            }
+            Inst::Publish { .. } => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (got Publish)"
+                ));
+            }
+            Inst::Issuance => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (got Issuance)"
+                ));
+            }
         }
     }
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
@@ -575,6 +593,67 @@ mod tests {
             err.to_string()
                 .contains("RegisterBlsKey is not allowed in aggregate")
         );
+    }
+
+    #[tokio::test]
+    async fn verify_aggregate_rejects_call_without_nonce() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let insts = Insts {
+            ops: vec![Inst::Call {
+                gas_limit: 0,
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: None,
+                expr: String::new(),
+            }],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: vec![0u8; 48],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
+            .await
+            .expect_err("aggregate Call without nonce must be rejected");
+        assert!(err.to_string().contains("missing nonce"));
+    }
+
+    #[tokio::test]
+    async fn verify_aggregate_rejects_publish() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let insts = Insts {
+            ops: vec![Inst::Publish {
+                gas_limit: 0,
+                name: String::new(),
+                bytes: vec![],
+            }],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: vec![0u8; 48],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
+            .await
+            .expect_err("aggregate Publish must be rejected");
+        assert!(err.to_string().contains("got Publish"));
+    }
+
+    #[tokio::test]
+    async fn verify_aggregate_rejects_issuance() {
+        let (mut runtime, _tmp) = new_test_runtime().await;
+        let insts = Insts {
+            ops: vec![Inst::Issuance],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: vec![0u8; 48],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
+            .await
+            .expect_err("aggregate Issuance must be rejected");
+        assert!(err.to_string().contains("got Issuance"));
     }
 
     // -----------------------------------------------------------------------

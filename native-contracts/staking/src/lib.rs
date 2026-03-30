@@ -44,9 +44,9 @@ fn status_to_enum(status: u64) -> ValidatorStatus {
     }
 }
 
-fn make_validator_info(pubkey: String, entry: &ValidatorEntryModel) -> ValidatorInfo {
+fn make_validator_info(signer_key: String, entry: &ValidatorEntryModel) -> ValidatorInfo {
     ValidatorInfo {
-        x_only_pubkey: pubkey,
+        signer_key,
         stake: entry.stake(),
         status: status_to_enum(entry.status()),
         activation_height: entry.activation_height(),
@@ -122,7 +122,7 @@ impl Guest for Staking {
         );
 
         Ok(ValidatorInfo {
-            x_only_pubkey: signer_key,
+            signer_key,
             stake: stake_amount,
             status: ValidatorStatus::PendingJoin,
             activation_height,
@@ -211,7 +211,7 @@ impl Guest for Staking {
             token::issue_to(ctx.core_signer(), &staking_address, v.stake)
                 .expect("Failed to mint genesis stake");
             model.validators().set(
-                v.x_only_pubkey.clone(),
+                v.signer_key.clone(),
                 ValidatorEntry {
                     stake: v.stake,
                     status: STATUS_ACTIVE,
@@ -274,7 +274,7 @@ impl Guest for Staking {
                 let entry = ctx.model().validators().get(&key)?;
                 if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {
                     Some(ActiveValidatorInfo {
-                        x_only_pubkey: key,
+                        signer_key: key,
                         stake: entry.stake(),
                         ed25519_pubkey: entry.ed25519_pubkey(),
                     })
@@ -285,9 +285,9 @@ impl Guest for Staking {
             .collect()
     }
 
-    fn get_validator(ctx: &ViewContext, x_only_pubkey: String) -> Option<ValidatorInfo> {
-        let entry = ctx.model().validators().get(&x_only_pubkey)?;
-        Some(make_validator_info(x_only_pubkey, &entry))
+    fn get_validator(ctx: &ViewContext, signer_key: String) -> Option<ValidatorInfo> {
+        let entry = ctx.model().validators().get(&signer_key)?;
+        Some(make_validator_info(signer_key, &entry))
     }
 
     fn get_staking_info(ctx: &ViewContext) -> StakingInfo {

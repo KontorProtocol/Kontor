@@ -82,14 +82,14 @@ Response: `TransactionRow`
 
 #### GET `/transactions/:txid/inspect`
 
-Parses the transaction and returns every detected op with its execution result (if any).
+Parses the transaction and returns every detected op in every `Insts` envelope with its execution result (if any). Aggregate envelopes are expanded to one `OpWithResult` per inner op and use canonical `SignerId` metadata.
 
 Response: `OpWithResult[]`
 
 
 #### POST `/transactions/inspect`
 
-Inspects an arbitrary transaction hex (does *not* need to be indexed).
+Inspects an arbitrary transaction hex (does *not* need to be indexed). Multi-op and aggregate envelopes are expanded the same way as the indexed inspect endpoint.
 
 Request Body: `TransactionHex`
 
@@ -98,7 +98,7 @@ Response: `OpWithResult[]`
 
 #### POST `/transactions/simulate`
 
-Simulates the execution of a transaction's operations. Useful for testing transaction before broadcasting.
+Simulates the execution of a transaction's operations. Useful for testing a transaction before broadcasting. Returns one `OpWithResult` per inner op, including aggregate `Insts` envelopes.
 
 Request Body: `TransactionHex`
 

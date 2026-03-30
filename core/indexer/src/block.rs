@@ -1,3 +1,4 @@
+use anyhow::{Result, anyhow};
 use bitcoin::{
     XOnlyPublicKey,
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
@@ -10,8 +11,68 @@ use indexmap::IndexMap;
 use libsql::Connection;
 
 use crate::database::{queries::get_op_result, types::OpResultId};
+use crate::runtime::{ComponentCache, Runtime, Storage, registry};
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
+
+async fn inspect_input_ops(
+    conn: &Connection,
+    txid: &str,
+    input: &indexer_types::TransactionInput,
+    mut runtime: Option<&mut Runtime>,
+) -> Result<Vec<OpWithResult>> {
+    let signer_ids = input
+        .insts
+        .aggregate
+        .as_ref()
+        .map(|agg| agg.signer_ids.as_slice());
+
+    if let Some(signer_ids) = signer_ids
+        && signer_ids.len() != input.insts.ops.len()
+    {
+        return Err(anyhow!(
+            "aggregate signer_ids length ({}) != ops length ({})",
+            signer_ids.len(),
+            input.insts.ops.len()
+        ));
+    }
+
+    let mut ops = Vec::with_capacity(input.insts.ops.len());
+    for (op_index, inst) in input.insts.ops.iter().enumerate() {
+        let signer = match signer_ids {
+            Some(signer_ids) => Signer::new_signer_id(signer_ids[op_index]),
+            None => match (&input.witness_signer, inst, runtime.as_deref_mut()) {
+                (Signer::XOnlyPubKey(_), Inst::RegisterBlsKey { .. }, _) => {
+                    input.witness_signer.clone()
+                }
+                (Signer::XOnlyPubKey(x_only_pubkey), _, Some(runtime)) => {
+                    match registry::api::get_signer_id(runtime, x_only_pubkey).await {
+                        Ok(Some(signer_id)) => Signer::new_signer_id(signer_id),
+                        Ok(None) | Err(_) => input.witness_signer.clone(),
+                    }
+                }
+                _ => input.witness_signer.clone(),
+            },
+        };
+        let op = op_from_inst(
+            inst.clone(),
+            OpMetadata {
+                previous_output: input.previous_output,
+                input_index: input.input_index,
+                signer,
+            },
+        );
+        let id = OpResultId::builder()
+            .txid(txid.to_string())
+            .input_index(input.input_index)
+            .op_index(op_index as i64)
+            .build();
+        let result = get_op_result(conn, &id).await?.map(Into::into);
+        ops.push(OpWithResult { op, result });
+    }
+
+    Ok(ops)
+}
 
 pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
     match inst {
@@ -122,30 +183,15 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
     })
 }
 
-pub async fn inspect(
-    conn: &Connection,
-    btx: bitcoin::Transaction,
-) -> anyhow::Result<Vec<OpWithResult>> {
+pub async fn inspect(conn: &Connection, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
+        let storage = Storage::builder().conn(conn.clone()).build();
+        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         for input in &tx.inputs {
-            if !input.insts.is_aggregate() {
-                let metadata = OpMetadata {
-                    previous_output: input.previous_output,
-                    input_index: input.input_index,
-                    signer: input.witness_signer.clone(),
-                };
-                for inst in &input.insts.ops {
-                    let op = op_from_inst(inst.clone(), metadata.clone());
-                    let id = OpResultId::builder()
-                        .txid(tx.txid.to_string())
-                        .input_index(input.input_index)
-                        .op_index(0)
-                        .build();
-                    let result = get_op_result(conn, &id).await?.map(Into::into);
-                    ops.push(OpWithResult { op, result });
-                }
-            }
+            ops.extend(
+                inspect_input_ops(conn, &tx.txid.to_string(), input, Some(&mut runtime)).await?,
+            );
         }
     }
     Ok(ops)

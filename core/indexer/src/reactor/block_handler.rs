@@ -257,7 +257,26 @@ async fn process_direct_input(
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
-        let op = op_from_inst(inst.clone(), metadata.clone());
+        let signer = match inst {
+            Inst::RegisterBlsKey { .. } => metadata.signer.clone(),
+            _ => match &input.witness_signer {
+                Signer::XOnlyPubKey(x_only) => match runtime.ensure_signer(x_only).await {
+                    Ok(signer_id) => Signer::new_signer_id(signer_id),
+                    Err(e) => {
+                        warn!("Failed to ensure signer for {x_only}: {e}");
+                        continue;
+                    }
+                },
+                other => other.clone(),
+            },
+        };
+        let op = op_from_inst(
+            inst.clone(),
+            OpMetadata {
+                signer,
+                ..metadata.clone()
+            },
+        );
 
         runtime
             .set_context(
@@ -304,13 +323,10 @@ async fn process_aggregate_input(
         .zip(agg.signer_ids.iter())
         .enumerate()
     {
-        let x_only = match signer_map.get(&signer_id) {
-            Some(x) => x.clone(),
-            None => {
-                warn!("signer_id {signer_id} not in signer_map after verification");
-                continue;
-            }
-        };
+        if !signer_map.contains_key(&signer_id) {
+            warn!("signer_id {signer_id} not in signer_map after verification");
+            continue;
+        }
 
         runtime
             .set_context(
@@ -355,11 +371,11 @@ async fn process_aggregate_input(
             }
         }
 
-        let signer = Signer::XOnlyPubKey(x_only);
+        let signer = Signer::new_signer_id(signer_id);
         let metadata = OpMetadata {
             previous_output: input.previous_output,
             input_index: input.input_index,
-            signer: signer.clone(), // TODO
+            signer,
         };
         let op = op_from_inst(inst.clone(), metadata);
         execute_op(runtime, &op).await;
@@ -367,11 +383,15 @@ async fn process_aggregate_input(
 }
 
 pub async fn execute_op(runtime: &mut Runtime, op: &Op) {
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
-        && let Err(e) = runtime.ensure_signer(x_only).await
-    {
-        warn!("Failed to ensure signer for {x_only}: {e}");
-        return;
+    match &op.metadata().signer {
+        Signer::XOnlyPubKey(_) if !matches!(op, Op::RegisterBlsKey { .. }) => {
+            warn!("non-registration op reached execute_op with x-only signer");
+            return;
+        }
+        Signer::SignerId { .. } => {
+            // Already resolved and verified during aggregate verification.
+        }
+        _ => {}
     }
 
     match op {

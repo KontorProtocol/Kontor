@@ -1,13 +1,20 @@
 use anyhow::{Result, anyhow};
-use bitcoin::consensus::encode::deserialize_hex;
 use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
-use indexer::database::types::OpResultId;
-use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts};
+use indexer::runtime;
+use indexer_types::{
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, Signer,
+};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../../native-contracts/token/wit",
+);
 import!(
     name = "registry",
     height = 0,
@@ -54,11 +61,11 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
     })?;
 
-    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
-        .await?
+    let signer1_id = signer1
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
-        .await?
+    let signer2_id = signer2
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     // Build two inner ops.
@@ -127,23 +134,18 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let decoded0 = arith::wave::eval_parse_return_expr(v0);
     assert_eq!(decoded0.value, 10);
 
-    // Inner op 1 should exist at op_index=1 and decode as eval(10, sum({y:8})) = 18.
-    let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&res.reveal_tx_hex)?;
-    let op1_id = OpResultId::builder()
-        .txid(reveal_tx.compute_txid().to_string())
-        .op_index(1)
-        .build();
-    let client = reg_tester.kontor_client().await;
-    let result1 = client
-        .result(&op1_id)
-        .await?
-        .ok_or_else(|| anyhow!("missing result for inner op 1"))?;
-    let v1 = result1
+    // Inner op 1 should also be returned by the multi-op helper.
+    assert_eq!(res.ops.len(), 2);
+    let v1 = res.ops[1]
+        .result
+        .as_ref()
+        .ok_or_else(|| anyhow!("missing result for inner op 1"))?
         .value
         .as_deref()
         .ok_or_else(|| anyhow!("expected a return value for inner op 1"))?;
     let decoded1 = arith::wave::eval_parse_return_expr(v1);
     assert_eq!(decoded1.value, 18);
+    let client = reg_tester.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer1_id.to_string())
@@ -169,6 +171,67 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .await?;
     let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
     assert_eq!(last_op, Some(arith::Op::Sum(arith::Operand { y: 8 })));
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+async fn direct_and_aggregate_calls_share_signer_id_account_regtest() -> Result<()> {
+    let mut signer = reg_tester.identity().await?;
+    let mut publisher = reg_tester.identity().await?;
+
+    reg_tester
+        .instruction(&mut publisher, Inst::Issuance)
+        .await?;
+
+    // Direct path should canonicalize the witness x-only pubkey into the registry signer_id.
+    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
+
+    let signer_id = signer
+        .signer_id
+        .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
+    let signer_key = match Signer::new_signer_id(signer_id) {
+        Signer::SignerId { signer_key, .. } => signer_key,
+        other => return Err(anyhow!("expected SignerId, got {other:?}")),
+    };
+
+    // Aggregate path should hit the same logical account, not create a second x-only account.
+    let aggregate_call = Inst::Call {
+        gas_limit: 50_000,
+        contract: runtime::token::address().into(),
+        nonce: Some(0),
+        expr: token::wave::mint_call_expr(Decimal::from(25)),
+    };
+    let msg = aggregate_call.aggregate_signing_message(signer_id)?;
+    let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
+        .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
+    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
+
+    reg_tester
+        .insts_instruction(
+            &mut publisher,
+            Insts {
+                ops: vec![aggregate_call],
+                aggregate: Some(AggregateInfo {
+                    signer_ids: vec![signer_id],
+                    signature: sig.to_bytes().to_vec(),
+                }),
+            },
+        )
+        .await?;
+
+    let signer_balance = token::balance(runtime, &signer_key).await?;
+    let x_only_balance = token::balance(runtime, &signer.x_only_public_key().to_string()).await?;
+
+    assert_eq!(
+        x_only_balance, None,
+        "direct execution must no longer create a separate x-only account"
+    );
+    assert!(
+        signer_balance.ok_or_else(|| anyhow!("expected signer-id balance to exist"))?
+            > Decimal::from(30),
+        "direct issuance and aggregate mint should accumulate on the same signer-id account",
+    );
 
     Ok(())
 }
@@ -204,8 +267,8 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
             e
         )
     })?;
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
-        .await?
+    let signer_id = signer
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let inst0 = Inst::Call {
@@ -367,11 +430,11 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
             e
         )
     })?;
-    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
-        .await?
+    let signer1_id = signer1
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
-        .await?
+    let signer2_id = signer2
+        .signer_id
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     let inst0 = Inst::Call {

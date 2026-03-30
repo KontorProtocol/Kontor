@@ -557,7 +557,7 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
         .filter_map(|v| {
             if v.ed25519_pubkey.len() != 32 {
                 warn!(
-                    xonly = v.x_only_pubkey,
+                    signer_key = v.signer_key,
                     "Skipping validator with invalid ed25519 pubkey length"
                 );
                 return None;

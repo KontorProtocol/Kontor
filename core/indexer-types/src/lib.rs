@@ -225,6 +225,11 @@ pub struct Block {
 pub enum Signer {
     Core(Box<Signer>),
     XOnlyPubKey(String),
+    SignerId {
+        #[ts(type = "number")]
+        signer_id: u64,
+        signer_key: String,
+    },
     ContractId {
         #[ts(type = "number")]
         id: i64,
@@ -234,6 +239,15 @@ pub enum Signer {
 }
 
 impl Signer {
+    pub const SIGNER_ID_PREFIX: &str = "__sid__";
+
+    pub fn new_signer_id(signer_id: u64) -> Self {
+        Self::SignerId {
+            signer_id,
+            signer_key: format!("{}{}", Self::SIGNER_ID_PREFIX, signer_id),
+        }
+    }
+
     pub fn new_contract_id(id: i64) -> Self {
         Self::ContractId {
             id,
@@ -253,6 +267,7 @@ impl core::ops::Deref for Signer {
             Self::Nobody => "nobody",
             Self::Core(_) => "core",
             Self::XOnlyPubKey(s) => s,
+            Self::SignerId { signer_key, .. } => signer_key,
             Self::ContractId { id_str, .. } => id_str,
         }
     }
@@ -578,4 +593,25 @@ pub struct RegistryEntryResponse {
     pub bls_pubkey: Option<Vec<u8>>,
     #[ts(type = "number")]
     pub next_nonce: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Signer;
+
+    #[test]
+    fn signer_id_uses_namespaced_string_key() {
+        let signer = Signer::new_signer_id(42);
+        match &signer {
+            Signer::SignerId {
+                signer_id,
+                signer_key,
+            } => {
+                assert_eq!(*signer_id, 42);
+                assert_eq!(signer_key, "__sid__42");
+                assert_eq!(&*signer, "__sid__42");
+            }
+            other => panic!("expected SignerId, got {other:?}"),
+        }
+    }
 }
