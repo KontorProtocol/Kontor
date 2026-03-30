@@ -10,7 +10,7 @@ mod fib_contract;
 async fn regtest_all() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let cluster = RegTesterCluster::setup(4).await?;
+    let cluster = RegTesterCluster::setup(3).await?;
     let contracts_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-contracts")
         .canonicalize()
@@ -22,6 +22,7 @@ async fn regtest_all() -> Result<()> {
     // Single RegTester shared across tests — clones share Arc<Mutex> state,
     // so the UTXO chain and published contracts cache stay valid.
     let reg_tester = cluster.reg_tester(0).await?;
+    reg_tester.pre_create_identities(100).await?;
 
     run_test("counter_increment", async {
         let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());

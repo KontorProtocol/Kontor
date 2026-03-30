@@ -31,7 +31,7 @@ pub struct TypedCall<T> {
 }
 
 /// Trait for type-erased calls — used by Batch to store heterogeneous calls.
-pub trait CallExpr {
+pub trait CallExpr: Send {
     fn expr(&self) -> &str;
     fn contract(&self) -> &ContractAddress;
 }
@@ -515,6 +515,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     Inst::Call {
                         gas_limit: 10_000,
                         contract: (*contract).clone().into(),
+                        nonce: None,
                         expr: expr.to_string(),
                     },
                 )
