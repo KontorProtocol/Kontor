@@ -107,7 +107,7 @@ impl Protobuf for Vote {
 
     fn from_proto(proto: Self::Proto) -> Result<Self, ProtoError> {
         Ok(Self {
-            typ: decode_votetype(proto.vote_type()),
+            typ: decode_votetype(proto.vote_type())?,
             height: Height::from_proto(proto.height)?,
             round: Round::new(proto.round),
             value: match proto.value {
@@ -144,9 +144,10 @@ pub fn encode_votetype(vote_type: VoteType) -> proto::VoteType {
     }
 }
 
-pub fn decode_votetype(vote_type: proto::VoteType) -> VoteType {
+pub fn decode_votetype(vote_type: proto::VoteType) -> Result<VoteType, ProtoError> {
     match vote_type {
-        proto::VoteType::Prevote => VoteType::Prevote,
-        proto::VoteType::Precommit => VoteType::Precommit,
+        proto::VoteType::Prevote => Ok(VoteType::Prevote),
+        proto::VoteType::Precommit => Ok(VoteType::Precommit),
+        proto::VoteType::Unspecified => Err(ProtoError::Other("Unspecified VoteType".into())),
     }
 }

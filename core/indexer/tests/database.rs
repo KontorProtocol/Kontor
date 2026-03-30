@@ -9,11 +9,12 @@ use indexer::{
             exists_contract_state, get_contract_bytes_by_address, get_contract_bytes_by_id,
             get_contract_id_from_address, get_contract_result, get_contracts,
             get_latest_contract_state, get_latest_contract_state_value, get_op_result,
-            get_transaction_by_txid, get_transactions_at_height, insert_block, insert_contract,
-            insert_contract_result, insert_contract_state, insert_file_metadata,
-            insert_processed_block, insert_transaction, matching_path,
-            path_prefix_filter_contract_state, rollback_to_height, select_all_file_metadata,
-            select_block_at_height, select_block_latest, select_processed_block_by_height_or_hash,
+            get_transaction_by_txid, get_transactions_at_height, insert_batch, insert_block,
+            insert_contract, insert_contract_result, insert_contract_state, insert_file_metadata,
+            insert_transaction, matching_path, path_prefix_filter_contract_state,
+            rollback_to_height, select_all_file_metadata, select_batch, select_batches_from_anchor,
+            select_block_at_height, select_block_by_height_or_hash, select_block_latest,
+            select_min_batch_height,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId},
     },
@@ -31,7 +32,7 @@ async fn test_database() -> Result<()> {
 
     let (reader, writer, _temp_dir) = new_test_db().await?;
 
-    insert_processed_block(&writer.connection(), block).await?;
+    insert_block(&writer.connection(), block).await?;
     let block_at_height = select_block_at_height(&*reader.connection().await?, height)
         .await?
         .unwrap();
@@ -53,7 +54,7 @@ async fn test_transaction() -> Result<()> {
     let height = 800000;
     let hash = new_mock_block_hash(height as u32);
     let block = BlockRow::builder().height(height).hash(hash).build();
-    insert_processed_block(&tx, block).await?;
+    insert_block(&tx, block).await?;
     assert!(select_block_latest(&tx).await?.is_some());
     tx.commit().await?;
     Ok(())
@@ -91,8 +92,9 @@ async fn test_contract_state_operations() -> Result<()> {
         .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
-    insert_transaction(&conn, tx.clone()).await?;
+    let tx_id = insert_transaction(&conn, tx.clone()).await?;
 
     // Test contract state insertion and retrieval
     let contract_id = 123;
@@ -103,7 +105,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx.tx_index)
+        .tx_id(tx_id)
         .height(height)
         .path(path.to_string())
         .value(value.clone())
@@ -146,7 +148,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(retrieved_value.unwrap(), value);
     assert!(!retrieved_state.deleted);
     assert_eq!(retrieved_state.height, height);
-    assert_eq!(retrieved_state.tx_index, contract_state.tx_index);
+    assert_eq!(retrieved_state.tx_id, contract_state.tx_id);
 
     // Test with a newer version of the same contract state
     let height2 = 800001;
@@ -159,13 +161,14 @@ async fn test_contract_state_operations() -> Result<()> {
         .height(height2)
         .txid(txid2.to_string())
         .tx_index(2)
+        .confirmed_height(height2)
         .build();
-    insert_transaction(&conn, tx2.clone()).await?;
+    let tx_id2 = insert_transaction(&conn, tx2.clone()).await?;
 
     let updated_value = vec![5, 6, 7, 8];
     let updated_contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx2.tx_index)
+        .tx_id(tx_id2)
         .height(height2)
         .path(path.to_string())
         .value(updated_value.clone())
@@ -184,8 +187,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted =
-        delete_contract_state(&conn, height2, Some(tx2.tx_index), contract_id, path).await?;
+    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, path).await?;
     assert!(deleted);
 
     let count = conn
@@ -223,16 +225,19 @@ async fn test_transaction_operations() -> Result<()> {
         .height(height)
         .txid("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
     let tx2 = TransactionRow::builder()
         .height(height)
         .txid("123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0".to_string())
         .tx_index(1)
+        .confirmed_height(height)
         .build();
     let tx3 = TransactionRow::builder()
         .height(height)
         .txid("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string())
         .tx_index(2)
+        .confirmed_height(height)
         .build();
 
     // Insert multiple transactions at the same height
@@ -294,7 +299,7 @@ async fn test_transaction_operations() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
+async fn test_select_block_by_height_or_hash() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -312,19 +317,19 @@ async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
         .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
         .build();
 
-    insert_processed_block(&conn, block1.clone()).await?;
-    insert_processed_block(&conn, block2.clone()).await?;
-    insert_processed_block(&conn, block3.clone()).await?;
+    insert_block(&conn, block1.clone()).await?;
+    insert_block(&conn, block2.clone()).await?;
+    insert_block(&conn, block3.clone()).await?;
 
     // Test 1: Find by height (as string)
-    let result = select_processed_block_by_height_or_hash(&conn, "800000").await?;
+    let result = select_block_by_height_or_hash(&conn, "800000").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 800000);
     assert_eq!(found_block.hash, block1.hash);
 
     // Test 2: Find by hash
-    let result = select_processed_block_by_height_or_hash(
+    let result = select_block_by_height_or_hash(
         &conn,
         "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05",
     )
@@ -335,14 +340,14 @@ async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
     assert_eq!(found_block.hash, block2.hash);
 
     // Test 3: Find by different height
-    let result = select_processed_block_by_height_or_hash(&conn, "123456").await?;
+    let result = select_block_by_height_or_hash(&conn, "123456").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 123456);
     assert_eq!(found_block.hash, block3.hash);
 
     // Test 4: Find by different hash
-    let result = select_processed_block_by_height_or_hash(
+    let result = select_block_by_height_or_hash(
         &conn,
         "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
     )
@@ -353,20 +358,19 @@ async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
     assert_eq!(found_block.hash, block3.hash);
 
     // Test 5: Non-existent height
-    let result = select_processed_block_by_height_or_hash(&conn, "999999").await?;
+    let result = select_block_by_height_or_hash(&conn, "999999").await?;
     assert!(result.is_none());
 
     // Test 6: Non-existent hash
-    let result =
-        select_processed_block_by_height_or_hash(&conn, "nonexistenthash123456789").await?;
+    let result = select_block_by_height_or_hash(&conn, "nonexistenthash123456789").await?;
     assert!(result.is_none());
 
     // Test 7: Invalid height format (non-numeric string that's not a hash)
-    let result = select_processed_block_by_height_or_hash(&conn, "invalid_height").await?;
+    let result = select_block_by_height_or_hash(&conn, "invalid_height").await?;
     assert!(result.is_none());
 
     // Test 8: Empty string
-    let result = select_processed_block_by_height_or_hash(&conn, "").await?;
+    let result = select_block_by_height_or_hash(&conn, "").await?;
     assert!(result.is_none());
 
     // Test 9: Height 0 (edge case)
@@ -374,9 +378,9 @@ async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
         .height(0)
         .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
         .build();
-    insert_processed_block(&conn, block_zero.clone()).await?;
+    insert_block(&conn, block_zero.clone()).await?;
 
-    let result = select_processed_block_by_height_or_hash(&conn, "0").await?;
+    let result = select_block_by_height_or_hash(&conn, "0").await?;
     assert!(result.is_some());
     let found_block = result.unwrap();
     assert_eq!(found_block.height, 0);
@@ -384,12 +388,11 @@ async fn test_select_processed_block_by_height_or_hash() -> Result<()> {
 
     // Test 10: Very large height
     let large_height = u64::MAX;
-    let result = select_processed_block_by_height_or_hash(&conn, &large_height.to_string()).await?;
+    let result = select_block_by_height_or_hash(&conn, &large_height.to_string()).await?;
     assert!(result.is_none());
 
     // Test 11: Partial hash match (should not match)
-    let result =
-        select_processed_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
+    let result = select_block_by_height_or_hash(&conn, "000000000000000000015d76").await?;
     assert!(result.is_none());
 
     Ok(())
@@ -501,14 +504,45 @@ async fn test_map_keys() -> Result<()> {
 
     insert_block(&conn, block1.clone()).await?;
 
+    // Insert transactions to satisfy FK constraints
+    let tx_id1 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000001".to_string())
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let tx_id2 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000002".to_string())
+            .tx_index(1)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let tx_id3 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("aaaa000000000000000000000000000000000000000000000000000000000003".to_string())
+            .tx_index(2)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
     let contract_id = 123;
     let path = "test.path";
     let value = vec![1, 2, 3, 4];
-    let tx_index = 1;
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index)
+        .tx_id(tx_id1)
         .height(height)
         .path(format!("{}.key0.foo", path))
         .value(value.clone())
@@ -518,7 +552,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index)
+        .tx_id(tx_id1)
         .height(height)
         .path(format!("{}.key0.bar", path))
         .value(value.clone())
@@ -528,7 +562,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index + 1)
+        .tx_id(tx_id2)
         .height(height)
         .path(format!("{}.key2", path))
         .value(value.clone())
@@ -537,7 +571,7 @@ async fn test_map_keys() -> Result<()> {
 
     let contract_state = ContractStateRow::builder()
         .contract_id(contract_id)
-        .tx_index(tx_index + 2)
+        .tx_id(tx_id3)
         .height(height)
         .path(format!("{}.key1", path))
         .value(value.clone())
@@ -573,7 +607,7 @@ async fn test_contract_result_operations() -> Result<()> {
     let height = 800000;
     let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
     let block = BlockRow::builder().height(height).hash(hash).build();
-    insert_processed_block(&conn, block).await?;
+    insert_block(&conn, block).await?;
 
     let contract_id = insert_contract(
         &conn,
@@ -591,13 +625,14 @@ async fn test_contract_result_operations() -> Result<()> {
         .height(height)
         .txid(txid.to_string())
         .tx_index(0)
+        .confirmed_height(height)
         .build();
 
-    insert_transaction(&conn, tx1.clone()).await?;
+    let tx_id = insert_transaction(&conn, tx1.clone()).await?;
 
     let result = ContractResultRow::builder()
         .id(1)
-        .tx_index(tx1.tx_index)
+        .tx_id(tx_id)
         .input_index(0)
         .op_index(0)
         .height(height)
@@ -610,8 +645,7 @@ async fn test_contract_result_operations() -> Result<()> {
 
     let row = get_contract_result(
         &conn,
-        result.height,
-        result.tx_index,
+        result.tx_id,
         result.input_index,
         result.op_index,
         result.result_index,
@@ -737,6 +771,205 @@ async fn test_file_metadata_operations() -> Result<()> {
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, id1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_and_select_batch() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: i64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    insert_batch(&conn, 1, height, &hash.to_string(), b"cert1", false).await?;
+
+    // Insert two batch transactions
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .batch_height(1)
+            .txid("aa".repeat(32))
+            .build(),
+    )
+    .await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .batch_height(1)
+            .txid("bb".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    let result = select_batch(&conn, 1).await?;
+    assert!(result.is_some());
+    let batch = result.unwrap();
+    assert_eq!(batch.anchor_height, height);
+    assert_eq!(batch.anchor_hash, hash.to_string());
+    assert_eq!(batch.certificate, b"cert1");
+    assert_eq!(batch.txids.len(), 2);
+    assert_eq!(batch.txids[0], "aa".repeat(32));
+    assert_eq!(batch.txids[1], "bb".repeat(32));
+
+    // Non-existent batch
+    assert!(select_batch(&conn, 999).await?.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_min_batch_height() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    assert!(select_min_batch_height(&conn).await?.is_none());
+
+    let height: i64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    insert_batch(&conn, 5, height, &hash.to_string(), b"cert5", false).await?;
+    insert_batch(&conn, 3, height, &hash.to_string(), b"cert3", false).await?;
+    insert_batch(&conn, 8, height, &hash.to_string(), b"cert8", false).await?;
+
+    assert_eq!(select_min_batch_height(&conn).await?, Some(3));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_batches_from_anchor() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Create blocks at heights 100 and 200
+    for h in [100i64, 200] {
+        let hash = new_mock_block_hash(h as u32);
+        insert_block(&conn, BlockRow::builder().height(h).hash(hash).build()).await?;
+    }
+
+    let hash100 = new_mock_block_hash(100);
+    let hash200 = new_mock_block_hash(200);
+
+    // Batch at anchor 100
+    insert_batch(&conn, 1, 100, &hash100.to_string(), b"cert1", false).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .batch_height(1)
+            .txid("aa".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    // Batch at anchor 200
+    insert_batch(&conn, 2, 200, &hash200.to_string(), b"cert2", false).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(200)
+            .batch_height(2)
+            .txid("bb".repeat(32))
+            .build(),
+    )
+    .await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(200)
+            .batch_height(2)
+            .txid("cc".repeat(32))
+            .build(),
+    )
+    .await?;
+
+    // Query from anchor 200 — should only return the second batch
+    let results = select_batches_from_anchor(&conn, 200).await?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].consensus_height, 2);
+    assert_eq!(results[0].anchor_height, 200);
+    assert_eq!(results[0].txids.len(), 2);
+
+    // Query from anchor 100 — should return both
+    let results = select_batches_from_anchor(&conn, 100).await?;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].consensus_height, 1);
+    assert_eq!(results[0].txids.len(), 1);
+    assert_eq!(results[1].consensus_height, 2);
+    assert_eq!(results[1].txids.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_existing_txids() -> Result<()> {
+    use indexer::database::queries::select_existing_txids;
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Create a block
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(100)
+            .hash(new_mock_block_hash(100))
+            .build(),
+    )
+    .await?;
+
+    // Insert some transactions
+    let txid_a = "aa".repeat(32);
+    let txid_b = "bb".repeat(32);
+    let txid_c = "cc".repeat(32);
+
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .confirmed_height(100)
+            .tx_index(0)
+            .txid(txid_a.clone())
+            .build(),
+    )
+    .await?;
+    insert_batch(
+        &conn,
+        1,
+        100,
+        &new_mock_block_hash(100).to_string(),
+        b"cert",
+        false,
+    )
+    .await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .batch_height(1)
+            .txid(txid_b.clone())
+            .build(),
+    )
+    .await?;
+
+    // Query with mix of existing and non-existing txids
+    let result =
+        select_existing_txids(&conn, &[txid_a.clone(), txid_b.clone(), txid_c.clone()]).await?;
+
+    assert!(result.contains(&txid_a), "confirmed tx should be found");
+    assert!(result.contains(&txid_b), "batched tx should be found");
+    assert!(!result.contains(&txid_c), "unknown tx should not be found");
+    assert_eq!(result.len(), 2);
+
+    // Empty input returns empty result
+    let empty = select_existing_txids(&conn, &[]).await?;
+    assert!(empty.is_empty());
 
     Ok(())
 }

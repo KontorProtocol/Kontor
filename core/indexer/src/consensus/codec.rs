@@ -122,10 +122,8 @@ pub fn encode_round_certificate(
         height: certificate.height.as_u64(),
         round: certificate.round.as_u32().expect("round should not be nil"),
         cert_type: match certificate.cert_type {
-            RoundCertificateType::Precommit => {
-                proto::RoundCertificateType::RoundCertPrecommit.into()
-            }
-            RoundCertificateType::Skip => proto::RoundCertificateType::RoundCertSkip.into(),
+            RoundCertificateType::Precommit => proto::RoundCertificateType::Precommit.into(),
+            RoundCertificateType::Skip => proto::RoundCertificateType::Skip.into(),
         },
         signatures: certificate
             .round_signatures
@@ -155,14 +153,17 @@ pub fn decode_round_certificate(
         cert_type: match proto::RoundCertificateType::try_from(certificate.cert_type)
             .map_err(|_| ProtoError::Other("Unknown RoundCertificateType".into()))?
         {
-            proto::RoundCertificateType::RoundCertPrecommit => RoundCertificateType::Precommit,
-            proto::RoundCertificateType::RoundCertSkip => RoundCertificateType::Skip,
+            proto::RoundCertificateType::Precommit => RoundCertificateType::Precommit,
+            proto::RoundCertificateType::Skip => RoundCertificateType::Skip,
+            proto::RoundCertificateType::Unspecified => {
+                return Err(ProtoError::Other("Unspecified RoundCertificateType".into()));
+            }
         },
         round_signatures: certificate
             .signatures
             .into_iter()
             .map(|sig| -> Result<RoundSignature<Ctx>, ProtoError> {
-                let vote_type = decode_votetype(sig.vote_type());
+                let vote_type = decode_votetype(sig.vote_type())?;
                 let address = sig.validator_address.ok_or_else(|| {
                     ProtoError::missing_field::<proto::RoundCertificate>("validator_address")
                 })?;
@@ -633,4 +634,41 @@ pub fn decode_signature(signature: proto::Signature) -> Result<Signature, ProtoE
     let bytes = <[u8; 64]>::try_from(signature.bytes.as_ref())
         .map_err(|_| ProtoError::Other("Invalid signature length".to_string()))?;
     Ok(Signature::from_bytes(bytes))
+}
+
+impl Codec<malachitebft_core_types::ValidatorProof<Ctx>> for ProtobufCodec {
+    type Error = ProtoError;
+
+    fn decode(
+        &self,
+        bytes: Bytes,
+    ) -> Result<malachitebft_core_types::ValidatorProof<Ctx>, Self::Error> {
+        let proto = proto::ValidatorProof::decode(bytes.as_ref())?;
+        let signature = decode_signature(
+            proto
+                .signature
+                .ok_or_else(|| ProtoError::Other("Missing signature".to_string()))?,
+        )?;
+        Ok(malachitebft_core_types::ValidatorProof::new(
+            proto.consensus_pub_key.to_vec(),
+            proto.peer_id.to_vec(),
+            signature,
+        ))
+    }
+
+    fn encode(
+        &self,
+        msg: &malachitebft_core_types::ValidatorProof<Ctx>,
+    ) -> Result<Bytes, Self::Error> {
+        Ok(Bytes::from(
+            proto::ValidatorProof {
+                consensus_pub_key: Bytes::copy_from_slice(&msg.public_key),
+                peer_id: Bytes::copy_from_slice(&msg.peer_id),
+                signature: Some(proto::Signature {
+                    bytes: Bytes::copy_from_slice(msg.signature.to_bytes().as_ref()),
+                }),
+            }
+            .encode_to_vec(),
+        ))
+    }
 }

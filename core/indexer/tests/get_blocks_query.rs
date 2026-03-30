@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexer::{
     database::{
-        queries::{get_blocks_paginated, insert_block, insert_processed_block},
+        queries::{get_blocks_paginated, insert_block},
         types::BlockQuery,
     },
     test_utils::{new_mock_block_hash, new_test_db},
@@ -12,7 +12,7 @@ use indexer_types::BlockRow;
 async fn test_get_blocks_query() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(100)
@@ -21,7 +21,7 @@ async fn test_get_blocks_query() -> Result<()> {
     )
     .await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(101)
@@ -30,20 +30,11 @@ async fn test_get_blocks_query() -> Result<()> {
     )
     .await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(102)
             .hash(new_mock_block_hash(102))
-            .build(),
-    )
-    .await?;
-
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(103)
-            .hash(new_mock_block_hash(103))
             .build(),
     )
     .await?;
@@ -92,7 +83,7 @@ async fn test_get_blocks_query() -> Result<()> {
 async fn test_get_blocks_query_relevant() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(100)
@@ -102,7 +93,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     )
     .await?;
 
-    insert_processed_block(
+    insert_block(
         &conn,
         BlockRow::builder()
             .height(101)

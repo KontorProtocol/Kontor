@@ -6,16 +6,16 @@ use indexer::{
     database::{
         queries::{
             contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
-            insert_processed_block, insert_transaction,
+            insert_transaction,
         },
         types::ContractRow,
     },
     reg_tester::{self},
-    runtime::{ComponentCache, Runtime as IndexerRuntime, Storage, TransactionContext},
-    test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db},
+    runtime::{Runtime as IndexerRuntime, TransactionContext},
+    test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Block, BlockRow, Inst, TransactionRow};
+use indexer_types::{Inst, TransactionRow};
 pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
@@ -168,42 +168,32 @@ impl RuntimeLocal {
         Ok(())
     }
 
-    pub async fn new(block: Option<&Block>) -> Result<Self> {
-        let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
-        let conn = writer.connection();
-        insert_processed_block(
+    pub fn into_parts(self) -> (IndexerRuntime, TempDir) {
+        (self.runtime, self._db_dir)
+    }
+
+    pub async fn new() -> Result<Self> {
+        let (mut runtime, _db_dir, _db_name) = indexer::test_utils::test_runtime().await?;
+        let conn = runtime.get_storage_conn();
+        let height = 1i64;
+        let tx_index = 1i64;
+        let txid = new_mock_transaction(0).txid;
+        let tx_id = insert_transaction(
             &conn,
-            BlockRow::builder()
-                .height(0)
-                .hash(new_mock_block_hash(0))
-                .relevant(true)
+            TransactionRow::builder()
+                .height(height)
+                .txid(txid.to_string())
+                .tx_index(tx_index)
+                .confirmed_height(height)
                 .build(),
         )
         .await?;
-        let (height, tx_index, txid) = if let Some(block) = block {
-            insert_processed_block(&conn, block.into()).await?;
-            (block.height as i64, 0, new_mock_transaction(0).txid)
-        } else {
-            insert_processed_block(
-                &conn,
-                BlockRow::builder()
-                    .height(1)
-                    .hash(new_mock_block_hash(1))
-                    .relevant(true)
-                    .build(),
-            )
-            .await?;
-            (1, 1, new_mock_transaction(0).txid)
-        };
-        let storage = Storage::builder().height(height).conn(conn).build();
-        let component_cache = ComponentCache::new();
-        let mut runtime = IndexerRuntime::new(component_cache, storage).await?;
-        runtime.publish_native_contracts().await?;
         runtime
             .set_context(
                 height,
                 Some(
                     TransactionContext::builder()
+                        .tx_id(tx_id)
                         .tx_index(tx_index)
                         .txid(txid)
                         .build(),
@@ -389,7 +379,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub async fn new_local(config: RuntimeConfig<'_>) -> Result<Self> {
-        let runtime = RuntimeLocal::new(None).await?;
+        let runtime = RuntimeLocal::new().await?;
         Ok(Runtime {
             contract_reader: ContractReader::new(config.contracts_dir).await?,
             runtime: Box::new(runtime),
@@ -402,15 +392,6 @@ impl Runtime {
             contract_reader: ContractReader::new(config.contracts_dir).await?,
             runtime,
         })
-    }
-
-    pub async fn new_local_with_block(block: &Block) -> Result<(IndexerRuntime, TempDir)> {
-        let RuntimeLocal {
-            runtime,
-            _db_dir,
-            _db_name: _,
-        } = RuntimeLocal::new(Some(block)).await?;
-        Ok((runtime, _db_dir))
     }
 
     pub async fn identity(&mut self) -> Result<Signer> {

@@ -12,9 +12,7 @@ use indexer::{
     config::Config,
     database::{
         Reader, Writer,
-        queries::{
-            insert_contract, insert_contract_state, insert_processed_block, insert_transaction,
-        },
+        queries::{insert_block, insert_contract, insert_contract_state, insert_transaction},
         types::{ContractRow, ContractStateRow},
     },
     event::EventSubscriber,
@@ -46,7 +44,7 @@ async fn create_test_app(
             .height(height)
             .hash(format!("{:064x}", height).parse()?)
             .build();
-        insert_processed_block(&conn, block).await?;
+        insert_block(&conn, block).await?;
     }
 
     insert_contract(
@@ -67,63 +65,69 @@ async fn create_test_app(
     }
 
     // Height 800000: 5 transactions (indices 0-4)
+    let mut tx_ids_800000 = Vec::new();
     for tx_index in 0..5 {
         let tx = TransactionRow::builder()
             .height(800000)
             .txid(format!("tx_800000_{}_hash{:056x}", tx_index, tx_index))
             .tx_index(tx_index)
             .build();
-        insert_transaction(&conn, tx).await?;
+        tx_ids_800000.push(insert_transaction(&conn, tx).await?);
     }
 
+    // tx_index=1 modifies the token contract
     insert_contract_state(
         &conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800000[1])
             .height(800000)
-            .tx_index(1)
             .path("foo".to_string())
             .build(),
     )
     .await?;
 
     // Height 800001: 3 transactions (indices 0-2)
+    let mut tx_ids_800001 = Vec::new();
     for tx_index in 0..3 {
         let tx = TransactionRow::builder()
             .height(800001)
             .txid(format!("tx_800001_{}_hash{:056x}", tx_index, tx_index))
             .tx_index(tx_index)
             .build();
-        insert_transaction(&conn, tx).await?;
+        tx_ids_800001.push(insert_transaction(&conn, tx).await?);
     }
 
+    // tx_index=2 modifies the token contract
     insert_contract_state(
         &conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800001[2])
             .height(800001)
-            .tx_index(2)
             .path("bar".to_string())
             .build(),
     )
     .await?;
 
     // Height 800002: 7 transactions (indices 0-6)
+    let mut tx_ids_800002 = Vec::new();
     for tx_index in 0..7 {
         let tx = TransactionRow::builder()
             .height(800002)
             .txid(format!("tx_800002_{}_hash{:056x}", tx_index, tx_index))
             .tx_index(tx_index)
             .build();
-        insert_transaction(&conn, tx).await?;
+        tx_ids_800002.push(insert_transaction(&conn, tx).await?);
     }
 
+    // tx_index=3 modifies the token contract
     insert_contract_state(
         &conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800002[3])
             .height(800002)
-            .tx_index(3)
             .path("biz".to_string())
             .build(),
     )
@@ -265,7 +269,7 @@ async fn collect_all_transactions_with_offset(
 async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test with different page sizes
     for limit in [1, 2, 3, 5, 7, 10] {
@@ -320,7 +324,7 @@ async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
             assert!(
                 prev.height > curr.height
                     || (prev.height == curr.height && prev.tx_index > curr.tx_index),
-                "Incorrect ordering at index {} for limit={}: ({}, {}) should come before ({}, {})",
+                "Incorrect ordering at index {} for limit={}: ({}, {:?}) should come before ({}, {:?})",
                 i,
                 limit,
                 prev.height,
@@ -338,7 +342,7 @@ async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
 async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test pagination for height 800000 (5 transactions)
     for limit in [1, 2, 3, 4, 5, 6] {
@@ -386,12 +390,16 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
         );
 
         // Verify ordering (DESC by tx_index: 4, 3, 2, 1, 0)
-        let expected_indices = [4, 3, 2, 1, 0];
+        let expected_indices: [i64; 5] = [4, 3, 2, 1, 0];
         for (i, tx) in cursor_transactions.iter().enumerate() {
             assert_eq!(
-                tx.tx_index, expected_indices[i],
-                "Incorrect tx_index at position {} for limit={}: expected {}, got {}",
-                i, limit, expected_indices[i], tx.tx_index
+                tx.tx_index,
+                Some(expected_indices[i]),
+                "Incorrect tx_index at position {} for limit={}: expected {}, got {:?}",
+                i,
+                limit,
+                expected_indices[i],
+                tx.tx_index
             );
         }
     }
@@ -403,7 +411,7 @@ async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
 async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test pagination for height 800002 (7 transactions)
     for limit in [1, 2, 3, 4, 5, 6, 7, 8] {
@@ -431,12 +439,16 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
         );
 
         // Verify ordering (DESC by tx_index: 6, 5, 4, 3, 2, 1, 0)
-        let expected_indices = [6, 5, 4, 3, 2, 1, 0];
+        let expected_indices: [i64; 7] = [6, 5, 4, 3, 2, 1, 0];
         for (i, tx) in cursor_transactions.iter().enumerate() {
             assert_eq!(
-                tx.tx_index, expected_indices[i],
-                "Incorrect tx_index at position {} for limit={}: expected {}, got {}",
-                i, limit, expected_indices[i], tx.tx_index
+                tx.tx_index,
+                Some(expected_indices[i]),
+                "Incorrect tx_index at position {} for limit={}: expected {}, got {:?}",
+                i,
+                limit,
+                expected_indices[i],
+                tx.tx_index
             );
         }
     }
@@ -448,7 +460,7 @@ async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Resul
 async fn test_cursor_pagination_edge_cases() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test with limit=1 to ensure every transaction is returned exactly once
     let transactions =
@@ -473,7 +485,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
         "Expected exactly 1 transaction at height 800003"
     );
     assert_eq!(single_tx[0].height, 800003);
-    assert_eq!(single_tx[0].tx_index, 0);
+    assert_eq!(single_tx[0].tx_index, Some(0));
 
     // Test empty height (800006 - no transactions)
     let empty_result =
@@ -492,7 +504,7 @@ async fn test_cursor_pagination_edge_cases() -> Result<()> {
 async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test that cursor pagination works correctly when page size equals total count
     let height_800001_all =
@@ -529,7 +541,7 @@ async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
 async fn test_cursor_consistency_across_different_limits() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Collect all transactions with different page sizes
     let results_limit_1 =
@@ -578,7 +590,7 @@ async fn test_cursor_consistency_across_different_limits() -> Result<()> {
 async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     // Test that total_count decreases as we paginate (showing remaining items)
     let mut cursor: Option<i64> = None;
@@ -637,7 +649,7 @@ async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
 async fn test_cursor_pagination_contract_address() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let url = "/api/transactions?limit=1&contract=token_800000_1";
     let response: TestResponse = server.get(url).await;
@@ -648,7 +660,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800002);
-    assert_eq!(transactions[0].tx_index, 3);
+    assert_eq!(transactions[0].tx_index, Some(3));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
     assert_eq!(meta.total_count, 3);
@@ -665,7 +677,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800001);
-    assert_eq!(transactions[0].tx_index, 2);
+    assert_eq!(transactions[0].tx_index, Some(2));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -681,7 +693,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800000);
-    assert_eq!(transactions[0].tx_index, 1);
+    assert_eq!(transactions[0].tx_index, Some(1));
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -692,7 +704,7 @@ async fn test_cursor_pagination_contract_address() -> Result<()> {
 async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
     let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-    let server = TestServer::new(app)?;
+    let server = TestServer::new(app);
 
     let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";
     let response: TestResponse = server.get(url).await;
@@ -703,7 +715,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800000);
-    assert_eq!(transactions[0].tx_index, 1);
+    assert_eq!(transactions[0].tx_index, Some(1));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
     assert_eq!(meta.total_count, 3);
@@ -720,7 +732,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800001);
-    assert_eq!(transactions[0].tx_index, 2);
+    assert_eq!(transactions[0].tx_index, Some(2));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -736,7 +748,7 @@ async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800002);
-    assert_eq!(transactions[0].tx_index, 3);
+    assert_eq!(transactions[0].tx_index, Some(3));
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 

@@ -7,8 +7,9 @@ use thiserror::Error as ThisError;
 
 use crate::{
     database::types::{
-        BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow, ContractRow,
-        FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+        BatchQueryResult, BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow,
+        ContractRow, FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery,
+        TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -40,15 +41,6 @@ pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Err
     Ok(conn.last_insert_rowid())
 }
 
-pub async fn insert_processed_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
-    conn.execute(
-        "INSERT OR REPLACE INTO blocks (height, hash, relevant, processed) VALUES (?, ?, ?, 1)",
-        (block.height, block.hash.to_string(), block.relevant),
-    )
-    .await?;
-    Ok(conn.last_insert_rowid())
-}
-
 pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, Error> {
     let num_rows = conn
         .execute("DELETE FROM blocks WHERE height > ?", [height])
@@ -60,7 +52,7 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
 pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT 1",
+            "SELECT height, hash, relevant FROM blocks ORDER BY height DESC LIMIT 1",
             params![],
         )
         .await?;
@@ -70,7 +62,7 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
 pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE processed = 1 ORDER BY height DESC LIMIT ?",
+            "SELECT height, hash, relevant FROM blocks ORDER BY height DESC LIMIT ?",
             params![limit],
         )
         .await?;
@@ -81,28 +73,13 @@ pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<B
     Ok(results)
 }
 
-pub async fn set_block_processed(conn: &Connection, height: i64) -> Result<(), Error> {
-    conn.execute(
-        "UPDATE blocks SET processed = 1 WHERE height = ?",
-        params![height],
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn delete_unprocessed_blocks(conn: &Connection) -> Result<u64, Error> {
-    Ok(conn
-        .execute("DELETE FROM blocks WHERE processed = 0", params![])
-        .await?)
-}
-
-pub async fn select_processed_block_by_height_or_hash(
+pub async fn select_block_by_height_or_hash(
     conn: &Connection,
     identifier: &str,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT height, hash, relevant FROM blocks WHERE (height = ? OR hash = ?) AND processed = 1",
+            "SELECT height, hash, relevant FROM blocks WHERE height = ? OR hash = ?",
             params![identifier, identifier],
         )
         .await?;
@@ -116,19 +93,6 @@ pub async fn select_block_at_height(
     let mut rows = conn
         .query(
             "SELECT height, hash, relevant FROM blocks WHERE height = ?",
-            params![height],
-        )
-        .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
-}
-
-pub async fn select_processed_block_at_height(
-    conn: &Connection,
-    height: i64,
-) -> Result<Option<BlockRow>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT height, hash, relevant FROM blocks WHERE height = ? AND processed = 1",
             params![height],
         )
         .await?;
@@ -153,7 +117,7 @@ pub async fn get_blocks_paginated(
     query: BlockQuery,
 ) -> Result<(Vec<BlockRow>, PaginationMeta), Error> {
     let var = "b";
-    let mut where_clauses = vec!["processed = 1".to_string()];
+    let mut where_clauses = vec![];
     let mut params = vec![];
     if let Some(relevant) = query.relevant {
         where_clauses.push("b.relevant = :relevant".to_string());
@@ -181,7 +145,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             INSERT OR REPLACE INTO contract_state (
                 contract_id,
                 height,
-                tx_index,
+                tx_id,
                 size,
                 path,
                 value,
@@ -191,7 +155,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             params![
                 row.contract_id,
                 row.height,
-                row.tx_index,
+                row.tx_id,
                 row.size(),
                 row.path,
                 row.value,
@@ -222,7 +186,7 @@ pub async fn get_latest_contract_state(
                 SELECT
                     contract_id,
                     height,
-                    tx_index,
+                    tx_id,
                     path,
                     value,
                     deleted
@@ -277,7 +241,7 @@ pub async fn get_latest_contract_state_value(
 pub async fn delete_contract_state(
     conn: &Connection,
     height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     contract_id: i64,
     path: &str,
 ) -> Result<bool, Error> {
@@ -286,7 +250,7 @@ pub async fn delete_contract_state(
             Some(mut row) => {
                 row.deleted = true;
                 row.height = height;
-                row.tx_index = tx_index;
+                row.tx_id = tx_id;
                 insert_contract_state(conn, row).await?;
                 true
             }
@@ -533,13 +497,183 @@ pub async fn get_contract_bytes_by_id(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<(), Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT INTO transactions (height, txid, tx_index) VALUES (?, ?, ?)",
-        params![row.height, row.txid, row.tx_index],
+        "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
+        params![row.height, row.txid, row.confirmed_height, row.tx_index, row.batch_height],
+    )
+    .await?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub async fn insert_batch(
+    conn: &Connection,
+    consensus_height: i64,
+    anchor_height: i64,
+    anchor_hash: &str,
+    certificate: &[u8],
+    is_block: bool,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (?, ?, ?, ?, ?)",
+        params![consensus_height, anchor_height, anchor_hash, certificate, is_block as i64],
     )
     .await?;
     Ok(())
+}
+
+pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    Ok(conn
+        .query("SELECT MAX(consensus_height) FROM batches", ())
+        .await?
+        .next()
+        .await?
+        .and_then(|row| row.get(0).ok()))
+}
+
+pub async fn select_batch(
+    conn: &Connection,
+    consensus_height: i64,
+) -> Result<Option<BatchQueryResult>, Error> {
+    let results = query_batches(
+        conn,
+        &format!("WHERE b.consensus_height = {consensus_height}"),
+    )
+    .await?;
+    Ok(results.into_iter().next())
+}
+
+pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
+    let mut rows = conn
+        .query("SELECT MIN(consensus_height) FROM batches", params![])
+        .await?;
+
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+
+    Ok(row.get::<Option<i64>>(0)?)
+}
+
+pub async fn select_batches_from_anchor(
+    conn: &Connection,
+    from_anchor: i64,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    query_batches(conn, &format!("WHERE b.anchor_height >= {from_anchor}")).await
+}
+
+async fn query_batches(
+    conn: &Connection,
+    where_clause: &str,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    let sql = format!(
+        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.is_block, b.certificate, \
+                t.txid \
+         FROM batches b \
+         LEFT JOIN transactions t ON t.batch_height = b.consensus_height \
+         {where_clause} \
+         ORDER BY b.consensus_height, t.id"
+    );
+    let mut rows = conn.query(&sql, ()).await?;
+
+    let mut results: Vec<BatchQueryResult> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let consensus_height: i64 = row.get(0)?;
+        let txid: Option<String> = row.get(5)?;
+
+        if results
+            .last()
+            .is_some_and(|r| r.consensus_height == consensus_height)
+        {
+            if let Some(txid) = txid {
+                results.last_mut().unwrap().txids.push(txid);
+            }
+        } else {
+            results.push(BatchQueryResult {
+                consensus_height,
+                anchor_height: row.get(1)?,
+                anchor_hash: row.get(2)?,
+                is_block: row.get::<i64>(3)? != 0,
+                certificate: row.get(4)?,
+                txids: txid.into_iter().collect(),
+            });
+        }
+    }
+
+    Ok(results)
+}
+
+pub async fn confirm_transaction(
+    conn: &Connection,
+    txid: &str,
+    confirmed_height: i64,
+    tx_index: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
+        params![confirmed_height, tx_index, txid],
+    )
+    .await?;
+    delete_unconfirmed_batch_tx(conn, txid).await?;
+    Ok(())
+}
+
+pub async fn insert_unconfirmed_batch_tx(
+    conn: &Connection,
+    txid: &str,
+    batch_height: i64,
+    raw_tx: &[u8],
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO unconfirmed_batch_txs (txid, batch_height, raw_tx) VALUES (?, ?, ?)",
+        params![txid, batch_height, raw_tx],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM unconfirmed_batch_txs WHERE txid = ?",
+        params![txid],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_unconfirmed_batch_txs(
+    conn: &Connection,
+    batch_height: i64,
+) -> Result<Vec<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE batch_height = ?",
+            params![batch_height],
+        )
+        .await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let raw_tx: Vec<u8> = row.get(0)?;
+        results.push(raw_tx);
+    }
+    Ok(results)
+}
+
+pub async fn select_unconfirmed_batch_tx(
+    conn: &Connection,
+    txid: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE txid = ?",
+            params![txid],
+        )
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .map(|row| row.get::<Vec<u8>>(0))
+        .transpose()?)
 }
 
 pub async fn get_transaction_by_txid(
@@ -548,7 +682,7 @@ pub async fn get_transaction_by_txid(
 ) -> Result<Option<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE txid = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE txid = ?",
             params![txid],
         )
         .await?;
@@ -562,7 +696,7 @@ pub async fn get_transactions_at_height(
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT id, txid, height, tx_index FROM transactions WHERE height = ?",
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
             params![height],
         )
         .await?;
@@ -708,15 +842,16 @@ pub async fn get_transactions_paginated(
 ) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "t";
-    let mut selects = "t.id, t.txid, t.height, t.tx_index".to_string();
-    let mut from = "transactions t JOIN blocks b USING (height)".to_string();
-    let mut where_clauses = vec!["b.processed = 1".to_string()];
+    let mut selects =
+        "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
+    let mut from = "transactions t".to_string();
+    let mut where_clauses = vec![];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
             .await?
             .ok_or(Error::ContractNotFound(address.to_string()))?;
         selects = format!("DISTINCT {}", selects);
-        from = format!("{} JOIN contract_state c USING (height, tx_index)", from);
+        from = format!("{} JOIN contract_state c ON c.tx_id = t.id", from);
         where_clauses.push(format!("c.contract_id = {}", contract_id));
     }
 
@@ -750,7 +885,7 @@ pub async fn get_results_paginated(
         DISTINCT
         r.id,
         r.height,
-        r.tx_index,
+        t.tx_index,
         r.input_index,
         r.op_index,
         r.result_index,
@@ -764,11 +899,10 @@ pub async fn get_results_paginated(
     "#;
     let from = r#"
         contract_results r
-        JOIN blocks b USING (height)
-        LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+        LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
-    let mut where_clauses = vec!["b.processed = 1".to_string()];
+    let mut where_clauses = vec![];
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
             .await?
@@ -821,12 +955,12 @@ pub async fn get_op_result(
             r#"
             SELECT
                 r.id,
-                r.func,
                 r.height,
-                r.tx_index,
+                t.tx_index,
                 r.input_index,
                 r.op_index,
                 r.result_index,
+                r.func,
                 r.gas,
                 r.value,
                 c.name as contract_name,
@@ -834,10 +968,9 @@ pub async fn get_op_result(
                 c.tx_index as contract_tx_index,
                 t.txid
             FROM contract_results r
-            JOIN blocks b USING (height)
-            LEFT JOIN transactions t ON r.height = t.height AND r.tx_index = t.tx_index
+            LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
-            WHERE b.processed = 1 AND t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
+            WHERE t.txid = :txid AND r.input_index = :input_index AND r.op_index = :op_index
             ORDER BY r.result_index DESC
             LIMIT 1
             "#,
@@ -854,8 +987,7 @@ pub async fn get_op_result(
 
 pub async fn get_contract_result(
     conn: &Connection,
-    height: i64,
-    tx_index: Option<i64>,
+    tx_id: Option<i64>,
     input_index: Option<i64>,
     op_index: Option<i64>,
     result_index: i64,
@@ -868,22 +1000,20 @@ pub async fn get_contract_result(
                 contract_id,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
                 gas,
                 value
             FROM contract_results
-            WHERE height = :height
-              AND tx_index IS :tx_index
+            WHERE tx_id IS :tx_id
               AND input_index IS :input_index
               AND op_index IS :op_index
               AND result_index = :result_index
             "#,
             named_params! {
-                ":height": height,
-                ":tx_index": tx_index,
+                ":tx_id": tx_id,
                 ":input_index": input_index,
                 ":op_index": op_index,
                 ":result_index": result_index,
@@ -904,7 +1034,7 @@ pub async fn insert_contract_result(
                 size,
                 func,
                 height,
-                tx_index,
+                tx_id,
                 input_index,
                 op_index,
                 result_index,
@@ -917,7 +1047,7 @@ pub async fn insert_contract_result(
             row.size(),
             row.func,
             row.height,
-            row.tx_index,
+            row.tx_id,
             row.input_index,
             row.op_index,
             row.result_index,
@@ -1046,4 +1176,32 @@ pub async fn insert_file_metadata(
     )
     .await?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Return the subset of `txids` that already exist in the transactions table.
+pub async fn select_existing_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashSet<String>, Error> {
+    if txids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let placeholders: Vec<&str> = txids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT txid FROM transactions WHERE txid IN ({})",
+        placeholders.join(", ")
+    );
+    let params: Vec<libsql::Value> = txids
+        .iter()
+        .map(|t| libsql::Value::from(t.clone()))
+        .collect();
+    let mut rows = conn
+        .query(&sql, libsql::params::Params::Positional(params))
+        .await?;
+    let mut result = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        let txid: String = row.get(0)?;
+        result.insert(txid);
+    }
+    Ok(result)
 }

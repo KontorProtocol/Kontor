@@ -2,8 +2,8 @@ use anyhow::Result;
 use indexer::{
     database::{
         queries::{
-            get_transactions_paginated, insert_contract, insert_contract_state,
-            insert_processed_block, insert_transaction,
+            get_transactions_paginated, insert_block, insert_contract, insert_contract_state,
+            insert_transaction,
         },
         types::{ContractRow, ContractStateRow, OrderDirection, TransactionQuery},
     },
@@ -21,7 +21,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         )
         .parse()?;
         let block = BlockRow::builder().height(height).hash(hash).build();
-        insert_processed_block(conn, block).await?;
+        insert_block(conn, block).await?;
     }
 
     insert_contract(
@@ -37,6 +37,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
 
     // Insert transactions across multiple heights
     // Height 800000: 5 transactions (tx_index 0-4)
+    let mut tx_ids_800000 = Vec::new();
     for i in 0..5 {
         let tx = TransactionRow::builder()
             .height(800000)
@@ -46,21 +47,23 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             ))
             .tx_index(i)
             .build();
-        insert_transaction(conn, tx).await?;
+        tx_ids_800000.push(insert_transaction(conn, tx).await?);
     }
 
+    // tx_index=0 modifies the token contract
     insert_contract_state(
         conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800000[0])
             .height(800000)
-            .tx_index(0)
             .path("foo".to_string())
             .build(),
     )
     .await?;
 
     // Height 800001: 3 transactions (tx_index 0-2)
+    let mut tx_ids_800001 = Vec::new();
     for i in 0..3 {
         let tx = TransactionRow::builder()
             .height(800001)
@@ -70,16 +73,16 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             ))
             .tx_index(i)
             .build();
-        insert_transaction(conn, tx).await?;
+        tx_ids_800001.push(insert_transaction(conn, tx).await?);
     }
 
-    // tests DISTINCT functionality
+    // tx_index=1 modifies the token contract (two state changes — tests DISTINCT)
     insert_contract_state(
         conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800001[1])
             .height(800001)
-            .tx_index(1)
             .path("bar".to_string())
             .build(),
     )
@@ -88,14 +91,15 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
         conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800001[1])
             .height(800001)
-            .tx_index(1)
             .path("biz".to_string())
             .build(),
     )
     .await?;
 
     // Height 800002: 2 transactions (tx_index 0-1)
+    let mut tx_ids_800002 = Vec::new();
     for i in 0..2 {
         let tx = TransactionRow::builder()
             .height(800002)
@@ -105,15 +109,16 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             ))
             .tx_index(i)
             .build();
-        insert_transaction(conn, tx).await?;
+        tx_ids_800002.push(insert_transaction(conn, tx).await?);
     }
 
+    // tx_index=0 modifies the token contract
     insert_contract_state(
         conn,
         ContractStateRow::builder()
             .contract_id(1)
+            .tx_id(tx_ids_800002[0])
             .height(800002)
-            .tx_index(0)
             .path("baz".to_string())
             .build(),
     )
@@ -159,11 +164,11 @@ async fn test_basic_pagination_no_filters() -> Result<()> {
 
     // Verify ordering (DESC by height, then DESC by tx_index)
     assert_eq!(transactions[0].height, 800002);
-    assert_eq!(transactions[0].tx_index, 1);
+    assert_eq!(transactions[0].tx_index, Some(1));
     assert_eq!(transactions[1].height, 800002);
-    assert_eq!(transactions[1].tx_index, 0);
+    assert_eq!(transactions[1].tx_index, Some(0));
     assert_eq!(transactions[2].height, 800001);
-    assert_eq!(transactions[2].tx_index, 2);
+    assert_eq!(transactions[2].tx_index, Some(2));
 
     Ok(())
 }
@@ -321,9 +326,9 @@ async fn test_height_filter() -> Result<()> {
     }
 
     // Verify ordering within height (DESC by tx_index)
-    assert_eq!(transactions[0].tx_index, 2);
-    assert_eq!(transactions[1].tx_index, 1);
-    assert_eq!(transactions[2].tx_index, 0);
+    assert_eq!(transactions[0].tx_index, Some(2));
+    assert_eq!(transactions[1].tx_index, Some(1));
+    assert_eq!(transactions[2].tx_index, Some(0));
 
     Ok(())
 }
@@ -524,7 +529,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800002);
-    assert_eq!(transactions[0].tx_index, 0);
+    assert_eq!(transactions[0].tx_index, Some(0));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
     assert_eq!(meta.total_count, 3);
@@ -545,7 +550,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800001);
-    assert_eq!(transactions[0].tx_index, 1);
+    assert_eq!(transactions[0].tx_index, Some(1));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -565,7 +570,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800000);
-    assert_eq!(transactions[0].tx_index, 0);
+    assert_eq!(transactions[0].tx_index, Some(0));
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -594,7 +599,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800000);
-    assert_eq!(transactions[0].tx_index, 0);
+    assert_eq!(transactions[0].tx_index, Some(0));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
     assert_eq!(meta.total_count, 3);
@@ -616,7 +621,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800001);
-    assert_eq!(transactions[0].tx_index, 1);
+    assert_eq!(transactions[0].tx_index, Some(1));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
@@ -637,7 +642,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
 
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].height, 800002);
-    assert_eq!(transactions[0].tx_index, 0);
+    assert_eq!(transactions[0].tx_index, Some(0));
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
 

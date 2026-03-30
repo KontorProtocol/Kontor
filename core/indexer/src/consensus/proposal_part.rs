@@ -1,3 +1,5 @@
+use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Transaction, Txid};
 use bytes::Bytes;
 use malachitebft_signing_ed25519::Signature;
 use serde::{Deserialize, Serialize};
@@ -6,24 +8,60 @@ use malachitebft_core_types::Round;
 use malachitebft_proto::{self as proto_trait, Error as ProtoError, Protobuf};
 
 use crate::consensus::codec::{decode_signature, encode_signature};
+use crate::consensus::proto;
+use crate::consensus::proto::proposal_part::Part;
 use crate::consensus::{Address, Ctx, Height};
 
+/// Proposal data streamed during live consensus.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProposalData {
-    pub anchor_height: u64,
-    pub txids: Vec<[u8; 32]>,
+pub enum ProposalData {
+    /// A batch of mempool transactions anchored at a specific block.
+    Batch {
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        transactions: Vec<Transaction>,
+    },
+    /// A Bitcoin block confirmation — no full tx data needed.
+    Block { height: u64, hash: BlockHash },
 }
 
 impl ProposalData {
-    pub fn new(anchor_height: u64, txids: Vec<[u8; 32]>) -> Self {
-        Self {
+    pub fn new_batch(
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        transactions: Vec<Transaction>,
+    ) -> Self {
+        Self::Batch {
             anchor_height,
-            txids,
+            anchor_hash,
+            transactions,
+        }
+    }
+
+    pub fn new_block(height: u64, hash: BlockHash) -> Self {
+        Self::Block { height, hash }
+    }
+
+    pub fn txids(&self) -> Vec<Txid> {
+        match self {
+            Self::Batch { transactions, .. } => {
+                transactions.iter().map(|tx| tx.compute_txid()).collect()
+            }
+            Self::Block { .. } => Vec::new(),
         }
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() + self.txids.len() * 32
+        match self {
+            Self::Batch { transactions, .. } => {
+                8 + 32
+                    + transactions
+                        .iter()
+                        .map(|tx| bitcoin::consensus::serialize(tx).len())
+                        .sum::<usize>()
+            }
+            Self::Block { .. } => 8 + 32,
+        }
     }
 }
 
@@ -105,8 +143,6 @@ impl Protobuf for ProposalPart {
     type Proto = crate::consensus::proto::ProposalPart;
 
     fn from_proto(proto: Self::Proto) -> Result<Self, ProtoError> {
-        use crate::consensus::proto::proposal_part::Part;
-
         let part = proto
             .part
             .ok_or_else(|| ProtoError::missing_field::<Self::Proto>("part"))?;
@@ -122,19 +158,35 @@ impl Protobuf for ProposalPart {
                     .and_then(Address::from_proto)?,
             })),
             Part::Data(data) => {
-                let txids: Vec<[u8; 32]> = data
-                    .txids
-                    .iter()
-                    .map(|b| {
-                        <[u8; 32]>::try_from(b.as_ref()).map_err(|_| {
-                            ProtoError::Other(format!(
-                                "Invalid txid length: expected 32, got {}",
-                                b.len()
-                            ))
+                let hash_arr: [u8; 32] = data.anchor_hash.as_ref().try_into().map_err(|_| {
+                    ProtoError::Other(format!(
+                        "Invalid anchor_hash length: got {} bytes, expected 32",
+                        data.anchor_hash.len()
+                    ))
+                })?;
+                let hash = BlockHash::from_byte_array(hash_arr);
+
+                if data.is_block {
+                    Ok(Self::Data(ProposalData::new_block(
+                        data.anchor_height,
+                        hash,
+                    )))
+                } else {
+                    let transactions: Vec<Transaction> = data
+                        .transactions
+                        .iter()
+                        .map(|b: &Bytes| {
+                            bitcoin::consensus::deserialize(b.as_ref()).map_err(|e| {
+                                ProtoError::Other(format!("Failed to deserialize transaction: {e}"))
+                            })
                         })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Self::Data(ProposalData::new(data.anchor_height, txids)))
+                        .collect::<Result<Vec<_>, ProtoError>>()?;
+                    Ok(Self::Data(ProposalData::new_batch(
+                        data.anchor_height,
+                        hash,
+                        transactions,
+                    )))
+                }
             }
             Part::Fin(fin) => Ok(Self::Fin(ProposalFin {
                 signature: fin
@@ -146,9 +198,6 @@ impl Protobuf for ProposalPart {
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
-        use crate::consensus::proto;
-        use crate::consensus::proto::proposal_part::Part;
-
         match self {
             Self::Init(init) => Ok(Self::Proto {
                 part: Some(Part::Init(proto::ProposalInit {
@@ -158,16 +207,32 @@ impl Protobuf for ProposalPart {
                     proposer: Some(init.proposer.to_proto()?),
                 })),
             }),
-            Self::Data(data) => Ok(Self::Proto {
-                part: Some(Part::Data(proto::ProposalData {
-                    anchor_height: data.anchor_height,
-                    txids: data
-                        .txids
-                        .iter()
-                        .map(|t| Bytes::copy_from_slice(t))
-                        .collect(),
-                })),
-            }),
+            Self::Data(data) => {
+                let proto_data = match data {
+                    ProposalData::Batch {
+                        anchor_height,
+                        anchor_hash,
+                        transactions,
+                    } => proto::ProposalData {
+                        anchor_height: *anchor_height,
+                        transactions: transactions
+                            .iter()
+                            .map(|tx| Bytes::from(bitcoin::consensus::serialize(tx)))
+                            .collect(),
+                        anchor_hash: Bytes::from(anchor_hash.to_byte_array().to_vec()),
+                        is_block: false,
+                    },
+                    ProposalData::Block { height, hash } => proto::ProposalData {
+                        anchor_height: *height,
+                        transactions: Vec::new(),
+                        anchor_hash: Bytes::from(hash.to_byte_array().to_vec()),
+                        is_block: true,
+                    },
+                };
+                Ok(Self::Proto {
+                    part: Some(Part::Data(proto_data)),
+                })
+            }
             Self::Fin(fin) => Ok(Self::Proto {
                 part: Some(Part::Fin(proto::ProposalFin {
                     signature: Some(encode_signature(&fin.signature)),

@@ -73,6 +73,7 @@ export type Info = {
   available: boolean;
   height: number;
   checkpoint: string | null;
+  consensus_height: number | null;
 };
 
 export type Inst =
@@ -160,7 +161,7 @@ export type ParticipantScripts = {
 export type RegistryEntryResponse = {
   signer_id: number;
   x_only_pubkey: string;
-  bls_pubkey: Array<number>;
+  bls_pubkey: Array<number> | null;
   next_nonce: number;
 };
 
@@ -243,7 +244,9 @@ export type TransactionRow = {
   id: number;
   txid: string;
   height: number;
-  tx_index: number;
+  confirmed_height: number | null;
+  tx_index: number | null;
+  batch_height: number | null;
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };

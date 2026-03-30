@@ -28,7 +28,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state1 = ContractStateRow::builder()
         .contract_id(1)
-        .tx_index(1)
         .height(10)
         .path("/test/path1".to_string())
         .value(b"test value 1".to_vec())
@@ -47,7 +46,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state2 = ContractStateRow::builder()
         .contract_id(1)
-        .tx_index(2)
         .height(20)
         .path("/test/path2".to_string())
         .build();
@@ -65,7 +63,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state3 = ContractStateRow::builder()
         .contract_id(2)
-        .tx_index(3)
         .height(60)
         .path("/test/path3".to_string())
         .value(b"test value 3".to_vec())
@@ -84,7 +81,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state4 = ContractStateRow::builder()
         .contract_id(2)
-        .tx_index(4)
         .height(75)
         .path("/test/path4".to_string())
         .value(b"test value 4".to_vec())
@@ -103,7 +99,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state5 = ContractStateRow::builder()
         .contract_id(3)
-        .tx_index(5)
         .height(120)
         .path("/test/path5".to_string())
         .value(b"test value 5".to_vec())
@@ -122,7 +117,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state6 = ContractStateRow::builder()
         .contract_id(4)
-        .tx_index(6)
         .height(190)
         .path("/test/path6".to_string())
         .build();
@@ -140,7 +134,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
 
     let contract_state7 = ContractStateRow::builder()
         .contract_id(4)
-        .tx_index(7)
         .height(199)
         .path("/test/path7".to_string())
         .value(b"test value 7".to_vec())
@@ -163,7 +156,6 @@ async fn test_checkpoint_trigger() -> Result<()> {
     // Test case 8: Insertion in the same height
     let contract_state8 = ContractStateRow::builder()
         .contract_id(4)
-        .tx_index(8)
         .height(199)
         .path("/test/path7".to_string())
         .value(b"test value 7".to_vec())

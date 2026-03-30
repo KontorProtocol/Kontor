@@ -8,7 +8,7 @@ use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use indexer::{
-    bitcoin_follower::event::BitcoinEvent,
+    bitcoin_follower::event::BlockEvent,
     bls::{
         KONTOR_BLS_DST, RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
         taproot_derivation_path,
@@ -23,7 +23,7 @@ use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
     loop {
-        if let Ok(Some(block)) = queries::select_processed_block_at_height(conn, height).await
+        if let Ok(Some(block)) = queries::select_block_at_height(conn, height).await
             && block.hash == hash
         {
             return;
@@ -33,14 +33,14 @@ async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHas
 }
 
 async fn send_block_and_wait(
-    tx: &mpsc::Sender<BitcoinEvent>,
+    tx: &mpsc::Sender<BlockEvent>,
     conn: &libsql::Connection,
     block: &indexer_types::Block,
     target_height: u64,
 ) {
     let hash = block.hash;
     let height = block.height as i64;
-    tx.send(BitcoinEvent::BlockInsert {
+    tx.send(BlockEvent::BlockInsert {
         target_height,
         block: block.clone(),
     })
@@ -57,8 +57,23 @@ async fn test_reactor_fetching() -> Result<()> {
 
     let blocks = new_random_blockchain(5);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        block_rx,
+        mempool_rx,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+    );
 
     let target = 5;
     for block in &blocks {
@@ -66,7 +81,7 @@ async fn test_reactor_fetching() -> Result<()> {
     }
 
     for (i, expected) in blocks.iter().enumerate() {
-        let block = queries::select_processed_block_at_height(conn, (i + 1) as i64)
+        let block = queries::select_block_at_height(conn, (i + 1) as i64)
             .await?
             .unwrap();
         assert_eq!(block.hash, expected.hash);
@@ -85,8 +100,23 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
 
     let blocks = new_random_blockchain(3);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        block_rx,
+        mempool_rx,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+    );
 
     // Insert blocks 1-3
     let target = 3;
@@ -97,9 +127,7 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     let initial_block_3_hash = blocks[2].hash;
 
     // Rollback to height 2 (remove block 3), then insert new blocks 3-5
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 2 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 2 }).await?;
 
     let new_blocks = gen_random_blocks(2, 5, Some(blocks[1].hash));
     let target = 5;
@@ -108,16 +136,12 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
     }
 
     // Block 3 should have a different hash now
-    let block = queries::select_processed_block_at_height(conn, 3)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 3).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
     assert_ne!(block.hash, initial_block_3_hash);
 
     // Blocks 4-5 should exist with new hashes
-    let block = queries::select_processed_block_at_height(conn, 5)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 5).await?.unwrap();
     assert_eq!(block.hash, new_blocks[2].hash);
 
     cancel_token.cancel();
@@ -133,8 +157,23 @@ async fn test_reactor_deep_rollback() -> Result<()> {
 
     let blocks = new_random_blockchain(4);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        block_rx,
+        mempool_rx,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+    );
 
     // Insert blocks 1-4
     let target = 4;
@@ -143,9 +182,7 @@ async fn test_reactor_deep_rollback() -> Result<()> {
     }
 
     // Roll back to height 1 (remove blocks 2-4)
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
 
     // Insert new chain from block 1
     let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
@@ -155,15 +192,11 @@ async fn test_reactor_deep_rollback() -> Result<()> {
     }
 
     // Block 1 should be preserved
-    let block = queries::select_processed_block_at_height(conn, 1)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 1).await?.unwrap();
     assert_eq!(block.hash, blocks[0].hash);
 
     // Block 2 should have new hash
-    let block = queries::select_processed_block_at_height(conn, 2)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 2).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
 
     cancel_token.cancel();
@@ -179,8 +212,23 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
 
     let blocks = new_random_blockchain(2);
 
-    let (event_tx, event_rx) = mpsc::channel(10);
-    let handle = reactor::run(1, cancel_token.clone(), writer, event_rx, None, None, None);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
+    let handle = reactor::run(
+        1,
+        cancel_token.clone(),
+        writer,
+        block_rx,
+        mempool_rx,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+    );
 
     // Insert blocks 1-2
     let target = 2;
@@ -195,15 +243,11 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         send_block_and_wait(&event_tx, conn, block, target).await;
     }
 
-    let block = queries::select_processed_block_at_height(conn, 4)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 4).await?.unwrap();
     assert_eq!(block.hash, more_blocks[1].hash);
 
     // Roll back to height 1, insert entirely new chain
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
 
     let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
     let target = 4;
@@ -212,15 +256,11 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
     }
 
     // Verify block 2 has new hash
-    let block = queries::select_processed_block_at_height(conn, 2)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 2).await?.unwrap();
     assert_eq!(block.hash, new_blocks[0].hash);
 
     // Verify block 4 has new hash
-    let block = queries::select_processed_block_at_height(conn, 4)
-        .await?
-        .unwrap();
+    let block = queries::select_block_at_height(conn, 4).await?.unwrap();
     assert_eq!(block.hash, new_blocks[2].hash);
 
     cancel_token.cancel();
@@ -234,14 +274,14 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
 /// stream so we know the block has been fully processed (including all
 /// WASM contract execution) before continuing.
 async fn send_block_and_await_event(
-    event_tx: &mpsc::Sender<BitcoinEvent>,
+    event_tx: &mpsc::Sender<BlockEvent>,
     output_rx: &mut mpsc::Receiver<Event>,
     block: indexer_types::Block,
     target_height: u64,
 ) {
     let expected_height = block.height as i64;
     event_tx
-        .send(BitcoinEvent::BlockInsert {
+        .send(BlockEvent::BlockInsert {
             target_height,
             block,
         })
@@ -265,15 +305,22 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let (output_tx, mut output_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         Some(output_tx),
+        None,
+        None,
+        None,
+        None,
+        vec![],
         None,
     );
 
@@ -322,9 +369,7 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         "registration must write contract_state at height 1"
     );
 
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 0 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 0),
         other => panic!("expected Rolledback, got {other:?}"),
@@ -359,15 +404,22 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let (output_tx, mut output_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         Some(output_tx),
+        None,
+        None,
+        None,
+        None,
+        vec![],
         None,
     );
 
@@ -468,9 +520,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
     );
 
     // -- Rollback to height 1: block 2 is deleted, nonce reverts --
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 1 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 1),
         other => panic!("expected Rolledback, got {other:?}"),
@@ -529,15 +579,22 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = &writer.connection();
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, block_rx) = mpsc::channel(10);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(10);
     let (output_tx, mut output_rx) = mpsc::channel(10);
     let handle = reactor::run(
         1,
         cancel_token.clone(),
         writer,
-        event_rx,
+        block_rx,
+        mempool_rx,
         None,
         Some(output_tx),
+        None,
+        None,
+        None,
+        None,
+        vec![],
         None,
     );
 
@@ -596,9 +653,7 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
     );
 
     // -- Rollback to height 0: block 1 is deleted --
-    event_tx
-        .send(BitcoinEvent::Rollback { to_height: 0 })
-        .await?;
+    event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
     match output_rx.recv().await.unwrap() {
         Event::Rolledback { height } => assert_eq!(height, 0),
         other => panic!("expected Rolledback, got {other:?}"),

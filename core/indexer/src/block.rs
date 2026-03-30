@@ -3,14 +3,11 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{Inst, Op, OpMetadata, OpWithResult, Transaction, deserialize};
+use indexer_types::{Inst, Op, OpMetadata, OpWithResult, Signer, Transaction, deserialize};
 use indexmap::IndexMap;
 use libsql::Connection;
 
-use crate::{
-    database::{queries::get_op_result, types::OpResultId},
-    runtime::wit::Signer,
-};
+use crate::database::{queries::get_op_result, types::OpResultId};
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 

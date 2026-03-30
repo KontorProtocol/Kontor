@@ -10,7 +10,11 @@ use tracing::error;
 
 use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
 
-use self::{event::BitcoinEvent, listener::ListenerConfig, poller::PollerConfig};
+use self::{
+    event::{BlockEvent, MempoolEvent},
+    listener::ListenerConfig,
+    poller::PollerConfig,
+};
 
 pub mod event;
 pub mod listener;
@@ -24,14 +28,21 @@ pub async fn run<C: BitcoinRpc>(
     starting_block_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
     zmq_address: String,
-) -> (mpsc::Receiver<BitcoinEvent>, JoinHandle<()>) {
-    let (event_tx, event_rx) = mpsc::channel(32);
+) -> (
+    mpsc::Receiver<BlockEvent>,
+    mpsc::Receiver<MempoolEvent>,
+    mpsc::Sender<u64>,
+    JoinHandle<()>,
+) {
+    let (block_tx, block_rx) = mpsc::channel(32);
+    let (mempool_tx, mempool_rx) = mpsc::channel(32);
+    let (replay_tx, replay_rx) = mpsc::channel(4);
 
     let start_height = known_hashes
         .iter()
         .map(|(h, _)| *h)
         .max()
-        .map(|h| h + 1)
+        .map(|h| (h + 1).max(starting_block_height))
         .unwrap_or(starting_block_height);
 
     let handle = tokio::spawn(async move {
@@ -39,18 +50,19 @@ pub async fn run<C: BitcoinRpc>(
         let poller_handle = tokio::spawn(poller::run(
             bitcoin.clone(),
             f,
-            event_tx.clone(),
+            block_tx,
             cancel_token.clone(),
             start_height,
             known_hashes,
             poll_notify.clone(),
             PollerConfig::default(),
+            replay_rx,
         ));
 
         let listener_handle = tokio::spawn(listener::run(
             bitcoin,
             f,
-            event_tx,
+            mempool_tx,
             cancel_token.clone(),
             poll_notify,
             ListenerConfig::new(zmq_address),
@@ -72,5 +84,5 @@ pub async fn run<C: BitcoinRpc>(
         }
     });
 
-    (event_rx, handle)
+    (block_rx, mempool_rx, replay_tx, handle)
 }

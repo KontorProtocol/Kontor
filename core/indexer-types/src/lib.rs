@@ -382,8 +382,12 @@ pub struct TransactionRow {
     pub txid: String,
     #[ts(type = "number")]
     pub height: i64,
-    #[ts(type = "number")]
-    pub tx_index: i64,
+    #[ts(type = "number | null")]
+    pub confirmed_height: Option<i64>,
+    #[ts(type = "number | null")]
+    pub tx_index: Option<i64>,
+    #[ts(type = "number | null")]
+    pub batch_height: Option<i64>,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
@@ -433,6 +437,8 @@ pub struct Info {
     #[ts(type = "number")]
     pub height: i64,
     pub checkpoint: Option<String>,
+    #[ts(type = "number | null")]
+    pub consensus_height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -566,7 +572,7 @@ pub struct RegistryEntryResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
     pub x_only_pubkey: String,
-    pub bls_pubkey: Vec<u8>,
+    pub bls_pubkey: Option<Vec<u8>>,
     #[ts(type = "number")]
     pub next_nonce: u64,
 }

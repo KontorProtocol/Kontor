@@ -41,16 +41,16 @@ fn build(contract_dir: &std::path::Path) {
 
 fn build_protos() {
     let protos = &[
-        "src/consensus/proto/consensus.proto",
-        "src/consensus/proto/sync.proto",
-        "src/consensus/proto/liveness.proto",
+        "proto/consensus/v1/consensus.proto",
+        "proto/consensus/v1/sync.proto",
+        "proto/consensus/v1/liveness.proto",
     ];
 
     for proto in protos {
         println!("cargo:rerun-if-changed={proto}");
     }
 
-    let fds = protox::compile(protos, ["src/consensus/proto"]).expect("protobuf compilation");
+    let fds = protox::compile(protos, ["proto"]).expect("protobuf compilation");
 
     let mut config = prost_build::Config::new();
     config.enable_type_names();

@@ -21,6 +21,7 @@ mod host_files;
 mod host_numbers;
 mod host_storage;
 
+use crate::bls::verify_bls_bulk;
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
@@ -59,6 +60,23 @@ use crate::bls::RegistrationProof;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
+
+#[derive(Clone, Debug)]
+pub struct GenesisValidator {
+    pub x_only_pubkey: String,
+    pub stake: Decimal,
+    pub ed25519_pubkey: Vec<u8>,
+}
+
+impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
+    fn from(v: GenesisValidator) -> Self {
+        Self {
+            x_only_pubkey: v.x_only_pubkey,
+            stake: v.stake,
+            ed25519_pubkey: v.ed25519_pubkey,
+        }
+    }
+}
 
 impls!(host = true);
 
@@ -106,14 +124,13 @@ pub struct Runtime {
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = wasmtime::Config::new();
-        config.async_support(true);
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
-        Engine::new(&config)
+        Ok(Engine::new(&config)?)
     }
 
     pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
@@ -222,7 +239,10 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
-    pub async fn publish_native_contracts(&mut self) -> Result<()> {
+    pub async fn publish_native_contracts(
+        &mut self,
+        genesis_validators: &[GenesisValidator],
+    ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
@@ -242,6 +262,15 @@ impl Runtime {
         .await?;
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
+        if !genesis_validators.is_empty() {
+            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+            staking::api::set_genesis_set(
+                self,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                validators,
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -290,6 +319,114 @@ impl Runtime {
         Ok(())
     }
 
+    pub async fn execute_bls_bulk(
+        &mut self,
+        ops: &[indexer_types::BlsBulkOp],
+        signature: &[u8],
+        previous_output: bitcoin::OutPoint,
+        input_index: i64,
+        op_return_data: Option<indexer_types::OpReturnData>,
+    ) -> Result<()> {
+        let signer_map = verify_bls_bulk(self, ops, signature).await?;
+
+        let base_ctx = self
+            .tx_context()
+            .expect("tx context must be set for BLS bulk execution")
+            .clone();
+
+        for (inner_index, inner_op) in ops.iter().enumerate() {
+            self.set_context(
+                self.storage.height,
+                Some(TransactionContext {
+                    tx_id: base_ctx.tx_id,
+                    tx_index: base_ctx.tx_index,
+                    input_index,
+                    op_index: inner_index as i64,
+                    txid: base_ctx.txid,
+                }),
+                Some(previous_output),
+                op_return_data.clone().map(Into::into),
+            )
+            .await;
+
+            match inner_op {
+                indexer_types::BlsBulkOp::Call {
+                    signer_id,
+                    nonce,
+                    gas_limit,
+                    contract,
+                    expr,
+                } => {
+                    let x_only = signer_map
+                        .get(signer_id)
+                        .expect("signer_id must be in signer_map after verify_bls_bulk succeeds");
+
+                    let nonce_result = registry::api::advance_nonce(
+                        self,
+                        &Signer::Core(Box::new(Signer::Nobody)),
+                        *signer_id,
+                        *nonce,
+                    )
+                    .await;
+                    match nonce_result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                "BlsBulk nonce check failed for signer {signer_id}: {e:?}"
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "BlsBulk nonce advance error for signer {signer_id}: {e}"
+                            );
+                            continue;
+                        }
+                    }
+
+                    let signer = Signer::XOnlyPubKey(x_only.clone());
+                    self.set_gas_limit(*gas_limit);
+                    let result = self.execute(Some(&signer), &(contract.into()), expr).await;
+                    if result.is_err() {
+                        tracing::warn!("BlsBulk call operation failed: {:?}", result);
+                    }
+                }
+                indexer_types::BlsBulkOp::RegisterBlsKey {
+                    signer,
+                    bls_pubkey,
+                    schnorr_sig,
+                    bls_sig,
+                } => {
+                    if let Err(e) = self
+                        .register_bls_key(
+                            signer,
+                            bls_pubkey.as_slice(),
+                            schnorr_sig.as_slice(),
+                            bls_sig.as_slice(),
+                        )
+                        .await
+                    {
+                        tracing::warn!("BlsBulk RegisterBlsKey failed: {e}");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64> {
+        self.set_gas_limit(self.gas_limit_for_non_procs);
+        let entry = registry::api::ensure_signer(
+            self,
+            &Signer::Core(Box::new(Signer::Nobody)),
+            x_only_pubkey,
+        )
+        .await?
+        .map_err(|e| anyhow!("registry ensure-signer failed: {e:?}"))?;
+        Ok(entry.signer_id)
+    }
+
     pub async fn register_bls_key(
         &mut self,
         signer: &Signer,
@@ -307,7 +444,7 @@ impl Runtime {
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
         if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
-            && entry.bls_pubkey == bls_pubkey
+            && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
         {
             return Ok(());
         }
@@ -380,7 +517,9 @@ impl Runtime {
         })
         .await
         .expect("Failed to join execution");
-        let mut result = self.handle_call(is_fallback, result, results).await;
+        let mut result = self
+            .handle_call(is_fallback, result.map_err(Into::into), results)
+            .await;
         OptionFuture::from(
             self.gauge
                 .as_ref()
@@ -426,8 +565,23 @@ impl Runtime {
     }
 }
 
-static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
-    LazyLock::new(|| [("token", ["hold"].into())].into());
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> = LazyLock::new(|| {
+    [
+        ("token", ["hold"].into()),
+        (
+            "registry",
+            [
+                "ensure-signer",
+                "get-entry",
+                "get-entry-by-id",
+                "get-signer-id",
+                "get-bls-pubkey",
+            ]
+            .into(),
+        ),
+    ]
+    .into()
+});
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
     SKIP_RESULT_RULES

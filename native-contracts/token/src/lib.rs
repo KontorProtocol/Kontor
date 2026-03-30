@@ -64,6 +64,10 @@ impl Guest for Token {
         )
     }
 
+    fn issue_to(ctx: &CoreContext, dst: String, amt: Decimal) -> Result<Mint, Error> {
+        mint(&ctx.proc_context().model(), dst, amt)
+    }
+
     fn hold(ctx: &CoreContext, amt: Decimal) -> Result<Transfer, Error> {
         Self::transfer(
             &ctx.signer_proc_context(),

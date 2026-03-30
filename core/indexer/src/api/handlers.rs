@@ -19,7 +19,7 @@ use crate::{
         queries::{
             self, get_blocks_paginated, get_checkpoint_latest, get_op_result,
             get_results_paginated, get_transaction_by_txid, get_transactions_paginated,
-            select_block_latest, select_processed_block_by_height_or_hash,
+            select_block_by_height_or_hash, select_block_latest, select_latest_consensus_height,
         },
         types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
@@ -43,6 +43,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
         .map(|b| b.height)
         .unwrap_or((env.config.starting_block_height - 1) as i64);
     let checkpoint = get_checkpoint_latest(&conn).await?.map(|c| c.hash);
+    let consensus_height = select_latest_consensus_height(&conn).await?;
     Ok(Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
@@ -50,6 +51,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
         available: *env.available.read().await,
         height,
         checkpoint,
+        consensus_height,
     })
 }
 
@@ -63,9 +65,7 @@ pub async fn stop(State(env): State<Env>) -> Result<Info> {
 }
 
 pub async fn get_block(State(env): State<Env>, Path(identifier): Path<String>) -> Result<BlockRow> {
-    match select_processed_block_by_height_or_hash(&*env.reader.connection().await?, &identifier)
-        .await?
-    {
+    match select_block_by_height_or_hash(&*env.reader.connection().await?, &identifier).await? {
         Some(block_row) => Ok(block_row.into()),
         None => Err(HttpError::NotFound(format!("block at height or hash: {}", identifier)).into()),
     }
@@ -173,7 +173,7 @@ pub async fn get_block_transactions(
 ) -> Result<PaginatedResponse<TransactionRow>> {
     validate_query(query.cursor, query.offset)?;
     let conn = env.reader.connection().await?;
-    let block = select_processed_block_by_height_or_hash(&conn, &identifier)
+    let block = select_block_by_height_or_hash(&conn, &identifier)
         .await?
         .ok_or_else(|| HttpError::NotFound(format!("block at height or hash: {}", identifier)))?;
     query.height = Some(block.height);

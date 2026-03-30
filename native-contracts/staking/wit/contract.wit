@@ -17,7 +17,8 @@ world root {
     x-only-pubkey: string,
     stake: decimal,
     status: validator-status,
-    joined-epoch: u64,
+    activation-height: u64,
+    deactivation-height: u64,
     ed25519-pubkey: list<u8>,
   }
 
@@ -27,15 +28,12 @@ world root {
     ed25519-pubkey: list<u8>,
   }
 
-  record epoch-info {
-    epoch: u64,
-    next-epoch-height: u64,
+  record staking-info {
     active-count: u64,
     total-stake: decimal,
   }
 
-  record epoch-transition-result {
-    new-epoch: u64,
+  record validator-set-change {
     activated: u64,
     deactivated: u64,
   }
@@ -46,14 +44,16 @@ world root {
   export register-validator: async func(ctx: borrow<proc-context>, ed25519-pubkey: list<u8>, stake-amount: decimal) -> result<validator-info, error>;
   export add-stake: async func(ctx: borrow<proc-context>, amount: decimal) -> result<validator-info, error>;
   export begin-unstake: async func(ctx: borrow<proc-context>) -> result<validator-info, error>;
-  export withdraw-stake: async func(ctx: borrow<proc-context>) -> result<validator-info, error>;
 
-  // --- Epoch management (CoreContext — called by block handler) ---
-  export transition-epoch: async func(ctx: borrow<core-context>, block-height: u64) -> result<epoch-transition-result, error>;
+  // --- System initialization (CoreContext — called during native contract publishing) ---
+  export set-genesis-set: async func(ctx: borrow<core-context>, validators: list<active-validator-info>);
+
+  // --- Per-block validator processing (CoreContext — called by block handler) ---
+  export process-pending-validators: async func(ctx: borrow<core-context>, block-height: u64) -> result<validator-set-change, error>;
 
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;
   export get-validator: async func(ctx: borrow<view-context>, x-only-pubkey: string) -> option<validator-info>;
-  export get-epoch-info: async func(ctx: borrow<view-context>) -> epoch-info;
+  export get-staking-info: async func(ctx: borrow<view-context>) -> staking-info;
   export get-active-count: async func(ctx: borrow<view-context>) -> u64;
 }

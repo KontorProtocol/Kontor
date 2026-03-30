@@ -5,7 +5,7 @@ use std::thread::available_parallelism;
 use crate::api::Env;
 use anyhow::Result;
 use clap::Parser;
-use indexer::database::queries::{delete_unprocessed_blocks, select_recent_blocks};
+use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
@@ -45,9 +45,6 @@ async fn main() -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
-    let deleted_count = delete_unprocessed_blocks(&writer.connection()).await?;
-    info!("Deleted {} unprocessed blocks", deleted_count);
-
     let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
@@ -74,7 +71,7 @@ async fn main() -> Result<()> {
         .map(|b| (b.height as u64, b.hash))
         .collect();
 
-    let (bitcoin_event_rx, follower_handle) = bitcoin_follower::run(
+    let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
         block::filter_map,
         cancel_token.clone(),
@@ -85,17 +82,41 @@ async fn main() -> Result<()> {
     .await;
     handles.push(follower_handle);
 
-    let (init_tx, init_rx) = oneshot::channel();
+    // Build consensus engine config if a private key is provided
+    let engine_config = config.consensus_private_key.as_ref().map(|key_hex| {
+        let key_bytes = hex::decode(key_hex).expect("Invalid consensus private key hex");
+        let key_array: [u8; 32] = key_bytes
+            .try_into()
+            .expect("Ed25519 private key must be 32 bytes");
+        let private_key = indexer::consensus::signing::PrivateKey::from(key_array);
+        reactor::engine::EngineConfig {
+            private_key,
+            listen_addr: config
+                .consensus_listen_addr
+                .clone()
+                .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
+            persistent_peers: config.consensus_peers.clone(),
+            data_dir: config.data_dir.clone(),
+        }
+    });
+
+    let (ready_tx, ready_rx) = oneshot::channel();
     handles.push(reactor::run(
         config.starting_block_height,
         cancel_token.clone(),
         writer,
-        bitcoin_event_rx,
-        Some(init_tx),
+        block_rx,
+        mempool_rx,
+        Some(ready_tx),
         Some(event_tx),
         Some(simulate_rx),
+        engine_config,
+        Some(bitcoin.clone()),
+        Some(replay_tx),
+        load_genesis_validators(&config)?,
+        None,
     ));
-    init_rx.await?;
+    ready_rx.await?;
     {
         let mut available = available.write().await;
         *available = true;
@@ -107,4 +128,25 @@ async fn main() -> Result<()> {
     }
     info!("Exited");
     Ok(())
+}
+
+fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
+    let Some(path) = &config.genesis_file else {
+        return Ok(vec![]);
+    };
+    let genesis = indexer::config::GenesisConfig::load(path)?;
+    genesis
+        .validators
+        .into_iter()
+        .map(|v| {
+            let ed25519_bytes = hex::decode(&v.ed25519_pubkey)
+                .map_err(|e| anyhow::anyhow!("invalid ed25519 hex: {e}"))?;
+            let stake = runtime::Decimal::from(v.stake.as_str());
+            Ok(runtime::GenesisValidator {
+                x_only_pubkey: v.x_only_pubkey,
+                stake,
+                ed25519_pubkey: ed25519_bytes,
+            })
+        })
+        .collect()
 }

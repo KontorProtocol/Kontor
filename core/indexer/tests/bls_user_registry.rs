@@ -81,10 +81,22 @@ async fn bls_user_registry_register_in_bls_bulk_regtest() -> Result<()> {
         )
         .await?;
 
+    // The Taproot envelope signer (publisher) is auto-registered by the indexer.
+    let publisher_xonly = publisher.x_only_public_key().to_string();
+    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
+        .await?
+        .expect("publisher must have a signer_id");
+
     let xonly1 = user1.x_only_public_key().to_string();
     let xonly2 = user2.x_only_public_key().to_string();
-    assert_eq!(registry::get_signer_id(runtime, &xonly1).await?, Some(0));
-    assert_eq!(registry::get_signer_id(runtime, &xonly2).await?, Some(1));
+    assert_eq!(
+        registry::get_signer_id(runtime, &xonly1).await?,
+        Some(publisher_id + 1)
+    );
+    assert_eq!(
+        registry::get_signer_id(runtime, &xonly2).await?,
+        Some(publisher_id + 2)
+    );
     assert_eq!(
         registry::get_bls_pubkey(runtime, &xonly1).await?,
         Some(proof1.bls_pubkey.to_vec())
@@ -217,9 +229,17 @@ async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> 
         )
         .await;
 
+    let publisher_xonly = publisher.x_only_public_key().to_string();
+    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
+        .await?
+        .expect("publisher must have a signer_id");
+
+    let user_id = registry::get_signer_id(runtime, &user_xonly)
+        .await?
+        .expect("user must have a signer_id");
     assert_eq!(
-        registry::get_signer_id(runtime, &user_xonly).await?,
-        Some(0),
+        user_id,
+        publisher_id + 1,
         "duplicate same-key register must produce exactly one entry"
     );
     assert_eq!(
@@ -240,9 +260,12 @@ async fn bls_user_registry_duplicate_same_key_in_bundle_idempotent_regtest() -> 
         )
         .await?;
     let next_xonly = next_user.x_only_public_key().to_string();
+    let next_id = registry::get_signer_id(runtime, &next_xonly)
+        .await?
+        .expect("next user must have a signer_id");
     assert_eq!(
-        registry::get_signer_id(runtime, &next_xonly).await?,
-        Some(1),
+        next_id,
+        user_id + 1,
         "next registration after idempotent duplicate must get sequential ID (no gap)"
     );
 
@@ -298,11 +321,15 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
         )
         .await;
 
-    assert_eq!(
-        registry::get_signer_id(runtime, &user_xonly).await?,
-        Some(0),
-        "first key must win registration"
-    );
+    let publisher_xonly = publisher.x_only_public_key().to_string();
+    let publisher_id = registry::get_signer_id(runtime, &publisher_xonly)
+        .await?
+        .expect("publisher must have a signer_id");
+
+    let user_id = registry::get_signer_id(runtime, &user_xonly)
+        .await?
+        .expect("user must have a signer_id");
+    assert_eq!(user_id, publisher_id + 1, "first key must win registration");
     assert_eq!(
         registry::get_bls_pubkey(runtime, &user_xonly).await?,
         Some(proof_a.bls_pubkey.to_vec()),
@@ -322,9 +349,12 @@ async fn bls_user_registry_different_keys_same_xonly_in_bundle_first_wins_regtes
         )
         .await?;
     let next_xonly = next_user.x_only_public_key().to_string();
+    let next_id = registry::get_signer_id(runtime, &next_xonly)
+        .await?
+        .expect("next user must have a signer_id");
     assert_eq!(
-        registry::get_signer_id(runtime, &next_xonly).await?,
-        Some(1),
+        next_id,
+        user_id + 1,
         "rejected duplicate must not consume an ID (no gap)"
     );
 

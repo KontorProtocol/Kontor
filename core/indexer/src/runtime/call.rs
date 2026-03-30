@@ -96,10 +96,14 @@ impl Runtime {
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
                     is_proc = true;
-                    fuel_limit = self.fuel_limit_for_non_procs();
-                    store
-                        .set_fuel(fuel_limit)
-                        .expect("Failed to set fuel for core context procedure");
+                    if self.stack.is_empty().await {
+                        fuel_limit = self.fuel_limit_for_non_procs();
+                        store
+                            .set_fuel(fuel_limit)
+                            .expect("Failed to set fuel for core context procedure");
+                    } else {
+                        fuel_limit = store.get_fuel().unwrap_or(0);
+                    }
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -244,7 +248,7 @@ impl Runtime {
                     Err(anyhow!("fallback did not return a string"))
                 }
             } else {
-                val.to_wave()
+                val.to_wave().map_err(Into::into)
             }
         };
 
@@ -380,7 +384,9 @@ impl Runtime {
         })
         .await
         .expect("Failed to join call");
-        let mut result = self.handle_call(is_fallback, result, results).await;
+        let mut result = self
+            .handle_call(is_fallback, result.map_err(Into::into), results)
+            .await;
         let fuel = store.get_fuel().unwrap();
         accessor
             .with(|mut access| access.as_context_mut().set_fuel(fuel))
