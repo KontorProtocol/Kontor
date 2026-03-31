@@ -4,17 +4,19 @@ use tracing::warn;
 
 use crate::bitcoin_client::Client;
 use crate::block::filter_map;
+use crate::bls::validate_aggregate_shape;
 use crate::retry::{new_backoff_unlimited, retry};
 use crate::runtime::Runtime;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
 /// via Value::Block decisions, not consensus batches.
-/// Aggregate inputs are always batchable (RegisterBlsKey is rejected at verification).
+/// Aggregate inputs are batchable only if they satisfy the same stateless shape
+/// constraints enforced by aggregate execution preflight.
 pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
     inputs.iter().all(|input| {
         if input.insts.is_aggregate() {
-            return true;
+            return validate_aggregate_shape(&input.insts).is_ok();
         }
         !input.insts.ops.iter().any(|inst| {
             matches!(
@@ -212,5 +214,105 @@ impl Executor for RuntimeExecutor {
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
         filter_map((0, tx.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_batchable;
+    use bitcoin::OutPoint;
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, Signer, TransactionInput};
+
+    fn aggregate_input(ops: Vec<Inst>, signer_ids: Vec<u64>) -> TransactionInput {
+        TransactionInput {
+            previous_output: OutPoint::null(),
+            input_index: 0,
+            witness_signer: Signer::XOnlyPubKey("00".repeat(32)),
+            insts: Insts {
+                ops,
+                aggregate: Some(AggregateInfo {
+                    signer_ids,
+                    signature: vec![7u8; 48],
+                }),
+            },
+        }
+    }
+
+    fn direct_input(inst: Inst) -> TransactionInput {
+        TransactionInput {
+            previous_output: OutPoint::null(),
+            input_index: 0,
+            witness_signer: Signer::XOnlyPubKey("00".repeat(32)),
+            insts: Insts {
+                ops: vec![inst],
+                aggregate: None,
+            },
+        }
+    }
+
+    fn sample_call(nonce: Option<u64>) -> Inst {
+        Inst::Call {
+            gas_limit: 50_000,
+            contract: ContractAddress {
+                name: "arith".to_string(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce,
+            expr: "eval(1, id)".to_string(),
+        }
+    }
+
+    #[test]
+    fn is_batchable_accepts_well_formed_aggregate_input() {
+        let input = aggregate_input(vec![sample_call(Some(0))], vec![1]);
+        assert!(is_batchable(&[input]));
+    }
+
+    #[test]
+    fn is_batchable_rejects_aggregate_with_mismatched_signer_count() {
+        let input = aggregate_input(vec![sample_call(Some(0))], vec![]);
+        assert!(!is_batchable(&[input]));
+    }
+
+    #[test]
+    fn is_batchable_rejects_aggregate_call_without_nonce() {
+        let input = aggregate_input(vec![sample_call(None)], vec![1]);
+        assert!(!is_batchable(&[input]));
+    }
+
+    #[test]
+    fn is_batchable_rejects_aggregate_with_non_call_ops() {
+        let publish = Inst::Publish {
+            gas_limit: 10,
+            name: "test".to_string(),
+            bytes: vec![],
+        };
+        let register = Inst::RegisterBlsKey {
+            bls_pubkey: vec![0u8; 96],
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        };
+        assert!(!is_batchable(&[aggregate_input(vec![publish], vec![1])]));
+        assert!(!is_batchable(&[aggregate_input(vec![register], vec![1])]));
+        assert!(!is_batchable(&[aggregate_input(
+            vec![Inst::Issuance],
+            vec![1]
+        )]));
+    }
+
+    #[test]
+    fn is_batchable_still_rejects_non_batchable_direct_ops() {
+        assert!(!is_batchable(&[direct_input(Inst::Publish {
+            gas_limit: 10,
+            name: "test".to_string(),
+            bytes: vec![],
+        })]));
+        assert!(!is_batchable(&[direct_input(Inst::RegisterBlsKey {
+            bls_pubkey: vec![0u8; 96],
+            schnorr_sig: vec![0u8; 64],
+            bls_sig: vec![0u8; 48],
+        })]));
+        assert!(!is_batchable(&[direct_input(Inst::Issuance)]));
     }
 }

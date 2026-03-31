@@ -183,15 +183,15 @@ impl SignerResolver {
     }
 }
 
-/// Verify the BLS aggregate signature on an `Insts` envelope.
+/// Validate the stateless shape of an aggregate `Insts` envelope.
 ///
-/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
-/// signers for execution without redundant registry lookups.
-pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+/// This is intentionally separated from cryptographic verification so batch
+/// admission and execution preflight can enforce the exact same aggregate rules.
+pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::AggregateInfo> {
     let agg = insts
         .aggregate
         .as_ref()
-        .ok_or_else(|| anyhow!("verify_aggregate called on non-aggregate Insts"))?;
+        .ok_or_else(|| anyhow!("validate_aggregate_shape called on non-aggregate Insts"))?;
 
     if insts.ops.is_empty() {
         return Err(anyhow!("aggregate must contain at least one operation"));
@@ -235,6 +235,16 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
             }
         }
     }
+
+    Ok(agg)
+}
+
+/// Verify the BLS aggregate signature on an `Insts` envelope.
+///
+/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
+/// signers for execution without redundant registry lookups.
+pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+    let agg = validate_aggregate_shape(insts)?;
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
         return Err(anyhow!(
             "invalid aggregate signature length: expected {BLS_SIGNATURE_BYTES}, got {}",
@@ -450,6 +460,17 @@ mod tests {
             .await
             .expect_err("empty bundle must be rejected");
         assert!(err.to_string().contains("at least one operation"));
+    }
+
+    #[test]
+    fn validate_aggregate_shape_rejects_non_aggregate_insts() {
+        let insts = Insts {
+            ops: vec![Inst::Issuance],
+            aggregate: None,
+        };
+        let err = validate_aggregate_shape(&insts)
+            .expect_err("non-aggregate Insts must be rejected by aggregate validator");
+        assert!(err.to_string().contains("non-aggregate Insts"));
     }
 
     #[tokio::test]

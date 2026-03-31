@@ -86,14 +86,17 @@ When `aggregate` is present, the envelope is on the aggregate BLS path. When `ag
 
 ### 2) Cryptographic domains and safety requirements
 
-The architecture separates signature “spaces” so that no byte-string is valid as both a PoP signature and an operation signature.
+The current implementation already uses the intended domain-separated registration and operation signing model.
 
-- **PoP domain** (rogue-key defense): `KONTOR-POP-V1 || pubkey`
-- **Operation domain** (authorization): `KONTOR-OP-V1 || op_index || nonce || operation_data`
+Current message domains:
+
+- **Taproot -> BLS binding proof**: `KONTOR_XONLY_TO_BLS_V1 || bls_pubkey` (hashed before Schnorr signing)
+- **BLS -> Taproot binding proof**: `KONTOR_BLS_TO_XONLY_V1 || x_only_pubkey`
+- **Aggregate operation authorization**: `KONTOR-OP-V1 || postcard((signer_id, inst))`
 
 Additionally:
 
-- **Subgroup validation MUST be enabled** for BLS public keys and signatures (BLS12-381 cofactors).
+- **Subgroup validation MUST be enabled** for BLS public keys and signatures (BLS12-381 cofactors). The current indexer already does this on registration-proof parsing and aggregate verification.
 - **Key derivation separation MUST be enforced** between Bitcoin Taproot keys and Kontor BLS keys.
 
 ```
@@ -132,13 +135,13 @@ Canonical execution identity is the signer ID, not the x-only pubkey:
 - direct non-registration execution and aggregate execution must converge on that same canonical signer key
 - `Signer::XOnlyPubKey` remains valid for witness parsing and `RegisterBlsKey`, but it is not the steady-state execution identity for ordinary calls
 
-#### A. Proof of Possession (PoP) — required
+#### A. Current registration proof / PoP
 
-Rogue-key defense requires PoP: a BLS public key must not be admitted to the registry without proof that the submitter knows its secret key.
+- direct `RegisterBlsKey` submits a bidirectional binding proof between the Taproot x-only key and the BLS key
+- the indexer verifies both the Schnorr binding proof and the BLS binding proof before admitting the BLS pubkey
+- subgroup validation is enabled on the BLS public key and BLS signature during registration verification
 
-- PoP is a BLS signature over the PoP domain tag and the public key.
-- PoP verification must include subgroup checks.
-- PoP and operation signatures use distinct domain tags.
+This proof serves as Kontor's rogue-key defense by requiring the registrant to demonstrate control of both the Taproot identity and the BLS secret key before the registry admits the binding.
 
 #### B. Inline registration — not yet implemented
 
@@ -163,11 +166,20 @@ The current aggregate path signs ordinary `Inst::Call` values inside an `Insts` 
 - `gas_limit`, `contract`, `nonce`, and `expr` are all part of the signed bytes
 - the signer reference comes from `AggregateInfo.signer_ids`, ordered alongside `ops`
 
-Canonical bytes:
+Canonical bytes in the current indexer:
 
-- define `op_bytes = postcard(inst_call)`
-- define signing preimage with explicit domain separation and signer binding:
-  - `msg = "KONTOR-OP-V1" || signer_id || nonce || gas_limit || op_bytes`
+- define `op_bytes = postcard((signer_id, inst))`
+- define signing preimage:
+  - `msg = "KONTOR-OP-V1" || op_bytes`
+
+Because `inst` is an `Inst::Call`, the serialized bytes already include:
+
+- `gas_limit`
+- `contract`
+- `nonce`
+- `expr`
+
+Signer binding is therefore part of the signed bytes today via the serialized `(signer_id, inst)` tuple, even though the signer IDs are also stored separately in `AggregateInfo.signer_ids` for bundle structure.
 
 Spec rationale for “operation authorization is separate from publisher Schnorr signing”:
 
@@ -227,8 +239,18 @@ Indexers must process aggregate `Insts` envelopes deterministically, verifying b
 
 #### C. Replay protection
 
-- include `nonce: u64` in each op preimage
-- maintain a `(signer_id, nonce)` used-set (reorg-safe rollback)
+Current implementation:
+
+- aggregate `Inst::Call` requires `nonce: Some(u64)`
+- the signed bytes include `nonce` because it is part of the serialized `Inst::Call`
+- the registry stores `next_nonce` per signer
+- execution requires `caller_nonce == next_nonce`
+- after a successful call, `next_nonce` increments by exactly 1
+- rejected, replayed, or skipped-ahead calls do not advance the nonce
+
+Deferred future work:
+
+- arbitrary unused `(signer_id, nonce)` acceptance backed by a used-set table instead of strict sequencing
 
 #### D. Aggregate verification
 
@@ -272,4 +294,3 @@ Signature overhead: BLS aggregate signatures add 48 bytes plus 4 bytes per uniqu
 ```
 
 Source: `../Documentation/specs/scalability/main.typ` (Benchmarks → Methodology), L219–L223
-

@@ -385,11 +385,11 @@ async fn process_aggregate_input(
 pub async fn execute_op(runtime: &mut Runtime, op: &Op) {
     match &op.metadata().signer {
         Signer::XOnlyPubKey(_) if !matches!(op, Op::RegisterBlsKey { .. }) => {
-            warn!("non-registration op reached execute_op with x-only signer");
+            warn!("non-registration op reached execute_op without canonical signer_id");
             return;
         }
         Signer::SignerId { .. } => {
-            // Already resolved and verified during aggregate verification.
+            // Already canonicalized before execution on the direct or aggregate path.
         }
         _ => {}
     }

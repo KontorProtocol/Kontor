@@ -67,7 +67,7 @@ Define binding prefixes:
 - `SCHNORR_BINDING_PREFIX = "KONTOR_XONLY_TO_BLS_V1"`
 - `BLS_BINDING_PREFIX     = "KONTOR_BLS_TO_XONLY_V1"`
 
-Define the BLS domain separation tag (DST) for protocol-level BLS signatures:
+Define the BLS domain separation tag (DST) for the current implemented BLS signatures:
 
 - `KONTOR_BLS_DST = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"`
 
@@ -90,6 +90,8 @@ Wallet constructs:
 Then signs with the derived BLS secret key using `KONTOR_BLS_DST` as DST:
 
 - `bls_sig: [u8; 48]`
+
+This is the registration proof used by the indexer. It proves possession of the BLS secret key and binds it to the Taproot identity.
 
 ## 4) Registration payload (what user submits)
 

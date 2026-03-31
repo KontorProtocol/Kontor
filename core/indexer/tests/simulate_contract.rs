@@ -38,6 +38,10 @@ async fn test_crypto_contract_regtest() -> Result<()> {
         .await?;
     assert_eq!(result.len(), 1);
     assert_eq!(
+        result[0].op.metadata().signer,
+        Signer::XOnlyPubKey(ident.x_only_public_key().to_string())
+    );
+    assert_eq!(
         result[0].clone().result.unwrap().value.unwrap(),
         "[44, 38, 180, 107, 104, 255, 198, 143, 249, 155, 69, 60, 29, 48, 65, 52, 19, 66, 45, 112, 100, 131, 191, 160, 249, 138, 94, 136, 98, 102, 231, 174]"
     );

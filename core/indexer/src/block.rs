@@ -11,15 +11,12 @@ use indexmap::IndexMap;
 use libsql::Connection;
 
 use crate::database::{queries::get_op_result, types::OpResultId};
-use crate::runtime::{ComponentCache, Runtime, Storage, registry};
-
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
 async fn inspect_input_ops(
     conn: &Connection,
     txid: &str,
     input: &indexer_types::TransactionInput,
-    mut runtime: Option<&mut Runtime>,
 ) -> Result<Vec<OpWithResult>> {
     let signer_ids = input
         .insts
@@ -41,18 +38,7 @@ async fn inspect_input_ops(
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
         let signer = match signer_ids {
             Some(signer_ids) => Signer::new_signer_id(signer_ids[op_index]),
-            None => match (&input.witness_signer, inst, runtime.as_deref_mut()) {
-                (Signer::XOnlyPubKey(_), Inst::RegisterBlsKey { .. }, _) => {
-                    input.witness_signer.clone()
-                }
-                (Signer::XOnlyPubKey(x_only_pubkey), _, Some(runtime)) => {
-                    match registry::api::get_signer_id(runtime, x_only_pubkey).await {
-                        Ok(Some(signer_id)) => Signer::new_signer_id(signer_id),
-                        Ok(None) | Err(_) => input.witness_signer.clone(),
-                    }
-                }
-                _ => input.witness_signer.clone(),
-            },
+            None => input.witness_signer.clone(),
         };
         let op = op_from_inst(
             inst.clone(),
@@ -186,12 +172,8 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 pub async fn inspect(conn: &Connection, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     if let Some(tx) = filter_map((0, btx)) {
-        let storage = Storage::builder().conn(conn.clone()).build();
-        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         for input in &tx.inputs {
-            ops.extend(
-                inspect_input_ops(conn, &tx.txid.to_string(), input, Some(&mut runtime)).await?,
-            );
+            ops.extend(inspect_input_ops(conn, &tx.txid.to_string(), input).await?);
         }
     }
     Ok(ops)
