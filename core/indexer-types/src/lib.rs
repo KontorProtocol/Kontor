@@ -18,8 +18,8 @@ pub struct InstructionQuery {
     pub address: String,
     pub x_only_public_key: String,
     pub funding_utxo_ids: String,
-    pub instruction: Inst,
-    pub chained_instruction: Option<Inst>,
+    pub insts: Insts,
+    pub chained_insts: Option<Insts>,
 }
 
 #[derive(Serialize, Deserialize, Builder, TS)]
@@ -186,12 +186,23 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct TransactionInput {
+    #[ts(as = "String")]
+    pub previous_output: bitcoin::OutPoint,
+    #[ts(type = "number")]
+    pub input_index: i64,
+    pub witness_signer: Signer,
+    pub insts: Insts,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Transaction {
     #[ts(type = "string")]
     pub txid: Txid,
     #[ts(type = "number")]
     pub index: i64,
-    pub ops: Vec<Op>,
+    pub inputs: Vec<TransactionInput>,
     #[ts(type = "Record<number, OpReturnData>")]
     #[serde(with = "indexmap::map::serde_seq")]
     pub op_return_data: IndexMap<u64, OpReturnData>,
@@ -266,42 +277,47 @@ pub struct OpMetadata {
     pub signer: Signer,
 }
 
-#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub enum BlsBulkOp {
-    Call {
-        #[ts(type = "number")]
-        signer_id: u64,
-        #[ts(type = "number")]
-        nonce: u64,
-        #[ts(type = "number")]
-        gas_limit: u64,
-        #[ts(as = "String")]
-        #[serde_as(as = "DisplayFromStr")]
-        contract: ContractAddress,
-        expr: String,
-    },
-    RegisterBlsKey {
-        signer: Signer,
-        bls_pubkey: Vec<u8>,
-        schnorr_sig: Vec<u8>,
-        bls_sig: Vec<u8>,
-    },
+pub struct AggregateInfo {
+    pub signer_ids: Vec<u64>,
+    pub signature: Vec<u8>,
 }
 
-impl BlsBulkOp {
-    /// Build the domain-separated message that signers authorize for this operation.
-    ///
-    /// Returns `KONTOR-OP-V1 || postcard(self)`.
-    pub fn signing_message(&self) -> Result<Vec<u8>> {
-        const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(self)?;
-        let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-        msg.extend_from_slice(KONTOR_OP_PREFIX);
-        msg.extend_from_slice(&op_bytes);
-        Ok(msg)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Insts {
+    pub ops: Vec<Inst>,
+    pub aggregate: Option<AggregateInfo>,
+}
+
+impl Insts {
+    pub fn direct(ops: Vec<Inst>) -> Self {
+        Self {
+            ops,
+            aggregate: None,
+        }
     }
+
+    pub fn single(inst: Inst) -> Self {
+        Self::direct(vec![inst])
+    }
+
+    pub fn is_aggregate(&self) -> bool {
+        self.aggregate.is_some()
+    }
+}
+
+/// Build the domain-separated signing message for one operation in an aggregate batch.
+///
+/// Returns `KONTOR-OP-V1 || postcard((signer_id, inst))`.
+pub fn aggregate_signing_message(signer_id: u64, inst: &Inst) -> Result<Vec<u8>> {
+    const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
+    let op_bytes = serialize(&(signer_id, inst))?;
+    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
+    msg.extend_from_slice(KONTOR_OP_PREFIX);
+    msg.extend_from_slice(&op_bytes);
+    Ok(msg)
 }
 
 #[serde_as]
@@ -322,6 +338,9 @@ pub enum Op {
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
+        #[ts(type = "number | null")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonce: Option<u64>,
         expr: String,
     },
     Issuance {
@@ -333,11 +352,6 @@ pub enum Op {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
-    BlsBulk {
-        metadata: OpMetadata,
-        ops: Vec<BlsBulkOp>,
-        signature: Vec<u8>,
-    },
 }
 
 impl Op {
@@ -347,7 +361,6 @@ impl Op {
             Op::Call { metadata, .. } => metadata,
             Op::Issuance { metadata, .. } => metadata,
             Op::RegisterBlsKey { metadata, .. } => metadata,
-            Op::BlsBulk { metadata, .. } => metadata,
         }
     }
 }
@@ -518,6 +531,9 @@ pub enum Inst {
         #[ts(type = "string")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
+        #[ts(type = "number | null")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonce: Option<u64>,
         expr: String,
     },
     Issuance,
@@ -525,10 +541,6 @@ pub enum Inst {
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
-    },
-    BlsBulk {
-        ops: Vec<BlsBulkOp>,
-        signature: Vec<u8>,
     },
 }
 
@@ -550,12 +562,12 @@ pub fn bytes_to_json<T: for<'a> Deserialize<'a> + Serialize>(bytes: Vec<u8>) -> 
     serde_json::to_string(&inst).expect("Failed to serialize to JSON")
 }
 
-pub fn inst_json_to_bytes(json: String) -> Vec<u8> {
-    json_to_bytes::<Inst>(json)
+pub fn insts_json_to_bytes(json: String) -> Vec<u8> {
+    json_to_bytes::<Insts>(json)
 }
 
-pub fn inst_bytes_to_json(bytes: Vec<u8>) -> String {
-    bytes_to_json::<Inst>(bytes)
+pub fn insts_bytes_to_json(bytes: Vec<u8>) -> String {
+    bytes_to_json::<Insts>(bytes)
 }
 
 pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {

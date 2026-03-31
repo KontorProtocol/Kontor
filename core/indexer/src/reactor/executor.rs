@@ -5,19 +5,25 @@ use tracing::warn;
 use crate::bitcoin_client::Client;
 use crate::block::filter_map;
 use crate::retry::{new_backoff_unlimited, retry};
-use crate::runtime::{Runtime, TransactionContext};
+use crate::runtime::Runtime;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Non-batchable ops (Publish, Issuance, RegisterBlsKey) must only execute
 /// via Value::Block decisions, not consensus batches.
-pub fn is_batchable(ops: &[indexer_types::Op]) -> bool {
-    !ops.iter().any(|op| {
-        matches!(
-            op,
-            indexer_types::Op::Publish { .. }
-                | indexer_types::Op::Issuance { .. }
-                | indexer_types::Op::RegisterBlsKey { .. }
-        )
+/// Aggregate inputs are always batchable (RegisterBlsKey is rejected at verification).
+pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
+    inputs.iter().all(|input| {
+        if input.insts.is_aggregate() {
+            return true;
+        }
+        !input.insts.ops.iter().any(|inst| {
+            matches!(
+                inst,
+                indexer_types::Inst::Publish { .. }
+                    | indexer_types::Inst::Issuance
+                    | indexer_types::Inst::RegisterBlsKey { .. }
+            )
+        })
     })
 }
 
@@ -119,7 +125,7 @@ impl Executor for RuntimeExecutor {
         // Parse Kontor ops — reject if no valid ops
         let parsed = filter_map((0, tx.clone()))?;
 
-        if !is_batchable(&parsed.ops) {
+        if !is_batchable(&parsed.inputs) {
             return None;
         }
 
@@ -182,27 +188,18 @@ impl Executor for RuntimeExecutor {
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) {
-        for op in &tx.ops {
-            let metadata = op.metadata();
-            let input_index = metadata.input_index;
-            let op_return_data = tx.op_return_data.get(&(input_index as u64)).cloned();
-
-            runtime
-                .set_context(
-                    height,
-                    Some(TransactionContext {
-                        tx_id: Some(tx_id),
-                        tx_index: tx.index,
-                        input_index,
-                        op_index: 0,
-                        txid: tx.txid,
-                    }),
-                    Some(metadata.previous_output),
-                    op_return_data.clone().map(Into::into),
-                )
-                .await;
-
-            super::block_handler::execute_op(runtime, op, op_return_data).await;
+        for input in &tx.inputs {
+            let op_return_data = tx.op_return_data.get(&(input.input_index as u64)).cloned();
+            super::block_handler::process_input(
+                runtime,
+                input,
+                height,
+                Some(tx_id),
+                tx.index,
+                tx.txid,
+                op_return_data,
+            )
+            .await;
         }
     }
     async fn replay_blocks_from(&mut self, height: u64) {

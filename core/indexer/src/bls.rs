@@ -24,7 +24,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::BlsBulkOp;
+use indexer_types::{AggregateInfo, Inst, Insts, aggregate_signing_message};
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
@@ -72,10 +72,10 @@ pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"
 /// Compressed BLS12-381 MinSig signature length in bytes.
 pub const BLS_SIGNATURE_BYTES: usize = 48;
 
-/// Hard cap on number of operations per `Inst::BlsBulk`.
+/// Hard cap on number of operations per aggregate bundle.
 pub const MAX_BLS_BULK_OPS: usize = 10_000;
 
-/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
+/// Hard cap on total signed message bytes per aggregate bundle.
 pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -143,21 +143,15 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// SignerResolver — deduplicated BLS pubkey resolution for bundle verification
+// Aggregate verification — BLS pubkey resolution and signature checking
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum SignerKey {
-    RegistryId(u64),
-    RawPubkey(Vec<u8>),
-}
-
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_bls_bulk`]
-/// so the reactor can look up signers without redundant registry calls.
+/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
+/// so the block handler can look up signers without redundant registry calls.
 pub type SignerMap = HashMap<u64, String>;
 
 struct SignerResolver {
-    pk_cache: HashMap<SignerKey, BlsPublicKey>,
+    pk_cache: HashMap<u64, BlsPublicKey>,
     signer_map: SignerMap,
 }
 
@@ -169,95 +163,91 @@ impl SignerResolver {
         }
     }
 
-    async fn resolve(&mut self, runtime: &mut Runtime, op: &BlsBulkOp) -> Result<BlsPublicKey> {
-        let key = match op {
-            BlsBulkOp::Call { signer_id, .. } => SignerKey::RegistryId(*signer_id),
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
-                SignerKey::RawPubkey(bls_pubkey.clone())
-            }
-        };
-
-        if let Some(pk) = self.pk_cache.get(&key) {
+    async fn resolve(&mut self, runtime: &mut Runtime, signer_id: u64) -> Result<BlsPublicKey> {
+        if let Some(pk) = self.pk_cache.get(&signer_id) {
             return Ok(*pk);
         }
 
-        let raw_bytes = match op {
-            BlsBulkOp::Call { signer_id, .. } => {
-                let entry = get_entry_by_id(runtime, *signer_id).await?;
-                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-                self.signer_map
-                    .insert(*signer_id, entry.x_only_pubkey.clone());
-                entry
-                    .bls_pubkey
-                    .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?
-            }
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
-        };
+        let entry = get_entry_by_id(runtime, signer_id).await?;
+        let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+        self.signer_map
+            .insert(signer_id, entry.x_only_pubkey.clone());
+        let raw_bytes = entry
+            .bls_pubkey
+            .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?;
 
         let pk = BlsPublicKey::key_validate(&raw_bytes)
             .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-        self.pk_cache.insert(key, pk);
+        self.pk_cache.insert(signer_id, pk);
         Ok(pk)
     }
 }
 
-pub async fn verify_bls_bulk(
+/// Verify the BLS aggregate signature on an `Insts` envelope.
+///
+/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
+/// signers for execution without redundant registry lookups.
+pub async fn verify_aggregate(
     runtime: &mut Runtime,
-    ops: &[BlsBulkOp],
-    signature: &[u8],
+    insts: &Insts,
 ) -> Result<SignerMap> {
-    // 1) Basic sanity: empty bundles are not meaningful and should be rejected.
-    if ops.is_empty() {
-        return Err(anyhow!("BlsBulk must contain at least one operation"));
+    let agg = insts
+        .aggregate
+        .as_ref()
+        .ok_or_else(|| anyhow!("verify_aggregate called on non-aggregate Insts"))?;
+
+    if insts.ops.is_empty() {
+        return Err(anyhow!("aggregate must contain at least one operation"));
     }
-    // 2) DoS hardening: cap per-bundle work (pubkey lookups + hashing + pairing checks).
-    if ops.len() > MAX_BLS_BULK_OPS {
+    if insts.ops.len() > MAX_BLS_BULK_OPS {
         return Err(anyhow!(
-            "BlsBulk contains {} operations (max {})",
-            ops.len(),
+            "aggregate contains {} operations (max {})",
+            insts.ops.len(),
             MAX_BLS_BULK_OPS
         ));
     }
-    // 3) Quick reject: Kontor expects a single compressed MinSig signature (48 bytes).
-    if signature.len() != BLS_SIGNATURE_BYTES {
+    if agg.signer_ids.len() != insts.ops.len() {
+        return Err(anyhow!(
+            "signer_ids length ({}) != ops length ({})",
+            agg.signer_ids.len(),
+            insts.ops.len()
+        ));
+    }
+    for inst in &insts.ops {
+        if matches!(inst, Inst::RegisterBlsKey { .. }) {
+            return Err(anyhow!(
+                "RegisterBlsKey is not allowed in aggregate path (use direct)"
+            ));
+        }
+    }
+    if agg.signature.len() != BLS_SIGNATURE_BYTES {
         return Err(anyhow!(
             "invalid aggregate signature length: expected {BLS_SIGNATURE_BYTES}, got {}",
-            signature.len()
+            agg.signature.len()
         ));
     }
 
-    // 4) Parse + validate signature (includes subgroup check) before spending effort
-    // building messages and resolving pubkeys.
-    let aggregate_sig = BlsSignature::sig_validate(signature, true)
+    let aggregate_sig = BlsSignature::sig_validate(&agg.signature, true)
         .map_err(|e| anyhow!("invalid aggregate signature bytes: {e:?}"))?;
 
-    // 5) Build the two parallel vecs that aggregate_verify needs: one message and one
-    // pubkey per op. The resolver deduplicates registry lookups and subgroup checks
-    // across ops that share a signer.
     let mut resolver = SignerResolver::new();
-    let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(ops.len());
-    let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(ops.len());
+    let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
+    let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(insts.ops.len());
     let mut total_message_bytes: usize = 0;
 
-    for op in ops {
-        // Reconstruct the exact bytes each signer authorized. If the bundler
-        // mutates any op field after signing, this message changes and verification fails.
-        let msg = op.signing_message()?;
+    for (inst, &signer_id) in insts.ops.iter().zip(agg.signer_ids.iter()) {
+        let msg = aggregate_signing_message(signer_id, inst)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
-                "BlsBulk signed message bytes exceed max {}",
+                "aggregate signed message bytes exceed max {}",
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
-        // Resolve the BLS pubkey for this op (registry lookup for Calls, inline for
-        // RegisterBlsKey). Cached per unique signer to avoid redundant subgroup checks.
-        pks.push(resolver.resolve(runtime, op).await?);
+        pks.push(resolver.resolve(runtime, signer_id).await?);
         msgs.push(msg);
     }
 
-    // 6) Aggregate verify: proves every op's message was signed by the corresponding
-    // signer, while only storing a single 48-byte signature on-chain.
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
     let pk_refs: Vec<&BlsPublicKey> = pks.iter().collect();
     let verify_result =

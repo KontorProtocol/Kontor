@@ -311,7 +311,7 @@ impl RegTesterInner {
             .address(ident.address.to_string())
             .x_only_public_key(ident.x_only_public_key().to_string())
             .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .instruction(inst)
+            .insts(indexer_types::Insts::single(inst))
             .build();
         let query = ComposeQuery::builder()
             .instructions(vec![instructions])
