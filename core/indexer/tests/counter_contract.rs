@@ -10,47 +10,53 @@ async fn test_counter_batching() -> Result<()> {
 
     let before = counter::get(runtime, &contract).await?;
 
-    // Unordered batch: separate transactions, one consensus round
-    let mut batch = runtime.batch();
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.execute().await?;
+    // Unordered: separate transactions, one consensus round
+    let mut submit = runtime.submit();
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.execute().await?;
 
     let value = counter::get(runtime, &contract).await?;
     assert_eq!(value, before + 3);
 
-    // Unordered batch with multiple signers
+    // Unordered with multiple signers
     let before = value;
-    let mut batch = runtime.batch();
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&user, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.execute().await?;
+    let mut submit = runtime.submit();
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.push(&user, counter::increment_call(&contract));
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.execute().await?;
 
     let value = counter::get(runtime, &contract).await?;
     assert_eq!(value, before + 3);
 
-    // Ordered batch: single transaction, guaranteed execution order
+    // Ordered: single transaction, guaranteed execution order
     let before = value;
-    let mut batch = runtime.batch();
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    let results = batch.execute_ordered().await?;
-    assert_eq!(results.raw.len(), 3);
+    let mut ops = Ops::new(&admin);
+    ops.push(counter::increment_call(&contract));
+    ops.push(counter::increment_call(&contract));
+    ops.push(counter::increment_call(&contract));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    let results = submit.execute().await?;
+    assert_eq!(results.groups.len(), 1);
+    assert_eq!(results.groups[0].len(), 3);
 
     let value = counter::get(runtime, &contract).await?;
     assert_eq!(value, before + 3);
 
-    // Ordered batch with BLS aggregate: multiple signers in one transaction
+    // Ordered with BLS aggregate: multiple signers in one transaction
     let before = value;
-    let mut batch = runtime.batch();
-    batch.push(&admin, counter::increment_call(&contract));
-    batch.push(&user, counter::increment_call(&contract));
-    batch.push(&admin, counter::increment_call(&contract));
-    let results = batch.execute_ordered().await?;
-    assert_eq!(results.raw.len(), 3);
+    let mut ops = AggregateOps::new();
+    ops.push(&admin, counter::increment_call(&contract));
+    ops.push(&user, counter::increment_call(&contract));
+    ops.push(&admin, counter::increment_call(&contract));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    let results = submit.execute().await?;
+    assert_eq!(results.groups.len(), 1);
+    assert_eq!(results.groups[0].len(), 3);
 
     let value = counter::get(runtime, &contract).await?;
     assert_eq!(value, before + 3);

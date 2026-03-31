@@ -17,7 +17,7 @@ use indexer::{
 pub use indexer::{logging::setup as logging, testlib_exports::*};
 use indexer_types::{Inst, Insts, TransactionRow};
 pub use serial_test;
-use std::{collections::HashMap, path::PathBuf};
+use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
 use tokio::{fs::File, io::AsyncReadExt, task};
@@ -46,20 +46,23 @@ impl<T> CallExpr for TypedCall<T> {
     }
 }
 
-/// A typed handle to a batched call's result. Retains the type and parse function.
+/// A typed handle to a submitted call's result. Retains the type and parse function.
+/// The group_index is shared with the Ops that created it via Rc<Cell>, and gets
+/// set when the Ops is added to a Submit.
 pub struct Handle<T> {
-    index: usize,
+    group_index: Rc<Cell<usize>>,
+    op_index: usize,
     parse: fn(&str) -> T,
 }
 
-/// Results from a batch execution.
-pub struct BatchResults {
-    pub raw: Vec<String>,
+/// Results from a submit execution. Each group's results are stored separately.
+pub struct SubmitResults {
+    pub groups: Vec<Vec<String>>,
 }
 
-impl BatchResults {
+impl SubmitResults {
     pub fn get<T>(&self, handle: &Handle<T>) -> T {
-        (handle.parse)(&self.raw[handle.index])
+        (handle.parse)(&self.groups[handle.group_index.get()][handle.op_index])
     }
 }
 
@@ -163,32 +166,42 @@ pub trait RuntimeImpl: Send {
         Ok(addresses)
     }
 
-    /// Execute multiple calls in a single consensus batch. Default implementation
-    /// falls back to sequential executes.
-    async fn execute_many(
-        &mut self,
-        calls: &[(&Signer, &ContractAddress, &str)],
-    ) -> Result<Vec<String>> {
-        let mut results = Vec::with_capacity(calls.len());
-        for (signer, contract, expr) in calls {
-            results.push(self.execute(Some(signer), contract, expr).await?);
+    /// Execute a submission of grouped calls. Default falls back to sequential.
+    async fn execute_submit(&mut self, groups: &[SubmitGroup<'_>]) -> Result<Vec<Vec<String>>> {
+        let mut results = Vec::with_capacity(groups.len());
+        for group in groups {
+            match group {
+                SubmitGroup::Single(signer, contract, expr) => {
+                    results.push(vec![self.execute(Some(signer), contract, expr).await?]);
+                }
+                SubmitGroup::Ordered(signer, calls) => {
+                    let mut group_results = Vec::with_capacity(calls.len());
+                    for (contract, expr) in calls {
+                        group_results.push(self.execute(Some(signer), contract, expr).await?);
+                    }
+                    results.push(group_results);
+                }
+                SubmitGroup::Aggregate(calls) => {
+                    let mut group_results = Vec::with_capacity(calls.len());
+                    for (signer, contract, expr) in calls {
+                        group_results.push(self.execute(Some(signer), contract, expr).await?);
+                    }
+                    results.push(group_results);
+                }
+            }
         }
         Ok(results)
     }
+}
 
-    /// Execute multiple calls as ordered instructions in a single transaction.
-    /// If all signers are the same, uses direct Insts. If mixed signers, uses
-    /// BLS aggregate. Default implementation falls back to sequential executes.
-    async fn execute_many_ordered(
-        &mut self,
-        calls: &[(&Signer, &ContractAddress, &str)],
-    ) -> Result<Vec<String>> {
-        let mut results = Vec::with_capacity(calls.len());
-        for (signer, contract, expr) in calls {
-            results.push(self.execute(Some(signer), contract, expr).await?);
-        }
-        Ok(results)
-    }
+/// A group of calls within a Submit.
+pub enum SubmitGroup<'a> {
+    /// Single call, one tx.
+    Single(&'a Signer, &'a ContractAddress, &'a str),
+    /// Ordered calls, same signer, one tx.
+    Ordered(&'a Signer, Vec<(&'a ContractAddress, &'a str)>),
+    /// Ordered calls, per-call signers, BLS aggregate, one tx.
+    Aggregate(Vec<(&'a Signer, &'a ContractAddress, &'a str)>),
 }
 
 pub struct RuntimeLocal {
@@ -582,107 +595,104 @@ impl RuntimeImpl for RuntimeRegtest {
         Ok(addresses.into_iter().map(|a| a.unwrap()).collect())
     }
 
-    async fn execute_many(
-        &mut self,
-        calls: &[(&Signer, &ContractAddress, &str)],
-    ) -> Result<Vec<String>> {
-        if calls.is_empty() {
-            return Ok(vec![]);
+    async fn execute_submit(&mut self, groups: &[SubmitGroup<'_>]) -> Result<Vec<Vec<String>>> {
+        // Phase 1: Send all txs to mempool, collecting txids and op counts
+        struct Sent {
+            txid: String,
+            op_count: usize,
+        }
+        let mut all_sent: Vec<Sent> = Vec::with_capacity(groups.len());
+
+        for group in groups {
+            match group {
+                SubmitGroup::Single(signer, contract, expr) => {
+                    let identity = self
+                        .identities
+                        .get_mut(signer)
+                        .ok_or_else(|| anyhow!("Identity not found"))?;
+                    let sent = self
+                        .reg_tester
+                        .send_instruction(
+                            identity,
+                            Inst::Call {
+                                gas_limit: 10_000,
+                                contract: (*contract).clone().into(),
+                                nonce: None,
+                                expr: expr.to_string(),
+                            },
+                        )
+                        .await?;
+                    all_sent.push(Sent {
+                        txid: sent.reveal_txid.to_string(),
+                        op_count: 1,
+                    });
+                }
+                SubmitGroup::Ordered(signer, calls) => {
+                    let insts: Vec<Inst> = calls
+                        .iter()
+                        .map(|(contract, expr)| Inst::Call {
+                            gas_limit: 10_000,
+                            contract: (*contract).clone().into(),
+                            nonce: None,
+                            expr: expr.to_string(),
+                        })
+                        .collect();
+                    let op_count = insts.len();
+                    let identity = self
+                        .identities
+                        .get_mut(signer)
+                        .ok_or_else(|| anyhow!("Identity not found"))?;
+                    let sent = self
+                        .reg_tester
+                        .send_insts(identity, Insts::direct(insts))
+                        .await?;
+                    all_sent.push(Sent {
+                        txid: sent.reveal_txid.to_string(),
+                        op_count,
+                    });
+                }
+                SubmitGroup::Aggregate(calls) => {
+                    let insts = self.build_aggregate_insts(calls).await?;
+                    let op_count = insts.ops.len();
+                    let identity = self
+                        .identities
+                        .get_mut(calls[0].0)
+                        .ok_or_else(|| anyhow!("Identity not found"))?;
+                    let sent = self.reg_tester.send_insts(identity, insts).await?;
+                    all_sent.push(Sent {
+                        txid: sent.reveal_txid.to_string(),
+                        op_count,
+                    });
+                }
+            }
         }
 
-        let mut txids = Vec::with_capacity(calls.len());
-        for (signer, contract, expr) in calls {
-            let identity = self
-                .identities
-                .get_mut(signer)
-                .ok_or_else(|| anyhow!("Identity not found"))?;
-            let sent = self
-                .reg_tester
-                .send_instruction(
-                    identity,
-                    Inst::Call {
-                        gas_limit: 10_000,
-                        contract: (*contract).clone().into(),
-                        nonce: None,
-                        expr: expr.to_string(),
-                    },
-                )
-                .await?;
-            txids.push(sent.reveal_txid.to_string());
-        }
-
-        // No mining — batchable calls go through consensus
+        // Phase 2: Wait for all txids at once
+        let txids: Vec<String> = all_sent.iter().map(|s| s.txid.clone()).collect();
         self.reg_tester.wait_for_txids(&txids).await?;
 
+        // Phase 3: Query results
         let client = self.reg_tester.kontor_client().await;
-        let mut results = Vec::with_capacity(txids.len());
-        for txid in &txids {
-            let id = OpResultId::builder().txid(txid.clone()).build();
-            let result = client
-                .result(&id)
-                .await?
-                .ok_or(anyhow!("Could not find op result"))?;
-            results.push(result.value.ok_or(anyhow!("Call failed in processing"))?);
-        }
-        Ok(results)
-    }
-
-    async fn execute_many_ordered(
-        &mut self,
-        calls: &[(&Signer, &ContractAddress, &str)],
-    ) -> Result<Vec<String>> {
-        if calls.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let single_signer = calls.iter().all(|(s, _, _)| *s == calls[0].0);
-
-        let insts = if single_signer {
-            // Single signer: direct Insts, no nonces needed
-            let insts: Vec<Inst> = calls
-                .iter()
-                .map(|(_, contract, expr)| Inst::Call {
-                    gas_limit: 10_000,
-                    contract: (*contract).clone().into(),
-                    nonce: None,
-                    expr: expr.to_string(),
-                })
-                .collect();
-            Insts::direct(insts)
-        } else {
-            // Multi-signer: BLS aggregate
-            self.build_aggregate_insts(calls).await?
-        };
-
-        // Pick any signer's identity to fund the tx
-        let identity = self
-            .identities
-            .get_mut(calls[0].0)
-            .ok_or_else(|| anyhow!("Identity not found"))?;
-
-        let sent = self.reg_tester.send_insts(identity, insts).await?;
-        let txid = sent.reveal_txid.to_string();
-
-        self.reg_tester
-            .wait_for_txids(std::slice::from_ref(&txid))
-            .await?;
-
-        let client = self.reg_tester.kontor_client().await;
-        let mut results = Vec::with_capacity(calls.len());
-        for op_index in 0..calls.len() {
-            let id = OpResultId::builder()
-                .txid(txid.clone())
-                .op_index(op_index as i64)
-                .build();
-            let result = client
-                .result(&id)
-                .await?
-                .ok_or(anyhow!("Could not find op result at op_index {}", op_index))?;
-            results.push(
-                result
-                    .value
-                    .ok_or(anyhow!("Call failed at op_index {}", op_index))?,
-            );
+        let mut results = Vec::with_capacity(all_sent.len());
+        for sent in &all_sent {
+            let mut group_results = Vec::with_capacity(sent.op_count);
+            for op_index in 0..sent.op_count {
+                let id = OpResultId::builder()
+                    .txid(sent.txid.clone())
+                    .op_index(op_index as i64)
+                    .build();
+                let result = client.result(&id).await?.ok_or(anyhow!(
+                    "Could not find op result for txid {} op_index {}",
+                    sent.txid,
+                    op_index
+                ))?;
+                group_results.push(
+                    result
+                        .value
+                        .ok_or(anyhow!("Call failed at op_index {}", op_index))?,
+                );
+            }
+            results.push(group_results);
         }
         Ok(results)
     }
@@ -788,52 +798,166 @@ impl Runtime {
         self.runtime.checkpoint().await
     }
 
-    pub fn batch(&mut self) -> Batch<'_> {
-        Batch {
+    pub fn submit(&mut self) -> Submit<'_> {
+        Submit {
             runtime: self,
-            calls: Vec::new(),
+            groups: Vec::new(),
         }
     }
 }
 
-pub struct Batch<'a> {
+/// A mempool submission: multiple groups of calls sent at once.
+pub struct Submit<'a> {
     runtime: &'a mut Runtime,
-    calls: Vec<(Signer, Box<dyn CallExpr>)>,
+    groups: Vec<SubmittedGroup>,
 }
 
-impl<'a> Batch<'a> {
+struct SubmittedGroup {
+    _group_index: Rc<Cell<usize>>,
+    kind: SubmittedGroupKind,
+}
+
+enum SubmittedGroupKind {
+    Single(Signer, Box<dyn CallExpr>),
+    Ordered {
+        signer: Signer,
+        calls: Vec<Box<dyn CallExpr>>,
+    },
+    Aggregate(Vec<(Signer, Box<dyn CallExpr>)>),
+}
+
+impl<'a> Submit<'a> {
+    /// Add a single call as its own transaction.
     pub fn push<T: 'static>(&mut self, signer: &Signer, call: TypedCall<T>) -> Handle<T> {
-        let index = self.calls.len();
+        let group_index = Rc::new(Cell::new(self.groups.len()));
         let parse = call.parse;
-        self.calls.push((signer.clone(), Box::new(call)));
-        Handle { index, parse }
-    }
-
-    /// Execute calls as separate transactions (unordered). Calls may land in
-    /// any order within the consensus batch. Different signers are allowed.
-    pub async fn execute(self) -> Result<BatchResults> {
-        let calls: Vec<(&Signer, &ContractAddress, &str)> = self
-            .calls
-            .iter()
-            .map(|(s, c)| (s, c.contract(), c.expr()))
-            .collect();
-        let raw = self.runtime.runtime.execute_many(&calls).await?;
-        Ok(BatchResults { raw })
-    }
-
-    /// Execute all calls as ordered instructions within a single transaction.
-    /// Guarantees execution order matches push order. Single signer uses direct
-    /// Insts, multiple signers uses BLS aggregate.
-    pub async fn execute_ordered(self) -> Result<BatchResults> {
-        if self.calls.is_empty() {
-            return Ok(BatchResults { raw: vec![] });
+        self.groups.push(SubmittedGroup {
+            _group_index: group_index.clone(),
+            kind: SubmittedGroupKind::Single(signer.clone(), Box::new(call)),
+        });
+        Handle {
+            group_index,
+            op_index: 0,
+            parse,
         }
-        let calls: Vec<(&Signer, &ContractAddress, &str)> = self
-            .calls
-            .iter()
-            .map(|(s, c)| (s, c.contract(), c.expr()))
-            .collect();
-        let raw = self.runtime.runtime.execute_many_ordered(&calls).await?;
-        Ok(BatchResults { raw })
+    }
+
+    /// Add a pre-built ops group (same-signer or aggregate).
+    pub fn add(&mut self, group: impl Into<OpsGroup>) {
+        let group = group.into();
+        let (group_index, kind) = match group {
+            OpsGroup::Direct(ops) => (
+                ops.group_index,
+                SubmittedGroupKind::Ordered {
+                    signer: ops.signer,
+                    calls: ops.calls,
+                },
+            ),
+            OpsGroup::Aggregate(ops) => (ops.group_index, SubmittedGroupKind::Aggregate(ops.calls)),
+        };
+        group_index.set(self.groups.len());
+        self.groups.push(SubmittedGroup {
+            _group_index: group_index,
+            kind,
+        });
+    }
+
+    /// Send all groups to mempool and wait for all results.
+    pub async fn execute(self) -> Result<SubmitResults> {
+        let mut all_calls: Vec<SubmitGroup> = Vec::new();
+        for group in &self.groups {
+            match &group.kind {
+                SubmittedGroupKind::Single(signer, call) => {
+                    all_calls.push(SubmitGroup::Single(signer, call.contract(), call.expr()));
+                }
+                SubmittedGroupKind::Ordered { signer, calls } => {
+                    let exprs: Vec<(&ContractAddress, &str)> =
+                        calls.iter().map(|c| (c.contract(), c.expr())).collect();
+                    all_calls.push(SubmitGroup::Ordered(signer, exprs));
+                }
+                SubmittedGroupKind::Aggregate(calls) => {
+                    let exprs: Vec<(&Signer, &ContractAddress, &str)> = calls
+                        .iter()
+                        .map(|(s, c)| (s, c.contract(), c.expr()))
+                        .collect();
+                    all_calls.push(SubmitGroup::Aggregate(exprs));
+                }
+            }
+        }
+
+        let results = self.runtime.runtime.execute_submit(&all_calls).await?;
+        Ok(SubmitResults { groups: results })
+    }
+}
+
+/// Builder for an ordered same-signer sequence. Standalone — does not borrow Submit.
+pub struct Ops {
+    signer: Signer,
+    calls: Vec<Box<dyn CallExpr>>,
+    group_index: Rc<Cell<usize>>,
+}
+
+impl Ops {
+    pub fn new(signer: &Signer) -> Self {
+        Self {
+            signer: signer.clone(),
+            calls: Vec::new(),
+            group_index: Rc::new(Cell::new(0)),
+        }
+    }
+
+    pub fn push<T: 'static>(&mut self, call: TypedCall<T>) -> Handle<T> {
+        let parse = call.parse;
+        let op_index = self.calls.len();
+        self.calls.push(Box::new(call));
+        Handle {
+            group_index: self.group_index.clone(),
+            op_index,
+            parse,
+        }
+    }
+}
+
+/// Builder for an ordered multi-signer sequence (BLS aggregate). Standalone.
+pub struct AggregateOps {
+    calls: Vec<(Signer, Box<dyn CallExpr>)>,
+    group_index: Rc<Cell<usize>>,
+}
+
+impl AggregateOps {
+    pub fn new() -> Self {
+        Self {
+            calls: Vec::new(),
+            group_index: Rc::new(Cell::new(0)),
+        }
+    }
+
+    pub fn push<T: 'static>(&mut self, signer: &Signer, call: TypedCall<T>) -> Handle<T> {
+        let parse = call.parse;
+        let op_index = self.calls.len();
+        self.calls.push((signer.clone(), Box::new(call)));
+        Handle {
+            group_index: self.group_index.clone(),
+            op_index,
+            parse,
+        }
+    }
+}
+
+/// Wrapper for passing either Ops or AggregateOps to Submit::add.
+pub enum OpsGroup {
+    Direct(Ops),
+    Aggregate(AggregateOps),
+}
+
+impl From<Ops> for OpsGroup {
+    fn from(ops: Ops) -> Self {
+        OpsGroup::Direct(ops)
+    }
+}
+
+impl From<AggregateOps> for OpsGroup {
+    fn from(ops: AggregateOps) -> Self {
+        OpsGroup::Aggregate(ops)
     }
 }
