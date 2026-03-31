@@ -50,7 +50,24 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
     insert_block(&runtime.storage.conn, block.into()).await?;
 
     for t in &block.transactions {
-        process_transaction(runtime, block.height, t).await?;
+        // Dedup: if this tx was already executed via batch_handler, just mark it
+        // as confirmed on-chain (for finality checks) and skip re-execution.
+        if get_transaction_by_txid(&runtime.storage.conn, &t.txid.to_string())
+            .await?
+            .is_some()
+        {
+            confirm_transaction(
+                &runtime.storage.conn,
+                &t.txid.to_string(),
+                block.height as i64,
+                t.index,
+            )
+            .await?;
+            info!(txid = %t.txid, "Transaction already batched — confirmed on chain, skipping execution");
+            continue;
+        }
+        process_transaction(runtime, t, block.height as i64, Some(block.height as i64), None)
+            .await?;
     }
 
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
@@ -123,29 +140,14 @@ pub async fn batch_handler(
     }
 
     for t in txs {
-        let tx_id = insert_transaction(
-            &runtime.storage.conn,
-            TransactionRow::builder()
-                .height(anchor_height as i64)
-                .batch_height(consensus_height.as_u64() as i64)
-                .txid(t.txid.to_string())
-                .build(),
+        process_transaction(
+            runtime,
+            t,
+            anchor_height as i64,
+            None,
+            Some(consensus_height.as_u64() as i64),
         )
         .await?;
-
-        for input in &t.inputs {
-            let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
-            process_input(
-                runtime,
-                input,
-                anchor_height as i64,
-                Some(tx_id),
-                t.index,
-                t.txid,
-                op_return_data,
-            )
-            .await;
-        }
     }
 
     info!(
@@ -160,48 +162,27 @@ pub async fn batch_handler(
 
 pub async fn process_transaction(
     runtime: &mut Runtime,
-    block_height: u64,
     t: &Transaction,
+    height: i64,
+    confirmed_height: Option<i64>,
+    batch_height: Option<i64>,
 ) -> Result<()> {
-    // Dedup: if this tx was already executed via batch_handler, just mark it
-    // as confirmed on-chain (for finality checks) and skip re-execution.
-    if let Some(_existing) =
-        get_transaction_by_txid(&runtime.storage.conn, &t.txid.to_string()).await?
-    {
-        confirm_transaction(
-            &runtime.storage.conn,
-            &t.txid.to_string(),
-            block_height as i64,
-            t.index,
-        )
-        .await?;
-        info!(txid = %t.txid, "Transaction already batched — confirmed on chain, skipping execution");
-        return Ok(());
-    }
-
     let tx_id = insert_transaction(
         &runtime.storage.conn,
-        TransactionRow::builder()
-            .height(block_height as i64)
-            .confirmed_height(block_height as i64)
-            .tx_index(t.index)
-            .txid(t.txid.to_string())
-            .build(),
+        TransactionRow {
+            id: 0,
+            txid: t.txid.to_string(),
+            height,
+            confirmed_height,
+            tx_index: confirmed_height.map(|_| t.index),
+            batch_height,
+        },
     )
     .await?;
 
     for input in &t.inputs {
         let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
-        process_input(
-            runtime,
-            input,
-            block_height as i64,
-            Some(tx_id),
-            t.index,
-            t.txid,
-            op_return_data,
-        )
-        .await;
+        process_input(runtime, input, height, Some(tx_id), t.index, t.txid, op_return_data).await;
     }
 
     Ok(())
