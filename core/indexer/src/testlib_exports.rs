@@ -16,4 +16,4 @@ pub use crate::{
     },
 };
 pub use anyhow::{Error as AnyhowError, Result, anyhow};
-pub use macros::{import_test as import, interface_test as interface, test};
+pub use macros::{import_test as import, interface_test as interface, regtest_tests, test};
