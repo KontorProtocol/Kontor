@@ -1,11 +1,13 @@
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::Hash;
-use indexer_types::{Block, Inst, Op, OpMetadata, OpWithResult, Transaction, TransactionInput, TransactionRow};
+use indexer_types::{
+    Block, Inst, Op, OpMetadata, OpWithResult, Transaction, TransactionInput, TransactionRow,
+};
 use tracing::{info, warn};
 
 use crate::{
-    bls,
     block::{filter_map, inspect, op_from_inst},
+    bls,
     consensus::Height,
     database::queries::{
         confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
@@ -215,10 +217,27 @@ pub async fn process_input(
     op_return_data: Option<indexer_types::OpReturnData>,
 ) {
     if input.insts.is_aggregate() {
-        process_aggregate_input(runtime, input, height, tx_id, tx_index, txid, op_return_data)
-            .await;
+        process_aggregate_input(
+            runtime,
+            input,
+            height,
+            tx_id,
+            tx_index,
+            txid,
+            op_return_data,
+        )
+        .await;
     } else {
-        process_direct_input(runtime, input, height, tx_id, tx_index, txid, op_return_data).await;
+        process_direct_input(
+            runtime,
+            input,
+            height,
+            tx_id,
+            tx_index,
+            txid,
+            op_return_data,
+        )
+        .await;
     }
 }
 
@@ -255,7 +274,7 @@ async fn process_direct_input(
             )
             .await;
 
-        execute_op(runtime, &op, op_return_data.clone()).await;
+        execute_op(runtime, &op).await;
     }
 }
 
@@ -278,8 +297,12 @@ async fn process_aggregate_input(
 
     let agg = input.insts.aggregate.as_ref().unwrap();
 
-    for (op_index, (inst, &signer_id)) in
-        input.insts.ops.iter().zip(agg.signer_ids.iter()).enumerate()
+    for (op_index, (inst, &signer_id)) in input
+        .insts
+        .ops
+        .iter()
+        .zip(agg.signer_ids.iter())
+        .enumerate()
     {
         let x_only = match signer_map.get(&signer_id) {
             Some(x) => x.clone(),
@@ -339,15 +362,11 @@ async fn process_aggregate_input(
             signer: signer.clone(), // TODO
         };
         let op = op_from_inst(inst.clone(), metadata);
-        execute_op(runtime, &op, op_return_data.clone()).await;
+        execute_op(runtime, &op).await;
     }
 }
 
-pub async fn execute_op(
-    runtime: &mut Runtime,
-    op: &Op,
-    op_return_data: Option<indexer_types::OpReturnData>,
-) {
+pub async fn execute_op(runtime: &mut Runtime, op: &Op) {
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {

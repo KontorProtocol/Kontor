@@ -308,18 +308,6 @@ impl Insts {
     }
 }
 
-/// Build the domain-separated signing message for one operation in an aggregate batch.
-///
-/// Returns `KONTOR-OP-V1 || postcard((signer_id, inst))`.
-pub fn aggregate_signing_message(signer_id: u64, inst: &Inst) -> Result<Vec<u8>> {
-    const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-    let op_bytes = serialize(&(signer_id, inst))?;
-    let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
-    msg.extend_from_slice(KONTOR_OP_PREFIX);
-    msg.extend_from_slice(&op_bytes);
-    Ok(msg)
-}
-
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
@@ -542,6 +530,20 @@ pub enum Inst {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+}
+
+impl Inst {
+    /// Build the domain-separated signing message for one operation in an aggregate batch.
+    ///
+    /// Returns `KONTOR-OP-V1 || postcard((signer_id, self))`.
+    pub fn aggregate_signing_message(&self, signer_id: u64) -> Result<Vec<u8>> {
+        const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
+        let op_bytes = serialize(&(signer_id, self))?;
+        let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
+        msg.extend_from_slice(KONTOR_OP_PREFIX);
+        msg.extend_from_slice(&op_bytes);
+        Ok(msg)
+    }
 }
 
 pub fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {

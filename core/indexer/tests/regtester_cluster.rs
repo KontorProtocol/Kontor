@@ -75,6 +75,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: contract_addr,
+            nonce: None,
             expr: counter::wave::increment_call_expr(),
         },
     )
@@ -182,6 +183,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
             indexer_types::Inst::Call {
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
+                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         )
@@ -293,6 +295,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
             indexer_types::Inst::Call {
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
+                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         )
@@ -320,6 +323,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
             indexer_types::Inst::Call {
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
+                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         )
@@ -417,6 +421,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
             indexer_types::Inst::Call {
                 gas_limit: 10_000,
                 contract: contract_addr.clone(),
+                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         )
@@ -541,6 +546,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: staking_addr.clone(),
+            nonce: None,
             expr: staking::wave::register_validator_call_expr(ed25519_pubkey, 5.into()),
         },
     )
@@ -575,6 +581,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: counter_addr.clone(),
+            nonce: None,
             expr: counter::wave::increment_call_expr(),
         },
     )
@@ -602,6 +609,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: counter_addr.clone(),
+            nonce: None,
             expr: counter::wave::increment_call_expr(),
         },
     )
@@ -636,6 +644,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: staking_addr.clone(),
+            nonce: None,
             expr: staking::wave::begin_unstake_call_expr(),
         },
     )
@@ -665,6 +674,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         indexer_types::Inst::Call {
             gas_limit: 10_000,
             contract: counter_addr,
+            nonce: None,
             expr: counter::wave::increment_call_expr(),
         },
     )

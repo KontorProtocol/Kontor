@@ -10,16 +10,16 @@ use anyhow::Result;
 use bitcoin::Network;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::rand::RngCore;
-use bitcoin::key::{Secp256k1, rand};
+use bitcoin::key::{Keypair, Secp256k1, rand};
 use bitcoin::secp256k1::Message;
 use blst::BLST_ERROR;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use blst::min_sig::{AggregatePublicKey, AggregateSignature, PublicKey as BlsPublicKey};
 use indexer::bls::{
     BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX,
-    bls_derivation_path, derive_bls_secret_key_eip2333,
+    bls_derivation_path, derive_bls_secret_key_eip2333, validate_aggregate_shape,
 };
-use indexer_types::{BlsBulkOp, Inst, Signer};
+use indexer_types::{AggregateInfo, Inst, Insts, Signer};
 use testlib::{
     AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
     RuntimeConfig, import, serial_test,
@@ -275,9 +275,11 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
         .await?;
 
     let alice_xonly = alice.x_only_public_key().to_string();
-    assert_eq!(
-        registry::get_signer_id(runtime, &alice_xonly).await?,
-        Some(0)
+    assert!(
+        registry::get_signer_id(runtime, &alice_xonly)
+            .await?
+            .is_some(),
+        "Alice must be registered before the replay attempt"
     );
 
     // Eve creates her own Schnorr binding to Alice's BLS pubkey (she controls
@@ -324,7 +326,7 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
     Ok(())
 }
 
-/// Identity hijack via BlsBulk: Eve tries to register her own BLS key under
+/// Identity hijack via aggregate registration: Eve tries to register her own BLS key under
 /// Alice's Taproot identity. Eve CAN produce the BLS binding proof (she signs
 /// `BLS_BINDING_PREFIX || alice_xonly` with `eve_bls_sk`), but CANNOT produce
 /// the Schnorr proof (needs Alice's Taproot secret key to sign over
@@ -334,16 +336,18 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
 /// |------------|-------------|----------------------------------------------|
 /// | Schnorr    | **Yes**     | Needs Alice's Taproot sk                     |
 /// | BLS        | No          | Eve can sign alice_xonly with her own BLS key |
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Result<()> {
-    let alice = reg_tester.unregistered_identity().await?;
-    let eve = reg_tester.unregistered_identity().await?;
-    let mut publisher = reg_tester.unregistered_identity().await?;
-
-    let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
-    let eve_bls_pk = eve_bls_sk.sk_to_pk();
-    let alice_xonly = alice.keypair.x_only_public_key().0;
+/// In the current `Insts` / `AggregateInfo` model, aggregate `RegisterBlsKey`
+/// is rejected outright before verification/execution, which removes this
+/// attack surface from the bundled path entirely.
+#[test]
+fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
     let secp = Secp256k1::new();
+    let alice_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+    let eve_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+    let alice_xonly = alice_keypair.x_only_public_key().0;
+
+    let eve_bls_sk = derive_test_key(42);
+    let eve_bls_pk = eve_bls_sk.sk_to_pk();
 
     // Schnorr half: Eve signs with her OWN Taproot key, but the indexer will
     // verify against alice_xonly — mismatch.
@@ -354,7 +358,7 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
         let digest = sha256::Hash::hash(&preimage).to_byte_array();
         Message::from_digest_slice(&digest).expect("32-byte digest")
     };
-    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
+    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve_keypair).serialize();
 
     // BLS half: Eve CAN produce this — she signs alice_xonly with eve_bls_sk.
     let bls_binding_msg = {
@@ -367,37 +371,28 @@ async fn bls_attack_eve_registers_own_key_under_alice_identity_regtest() -> Resu
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
 
-    // Submit via BlsBulk: Eve targets alice_xonly as the signer.
-    let op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(alice_xonly.to_string()),
+    // Attempt the old bundled registration attack in the new aggregate envelope.
+    let op = Inst::RegisterBlsKey {
         bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
         schnorr_sig: eve_schnorr_sig.to_vec(),
         bls_sig: eve_bls_binding_sig.to_vec(),
     };
 
-    let msg = op.signing_message()?;
-    let sig = eve_bls_sk.sign(&msg, KONTOR_BLS_DST, &[]);
-    let agg = AggregateSignature::aggregate(&[&sig], true).unwrap();
-    let agg_sig = agg.to_signature();
+    let insts = Insts {
+        ops: vec![op],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; 48],
+        }),
+    };
 
-    let _ = reg_tester
-        .instruction(
-            &mut publisher,
-            Inst::BlsBulk {
-                ops: vec![op],
-                signature: agg_sig.to_bytes().to_vec(),
-            },
-        )
-        .await;
-
-    let alice_xonly_str = alice_xonly.to_string();
-    assert_eq!(
-        registry::get_signer_id(runtime, &alice_xonly_str).await?,
-        None,
-        "Eve must not be able to register under Alice's identity"
+    let err = validate_aggregate_shape(&insts)
+        .expect_err("aggregate RegisterBlsKey must be rejected before execution");
+    assert!(
+        err.to_string()
+            .contains("RegisterBlsKey is not allowed in aggregate"),
+        "aggregate registration path should be closed entirely"
     );
-
-    Ok(())
 }
 
 /// Valid Schnorr, forged BLS binding: Eve controls her Taproot key so she can

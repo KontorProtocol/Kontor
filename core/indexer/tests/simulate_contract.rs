@@ -18,6 +18,7 @@ async fn test_crypto_contract_regtest() -> Result<()> {
             Inst::Call {
                 gas_limit: 10_000,
                 contract: crypto.clone().into(),
+                nonce: None,
                 expr: "set-hash(\"foo\")".to_string(),
             },
         )

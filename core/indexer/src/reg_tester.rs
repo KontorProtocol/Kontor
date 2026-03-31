@@ -33,7 +33,7 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, OpWithResult, ResultRow,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, Insts, OpWithResult, ResultRow,
     RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
@@ -307,11 +307,19 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<(ComposeOutputs, String, String)> {
+        self.compose_insts(ident, Insts::single(inst)).await
+    }
+
+    pub async fn compose_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<(ComposeOutputs, String, String)> {
         let instructions = InstructionQuery::builder()
             .address(ident.address.to_string())
             .x_only_public_key(ident.x_only_public_key().to_string())
             .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .insts(indexer_types::Insts::single(inst))
+            .insts(insts)
             .build();
         let query = ComposeQuery::builder()
             .instructions(vec![instructions])
@@ -358,8 +366,15 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<SendInstructionResult> {
-        let (compose_res, commit_tx_hex, reveal_tx_hex) =
-            self.compose_instruction(ident, inst).await?;
+        self.send_insts(ident, Insts::single(inst)).await
+    }
+
+    pub async fn send_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<SendInstructionResult> {
+        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
         let reveal_txid = compose_res.reveal_transaction.compute_txid();
         let txids = self
             .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
@@ -391,9 +406,19 @@ impl RegTesterInner {
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
-        let sent = self.send_instruction(ident, inst).await?;
+        self.instruction_insts(ident, Insts::single(inst)).await
+    }
+
+    pub async fn instruction_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<InstructionResult> {
+        let sent = self.send_insts(ident, insts).await?;
         let id = OpResultId::builder()
             .txid(sent.reveal_txid.to_string())
+            .input_index(0)
+            .op_index(0)
             .build();
 
         self.mine(1).await?;
@@ -794,6 +819,14 @@ impl RegTester {
             .await
     }
 
+    pub async fn compose_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<(ComposeOutputs, String, String)> {
+        self.inner.lock().await.compose_insts(ident, insts).await
+    }
+
     pub async fn send_instruction(
         &mut self,
         ident: &mut Identity,
@@ -802,12 +835,32 @@ impl RegTester {
         self.inner.lock().await.send_instruction(ident, inst).await
     }
 
+    pub async fn send_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<SendInstructionResult> {
+        self.inner.lock().await.send_insts(ident, insts).await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<InstructionResult> {
         self.inner.lock().await.instruction(ident, inst).await
+    }
+
+    pub async fn instruction_insts(
+        &mut self,
+        ident: &mut Identity,
+        insts: Insts,
+    ) -> Result<InstructionResult> {
+        self.inner
+            .lock()
+            .await
+            .instruction_insts(ident, insts)
+            .await
     }
 
     pub async fn unregistered_identity(&mut self) -> Result<Identity> {

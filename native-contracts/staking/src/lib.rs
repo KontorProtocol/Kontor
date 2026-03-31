@@ -45,9 +45,9 @@ fn status_to_enum(status: u64) -> ValidatorStatus {
     }
 }
 
-fn make_validator_info(pubkey: String, entry: &ValidatorEntryModel) -> ValidatorInfo {
+fn make_validator_info(x_only_pubkey: String, entry: &ValidatorEntryModel) -> ValidatorInfo {
     ValidatorInfo {
-        x_only_pubkey: pubkey,
+        x_only_pubkey,
         stake: entry.stake(),
         status: status_to_enum(entry.status()),
         activation_height: entry.activation_height(),
@@ -76,9 +76,9 @@ impl Guest for Staking {
         }
 
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let x_only_pubkey = ctx.signer().to_string();
 
-        if let Some(existing) = model.validators().get(&signer_key)
+        if let Some(existing) = model.validators().get(&x_only_pubkey)
             && existing.status() != STATUS_INACTIVE
         {
             return Err(Error::Message("already registered".to_string()));
@@ -96,7 +96,7 @@ impl Guest for Staking {
         let keys: Vec<String> = model.validators().keys().collect();
         for key in keys {
             if let Some(entry) = model.validators().get(&key)
-                && key != signer_key
+                && key != x_only_pubkey
                 && entry.ed25519_pubkey() == ed25519_pubkey
                 && entry.status() != STATUS_INACTIVE
             {
@@ -109,7 +109,7 @@ impl Guest for Staking {
         // Effects before interactions (CEI pattern)
         let activation_height = ctx.block_height() + ACTIVATION_DELAY;
         model.validators().set(
-            signer_key.clone(),
+            x_only_pubkey.clone(),
             ValidatorEntry {
                 stake: stake_amount,
                 status: STATUS_PENDING_JOIN,
@@ -126,7 +126,7 @@ impl Guest for Staking {
         )?;
 
         Ok(ValidatorInfo {
-            x_only_pubkey: signer_key,
+            x_only_pubkey,
             stake: stake_amount,
             status: ValidatorStatus::PendingJoin,
             activation_height,
@@ -137,11 +137,11 @@ impl Guest for Staking {
 
     fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<ValidatorInfo, Error> {
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let x_only_pubkey = ctx.signer().to_string();
 
         let entry = model
             .validators()
-            .get(&signer_key)
+            .get(&x_only_pubkey)
             .ok_or(Error::Message("not registered".to_string()))?;
 
         if amount <= 0.into() {
@@ -170,16 +170,16 @@ impl Guest for Staking {
 
         token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;
 
-        Ok(make_validator_info(signer_key, &entry))
+        Ok(make_validator_info(x_only_pubkey, &entry))
     }
 
     fn begin_unstake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
         let model = ctx.model();
-        let signer_key = ctx.signer().to_string();
+        let x_only_pubkey = ctx.signer().to_string();
 
         let entry = model
             .validators()
-            .get(&signer_key)
+            .get(&x_only_pubkey)
             .ok_or(Error::Message("not registered".to_string()))?;
 
         match entry.status() {
@@ -193,12 +193,12 @@ impl Guest for Staking {
                 let stake = entry.stake();
                 entry.set_stake(0.into());
                 entry.set_status(STATUS_INACTIVE);
-                token::transfer(ctx.contract_signer(), &signer_key, stake)?;
+                token::transfer(ctx.contract_signer(), &x_only_pubkey, stake)?;
             }
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
         }
 
-        Ok(make_validator_info(signer_key, &entry))
+        Ok(make_validator_info(x_only_pubkey, &entry))
     }
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
