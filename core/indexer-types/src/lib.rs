@@ -327,7 +327,7 @@ pub enum Op {
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
         #[ts(type = "number | null")]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         nonce: Option<u64>,
         expr: String,
     },
@@ -520,7 +520,7 @@ pub enum Inst {
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
         #[ts(type = "number | null")]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         nonce: Option<u64>,
         expr: String,
     },
