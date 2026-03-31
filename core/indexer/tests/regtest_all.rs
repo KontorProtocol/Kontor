@@ -30,6 +30,12 @@ async fn regtest_all() -> Result<()> {
     })
     .await;
 
+    run_test("counter_ordered", async {
+        let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());
+        counter_contract::test_counter_ordered(&mut runtime).await
+    })
+    .await;
+
     run_test("counter_multiple_signers", async {
         let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());
         counter_contract::test_counter_multiple_signers(&mut runtime).await

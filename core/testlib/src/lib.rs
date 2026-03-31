@@ -14,7 +14,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, TransactionRow};
+use indexer_types::{Inst, Insts, TransactionRow};
 pub use serial_test;
 use std::{collections::HashMap, path::PathBuf};
 use tempfile::TempDir;
@@ -53,7 +53,7 @@ pub struct Handle<T> {
 
 /// Results from a batch execution.
 pub struct BatchResults {
-    raw: Vec<String>,
+    pub raw: Vec<String>,
 }
 
 impl BatchResults {
@@ -170,6 +170,20 @@ pub trait RuntimeImpl: Send {
     ) -> Result<Vec<String>> {
         let mut results = Vec::with_capacity(calls.len());
         for (signer, contract, expr) in calls {
+            results.push(self.execute(Some(signer), contract, expr).await?);
+        }
+        Ok(results)
+    }
+
+    /// Execute multiple calls as ordered instructions in a single transaction.
+    /// Default implementation falls back to sequential executes.
+    async fn execute_many_ordered(
+        &mut self,
+        signer: &Signer,
+        calls: &[(&ContractAddress, &str)],
+    ) -> Result<Vec<String>> {
+        let mut results = Vec::with_capacity(calls.len());
+        for (contract, expr) in calls {
             results.push(self.execute(Some(signer), contract, expr).await?);
         }
         Ok(results)
@@ -539,6 +553,53 @@ impl RuntimeImpl for RuntimeRegtest {
         Ok(results)
     }
 
+    async fn execute_many_ordered(
+        &mut self,
+        signer: &Signer,
+        calls: &[(&ContractAddress, &str)],
+    ) -> Result<Vec<String>> {
+        if calls.is_empty() {
+            return Ok(vec![]);
+        }
+        let identity = self
+            .identities
+            .get_mut(signer)
+            .ok_or_else(|| anyhow!("Identity not found"))?;
+
+        let insts: Vec<Inst> = calls
+            .iter()
+            .map(|(contract, expr)| Inst::Call {
+                gas_limit: 10_000,
+                contract: (*contract).clone().into(),
+                nonce: None,
+                expr: expr.to_string(),
+            })
+            .collect();
+
+        let sent = self
+            .reg_tester
+            .send_insts(identity, Insts::direct(insts))
+            .await?;
+        let txid = sent.reveal_txid.to_string();
+
+        self.reg_tester.wait_for_txids(&[txid.clone()]).await?;
+
+        let client = self.reg_tester.kontor_client().await;
+        let mut results = Vec::with_capacity(calls.len());
+        for op_index in 0..calls.len() {
+            let id = OpResultId::builder()
+                .txid(txid.clone())
+                .op_index(op_index as i64)
+                .build();
+            let result = client
+                .result(&id)
+                .await?
+                .ok_or(anyhow!("Could not find op result at op_index {}", op_index))?;
+            results.push(result.value.ok_or(anyhow!("Call failed at op_index {}", op_index))?);
+        }
+        Ok(results)
+    }
+
     async fn checkpoint(&mut self) -> Result<Option<String>> {
         self.reg_tester.checkpoint().await
     }
@@ -661,6 +722,8 @@ impl<'a> Batch<'a> {
         Handle { index, parse }
     }
 
+    /// Execute calls as separate transactions (unordered). Calls may land in
+    /// any order within the consensus batch. Different signers are allowed.
     pub async fn execute(self) -> Result<BatchResults> {
         let calls: Vec<(&Signer, &ContractAddress, &str)> = self
             .calls
@@ -668,6 +731,30 @@ impl<'a> Batch<'a> {
             .map(|(s, c)| (s, c.contract(), c.expr()))
             .collect();
         let raw = self.runtime.runtime.execute_many(&calls).await?;
+        Ok(BatchResults { raw })
+    }
+
+    /// Execute all calls as ordered instructions within a single transaction.
+    /// Guarantees execution order matches push order. All calls must use the
+    /// same signer (multi-signer ordered batches will use BLS bulk later).
+    pub async fn execute_ordered(self) -> Result<BatchResults> {
+        if self.calls.is_empty() {
+            return Ok(BatchResults { raw: vec![] });
+        }
+        let first_signer = &self.calls[0].0;
+        if !self.calls.iter().all(|(s, _)| s == first_signer) {
+            anyhow::bail!("ordered batch requires all calls use the same signer");
+        }
+        let exprs: Vec<(&ContractAddress, &str)> = self
+            .calls
+            .iter()
+            .map(|(_, c)| (c.contract(), c.expr()))
+            .collect();
+        let raw = self
+            .runtime
+            .runtime
+            .execute_many_ordered(first_signer, &exprs)
+            .await?;
         Ok(BatchResults { raw })
     }
 }
