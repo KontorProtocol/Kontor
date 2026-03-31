@@ -24,21 +24,9 @@ async fn regtest_all() -> Result<()> {
     let reg_tester = cluster.reg_tester(0).await?;
     reg_tester.pre_create_identities(100).await?;
 
-    run_test("counter_increment", async {
+    run_test("counter_batching", async {
         let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());
-        counter_contract::test_counter_increment(&mut runtime).await
-    })
-    .await;
-
-    run_test("counter_ordered", async {
-        let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());
-        counter_contract::test_counter_ordered(&mut runtime).await
-    })
-    .await;
-
-    run_test("counter_multiple_signers", async {
-        let mut runtime = new_runtime(reg_tester.clone(), contract_reader.clone());
-        counter_contract::test_counter_multiple_signers(&mut runtime).await
+        counter_contract::test_counter_batching(&mut runtime).await
     })
     .await;
 

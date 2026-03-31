@@ -66,8 +66,14 @@ pub async fn block_handler(runtime: &mut Runtime, block: &Block) -> Result<()> {
             info!(txid = %t.txid, "Transaction already batched — confirmed on chain, skipping execution");
             continue;
         }
-        process_transaction(runtime, t, block.height as i64, Some(block.height as i64), None)
-            .await?;
+        process_transaction(
+            runtime,
+            t,
+            block.height as i64,
+            Some(block.height as i64),
+            None,
+        )
+        .await?;
     }
 
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
@@ -182,7 +188,16 @@ pub async fn process_transaction(
 
     for input in &t.inputs {
         let op_return_data = t.op_return_data.get(&(input.input_index as u64)).cloned();
-        process_input(runtime, input, height, Some(tx_id), t.index, t.txid, op_return_data).await;
+        process_input(
+            runtime,
+            input,
+            height,
+            Some(tx_id),
+            t.index,
+            t.txid,
+            op_return_data,
+        )
+        .await;
     }
 
     Ok(())

@@ -637,7 +637,10 @@ impl RegTesterInner {
                 keypair,
                 next_funding_utxo: (
                     OutPoint::null(),
-                    TxOut { value: Amount::ZERO, script_pubkey: address.script_pubkey() },
+                    TxOut {
+                        value: Amount::ZERO,
+                        script_pubkey: address.script_pubkey(),
+                    },
                 ),
                 bls_secret_key: bls_sk.to_bytes(),
                 bls_pubkey: bls_sk.sk_to_pk().to_bytes(),

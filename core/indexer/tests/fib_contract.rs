@@ -23,7 +23,10 @@ async fn test_fib_contract() -> Result<()> {
     // Batch 1: fib(8) + set proxy → fib (independent mutations)
     let mut batch = runtime.batch();
     let h_fib = batch.push(&signer, fib::fib_call(&fib, arith.clone(), 8));
-    batch.push(&signer, proxy::set_contract_address_call(&proxy, fib.clone()));
+    batch.push(
+        &signer,
+        proxy::set_contract_address_call(&proxy, fib.clone()),
+    );
     let results = batch.execute().await?;
     assert_eq!(results.get(&h_fib), 21);
 
@@ -51,11 +54,20 @@ async fn test_fib_contract() -> Result<()> {
 
     // Batch 4: fib_of_sub(18,10) + fib_of_sub(10,18) (independent)
     let mut batch = runtime.batch();
-    let h1 = batch.push(&signer, fib::fib_of_sub_call(&fib, arith.clone(), "18", "10"));
-    let h2 = batch.push(&signer, fib::fib_of_sub_call(&fib, arith.clone(), "10", "18"));
+    let h1 = batch.push(
+        &signer,
+        fib::fib_of_sub_call(&fib, arith.clone(), "18", "10"),
+    );
+    let h2 = batch.push(
+        &signer,
+        fib::fib_of_sub_call(&fib, arith.clone(), "10", "18"),
+    );
     let results = batch.execute().await?;
     assert_eq!(results.get(&h1), Ok(21));
-    assert_eq!(results.get(&h2), Err(Error::Message("less than 0".to_string())));
+    assert_eq!(
+        results.get(&h2),
+        Err(Error::Message("less than 0".to_string()))
+    );
 
     // Reentrancy prevented (expected failure, separate from batch)
     let result = arith::fib(runtime, &arith, &signer, fib.clone(), 9).await;

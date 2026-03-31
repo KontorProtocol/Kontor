@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bon::Builder;
 use glob::Paths;
 use indexer::{
+    bls::KONTOR_BLS_DST,
     database::{
         queries::{
             contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
@@ -176,14 +177,14 @@ pub trait RuntimeImpl: Send {
     }
 
     /// Execute multiple calls as ordered instructions in a single transaction.
-    /// Default implementation falls back to sequential executes.
+    /// If all signers are the same, uses direct Insts. If mixed signers, uses
+    /// BLS aggregate. Default implementation falls back to sequential executes.
     async fn execute_many_ordered(
         &mut self,
-        signer: &Signer,
-        calls: &[(&ContractAddress, &str)],
+        calls: &[(&Signer, &ContractAddress, &str)],
     ) -> Result<Vec<String>> {
         let mut results = Vec::with_capacity(calls.len());
-        for (contract, expr) in calls {
+        for (signer, contract, expr) in calls {
             results.push(self.execute(Some(signer), contract, expr).await?);
         }
         Ok(results)
@@ -360,6 +361,79 @@ impl RuntimeRegtest {
             reg_tester,
             identities,
         }
+    }
+
+    /// Build BLS aggregate Insts for multi-signer ordered execution.
+    /// Looks up signer_ids and nonces via API views, signs each op, aggregates.
+    async fn build_aggregate_insts(
+        &self,
+        calls: &[(&Signer, &ContractAddress, &str)],
+    ) -> Result<Insts> {
+        use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
+
+        let registry_addr = ContractAddress {
+            name: "registry".to_string(),
+            height: 0,
+            tx_index: 0,
+        };
+
+        let mut ops = Vec::with_capacity(calls.len());
+        let mut signer_ids = Vec::with_capacity(calls.len());
+        // Track nonce per signer — starts at 0 for each signer in this batch,
+        // incremented for subsequent ops from the same signer.
+        let mut nonce_counters: HashMap<u64, u64> = HashMap::new();
+
+        for (signer, contract, expr) in calls {
+            let x_only = match signer {
+                Signer::XOnlyPubKey(x) => x.clone(),
+                _ => anyhow::bail!("BLS aggregate requires XOnlyPubKey signer"),
+            };
+
+            // Look up signer_id via view API
+            let result = self
+                .reg_tester
+                .view(&registry_addr, &format!("get-signer-id(\"{}\")", x_only))
+                .await?;
+            let signer_id: Option<u64> = from_wave_expr(&result);
+            let signer_id = signer_id.ok_or_else(|| anyhow!("No signer_id for {}", x_only))?;
+
+            let nonce = nonce_counters.entry(signer_id).or_insert(0);
+            let current_nonce = *nonce;
+            *nonce += 1;
+
+            ops.push(Inst::Call {
+                gas_limit: 10_000,
+                contract: (*contract).clone().into(),
+                nonce: Some(current_nonce),
+                expr: expr.to_string(),
+            });
+            signer_ids.push(signer_id);
+        }
+
+        // Sign each op with its signer's BLS key and aggregate
+        let mut sigs = Vec::with_capacity(calls.len());
+        for (i, (signer, _, _)) in calls.iter().enumerate() {
+            let identity = self
+                .identities
+                .get(signer)
+                .ok_or_else(|| anyhow!("Identity not found for BLS signing"))?;
+            let sk = BlsSecretKey::from_bytes(&identity.bls_secret_key)
+                .map_err(|e| anyhow!("Invalid BLS secret key: {:?}", e))?;
+            let msg = ops[i].aggregate_signing_message(signer_ids[i])?;
+            sigs.push(sk.sign(&msg, KONTOR_BLS_DST, &[]));
+        }
+
+        let sig_refs: Vec<_> = sigs.iter().collect();
+        let aggregate = AggregateSignature::aggregate(&sig_refs, true)
+            .map_err(|e| anyhow!("BLS aggregate failed: {:?}", e))?;
+
+        Ok(Insts {
+            ops,
+            aggregate: Some(indexer_types::AggregateInfo {
+                signer_ids,
+                signature: aggregate.to_signature().to_bytes().to_vec(),
+            }),
+        })
     }
 }
 
@@ -555,34 +629,43 @@ impl RuntimeImpl for RuntimeRegtest {
 
     async fn execute_many_ordered(
         &mut self,
-        signer: &Signer,
-        calls: &[(&ContractAddress, &str)],
+        calls: &[(&Signer, &ContractAddress, &str)],
     ) -> Result<Vec<String>> {
         if calls.is_empty() {
             return Ok(vec![]);
         }
+
+        let single_signer = calls.iter().all(|(s, _, _)| *s == calls[0].0);
+
+        let insts = if single_signer {
+            // Single signer: direct Insts, no nonces needed
+            let insts: Vec<Inst> = calls
+                .iter()
+                .map(|(_, contract, expr)| Inst::Call {
+                    gas_limit: 10_000,
+                    contract: (*contract).clone().into(),
+                    nonce: None,
+                    expr: expr.to_string(),
+                })
+                .collect();
+            Insts::direct(insts)
+        } else {
+            // Multi-signer: BLS aggregate
+            self.build_aggregate_insts(calls).await?
+        };
+
+        // Pick any signer's identity to fund the tx
         let identity = self
             .identities
-            .get_mut(signer)
+            .get_mut(calls[0].0)
             .ok_or_else(|| anyhow!("Identity not found"))?;
 
-        let insts: Vec<Inst> = calls
-            .iter()
-            .map(|(contract, expr)| Inst::Call {
-                gas_limit: 10_000,
-                contract: (*contract).clone().into(),
-                nonce: None,
-                expr: expr.to_string(),
-            })
-            .collect();
-
-        let sent = self
-            .reg_tester
-            .send_insts(identity, Insts::direct(insts))
-            .await?;
+        let sent = self.reg_tester.send_insts(identity, insts).await?;
         let txid = sent.reveal_txid.to_string();
 
-        self.reg_tester.wait_for_txids(&[txid.clone()]).await?;
+        self.reg_tester
+            .wait_for_txids(std::slice::from_ref(&txid))
+            .await?;
 
         let client = self.reg_tester.kontor_client().await;
         let mut results = Vec::with_capacity(calls.len());
@@ -595,7 +678,11 @@ impl RuntimeImpl for RuntimeRegtest {
                 .result(&id)
                 .await?
                 .ok_or(anyhow!("Could not find op result at op_index {}", op_index))?;
-            results.push(result.value.ok_or(anyhow!("Call failed at op_index {}", op_index))?);
+            results.push(
+                result
+                    .value
+                    .ok_or(anyhow!("Call failed at op_index {}", op_index))?,
+            );
         }
         Ok(results)
     }
@@ -735,26 +822,18 @@ impl<'a> Batch<'a> {
     }
 
     /// Execute all calls as ordered instructions within a single transaction.
-    /// Guarantees execution order matches push order. All calls must use the
-    /// same signer (multi-signer ordered batches will use BLS bulk later).
+    /// Guarantees execution order matches push order. Single signer uses direct
+    /// Insts, multiple signers uses BLS aggregate.
     pub async fn execute_ordered(self) -> Result<BatchResults> {
         if self.calls.is_empty() {
             return Ok(BatchResults { raw: vec![] });
         }
-        let first_signer = &self.calls[0].0;
-        if !self.calls.iter().all(|(s, _)| s == first_signer) {
-            anyhow::bail!("ordered batch requires all calls use the same signer");
-        }
-        let exprs: Vec<(&ContractAddress, &str)> = self
+        let calls: Vec<(&Signer, &ContractAddress, &str)> = self
             .calls
             .iter()
-            .map(|(_, c)| (c.contract(), c.expr()))
+            .map(|(s, c)| (s, c.contract(), c.expr()))
             .collect();
-        let raw = self
-            .runtime
-            .runtime
-            .execute_many_ordered(first_signer, &exprs)
-            .await?;
+        let raw = self.runtime.runtime.execute_many_ordered(&calls).await?;
         Ok(BatchResults { raw })
     }
 }
