@@ -12,11 +12,11 @@ pub struct Lib {}
 
 impl Guest for Lib {
     fn serialize_inst(json_str: String) -> Vec<u8> {
-        inst_json_to_bytes(json_str)
+        insts_json_to_bytes(json_str)
     }
 
     fn deserialize_inst(bytes: Vec<u8>) -> String {
-        inst_bytes_to_json(bytes)
+        insts_bytes_to_json(bytes)
     }
 
     fn serialize_op_return_data(json_str: String) -> Vec<u8> {

@@ -108,15 +108,14 @@ impl ComposeInputs {
                         MAX_UTXOS_PER_PARTICIPANT
                     ));
                 }
-                let instruction = serialize(&instruction_query.instruction)?;
+                let instruction = serialize(&instruction_query.insts)?;
                 if instruction.is_empty() || instruction.len() > MAX_SCRIPT_BYTES {
                     return Err(anyhow!("script data size invalid"));
                 }
 
-                let chained_script_data_bytes = match instruction_query.chained_instruction.as_ref()
-                {
-                    Some(inst) => {
-                        let bytes = serialize(inst)?;
+                let chained_script_data_bytes = match instruction_query.chained_insts.as_ref() {
+                    Some(insts) => {
+                        let bytes = serialize(insts)?;
                         if bytes.is_empty() || bytes.len() > MAX_SCRIPT_BYTES {
                             return Err(anyhow!("chained script data size invalid"));
                         }

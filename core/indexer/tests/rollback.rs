@@ -18,7 +18,7 @@ use indexer::{
     reg_tester::derive_taproot_keypair_from_seed,
     test_utils::{gen_random_blocks, new_mock_block_hash, new_random_blockchain, new_test_db},
 };
-use indexer_types::{BlsBulkOp, Event, Op, OpMetadata, Signer, Transaction};
+use indexer_types::{AggregateInfo, Event, Inst, Insts, Signer, Transaction, TransactionInput};
 
 /// Poll until a processed block at `height` has the expected `hash`.
 async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
@@ -339,15 +339,15 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::RegisterBlsKey {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
-                },
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
+            inputs: vec![TransactionInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                witness_signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+                insts: Insts::single(Inst::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                }),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -439,15 +439,15 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::RegisterBlsKey {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
-                },
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
+            inputs: vec![TransactionInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                witness_signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+                insts: Insts::single(Inst::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                }),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -467,18 +467,17 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
     assert!(state_at_h1 > 0, "registration must write state at height 1");
 
     // -- Block 2: BlsBulk Call that advances the nonce --
-    let call_op = BlsBulkOp::Call {
-        signer_id: 0,
-        nonce: 0,
+    let call_op = Inst::Call {
         gas_limit: 100_000,
         contract: indexer_types::ContractAddress {
             name: "registry".to_string(),
             height: 0,
             tx_index: 0,
         },
+        nonce: Some(0),
         expr: "get-signer-count()".to_string(),
     };
-    let msg = call_op.signing_message()?;
+    let msg = call_op.aggregate_signing_message(0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
@@ -490,14 +489,17 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xBB; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::BlsBulk {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::Nobody,
+            inputs: vec![TransactionInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                witness_signer: Signer::Nobody,
+                insts: Insts {
+                    ops: vec![call_op],
+                    aggregate: Some(AggregateInfo {
+                        signer_ids: vec![0],
+                        signature: sig.to_bytes().to_vec(),
+                    }),
                 },
-                ops: vec![call_op],
-                signature: sig.to_bytes().to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -561,18 +563,12 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
     Ok(())
 }
 
-/// Rollback of a BLS key registration performed inside a `BlsBulk` bundle.
+/// Rollback of an attempted bundled BLS key registration.
 ///
 /// The existing `test_reactor_rollback_reverts_registration_state` covers
-/// the direct `Op::RegisterBlsKey` path. This test exercises the distinct
-/// `Op::BlsBulk → BlsBulkOp::RegisterBlsKey` path in block_handler, which
-/// first runs `verify_bls_bulk` (aggregate sig check) and then calls
-/// `register_bls_key` per-op. On rollback, the CASCADE delete must also
-/// remove the contract_state written through this path.
-///
-/// Additionally, after the rollback we re-insert the same block to prove
-/// that the registry state was fully reverted (the key can be registered
-/// again from scratch).
+/// the direct `Inst::RegisterBlsKey` path. In the Insts/AggregateInfo model,
+/// aggregate registration is rejected before execution, so this path should
+/// not write any state that rollback would need to remove.
 #[tokio::test]
 async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
     let cancel_token = CancellationToken::new();
@@ -601,17 +597,15 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
     let seed = [55u8; 64];
     let keypair =
         derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
-    let (x_only_public_key, _) = keypair.x_only_public_key();
     let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
     let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
 
-    let register_op = BlsBulkOp::RegisterBlsKey {
-        signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
+    let register_op = Inst::RegisterBlsKey {
         bls_pubkey: proof.bls_pubkey.to_vec(),
         schnorr_sig: proof.schnorr_sig.to_vec(),
         bls_sig: proof.bls_sig.to_vec(),
     };
-    let msg = register_op.signing_message()?;
+    let msg = register_op.aggregate_signing_message(0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
@@ -623,14 +617,17 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         transactions: vec![Transaction {
             txid: Txid::from_slice(&[0xCC; 32]).unwrap(),
             index: 0,
-            ops: vec![Op::BlsBulk {
-                metadata: OpMetadata {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    signer: Signer::Nobody,
+            inputs: vec![TransactionInput {
+                previous_output: OutPoint::null(),
+                input_index: 0,
+                witness_signer: Signer::Nobody,
+                insts: Insts {
+                    ops: vec![register_op.clone()],
+                    aggregate: Some(AggregateInfo {
+                        signer_ids: vec![0],
+                        signature: sig.to_bytes().to_vec(),
+                    }),
                 },
-                ops: vec![register_op.clone()],
-                signature: sig.to_bytes().to_vec(),
             }],
             op_return_data: IndexMap::new(),
         }],
@@ -647,9 +644,9 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         .await?
         .unwrap()
         .get(0)?;
-    assert!(
-        state_count > 0,
-        "BlsBulk registration must write contract_state at height 1"
+    assert_eq!(
+        state_count, 0,
+        "aggregate RegisterBlsKey should be rejected before writing state"
     );
 
     // -- Rollback to height 0: block 1 is deleted --
@@ -687,9 +684,9 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         .await?
         .unwrap()
         .get(0)?;
-    assert!(
-        state_reinserted > 0,
-        "re-inserted BlsBulk registration must recreate contract_state (proves full revert)"
+    assert_eq!(
+        state_reinserted, 0,
+        "re-inserted aggregate RegisterBlsKey must still be rejected"
     );
 
     cancel_token.cancel();

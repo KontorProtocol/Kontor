@@ -9,11 +9,16 @@ import {
 
 test("publish", () => {
   let inst = {
-    Publish: {
-      gas_limit: 1000000,
-      name: "foo",
-      bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
-    },
+    ops: [
+      {
+        Publish: {
+          gas_limit: 1000000,
+          name: "foo",
+          bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
+        },
+      },
+    ],
+    aggregate: null,
   };
   const str = JSON.stringify(inst);
   const bs = serializeInst(str);
@@ -23,11 +28,17 @@ test("publish", () => {
 
 test("call", () => {
   let inst = {
-    Call: {
-      gas_limit: 1000000,
-      contract: "foo_1_2",
-      expr: "foo()",
-    },
+    ops: [
+      {
+        Call: {
+          gas_limit: 1000000,
+          contract: "foo_1_2",
+          nonce: 0,
+          expr: "foo()",
+        },
+      },
+    ],
+    aggregate: null,
   };
   const str = JSON.stringify(inst);
   const bs = serializeInst(str);
@@ -35,8 +46,61 @@ test("call", () => {
   expect(inst).toStrictEqual(JSON.parse(result));
 });
 
+test("call with null nonce", () => {
+  let inst = {
+    ops: [
+      {
+        Call: {
+          gas_limit: 1000000,
+          contract: "foo_1_2",
+          nonce: null,
+          expr: "foo()",
+        },
+      },
+    ],
+    aggregate: null,
+  };
+  const str = JSON.stringify(inst);
+  const bs = serializeInst(str);
+  let result = deserializeInst(bs);
+  expect(inst).toStrictEqual(JSON.parse(result));
+});
+
+test("call with omitted nonce", () => {
+  let inst = {
+    ops: [
+      {
+        Call: {
+          gas_limit: 1000000,
+          contract: "foo_1_2",
+          expr: "foo()",
+        },
+      },
+    ],
+  };
+  const str = JSON.stringify(inst);
+  const bs = serializeInst(str);
+  let result = deserializeInst(bs);
+  expect(JSON.parse(result)).toStrictEqual({
+    ops: [
+      {
+        Call: {
+          gas_limit: 1000000,
+          contract: "foo_1_2",
+          nonce: null,
+          expr: "foo()",
+        },
+      },
+    ],
+    aggregate: null,
+  });
+});
+
 test("issuance", () => {
-  let inst = "Issuance";
+  let inst = {
+    ops: ["Issuance"],
+    aggregate: null,
+  };
   const str = JSON.stringify(inst);
   const bs = serializeInst(str);
   let result = deserializeInst(bs);
