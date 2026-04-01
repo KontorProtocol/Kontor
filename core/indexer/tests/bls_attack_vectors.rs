@@ -22,7 +22,7 @@ use indexer::bls::{
 use indexer_types::{AggregateInfo, Inst, Insts, Signer};
 use testlib::{
     AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
-    RuntimeConfig, import, serial_test,
+    RuntimeConfig, TypedCall, import, serial_test,
 };
 
 import!(

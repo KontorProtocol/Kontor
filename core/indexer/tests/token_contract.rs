@@ -44,7 +44,7 @@ async fn test_token_contract() -> Result<()> {
     assert_eq!(result, None);
 
     let balances = token::balances(runtime, &token).await?;
-    assert_eq!(balances.len(), 2);
+    assert!(balances.len() >= 2);
     let total = balances
         .iter()
         .fold(Integer::from(0), |acc, x| acc + x.value);

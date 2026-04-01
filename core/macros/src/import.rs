@@ -122,7 +122,7 @@ pub fn import(
     let mut func_streams = Vec::new();
     for export in exports.iter() {
         func_streams.push(
-            generate_functions(&resolve, test, export, contract_id)
+            generate_functions(&resolve, test, public, export, contract_id)
                 .expect("Function didn't generate"),
         )
     }
@@ -133,6 +133,12 @@ pub fn import(
             .push(generate_wave_functions(&resolve, export).expect("Wave function didn't generate"))
     }
 
+    let typed_call_import = if test && !public {
+        quote! { use super::TypedCall; }
+    } else {
+        quote! {}
+    };
+
     let supers = if test {
         quote! {
             use super::ContractAddress;
@@ -142,6 +148,7 @@ pub fn import(
             use super::Runtime;
             use super::Signer;
             use super::{ Decimal, Integer };
+            #typed_call_import
         }
     } else {
         quote! {
@@ -301,6 +308,7 @@ pub fn generate_wave_functions(resolve: &Resolve, export: &Function) -> Result<T
 pub fn generate_functions(
     resolve: &Resolve,
     test: bool,
+    public: bool,
     export: &Function,
     contract_id: Option<(&str, u64, u64)>,
 ) -> Result<TokenStream> {
@@ -396,24 +404,40 @@ pub fn generate_functions(
         quote! {}
     };
 
-    // Generate the _call constructor for batching (test mode, no fixed contract_id, proc/core context only)
-    let call_constructor = if test && contract_id.is_none() && (is_proc_context || is_core_context)
-    {
+    // Generate the _call constructor for batching (test mode, proc/core context only)
+    let call_constructor = if test && !public && (is_proc_context || is_core_context) {
         let call_fn_name = format_ident!("{}_call", fn_name);
         let ret_ty_inner = make_return_type(resolve, export)?;
 
-        // Params for the call constructor: contract_address + function-specific args (no runtime, no signer)
-        let mut call_params = vec![quote! { contract_address_: &ContractAddress }];
-        for param in export.params.iter().skip(1) {
-            let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
-            let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
-            call_params.push(quote! { #param_name: #param_ty });
-        }
+        let (call_params, contract_expr) = if let Some((name, height, tx_index)) = contract_id {
+            let mut params = Vec::new();
+            for param in export.params.iter().skip(1) {
+                let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+                let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
+                params.push(quote! { #param_name: #param_ty });
+            }
+            let expr = quote! {
+                ContractAddress {
+                    name: #name.to_string(),
+                    height: #height,
+                    tx_index: #tx_index,
+                }
+            };
+            (params, expr)
+        } else {
+            let mut params = vec![quote! { contract_address_: &ContractAddress }];
+            for param in export.params.iter().skip(1) {
+                let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+                let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
+                params.push(quote! { #param_name: #param_ty });
+            }
+            (params, quote! { contract_address_.clone() })
+        };
 
         quote! {
             pub fn #call_fn_name(#(#call_params),*) -> super::TypedCall<#ret_ty_inner> {
                 super::TypedCall {
-                    contract: contract_address_.clone(),
+                    contract: #contract_expr,
                     expr: wave::#fn_name_call_expr(#(#call_expr_param_names),*),
                     parse: wave::#fn_name_parse_return_expr,
                 }
