@@ -34,7 +34,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .expect("counter contract not found");
 
     // Create funded identity (identity + issuance, each mines a block)
-    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
             &mut ident,
@@ -139,7 +139,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         .await?
         .expect("counter contract not found");
 
-    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
             &mut ident,
@@ -251,7 +251,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .await?
         .expect("counter contract not found");
 
-    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
             &mut ident,
@@ -376,7 +376,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         .await?
         .expect("counter contract not found");
 
-    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
             &mut ident,
@@ -482,7 +482,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         .await?
         .expect("counter contract not found");
 
-    let (mut rt, mut ident) = cluster.funded_identity().await?;
+    let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
             &mut ident,

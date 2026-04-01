@@ -1310,12 +1310,10 @@ impl RegTesterCluster {
         })
     }
 
-    /// Create an identity with issuance via node 0.
-    /// Returns the RegTester and Identity for subsequent operations.
-    pub async fn funded_identity(&self) -> Result<(RegTester, Identity)> {
+    /// Pop a pre-created identity (with BLS registration and issuance) from node 0's pool.
+    pub async fn identity(&self) -> Result<(RegTester, Identity)> {
         let mut rt = self.reg_tester(0).await?;
-        let mut identity = rt.identity().await?;
-        rt.instruction(&mut identity, Inst::Issuance).await?;
+        let identity = rt.identity().await?;
         Ok((rt, identity))
     }
 
