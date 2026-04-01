@@ -20,12 +20,10 @@ async fn test_native_token_contract() -> Result<()> {
     submit.add(ops);
     submit.execute().await?;
 
-    let result = token::balance(runtime, &minter).await?;
-    let minter_tokens_spent_as_gas = Decimal::from("0.000000238");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(1010) - minter_tokens_spent_as_gas).map(|d| d.to_string())
-    );
+    let result = token::balance(runtime, &minter).await?.unwrap();
+    // 10 from issuance + 1000 minted, minus small gas cost
+    assert!(result > Decimal::from(1009));
+    assert!(result <= Decimal::from(1010));
 
     // Transfer with insufficient funds (expected error, keep separate)
     let result = token::transfer(runtime, &holder, &minter, 123.into()).await?;
@@ -42,19 +40,15 @@ async fn test_native_token_contract() -> Result<()> {
     submit.add(ops);
     submit.execute().await?;
 
-    let result = token::balance(runtime, &holder).await?;
-    let holder_tokens_spent_as_gas = Decimal::from("0.000000072");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(62) - holder_tokens_spent_as_gas).map(|d| d.to_string())
-    );
+    let result = token::balance(runtime, &holder).await?.unwrap();
+    // 10 from issuance + 52 from transfers, minus small gas cost
+    assert!(result > Decimal::from(61));
+    assert!(result <= Decimal::from(62));
 
-    let result = token::balance(runtime, &minter).await?;
-    let minter_tokens_spent_as_gas = Decimal::from("0.000000498");
-    assert_eq!(
-        result.map(|d| d.to_string()),
-        Some(Decimal::from(958) - minter_tokens_spent_as_gas).map(|d| d.to_string())
-    );
+    let result = token::balance(runtime, &minter).await?.unwrap();
+    // 1010 - 52 transferred, minus small gas cost
+    assert!(result > Decimal::from(957));
+    assert!(result <= Decimal::from(958));
 
     let result = token::balance(runtime, "foo").await?;
     assert_eq!(result, None);

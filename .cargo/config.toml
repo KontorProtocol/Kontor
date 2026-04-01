@@ -1,0 +1,2 @@
+[alias]
+regtest = "test -p indexer --features regtest-runner --test regtest_all --test regtester_cluster"

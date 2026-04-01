@@ -89,6 +89,10 @@ regtest-runner = []
 name = "regtest_all"
 required-features = ["regtest-runner"]
 
+[[test]]
+name = "regtester_cluster"
+required-features = ["regtest-runner"]
+
 [dev-dependencies]
 testlib = { path = "../testlib" }
 serial_test = "=3.4.0"

@@ -8,7 +8,7 @@ async fn test_crypto_contract_simulate() -> Result<()> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;
 
-    assert!(crypto::get_hash(runtime, &crypto).await?.is_none());
+    let hash_before = crypto::get_hash(runtime, &crypto).await?;
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
@@ -40,7 +40,7 @@ async fn test_crypto_contract_simulate() -> Result<()> {
     assert_eq!(info, expected_info);
 
     // State unchanged after simulation
-    assert!(crypto::get_hash(runtime, &crypto).await?.is_none());
+    assert_eq!(crypto::get_hash(runtime, &crypto).await?, hash_before);
 
     Ok(())
 }

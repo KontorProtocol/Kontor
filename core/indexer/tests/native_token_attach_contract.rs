@@ -199,6 +199,10 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let balance = token::balance(runtime, &utxo_id).await?;
     assert_eq!(balance, Some(Decimal::from(2)));
 
+    let buyer_balance_before = token::balance(runtime, &buyer_x_only.to_string())
+        .await?
+        .unwrap_or(Decimal::from(0));
+
     let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
     bitcoin_client
@@ -223,8 +227,10 @@ async fn test_native_token_attach_contract() -> Result<()> {
     assert_eq!(transfer.src, utxo_id);
     assert_eq!(transfer.dst, buyer_x_only.to_string());
 
-    let balance = token::balance(runtime, &buyer_x_only.to_string()).await?;
-    assert_eq!(balance, Some(Decimal::from(2)));
+    let buyer_balance_after = token::balance(runtime, &buyer_x_only.to_string())
+        .await?
+        .unwrap();
+    assert_eq!(buyer_balance_after - buyer_balance_before, Decimal::from(2));
 
     Ok(())
 }
