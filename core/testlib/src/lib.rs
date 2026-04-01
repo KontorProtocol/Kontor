@@ -484,17 +484,7 @@ impl RuntimeRegtest {
 #[async_trait]
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
-        let identity = if self.reg_tester.cluster_mode().await {
-            // Pipeline RegisterBlsKey + Issuance into one consensus round
-            self.reg_tester.identity_with_issuance().await?
-        } else {
-            // Standalone mode: sequential instructions with mining
-            let ident = self.reg_tester.identity().await?;
-            let signer = ident.signer();
-            self.identities.insert(signer.clone(), ident);
-            self.issuance(&signer).await?;
-            return Ok(signer);
-        };
+        let identity = self.reg_tester.identity().await?;
         let signer = identity.signer();
         self.identities.insert(signer.clone(), identity);
         Ok(signer)

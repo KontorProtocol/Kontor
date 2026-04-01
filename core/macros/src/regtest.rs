@@ -97,7 +97,7 @@ pub fn generate(config: Config) -> TokenStream {
             let contract_reader = ContractReader::new(&#contracts_dir_ident).await?;
 
             let reg_tester = cluster.reg_tester(0).await?;
-            reg_tester.pre_create_identities(100).await?;
+            reg_tester.pre_create_identities(150).await?;
 
             let filter = std::env::var("REGTEST_FILTER").unwrap_or_default();
 

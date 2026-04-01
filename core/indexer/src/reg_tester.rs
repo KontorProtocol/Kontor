@@ -559,24 +559,10 @@ impl RegTesterInner {
         Ok(())
     }
 
-    pub async fn identity(&mut self) -> Result<Identity> {
-        let mut identity = self.unregistered_identity().await?;
-        let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
-        self.instruction(
-            &mut identity,
-            Inst::RegisterBlsKey {
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
-            },
-        )
-        .await?;
-        Ok(identity)
-    }
-
     /// Create a new identity with BLS registration and issuance.
-    /// Pops from the pre-created pool if available, otherwise creates on-demand.
-    pub async fn identity_with_issuance(&mut self) -> Result<Identity> {
+    /// Pops from the pre-created pool if available, otherwise creates on-demand
+    /// with pipelined RegisterBlsKey + Issuance.
+    pub async fn identity(&mut self) -> Result<Identity> {
         if let Some(identity) = self.identity_pool.pop_front() {
             return Ok(identity);
         }
@@ -1076,10 +1062,6 @@ impl RegTester {
 
     pub async fn identity(&mut self) -> Result<Identity> {
         self.inner.lock().await.identity().await
-    }
-
-    pub async fn identity_with_issuance(&mut self) -> Result<Identity> {
-        self.inner.lock().await.identity_with_issuance().await
     }
 
     pub async fn pre_create_identities(&self, count: usize) -> Result<()> {
