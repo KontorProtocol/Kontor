@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Ident, parse::Parse, parse::ParseStream, punctuated::Punctuated, Token};
+use syn::{Ident, Token, parse::Parse, parse::ParseStream, punctuated::Punctuated};
 
 pub struct Config {
     modules: Vec<Ident>,
@@ -25,8 +25,11 @@ pub fn generate(config: Config) -> TokenStream {
     for module in &config.modules {
         let module_file = tests_dir.join(format!("{}.rs", module));
         if !module_file.exists() {
-            return syn::Error::new(module.span(), format!("Test file not found: {}", module_file.display()))
-                .to_compile_error();
+            return syn::Error::new(
+                module.span(),
+                format!("Test file not found: {}", module_file.display()),
+            )
+            .to_compile_error();
         }
 
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");

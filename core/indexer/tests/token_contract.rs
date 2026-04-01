@@ -1,28 +1,38 @@
 use testlib::*;
-use tracing::info;
 
 interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
-async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
-    info!("test_token_contract");
+#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+async fn test_token_contract() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
     let token = runtime.publish(&minter, "test-token").await?;
 
-    token::mint(runtime, &token, &minter, 900.into()).await??;
-    token::mint(runtime, &token, &minter, 100.into()).await??;
+    // Batch two mints (independent, same signer)
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token, 900.into()));
+    ops.push(token::mint_call(&token, 100.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(result, Some(1000.into()));
 
+    // Transfer with insufficient funds (expected error, keep separate)
     let result = token::transfer(runtime, &token, &holder, &minter, 123.into()).await?;
     assert_eq!(
         result,
         Err(Error::Message("insufficient funds".to_string()))
     );
 
-    token::transfer(runtime, &token, &minter, &holder, 40.into()).await??;
-    token::transfer(runtime, &token, &minter, &holder, 2.into()).await??;
+    // Batch two transfers (independent, same signer)
+    let mut ops = Ops::new(&minter);
+    ops.push(token::transfer_call(&token, &holder, 40.into()));
+    ops.push(token::transfer_call(&token, &holder, 2.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let result = token::balance(runtime, &token, &holder).await?;
     assert_eq!(result, Some(42.into()));
@@ -43,21 +53,22 @@ async fn run_test_token_contract(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<()> {
-    info!("test_token_contract_large_numbers");
+#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+async fn test_token_contract_large_numbers() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
     let token = runtime.publish(&minter, "test-token").await?;
 
-    token::mint(
-        runtime,
+    // Batch two mints (independent, same signer)
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(
         &token,
-        &minter,
         "100_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000".into(),
-    )
-    .await??;
-
-    token::mint(runtime, &token, &minter, 100.into()).await??;
+    ));
+    ops.push(token::mint_call(&token, 100.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let result = token::balance(runtime, &token, &minter).await?;
     assert_eq!(
@@ -68,6 +79,7 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
         )
     );
 
+    // Overflow mint (expected error, keep separate)
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     assert!(
         token::mint(runtime, &token, &minter, max_int.into())
@@ -98,23 +110,5 @@ async fn run_test_token_contract_large_numbers(runtime: &mut Runtime) -> Result<
         )
     );
 
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_token_contract() -> Result<()> {
-    run_test_token_contract(runtime).await
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_token_contract_large_numbers() -> Result<()> {
-    run_test_token_contract_large_numbers(runtime).await
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_token_contract_regtest() -> Result<()> {
-    logging::setup();
-    run_test_token_contract(runtime).await?;
-    run_test_token_contract_large_numbers(runtime).await?;
     Ok(())
 }
