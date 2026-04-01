@@ -66,6 +66,32 @@ impl SubmitResults {
     }
 }
 
+/// Specifies a contract to publish: either just a name (published as itself)
+/// or a (name, alias) pair (contract bytes loaded by name, published under alias).
+#[derive(Copy, Clone)]
+pub struct PublishSpec<'a> {
+    pub name: &'a str,
+    pub alias: &'a str,
+}
+
+impl<'a> PublishSpec<'a> {
+    fn into_parts(self) -> (&'a str, &'a str) {
+        (self.name, self.alias)
+    }
+}
+
+impl<'a> From<&'a str> for PublishSpec<'a> {
+    fn from(name: &'a str) -> Self {
+        PublishSpec { name, alias: name }
+    }
+}
+
+impl<'a> From<(&'a str, &'a str)> for PublishSpec<'a> {
+    fn from((name, alias): (&'a str, &'a str)) -> Self {
+        PublishSpec { name, alias }
+    }
+}
+
 #[macro_export]
 macro_rules! absolute_file {
     () => {
@@ -739,20 +765,22 @@ impl Runtime {
         self.publish_as(signer, name, name).await
     }
 
-    pub async fn publish_many(
+    pub async fn publish_many<'b>(
         &mut self,
         signer: &Signer,
-        names: &[&str],
+        specs: &[impl Into<PublishSpec<'b>> + Copy],
     ) -> Result<Vec<ContractAddress>> {
-        let mut contracts = Vec::with_capacity(names.len());
-        for name in names {
+        let mut contracts = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let (name, alias) = (*spec).into().into_parts();
             let name = name.replace("_", "-");
+            let alias = alias.replace("_", "-");
             let bytes = self.contract_reader.read(&name).await?.ok_or(anyhow!(
                 "Contract not found: {} in {}",
                 name,
                 self.contract_reader.dir,
             ))?;
-            contracts.push((name, bytes));
+            contracts.push((alias, bytes));
         }
         let refs: Vec<(&str, &[u8])> = contracts
             .iter()
