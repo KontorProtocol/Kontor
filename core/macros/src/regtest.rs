@@ -92,7 +92,7 @@ pub fn generate(config: Config) -> TokenStream {
         async fn regtest_all() -> Result<()> {
             let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-            let cluster = RegTesterCluster::setup(3).await?;
+            let cluster = RegTesterCluster::setup(3, 300, 50).await?;
             let #contracts_dir_ident = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../test-contracts")
                 .canonicalize()
@@ -101,8 +101,7 @@ pub fn generate(config: Config) -> TokenStream {
                 .to_string();
             let contract_reader = ContractReader::new(&#contracts_dir_ident).await?;
 
-            let reg_tester = cluster.reg_tester(0).await?;
-            reg_tester.pre_create_identity_pools(300, 50).await?;
+            let reg_tester = cluster.reg_tester();
 
             let filter = std::env::var("REGTEST_FILTER").unwrap_or_default();
 

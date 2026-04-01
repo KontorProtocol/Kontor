@@ -915,7 +915,7 @@ impl RegTester {
         self.inner.lock().await.unregistered_identity().await
     }
 
-    pub async fn identity(&mut self) -> Result<Identity> {
+    pub async fn identity(&self) -> Result<Identity> {
         self.inner.lock().await.identity().await
     }
 
@@ -1055,6 +1055,7 @@ pub struct RegTesterCluster {
     pub bitcoin_client: BitcoinClient,
     pub node_configs: Vec<NodeConfig>,
     pub identity: Identity,
+    pub reg_tester: RegTester,
     genesis_path: std::path::PathBuf,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
     _miner_handle: tokio::task::JoinHandle<()>,
@@ -1065,12 +1066,19 @@ pub struct RegTesterCluster {
 
 impl RegTesterCluster {
     /// Start a cluster of `n` validators, all in genesis, all started.
-    pub async fn setup(n: usize) -> Result<Self> {
-        Self::setup_with(n, n, n).await
+    /// Pre-creates `registered` identities (with BLS + issuance) and `unregistered` (funded only).
+    pub async fn setup(n: usize, registered: usize, unregistered: usize) -> Result<Self> {
+        Self::setup_with(n, n, n, registered, unregistered).await
     }
 
     /// Create a cluster with `total` keys, `genesis_count` in genesis, `active` started.
-    pub async fn setup_with(total: usize, genesis_count: usize, active: usize) -> Result<Self> {
+    pub async fn setup_with(
+        total: usize,
+        genesis_count: usize,
+        active: usize,
+        registered: usize,
+        unregistered: usize,
+    ) -> Result<Self> {
         assert!(genesis_count <= total, "genesis_count must be <= total");
         assert!(active <= total, "active must be <= total");
 
@@ -1201,10 +1209,28 @@ impl RegTesterCluster {
             }
         });
 
+        let client = &node_configs[0]
+            .running
+            .as_ref()
+            .expect("Node 0 not running")
+            .client;
+        let mut inner = RegTesterInner::with_port(
+            identity.clone(),
+            bitcoin_client.clone(),
+            client.clone(),
+            node_configs[0].api_port,
+        )
+        .await?;
+        inner.cluster_mode = true;
+        let reg_tester = RegTester {
+            inner: Arc::new(Mutex::new(inner)),
+        };
+
         let cluster = Self {
             bitcoin_client,
             node_configs,
             identity,
+            reg_tester,
             genesis_path,
             miner_cmd_tx,
             _miner_handle: miner_handle,
@@ -1214,6 +1240,10 @@ impl RegTesterCluster {
         };
 
         cluster.poll_all_nodes_height(102, 60).await?;
+
+        if registered > 0 || unregistered > 0 {
+            cluster.reg_tester.pre_create_identity_pools(registered, unregistered).await?;
+        }
 
         Ok(cluster)
     }
@@ -1292,27 +1322,15 @@ impl RegTesterCluster {
         }
     }
 
-    /// Create a `RegTester` targeting a specific running node.
-    /// Cluster-created RegTesters skip mining for batchable ops.
-    pub async fn reg_tester(&self, node_index: usize) -> Result<RegTester> {
-        let nc = &self.node_configs[node_index];
-        let client = &nc.running.as_ref().expect("Node not running").client;
-        let mut inner = RegTesterInner::with_port(
-            self.identity.clone(),
-            self.bitcoin_client.clone(),
-            client.clone(),
-            nc.api_port,
-        )
-        .await?;
-        inner.cluster_mode = true;
-        Ok(RegTester {
-            inner: Arc::new(Mutex::new(inner)),
-        })
+    /// Get a `RegTester` for the cluster. Returns a clone of the shared
+    /// node 0 RegTester (same pools, same state via Arc<Mutex>).
+    pub fn reg_tester(&self) -> RegTester {
+        self.reg_tester.clone()
     }
 
-    /// Pop a pre-created identity (with BLS registration and issuance) from node 0's pool.
+    /// Pop a pre-created identity (with BLS registration and issuance) from the shared pool.
     pub async fn identity(&self) -> Result<(RegTester, Identity)> {
-        let mut rt = self.reg_tester(0).await?;
+        let rt = self.reg_tester();
         let identity = rt.identity().await?;
         Ok((rt, identity))
     }

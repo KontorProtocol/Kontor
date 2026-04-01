@@ -24,7 +24,7 @@ fn active_count_is(expected: u64) -> impl Fn(&str) -> bool {
 async fn cluster_counter_increment_via_consensus() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let cluster = RegTesterCluster::setup(4).await?;
+    let cluster = RegTesterCluster::setup(4, 5, 0).await?;
 
     // Load counter contract bytes
     let contracts = ContractReader::new("../../test-contracts").await?;
@@ -131,7 +131,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
 async fn cluster_multi_batch_convergence() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let cluster = RegTesterCluster::setup(4).await?;
+    let cluster = RegTesterCluster::setup(4, 5, 0).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -243,7 +243,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
 async fn cluster_node_restart_recovery() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let mut cluster = RegTesterCluster::setup(4).await?;
+    let mut cluster = RegTesterCluster::setup(4, 5, 0).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -368,7 +368,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // 4 validators in genesis, only 3 started
-    let mut cluster = RegTesterCluster::setup_with(4, 4, 3).await?;
+    let mut cluster = RegTesterCluster::setup_with(4, 4, 3, 1, 0).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -474,7 +474,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // 5 keys, 4 in genesis, 4 started
-    let mut cluster = RegTesterCluster::setup_with(5, 4, 4).await?;
+    let mut cluster = RegTesterCluster::setup_with(5, 4, 4, 1, 0).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -541,7 +541,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         .public_key()
         .as_bytes()
         .to_vec();
-    rt.send_instruction(
+    rt.instruction(
         &mut ident,
         indexer_types::Inst::Call {
             gas_limit: 10_000,
@@ -576,7 +576,8 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         height: contract.height,
         tx_index: contract.tx_index,
     };
-    rt.send_instruction(
+    eprintln!("Sending increment...");
+    rt.instruction(
         &mut ident,
         indexer_types::Inst::Call {
             gas_limit: 10_000,
@@ -586,6 +587,17 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         },
     )
     .await?;
+    eprintln!("Increment processed via consensus");
+
+    // Debug: check each node individually
+    for (i, nc) in cluster.node_configs.iter().enumerate() {
+        if let Some(cn) = &nc.running {
+            let info = cn.client.index().await?;
+            let view = cn.client.view(&contract, &counter::wave::get_call_expr()).await;
+            eprintln!("Node {i}: height={}, consensus_height={:?}, counter={:?}",
+                info.height, info.consensus_height, view);
+        }
+    }
 
     cluster
         .poll_all_nodes_view(
@@ -639,7 +651,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     eprintln!("Node 3 restarted and caught up");
 
     // --- Unstake the 5th validator ---
-    rt.send_instruction(
+    rt.instruction(
         &mut ident,
         indexer_types::Inst::Call {
             gas_limit: 10_000,
