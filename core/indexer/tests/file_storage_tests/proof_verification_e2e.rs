@@ -87,9 +87,22 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let created2 = filestorage::create_agreement(runtime, &signer, descriptor2).await??;
 
     // Activate agreement
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created2.agreement_id, "node_3").await??;
+    let mut ops = Ops::new(&signer);
+    ops.push(filestorage::join_agreement_call(
+        &created2.agreement_id,
+        "node_1",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created2.agreement_id,
+        "node_2",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created2.agreement_id,
+        "node_3",
+    ));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let proof_bytes = decode_fixture_hex("invalid_proof_hex", &fixtures.invalid_proof_hex)?;
     let result = filestorage::verify_proof(runtime, &signer, proof_bytes).await?;
@@ -129,11 +142,15 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let created_b = filestorage::create_agreement(runtime, &signer, descriptor_b).await??;
 
     // Activate both agreements
+    let mut ops = Ops::new(&signer);
     for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_1").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_2").await??;
-        filestorage::join_agreement(runtime, &signer, agreement_id, "node_3").await??;
+        ops.push(filestorage::join_agreement_call(agreement_id, "node_1"));
+        ops.push(filestorage::join_agreement_call(agreement_id, "node_2"));
+        ops.push(filestorage::join_agreement_call(agreement_id, "node_3"));
     }
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     // Step 2: Create challenges for A and B at block N
     let block_n = 40000u64;
@@ -167,9 +184,22 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let created_c = filestorage::create_agreement(runtime, &signer, descriptor_c).await??;
 
     // Activate file C's agreement
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created_c.agreement_id, "node_3").await??;
+    let mut ops = Ops::new(&signer);
+    ops.push(filestorage::join_agreement_call(
+        &created_c.agreement_id,
+        "node_1",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created_c.agreement_id,
+        "node_2",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created_c.agreement_id,
+        "node_3",
+    ));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     // Step 4: Verify the precomputed proof
     let proof_bytes = decode_fixture_hex("cross_block_agg_hex", &fixtures.cross_block_agg_hex)?;

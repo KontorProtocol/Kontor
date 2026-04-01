@@ -111,7 +111,7 @@ async fn run_kontor(
     consensus: Option<&ConsensusNodeConfig>,
 ) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
-    let program = format!("{}/../target/debug/kontor", env!("CARGO_MANIFEST_DIR"));
+    let program = format!("{}/../target/release/kontor", env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(program);
     cmd.arg("--api-port")
         .arg(api_port.to_string())

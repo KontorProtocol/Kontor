@@ -35,7 +35,10 @@ pub fn generate(config: Config) -> TokenStream {
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");
         let syntax = syn::parse_file(&source).expect("Failed to parse test file");
 
-        mod_decls.push(quote! { mod #module; });
+        mod_decls.push(quote! {
+            #[allow(dead_code, unused_imports)]
+            mod #module;
+        });
 
         // Find all functions annotated with #[testlib::test(..., shared)] or
         // #[testlib::test(..., regtest_only)]

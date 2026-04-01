@@ -29,9 +29,22 @@ async fn setup_active_agreement_with_challenge(
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
     // Activate it with 3 nodes
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
-    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_3").await??;
+    let mut ops = Ops::new(&signer);
+    ops.push(filestorage::join_agreement_call(
+        &created.agreement_id,
+        "node_1",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created.agreement_id,
+        "node_2",
+    ));
+    ops.push(filestorage::join_agreement_call(
+        &created.agreement_id,
+        "node_3",
+    ));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     // Generate a challenge (core-only)
     let block_hash = vec![42u8; 32];
