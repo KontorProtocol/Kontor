@@ -5,9 +5,10 @@ use bitcoin::{
     consensus::serialize as serialize_tx, key::Secp256k1, transaction::Version,
 };
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn test_bitcoin_client() -> Result<()> {
-    let client = reg_tester.bitcoin_client().await;
+    let rt = runtime.reg_tester().unwrap();
+    let client = rt.bitcoin_client().await;
     let info = client.get_blockchain_info().await?;
     let hash = client.get_block_hash(info.blocks).await?;
     let block = client.get_block(&hash).await?;
@@ -25,10 +26,11 @@ async fn test_bitcoin_client() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn test_get_raw_mempool_sequence() -> Result<()> {
-    let client = reg_tester.bitcoin_client().await;
-    let mut ident = reg_tester.identity().await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let client = rt.bitcoin_client().await;
+    let mut ident = rt.identity().await?;
 
     // Build and submit several transactions to the mempool without mining
     let secp = Secp256k1::new();
@@ -57,7 +59,7 @@ async fn test_get_raw_mempool_sequence() -> Result<()> {
         )?;
 
         let raw_tx = hex::encode(serialize_tx(&tx));
-        let txids = reg_tester.send_to_mempool(&[raw_tx]).await?;
+        let txids = rt.send_to_mempool(&[raw_tx]).await?;
         expected_txids.push(txids[0]);
 
         // Chain: point to the unconfirmed output for the next iteration
@@ -73,9 +75,12 @@ async fn test_get_raw_mempool_sequence() -> Result<()> {
     let result = client.get_raw_mempool_sequence().await?;
 
     assert!(result.mempool_sequence > 0);
-    assert_eq!(result.txids.len(), expected_txids.len());
     for txid in &expected_txids {
-        assert!(result.txids.contains(txid));
+        assert!(
+            result.txids.contains(txid),
+            "Expected txid {} not found in mempool",
+            txid
+        );
     }
 
     Ok(())

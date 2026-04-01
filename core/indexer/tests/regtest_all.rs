@@ -1,5 +1,6 @@
 testlib::regtest_tests! {
     amm_contract,
+    bitcoin_client,
     compose,
     counter_contract,
     crypto_contract,
