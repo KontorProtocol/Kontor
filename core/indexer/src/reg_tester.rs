@@ -227,6 +227,8 @@ pub struct RegTesterInner {
     pub published_contracts: HashMap<String, ContractAddress>,
     /// Pre-created identities with BLS registration and issuance complete.
     pub identity_pool: std::collections::VecDeque<Identity>,
+    /// Pre-created funded identities without BLS registration or issuance.
+    pub unregistered_identity_pool: std::collections::VecDeque<Identity>,
 }
 
 pub struct SendInstructionResult {
@@ -266,6 +268,7 @@ impl RegTesterInner {
             cluster_mode: false,
             published_contracts: HashMap::new(),
             identity_pool: std::collections::VecDeque::new(),
+            unregistered_identity_pool: std::collections::VecDeque::new(),
         })
     }
 
@@ -469,6 +472,9 @@ impl RegTesterInner {
     ///
     /// Derivation paths are selected automatically based on the network (regtest → coin_type 1).
     pub async fn unregistered_identity(&mut self) -> Result<Identity> {
+        if let Some(identity) = self.unregistered_identity_pool.pop_front() {
+            return Ok(identity);
+        }
         let mut seed = [0u8; 64];
         rand::thread_rng().fill_bytes(&mut seed);
 
@@ -712,6 +718,103 @@ impl RegTesterInner {
         // Add to pool
         self.identity_pool.extend(identities);
         tracing::info!(count, "Pre-created identity pool");
+
+        Ok(())
+    }
+
+    /// Pre-create funded identities without BLS registration or issuance.
+    /// Single funding tx with N outputs, one mine. No consensus overhead
+    /// beyond the block confirmation.
+    pub async fn pre_create_unregistered_identities(&mut self, count: usize) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let secp = Secp256k1::new();
+        let per_identity_amount = Amount::from_sat(100_000);
+
+        let mut identities: Vec<Identity> = Vec::with_capacity(count);
+        let mut outputs = Vec::with_capacity(count + 1);
+        for _ in 0..count {
+            let mut seed = [0u8; 64];
+            rand::thread_rng().fill_bytes(&mut seed);
+            let taproot_path = taproot_derivation_path(Network::Regtest);
+            let bls_path = bls_derivation_path(Network::Regtest);
+            let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+            let (x_only_public_key, ..) = keypair.x_only_public_key();
+            let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+            let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+
+            outputs.push(TxOut {
+                value: per_identity_amount,
+                script_pubkey: address.script_pubkey(),
+            });
+            identities.push(Identity {
+                address: address.clone(),
+                keypair,
+                next_funding_utxo: (
+                    OutPoint::null(),
+                    TxOut {
+                        value: Amount::ZERO,
+                        script_pubkey: address.script_pubkey(),
+                    },
+                ),
+                bls_secret_key: bls_sk.to_bytes(),
+                bls_pubkey: bls_sk.sk_to_pk().to_bytes(),
+            });
+        }
+
+        let total_needed = per_identity_amount * count as u64 + Amount::from_sat(1000);
+        let change = self.identity.next_funding_utxo.1.value - total_needed;
+        outputs.push(TxOut {
+            value: change,
+            script_pubkey: self.identity.address.script_pubkey(),
+        });
+
+        let mut funding_tx = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: self.identity.next_funding_utxo.0,
+                ..Default::default()
+            }],
+            output: outputs,
+        };
+        test_utils::sign_key_spend(
+            &secp,
+            &mut funding_tx,
+            std::slice::from_ref(&self.identity.next_funding_utxo.1),
+            &self.identity.keypair,
+            0,
+            None,
+        )?;
+
+        let funding_txid = funding_tx.compute_txid();
+        let raw_tx = hex::encode(serialize_tx(&funding_tx));
+        self.send_to_mempool(&[raw_tx]).await?;
+
+        self.identity.next_funding_utxo = (
+            OutPoint {
+                txid: funding_txid,
+                vout: count as u32,
+            },
+            funding_tx.output[count].clone(),
+        );
+
+        for (i, ident) in identities.iter_mut().enumerate() {
+            ident.next_funding_utxo = (
+                OutPoint {
+                    txid: funding_txid,
+                    vout: i as u32,
+                },
+                funding_tx.output[i].clone(),
+            );
+        }
+
+        self.mine(1).await?;
+
+        self.unregistered_identity_pool.extend(identities);
+        tracing::info!(count, "Pre-created unregistered identity pool");
 
         Ok(())
     }
@@ -1066,6 +1169,14 @@ impl RegTester {
 
     pub async fn pre_create_identities(&self, count: usize) -> Result<()> {
         self.inner.lock().await.pre_create_identities(count).await
+    }
+
+    pub async fn pre_create_unregistered_identities(&self, count: usize) -> Result<()> {
+        self.inner
+            .lock()
+            .await
+            .pre_create_unregistered_identities(count)
+            .await
     }
 
     pub async fn cluster_mode(&self) -> bool {

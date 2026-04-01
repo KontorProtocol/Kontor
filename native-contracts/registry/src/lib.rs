@@ -209,4 +209,8 @@ impl Guest for Registry {
             Some(bls_pubkey)
         }
     }
+
+    fn get_next_signer_id(ctx: &ViewContext) -> u64 {
+        ctx.model().next_signer_id()
+    }
 }

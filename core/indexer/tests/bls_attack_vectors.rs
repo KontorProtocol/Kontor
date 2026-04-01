@@ -21,8 +21,8 @@ use indexer::bls::{
 };
 use indexer_types::{AggregateInfo, Inst, Insts, Signer};
 use testlib::{
-    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, RegTester, Runtime,
-    RuntimeConfig, TypedCall, import, serial_test,
+    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, Runtime, TypedCall,
+    import,
 };
 
 import!(
@@ -39,47 +39,20 @@ fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
 }
 
 /// Construct PK_rogue = PK_beta − PK_victim in G2.
-///
-/// Standard rogue-key construction (Boneh, Drijvers, Neven 2018;
-/// <https://eprint.iacr.org/2018/483>). The attacker knows beta_sk but NOT the
-/// discrete log of PK_rogue, so they cannot produce valid BLS signatures under it.
-///
-/// Without a binding proof / PoP, this key is dangerous: PK_rogue + PK_victim =
-/// β·G2, so the attacker can forge aggregate signatures that appear to include
-/// the victim by computing σ = β·H(m).
-///
-/// Kontor's defense is the BLS binding proof in [`RegistrationProof`], which is a
-/// proper BLS signature (hash-to-curve random oracle). Unlike linear KOSK schemes
-/// (e.g. ZK Hack IV "Supervillain"), the hash-to-curve makes each binding proof
-/// algebraically independent — the attacker cannot combine existing proofs to
-/// forge one for PK_rogue.
 fn construct_rogue_g2_pubkey(
     beta_pk_compressed: &[u8; 96],
     victim_pk_compressed: &[u8; 96],
 ) -> [u8; 96] {
     let beta_pk = BlsPublicKey::key_validate(beta_pk_compressed).expect("beta pk must be valid G2");
-
-    // Negate victim's pubkey by flipping the sign bit in compressed form.
-    // BLS12-381 compressed points use bit 5 (0x20) to select which square
-    // root of y² was used; flipping it gives (x, -y) = -P.
     let mut neg_victim_bytes = *victim_pk_compressed;
     neg_victim_bytes[0] ^= 0x20;
     let neg_victim_pk =
         BlsPublicKey::key_validate(&neg_victim_bytes).expect("negated victim pk must be valid G2");
-
-    // PK_rogue = PK_beta + (-PK_victim)
     let agg = AggregatePublicKey::aggregate(&[&beta_pk, &neg_victim_pk], false)
         .expect("aggregation must succeed");
     agg.to_public_key().to_bytes()
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests — aggregate-level rogue-key properties
-// ---------------------------------------------------------------------------
-
-/// Proves the rogue-key attack IS real when two signers sign the same message.
-/// The attacker forges σ = β·H(m) and it verifies as an aggregate of
-/// [PK_rogue, PK_victim] — without the victim ever signing anything.
 #[test]
 fn rogue_key_forgery_succeeds_with_same_message() {
     let victim_sk = derive_test_key(10);
@@ -93,11 +66,8 @@ fn rogue_key_forgery_succeeds_with_same_message() {
         .expect("rogue key must be valid G2");
 
     let msg = b"identical-message";
-
-    // Attacker forges aggregate: σ = β·H(m). Victim never signed.
     let forged_sig = beta_sk.sign(msg, KONTOR_BLS_DST, &[]);
 
-    // e(β·H(m), G2) = e(H(m), β·G2) = e(H(m), PK_rogue + PK_victim) ✓
     let result = forged_sig.aggregate_verify(
         true,
         &[msg.as_slice(), msg.as_slice()],
@@ -112,8 +82,6 @@ fn rogue_key_forgery_succeeds_with_same_message() {
     );
 }
 
-/// Proves the attack fails when each operation has a distinct message, which is
-/// always the case in Kontor (signer_id, nonce, and op contents differ).
 #[test]
 fn rogue_key_forgery_fails_with_distinct_messages() {
     let victim_sk = derive_test_key(10);
@@ -129,17 +97,13 @@ fn rogue_key_forgery_fails_with_distinct_messages() {
     let msg_attacker = b"attacker-op-data";
     let msg_victim = b"victim-op-data";
 
-    // Victim legitimately signed their op (e.g. broadcast to bundler).
     let victim_sig = victim_sk.sign(msg_victim, KONTOR_BLS_DST, &[]);
-    // Attacker signs their op with β (only key they know).
     let attacker_sig = beta_sk.sign(msg_attacker, KONTOR_BLS_DST, &[]);
 
     let agg =
         AggregateSignature::aggregate(&[&attacker_sig, &victim_sig], true).expect("aggregate");
     let agg_sig = agg.to_signature();
 
-    // Verification fails: e(H(msg_a), -PK_victim) · e(H(msg_v), PK_victim) ≠ 1
-    // because H(msg_a) ≠ H(msg_v).
     let result = agg_sig.aggregate_verify(
         true,
         &[msg_attacker.as_slice(), msg_victim.as_slice()],
@@ -154,55 +118,95 @@ fn rogue_key_forgery_fails_with_distinct_messages() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Integration tests — registration-level attacks
-// ---------------------------------------------------------------------------
+#[test]
+fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
+    let secp = Secp256k1::new();
+    let alice_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+    let eve_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+    let alice_xonly = alice_keypair.x_only_public_key().0;
 
-/// Rogue-key attack: attacker constructs PK_rogue = β·G2 − PK_victim and tries
-/// to register it. The BLS binding proof rejects this because the attacker does
-/// not know dlog(PK_rogue) and therefore cannot sign the binding message.
-///
-/// Signing with β fails verification: e(β·H(msg), G2) ≠ e(H(msg), PK_rogue)
-/// because PK_rogue ≠ β·G2.
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
-    let mut victim = reg_tester.unregistered_identity().await?;
+    let eve_bls_sk = derive_test_key(42);
+    let eve_bls_pk = eve_bls_sk.sk_to_pk();
+
+    let schnorr_msg = {
+        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+        preimage.extend_from_slice(&eve_bls_pk.to_bytes());
+        let digest = sha256::Hash::hash(&preimage).to_byte_array();
+        Message::from_digest_slice(&digest).expect("32-byte digest")
+    };
+    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve_keypair).serialize();
+
+    let bls_binding_msg = {
+        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+        msg.extend_from_slice(BLS_BINDING_PREFIX);
+        msg.extend_from_slice(&alice_xonly.serialize());
+        msg
+    };
+    let eve_bls_binding_sig = eve_bls_sk
+        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
+        .to_bytes();
+
+    let op = Inst::RegisterBlsKey {
+        bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+        schnorr_sig: eve_schnorr_sig.to_vec(),
+        bls_sig: eve_bls_binding_sig.to_vec(),
+    };
+
+    let insts = Insts {
+        ops: vec![op],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; 48],
+        }),
+    };
+
+    let err = validate_aggregate_shape(&insts)
+        .expect_err("aggregate RegisterBlsKey must be rejected before execution");
+    assert!(
+        err.to_string()
+            .contains("RegisterBlsKey is not allowed in aggregate"),
+        "aggregate registration path should be closed entirely"
+    );
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut victim = rt.unregistered_identity().await?;
     let victim_proof = RegistrationProof::new(&victim.keypair, &victim.bls_secret_key)?;
-    reg_tester
-        .instruction(
-            &mut victim,
-            Inst::RegisterBlsKey {
-                bls_pubkey: victim_proof.bls_pubkey.to_vec(),
-                schnorr_sig: victim_proof.schnorr_sig.to_vec(),
-                bls_sig: victim_proof.bls_sig.to_vec(),
-            },
-        )
-        .await?;
+    rt.instruction(
+        &mut victim,
+        Inst::RegisterBlsKey {
+            bls_pubkey: victim_proof.bls_pubkey.to_vec(),
+            schnorr_sig: victim_proof.schnorr_sig.to_vec(),
+            bls_sig: victim_proof.bls_sig.to_vec(),
+        },
+    )
+    .await?;
 
     let victim_xonly = victim.x_only_public_key().to_string();
-    assert_eq!(
-        registry::get_signer_id(runtime, &victim_xonly).await?,
-        Some(0)
+    assert!(
+        registry::get_signer_id(runtime, &victim_xonly)
+            .await?
+            .is_some(),
+        "Victim must be registered"
     );
 
-    // Attacker picks random β and constructs PK_rogue = β·G2 − PK_victim.
     let mut beta_ikm = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut beta_ikm);
     let beta_sk = BlsSecretKey::key_gen(&beta_ikm, &[]).expect("beta key_gen");
     let beta_pk_bytes = beta_sk.sk_to_pk().to_bytes();
     let rogue_pk_bytes = construct_rogue_g2_pubkey(&beta_pk_bytes, &victim.bls_pubkey);
 
-    // PK_rogue is on-curve and in-subgroup — the rejection must come from the
-    // binding proof, not from subgroup validation.
     assert!(
         blst::min_sig::PublicKey::key_validate(&rogue_pk_bytes).is_ok(),
         "rogue key must be a valid G2 subgroup element"
     );
 
-    let mut attacker = reg_tester.unregistered_identity().await?;
+    let mut attacker = rt.unregistered_identity().await?;
     let secp = Secp256k1::new();
 
-    // Schnorr half: attacker CAN produce (they own the Taproot key).
     let schnorr_msg = {
         let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
         preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
@@ -214,7 +218,6 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
         .sign_schnorr(&schnorr_msg, &attacker.keypair)
         .serialize();
 
-    // BLS half: attacker CANNOT produce — they know β, not dlog(PK_rogue).
     let bls_binding_msg = {
         let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
         msg.extend_from_slice(BLS_BINDING_PREFIX);
@@ -225,7 +228,7 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
 
-    let _ = reg_tester
+    let _ = rt
         .instruction(
             &mut attacker,
             Inst::RegisterBlsKey {
@@ -251,28 +254,20 @@ async fn bls_attack_rogue_key_registration_rejected_regtest() -> Result<()> {
     Ok(())
 }
 
-/// Proof replay: Eve takes Alice's (bls_pubkey, bls_sig) and submits them under
-/// Eve's Taproot identity with Eve's own Schnorr signature. The BLS binding
-/// proof signs `BLS_BINDING_PREFIX || alice_xonly`, so verification against
-/// Eve's x-only pubkey fails.
-///
-/// This test would PASS (incorrectly allowing registration) if the BLS binding
-/// message were changed to sign only the BLS pubkey without the x-only identity
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
-    // Alice registers legitimately.
-    let mut alice = reg_tester.unregistered_identity().await?;
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn bls_attack_proof_replay_rejected() -> Result<()> {
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut alice = rt.unregistered_identity().await?;
     let alice_proof = RegistrationProof::new(&alice.keypair, &alice.bls_secret_key)?;
-    reg_tester
-        .instruction(
-            &mut alice,
-            Inst::RegisterBlsKey {
-                bls_pubkey: alice_proof.bls_pubkey.to_vec(),
-                schnorr_sig: alice_proof.schnorr_sig.to_vec(),
-                bls_sig: alice_proof.bls_sig.to_vec(),
-            },
-        )
-        .await?;
+    rt.instruction(
+        &mut alice,
+        Inst::RegisterBlsKey {
+            bls_pubkey: alice_proof.bls_pubkey.to_vec(),
+            schnorr_sig: alice_proof.schnorr_sig.to_vec(),
+            bls_sig: alice_proof.bls_sig.to_vec(),
+        },
+    )
+    .await?;
 
     let alice_xonly = alice.x_only_public_key().to_string();
     assert!(
@@ -282,9 +277,7 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
         "Alice must be registered before the replay attempt"
     );
 
-    // Eve creates her own Schnorr binding to Alice's BLS pubkey (she controls
-    // her Taproot key, so this is trivial).
-    let mut eve = reg_tester.unregistered_identity().await?;
+    let mut eve = rt.unregistered_identity().await?;
     let secp = Secp256k1::new();
     let eve_schnorr_msg = {
         let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
@@ -297,10 +290,7 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
         .sign_schnorr(&eve_schnorr_msg, &eve.keypair)
         .serialize();
 
-    // Eve reuses Alice's BLS binding proof verbatim.
-    // Alice's proof signed `BLS_BINDING_PREFIX || alice_xonly`, but the indexer
-    // will verify it against eve_xonly — mismatch.
-    let _ = reg_tester
+    let _ = rt
         .instruction(
             &mut eve,
             Inst::RegisterBlsKey {
@@ -326,94 +316,18 @@ async fn bls_attack_proof_replay_rejected_regtest() -> Result<()> {
     Ok(())
 }
 
-/// Identity hijack via aggregate registration: Eve tries to register her own BLS key under
-/// Alice's Taproot identity. Eve CAN produce the BLS binding proof (she signs
-/// `BLS_BINDING_PREFIX || alice_xonly` with `eve_bls_sk`), but CANNOT produce
-/// the Schnorr proof (needs Alice's Taproot secret key to sign over
-/// `SCHNORR_BINDING_PREFIX || eve_bls_pk`).
-///
-/// | Proof half | Blocks Eve? | Why                                          |
-/// |------------|-------------|----------------------------------------------|
-/// | Schnorr    | **Yes**     | Needs Alice's Taproot sk                     |
-/// | BLS        | No          | Eve can sign alice_xonly with her own BLS key |
-/// In the current `Insts` / `AggregateInfo` model, aggregate `RegisterBlsKey`
-/// is rejected outright before verification/execution, which removes this
-/// attack surface from the bundled path entirely.
-#[test]
-fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
-    let secp = Secp256k1::new();
-    let alice_keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let eve_keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let alice_xonly = alice_keypair.x_only_public_key().0;
-
-    let eve_bls_sk = derive_test_key(42);
-    let eve_bls_pk = eve_bls_sk.sk_to_pk();
-
-    // Schnorr half: Eve signs with her OWN Taproot key, but the indexer will
-    // verify against alice_xonly — mismatch.
-    let schnorr_msg = {
-        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
-        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
-        preimage.extend_from_slice(&eve_bls_pk.to_bytes());
-        let digest = sha256::Hash::hash(&preimage).to_byte_array();
-        Message::from_digest_slice(&digest).expect("32-byte digest")
-    };
-    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve_keypair).serialize();
-
-    // BLS half: Eve CAN produce this — she signs alice_xonly with eve_bls_sk.
-    let bls_binding_msg = {
-        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
-        msg.extend_from_slice(BLS_BINDING_PREFIX);
-        msg.extend_from_slice(&alice_xonly.serialize());
-        msg
-    };
-    let eve_bls_binding_sig = eve_bls_sk
-        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
-        .to_bytes();
-
-    // Attempt the old bundled registration attack in the new aggregate envelope.
-    let op = Inst::RegisterBlsKey {
-        bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
-        schnorr_sig: eve_schnorr_sig.to_vec(),
-        bls_sig: eve_bls_binding_sig.to_vec(),
-    };
-
-    let insts = Insts {
-        ops: vec![op],
-        aggregate: Some(AggregateInfo {
-            signer_ids: vec![0],
-            signature: vec![0u8; 48],
-        }),
-    };
-
-    let err = validate_aggregate_shape(&insts)
-        .expect_err("aggregate RegisterBlsKey must be rejected before execution");
-    assert!(
-        err.to_string()
-            .contains("RegisterBlsKey is not allowed in aggregate"),
-        "aggregate registration path should be closed entirely"
-    );
-}
-
-/// Valid Schnorr, forged BLS binding: Eve controls her Taproot key so she can
-/// produce a valid Schnorr signature over `SCHNORR_BINDING_PREFIX || bls_pk`,
-/// but submits a BLS binding proof signed by a *different* BLS key than the one
-/// being registered. The indexer must reject registration even though the
-/// Schnorr half passes.
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
-    let mut eve = reg_tester.unregistered_identity().await?;
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn bls_attack_valid_schnorr_forged_bls_binding() -> Result<()> {
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut eve = rt.unregistered_identity().await?;
 
     let eve_bls_sk = BlsSecretKey::from_bytes(&eve.bls_secret_key).unwrap();
     let eve_bls_pk = eve_bls_sk.sk_to_pk();
 
-    // A second, unrelated BLS key that Eve also controls.
     let mut alt_ikm = [0u8; 32];
     alt_ikm[0] = 0xAB;
     let alt_bls_sk = BlsSecretKey::key_gen(&alt_ikm, &[]).expect("alt key_gen");
 
-    // Schnorr half: valid — Eve signs over her real BLS pubkey with her
-    // Taproot key. This will pass verification.
     let secp = Secp256k1::new();
     let schnorr_msg = {
         let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
@@ -424,10 +338,6 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
     };
     let schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve.keypair).serialize();
 
-    // BLS half: forged — signed with alt_bls_sk instead of eve_bls_sk.
-    // The binding message is correct (`BLS_BINDING_PREFIX || eve_xonly`), but
-    // it was signed by the wrong key. Verification against eve_bls_pk fails:
-    // e(alt_sk·H(msg), G2) ≠ e(H(msg), eve_bls_pk).
     let bls_binding_msg = {
         let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
         msg.extend_from_slice(BLS_BINDING_PREFIX);
@@ -438,7 +348,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding_regtest() -> Result<()> {
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
 
-    let _ = reg_tester
+    let _ = rt
         .instruction(
             &mut eve,
             Inst::RegisterBlsKey {

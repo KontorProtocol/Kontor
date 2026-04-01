@@ -98,6 +98,7 @@ pub fn generate(config: Config) -> TokenStream {
 
             let reg_tester = cluster.reg_tester(0).await?;
             reg_tester.pre_create_identities(150).await?;
+            reg_tester.pre_create_unregistered_identities(50).await?;
 
             let filter = std::env::var("REGTEST_FILTER").unwrap_or_default();
 
