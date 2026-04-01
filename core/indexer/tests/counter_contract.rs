@@ -2,7 +2,7 @@ use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_counter_batching() -> Result<()> {
     let admin = runtime.identity().await?;
     let user = runtime.identity().await?;

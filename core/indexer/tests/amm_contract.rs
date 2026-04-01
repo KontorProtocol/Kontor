@@ -726,32 +726,32 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swaps() -> Result<()> {
     run_test_amm_swaps(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_fee() -> Result<()> {
     run_test_amm_swap_fee(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_swap_low_slippage() -> Result<()> {
     run_test_amm_swap_low_slippage(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_deposit_withdraw() -> Result<()> {
     run_test_amm_deposit_withdraw(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_limits() -> Result<()> {
     run_test_amm_limits(runtime).await
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_pools() -> Result<()> {
     run_test_amm_pools(runtime).await
 }

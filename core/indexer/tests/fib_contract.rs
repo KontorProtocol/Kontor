@@ -6,7 +6,7 @@ interface!(name = "fib", path = "../../test-contracts/fib/wit",);
 
 interface!(name = "proxy", path = "../../test-contracts/proxy/wit",);
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_fib_contract() -> Result<()> {
     let signer = runtime.identity().await?;
     let addrs = runtime

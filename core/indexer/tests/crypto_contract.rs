@@ -2,7 +2,7 @@ use testlib::*;
 
 interface!(name = "crypto", path = "../../test-contracts/crypto/wit");
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_crypto_contract() -> Result<()> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;

@@ -2,7 +2,7 @@ use testlib::*;
 
 interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_token_contract() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
@@ -53,7 +53,7 @@ async fn test_token_contract() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_token_contract_large_numbers() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;

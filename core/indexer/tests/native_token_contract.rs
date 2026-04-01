@@ -7,7 +7,7 @@ import!(
     path = "../../native-contracts/token/wit",
 );
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_native_token_contract() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;

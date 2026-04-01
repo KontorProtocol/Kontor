@@ -7,7 +7,7 @@ interface!(
     path = "../../test-contracts/shared-account/wit",
 );
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_shared_account_contract() -> Result<()> {
     let alice = runtime.identity().await?;
     let bob = runtime.identity().await?;

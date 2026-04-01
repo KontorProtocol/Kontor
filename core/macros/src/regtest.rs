@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote};
 use syn::{Ident, Token, parse::Parse, parse::ParseStream, punctuated::Punctuated};
 
 pub struct Config {
@@ -40,23 +40,23 @@ pub fn generate(config: Config) -> TokenStream {
             mod #module;
         });
 
-        // Find all functions annotated with #[testlib::test(..., shared)] or
-        // #[testlib::test(..., regtest_only)]
+        // Find all async functions annotated with #[testlib::test(...)]
         for item in &syntax.items {
             if let syn::Item::Fn(func) = item {
                 if func.sig.asyncness.is_none() {
                     continue;
                 }
-                let is_shared = func.attrs.iter().any(|attr| {
+                let has_test_attr = func.attrs.iter().any(|attr| {
                     let path = attr.path();
-                    let path_str = quote::quote!(#path).to_string();
-                    if !path_str.contains("test") {
-                        return false;
-                    }
-                    let attr_str = attr.to_token_stream().to_string();
-                    attr_str.contains("shared") || attr_str.contains("regtest_only")
+                    let path_str = path
+                        .segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    path_str == "testlib::test"
                 });
-                if !is_shared {
+                if !has_test_attr {
                     continue;
                 }
 

@@ -43,7 +43,7 @@ world root {
 }
 "#;
 
-#[testlib::test(contracts_dir = "../../test-contracts", shared)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_get_wit_from_api() -> Result<()> {
     let wit = runtime.wit(&token::address()).await?;
     assert_eq!(WIT, wit);
