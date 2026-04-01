@@ -82,6 +82,13 @@ bytes = { workspace = true }
 prost = { workspace = true }
 sha3 = { workspace = true }
 
+[features]
+regtest-runner = []
+
+[[test]]
+name = "regtest_all"
+required-features = ["regtest-runner"]
+
 [dev-dependencies]
 testlib = { path = "../testlib" }
 serial_test = "=3.4.0"

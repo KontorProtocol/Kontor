@@ -1,8 +1,10 @@
 testlib::regtest_tests! {
     amm_contract,
+    compose,
     counter_contract,
     crypto_contract,
     fib_contract,
+    file_storage,
     native_token_attach_contract,
     native_token_contract,
     ops_contract,
