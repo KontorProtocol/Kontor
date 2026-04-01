@@ -18,23 +18,21 @@ import!(
     path = "../../native-contracts/token/wit",
 );
 
-pub async fn test_compose_token_attach_and_detach(
-    runtime: &mut Runtime,
-    reg_tester: &mut RegTester,
-) -> Result<()> {
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn test_native_token_attach_contract() -> Result<()> {
     let secp = Secp256k1::new();
 
-    let mut identity = reg_tester.identity().await?;
-    reg_tester
-        .instruction(&mut identity, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
 
+    let mut identity = rt.identity().await?;
+    rt.instruction(&mut identity, Inst::Issuance).await?;
+    let buyer_identity = rt.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
-    let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
+    let buyer_x_only = buyer_identity.x_only_public_key();
 
-    let buyer_identity = reg_tester.identity().await?;
+    let (internal_key, _parity) = keypair.x_only_public_key();
 
     let attach_inst = Inst::Call {
         gas_limit: 50_000,
@@ -64,7 +62,7 @@ pub async fn test_compose_token_attach_and_detach(
         .envelope(600)
         .build();
 
-    let compose_outputs = reg_tester.compose(query).await?;
+    let compose_outputs = rt.compose(query).await?;
 
     let mut commit_transaction = compose_outputs.commit_transaction;
     let mut reveal_transaction = compose_outputs.reveal_transaction;
@@ -127,12 +125,12 @@ pub async fn test_compose_token_attach_and_detach(
         ],
         op_return_data: Some(serialize(&vec![(
             0,
-            indexer_types::OpReturnData::PubKey(buyer_identity.x_only_public_key()),
+            indexer_types::OpReturnData::PubKey(buyer_x_only),
         )])?),
         envelope: None,
     };
 
-    let detach_outputs = reg_tester.compose_reveal(reveal_query).await?;
+    let detach_outputs = rt.compose_reveal(reveal_query).await?;
     let mut detach_transaction = detach_outputs.transaction;
 
     assert_eq!(detach_transaction.input.len(), 1);
@@ -159,7 +157,7 @@ pub async fn test_compose_token_attach_and_detach(
 
     let detach_tx_hex = hex::encode(serialize_tx(&detach_transaction));
 
-    let result = reg_tester
+    let result = rt
         .mempool_accept_result(&[
             commit_tx_hex.clone(),
             reveal_tx_hex.clone(),
@@ -172,7 +170,7 @@ pub async fn test_compose_token_attach_and_detach(
     assert!(result[1].allowed, "Reveal transaction was rejected");
     assert!(result[2].allowed, "Detach transaction was rejected");
 
-    let bitcoin_client = reg_tester.bitcoin_client().await;
+    let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&commit_tx_hex).await?;
     bitcoin_client.send_raw_transaction(&reveal_tx_hex).await?;
     bitcoin_client
@@ -182,8 +180,8 @@ pub async fn test_compose_token_attach_and_detach(
         .txid(reveal_transaction.compute_txid().to_string())
         .build();
 
-    reg_tester.wait_next_block().await?;
-    let attach_result = reg_tester
+    rt.wait_next_block().await?;
+    let attach_result = rt
         .kontor_client()
         .await
         .result(&id)
@@ -201,8 +199,8 @@ pub async fn test_compose_token_attach_and_detach(
     let balance = token::balance(runtime, &utxo_id).await?;
     assert_eq!(balance, Some(Decimal::from(2)));
 
+    let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
-
     bitcoin_client
         .generate_to_address(1, &seller_address.to_string())
         .await?;
@@ -211,8 +209,8 @@ pub async fn test_compose_token_attach_and_detach(
         .txid(detach_transaction.compute_txid().to_string())
         .build();
 
-    reg_tester.wait_next_block().await?;
-    let detach_result = reg_tester
+    rt.wait_next_block().await?;
+    let detach_result = rt
         .kontor_client()
         .await
         .result(&id)
@@ -223,15 +221,10 @@ pub async fn test_compose_token_attach_and_detach(
         token::wave::detach_parse_return_expr(&detach_result.value.expect("Expected value"))?;
 
     assert_eq!(transfer.src, utxo_id);
-    assert_eq!(transfer.dst, buyer_identity.x_only_public_key().to_string());
+    assert_eq!(transfer.dst, buyer_x_only.to_string());
 
-    let balance = token::balance(runtime, &buyer_identity.x_only_public_key().to_string()).await?;
+    let balance = token::balance(runtime, &buyer_x_only.to_string()).await?;
     assert_eq!(balance, Some(Decimal::from(2)));
 
     Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_native_token_attach_contract_regtest() -> Result<()> {
-    test_compose_token_attach_and_detach(runtime, &mut reg_tester).await
 }

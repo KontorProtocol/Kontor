@@ -178,6 +178,11 @@ pub trait RuntimeImpl: Send {
     async fn issuance(&mut self, signer: &Signer) -> Result<()>;
     async fn checkpoint(&mut self) -> Result<Option<String>>;
 
+    /// Get a clone of the underlying RegTester, if running against a regtest cluster.
+    fn reg_tester(&self) -> Option<RegTester> {
+        None
+    }
+
     /// Publish multiple contracts in a single block. Default implementation
     /// falls back to sequential publishes.
     async fn publish_many(
@@ -726,6 +731,10 @@ impl RuntimeImpl for RuntimeRegtest {
     async fn checkpoint(&mut self) -> Result<Option<String>> {
         self.reg_tester.checkpoint().await
     }
+
+    fn reg_tester(&self) -> Option<RegTester> {
+        Some(self.reg_tester.clone())
+    }
 }
 
 pub struct Runtime {
@@ -824,6 +833,10 @@ impl Runtime {
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
         self.runtime.checkpoint().await
+    }
+
+    pub fn reg_tester(&self) -> Option<RegTester> {
+        self.runtime.reg_tester()
     }
 
     pub fn submit(&mut self) -> Submit<'_> {

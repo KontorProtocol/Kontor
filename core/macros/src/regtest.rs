@@ -37,7 +37,8 @@ pub fn generate(config: Config) -> TokenStream {
 
         mod_decls.push(quote! { mod #module; });
 
-        // Find all functions annotated with #[testlib::test(..., shared)]
+        // Find all functions annotated with #[testlib::test(..., shared)] or
+        // #[testlib::test(..., regtest_only)]
         for item in &syntax.items {
             if let syn::Item::Fn(func) = item {
                 if func.sig.asyncness.is_none() {
@@ -49,8 +50,8 @@ pub fn generate(config: Config) -> TokenStream {
                     if !path_str.contains("test") {
                         return false;
                     }
-                    // Check if the attribute contains "shared"
-                    attr.to_token_stream().to_string().contains("shared")
+                    let attr_str = attr.to_token_stream().to_string();
+                    attr_str.contains("shared") || attr_str.contains("regtest_only")
                 });
                 if !is_shared {
                     continue;

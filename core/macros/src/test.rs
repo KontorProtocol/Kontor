@@ -13,6 +13,9 @@ pub struct Config {
     /// plus a `_local` `#[tokio::test]` wrapper. The public function can be
     /// called from the shared regtest runner.
     pub shared: Option<bool>,
+    /// When true, generates only a `pub async fn` taking `runtime: &mut Runtime`
+    /// with no local test wrapper. For tests that only work against a running node.
+    pub regtest_only: Option<bool>,
 }
 
 pub fn generate(config: Config, func: ItemFn) -> TokenStream {
@@ -32,6 +35,7 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
     }
     let mode = config.mode.unwrap_or("local".to_string());
     let shared = config.shared.unwrap_or(false);
+    let regtest_only = config.regtest_only.unwrap_or(false);
 
     let logging = if config.logging.unwrap_or(false) {
         quote! {
@@ -76,6 +80,13 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
                 #logging
                 #body
             }
+        }
+    } else if regtest_only {
+        // Regtest-only: public function, no local test wrapper
+        quote! {
+            #(#attrs)*
+            pub async fn #fn_name(runtime: &mut Runtime) -> Result<()>
+            #fn_block
         }
     } else if shared {
         // Shared mode: public reusable function + _local test wrapper
