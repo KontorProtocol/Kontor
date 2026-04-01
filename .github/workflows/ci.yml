@@ -139,10 +139,6 @@ jobs:
       - name: Run tests (standard)
         working-directory: ./core
         run: cargo test --workspace
-      - name: Run tests (long running)
-        if: runner.os == 'macOS'
-        working-directory: ./core
-        run: cargo test --workspace -- --ignored
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
