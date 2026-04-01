@@ -11,6 +11,9 @@ pub struct Config {
     /// When true, generates only a `pub async fn` taking `runtime: &mut Runtime`
     /// with no local test wrapper. For tests that only work against a running node.
     pub regtest_only: Option<bool>,
+    /// When true, generates only a local test (no pub async fn).
+    /// Excluded from regtest_all discovery.
+    pub local_only: Option<bool>,
 }
 
 pub fn generate(config: Config, func: ItemFn) -> TokenStream {
@@ -26,6 +29,7 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
         panic!("Contracts directory does not exist: {}", path.display());
     }
     let regtest_only = config.regtest_only.unwrap_or(false);
+    let local_only = config.local_only.unwrap_or(false);
 
     let logging = if config.logging.unwrap_or(false) {
         quote! {
@@ -35,7 +39,22 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
         quote! {}
     };
 
-    if regtest_only {
+    if local_only {
+        // Local-only: standard test, not discoverable by regtest_tests! macro
+        quote! {
+            #[cfg(not(feature = "regtest-runner"))]
+            #[tokio::test]
+            #(#attrs)*
+            async fn #fn_name() -> Result<()> {
+                let abs_path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).canonicalize().unwrap();
+                let contracts_dir = abs_path.join(#contracts_dir).to_string_lossy().to_string();
+                #logging
+                let mut runtime = Runtime::new_local(RuntimeConfig::builder().contracts_dir(&contracts_dir).build()).await?;
+                let runtime = &mut runtime;
+                #fn_block
+            }
+        }
+    } else if regtest_only {
         // Regtest-only: public function, no local test wrapper
         quote! {
             #(#attrs)*

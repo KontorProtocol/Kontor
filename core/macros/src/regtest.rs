@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::{Ident, Token, parse::Parse, parse::ParseStream, punctuated::Punctuated};
 
 pub struct Config {
@@ -54,7 +54,12 @@ pub fn generate(config: Config) -> TokenStream {
                         .map(|s| s.ident.to_string())
                         .collect::<Vec<_>>()
                         .join("::");
-                    path_str == "testlib::test"
+                    if path_str != "testlib::test" {
+                        return false;
+                    }
+                    // Exclude local_only tests
+                    let attr_str = attr.to_token_stream().to_string();
+                    !attr_str.contains("local_only")
                 });
                 if !has_test_attr {
                     continue;

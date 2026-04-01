@@ -14,7 +14,7 @@ import!(
     path = "../../native-contracts/token/wit",
 );
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator() -> Result<()> {
     let validator = runtime.identity().await?;
     let ed25519_key = vec![1u8; 32];
@@ -40,7 +40,7 @@ async fn test_register_validator() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_errors() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -82,7 +82,7 @@ async fn test_register_validator_errors() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -119,7 +119,7 @@ async fn test_add_stake() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -146,7 +146,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_begin_unstake_from_pending() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -167,7 +167,7 @@ async fn test_begin_unstake_from_pending() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_unstake_returns_tokens() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -190,7 +190,7 @@ async fn test_unstake_returns_tokens() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_multiple_validators() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -207,7 +207,7 @@ async fn test_multiple_validators() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -226,7 +226,7 @@ async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -243,7 +243,7 @@ async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_token_balance() -> Result<()> {
     let validator = runtime.identity().await?;
 
