@@ -58,7 +58,7 @@ COPY --from=planner /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
 COPY --from=tool-builder /usr/local/cargo/bin/wasm-opt /usr/local/cargo/bin/
 COPY --from=tool-builder /usr/local/cargo/bin/sccache /usr/local/cargo/bin/
 
-# Install wasm32 target directly instead of copying
+# Install wasm32 target (needed for indexer build.rs when it builds test-contracts to WASM).
 RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /build
