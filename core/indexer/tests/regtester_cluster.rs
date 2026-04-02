@@ -576,7 +576,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         height: contract.height,
         tx_index: contract.tx_index,
     };
-    eprintln!("Sending increment...");
     rt.instruction(
         &mut ident,
         indexer_types::Inst::Call {
@@ -587,17 +586,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         },
     )
     .await?;
-    eprintln!("Increment processed via consensus");
-
-    // Debug: check each node individually
-    for (i, nc) in cluster.node_configs.iter().enumerate() {
-        if let Some(cn) = &nc.running {
-            let info = cn.client.index().await?;
-            let view = cn.client.view(&contract, &counter::wave::get_call_expr()).await;
-            eprintln!("Node {i}: height={}, consensus_height={:?}, counter={:?}",
-                info.height, info.consensus_height, view);
-        }
-    }
 
     cluster
         .poll_all_nodes_view(

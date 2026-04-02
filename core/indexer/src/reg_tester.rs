@@ -1242,7 +1242,10 @@ impl RegTesterCluster {
         cluster.poll_all_nodes_height(102, 60).await?;
 
         if registered > 0 || unregistered > 0 {
-            cluster.reg_tester.pre_create_identity_pools(registered, unregistered).await?;
+            cluster
+                .reg_tester
+                .pre_create_identity_pools(registered, unregistered)
+                .await?;
         }
 
         Ok(cluster)

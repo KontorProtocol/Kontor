@@ -24,7 +24,7 @@ use crate::consensus::codec::{
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
-    Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
+    Address, BatchTx, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     ValidatorSet, Value, ValueId,
 };
 use crate::database::queries::{
@@ -45,6 +45,14 @@ pub enum ConsensusResult {
     Block(indexer_types::Block),
     /// A batch was decided and executed — the reactor should emit a websocket event.
     BatchProcessed { txids: Vec<String> },
+}
+
+pub struct DeferredBatch {
+    pub anchor_height: u64,
+    pub anchor_hash: bitcoin::BlockHash,
+    pub consensus_height: Height,
+    pub certificate: Vec<u8>,
+    pub txs: Vec<bitcoin::Transaction>,
 }
 
 /// All consensus-related state for the reactor.
@@ -84,6 +92,10 @@ pub struct ConsensusState {
     // (block arrived via poller after the decision). When the block arrives,
     // it should be executed immediately without re-proposing.
     pub missed_block_decisions: HashSet<u64>,
+
+    // Batches decided via sync whose anchor block hasn't been processed yet.
+    // Drained after handle_block processes the anchor.
+    pub deferred_batches: Vec<DeferredBatch>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
@@ -130,6 +142,7 @@ impl ConsensusState {
             parsed_tx_cache: HashMap::new(),
             pending_blocks: VecDeque::new(),
             missed_block_decisions: HashSet::new(),
+            deferred_batches: Vec::new(),
             block_cache: HashMap::new(),
             cached_validator_set,
             observation: None,
@@ -143,6 +156,7 @@ impl ConsensusState {
         self.pending_blocks.clear();
         self.block_cache.clear();
         self.missed_block_decisions.clear();
+        self.deferred_batches.clear();
         self.pending_batches.clear();
         self.tx_cache.clear();
         self.parsed_tx_cache.clear();
@@ -966,34 +980,66 @@ pub async fn handle_consensus_msg(
                     Value::Batch {
                         anchor_height,
                         anchor_hash,
-                        ..
+                        txs,
                     } => {
-                        let full_txs = state
+                        // Try tx_cache first (normal path), fall back to
+                        // raw txs embedded in the Value, then resolve from
+                        // bitcoind via executor (sync path for finalized batches).
+                        let mut full_txs = state
                             .tx_cache
                             .remove(&proposal.value.id())
                             .unwrap_or_default();
+                        if full_txs.is_empty() {
+                            for entry in txs {
+                                match entry {
+                                    BatchTx::Raw(tx) => full_txs.push(tx.clone()),
+                                    BatchTx::Id(txid) => {
+                                        if let Some(tx) = executor.resolve_transaction(txid).await {
+                                            full_txs.push(tx);
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         let cert_bytes = encode_commit_certificate(&certificate)
                             .map(|p| p.encode_to_vec())
                             .unwrap_or_default();
 
-                        state
-                            .process_decided_batch(
-                                executor,
-                                runtime,
-                                *anchor_height,
-                                *anchor_hash,
-                                certificate.height,
-                                &cert_bytes,
-                                &full_txs,
-                            )
-                            .await;
-                        result = ConsensusResult::BatchProcessed {
-                            txids: full_txs
-                                .iter()
-                                .map(|tx| tx.compute_txid().to_string())
-                                .collect(),
-                        };
+                        // Defer if anchor block hasn't been processed yet (sync path)
+                        if *anchor_height > last_height {
+                            info!(
+                                anchor = anchor_height,
+                                last_height,
+                                consensus_height = %certificate.height,
+                                "Deferring batch — anchor block not yet processed"
+                            );
+                            state.deferred_batches.push(DeferredBatch {
+                                anchor_height: *anchor_height,
+                                anchor_hash: *anchor_hash,
+                                consensus_height: certificate.height,
+                                certificate: cert_bytes,
+                                txs: full_txs,
+                            });
+                        } else {
+                            state
+                                .process_decided_batch(
+                                    executor,
+                                    runtime,
+                                    *anchor_height,
+                                    *anchor_hash,
+                                    certificate.height,
+                                    &cert_bytes,
+                                    &full_txs,
+                                )
+                                .await;
+                            result = ConsensusResult::BatchProcessed {
+                                txids: full_txs
+                                    .iter()
+                                    .map(|tx| tx.compute_txid().to_string())
+                                    .collect(),
+                            };
+                        }
                     }
                     Value::Block { height, hash } => {
                         // Store block decision for sync protocol

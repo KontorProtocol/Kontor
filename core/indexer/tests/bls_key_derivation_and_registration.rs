@@ -14,7 +14,7 @@ use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_key_derivation_and_registration() -> Result<()> {
-    let mut rt = runtime.reg_tester().unwrap();
+    let rt = runtime.reg_tester().unwrap();
     // Create a randomly-keyed identity with both Taproot and BLS keys.
     // Derivation paths are network-aware (regtest → coin_type 1).
     let identity = rt.identity().await?;

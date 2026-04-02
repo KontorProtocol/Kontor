@@ -28,7 +28,7 @@ async fn test_bitcoin_client() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn test_get_raw_mempool_sequence() -> Result<()> {
-    let mut rt = runtime.reg_tester().unwrap();
+    let rt = runtime.reg_tester().unwrap();
     let client = rt.bitcoin_client().await;
     let mut ident = rt.identity().await?;
 
