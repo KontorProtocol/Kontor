@@ -176,13 +176,4 @@ impl Proof {
             .map_err(|e| Error::Validation(format!("Failed to deserialize proof: {}", e)))?;
         Ok(Self { inner })
     }
-
-    /// Get the challenge IDs this proof covers (hex-encoded).
-    pub fn challenge_ids(&self) -> Vec<String> {
-        self.inner
-            .challenge_ids
-            .iter()
-            .map(|id| hex::encode(id.0))
-            .collect()
-    }
 }

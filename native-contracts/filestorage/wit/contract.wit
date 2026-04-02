@@ -47,6 +47,8 @@ world root {
 
   record challenge-data {
     challenge-id: string,
+    shard-id: u64,
+    shard-seq: u64,
     agreement-id: string,
     block-height: u64,
     num-challenges: u64,
@@ -127,6 +129,28 @@ world root {
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 
+  export get-prover-shard-next-seq: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64
+  ) -> option<u64>;
+
+  export get-prover-shard-challenge-ids: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
+  ) -> result<list<string>, error>;
+
+  export get-active-challenges-for-prover-shard: async func(
+    ctx: borrow<view-context>,
+    prover-id: string,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
+  ) -> result<list<challenge-data>, error>;
+
   export expire-challenges: async func(
     ctx: borrow<core-context>,
     current-height: u64
@@ -140,7 +164,7 @@ world root {
 
   // Create a challenge for a specific agreement and node (deterministic, for testing)
   export create-challenge-for-agreement: async func(
-    ctx: borrow<proc-context>,
+    ctx: borrow<core-context>,
     agreement-id: string,
     node-id: string,
     block-height: u64,
@@ -153,7 +177,10 @@ world root {
 
   export verify-proof: async func(
     ctx: borrow<proc-context>,
-    proof-bytes: list<u8>
+    proof-bytes: list<u8>,
+    shard-id: u64,
+    start-seq: u64,
+    end-seq: u64
   ) -> result<verify-proof-result, error>;
 
 }

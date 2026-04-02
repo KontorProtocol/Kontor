@@ -86,7 +86,6 @@ impl FileLedger {
     ) -> Result<()> {
         let rows = select_all_file_metadata(conn).await?;
 
-        // Add all files to rebuild the tree (this will generate incorrect historical roots)
         ledger
             .add_files(&rows)
             .map_err(|e| anyhow!("Failed to add files to ledger: {:?}", e))?;
@@ -105,10 +104,13 @@ impl FileLedger {
     /// Holds the lock for the entire operation to ensure the in-memory ledger
     /// and database stay in sync even with concurrent calls.
     ///
-    /// The historical root (the pre-modification ledger root) is captured and stored
-    /// in the database for later reconstruction during rebuilds.
+    /// The assigned stable ledger index and recorded historical root are persisted
+    /// so the in-memory ledger can be reconstructed exactly after restart/rollback.
     pub async fn add_file(&self, conn: &Connection, metadata: &FileMetadataRow) -> Result<()> {
         let mut inner = self.inner.write().await;
+
+        let next_ledger_index = u64::try_from(inner.ledger.next_ledger_index())
+            .map_err(|_| anyhow!("ledger index exceeds u64"))?; // todo
 
         // Capture the number of historical roots before adding
         let historical_roots_count_before = inner.ledger.historical_roots.len();
@@ -131,6 +133,7 @@ impl FileLedger {
 
         // Create metadata with the historical root for persistence
         let metadata_with_historical = FileMetadataRow {
+            ledger_index: Some(next_ledger_index),
             historical_root,
             ..metadata.clone()
         };
