@@ -5,7 +5,7 @@ testlib::regtest_tests! {
     bls_key_derivation_and_registration,
     bls_replay_protection,
     bls_user_registry,
-    // compose, // needs fund_address which requires admin identity
+    compose,
     counter_contract,
     crypto_contract,
     fib_contract,

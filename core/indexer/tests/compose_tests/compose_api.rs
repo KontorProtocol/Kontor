@@ -649,10 +649,15 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
 
 pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<()> {
     // Use a non-taproot address (p2wpkh) to trigger Invalid address type
-    let seller_identity = reg_tester.identity_p2wpkh().await?;
-    let seller_address = seller_identity.address;
-    let (internal_key, _parity) = seller_identity.keypair.x_only_public_key();
-    let (out_point, _utxo_for_output) = seller_identity.next_funding_utxo;
+    let secp = bitcoin::key::Secp256k1::new();
+    let keypair = bitcoin::key::Keypair::new(&secp, &mut bitcoin::key::rand::thread_rng());
+    let (internal_key, _parity) = keypair.x_only_public_key();
+    let secret_key = bitcoin::secp256k1::SecretKey::new(&mut bitcoin::key::rand::thread_rng());
+    let private_key = bitcoin::PrivateKey::new(secret_key, bitcoin::Network::Regtest);
+    let public_key = bitcoin::key::PublicKey::from_private_key(&secp, &private_key);
+    let compressed = bitcoin::CompressedPublicKey(public_key.inner);
+    let seller_address = bitcoin::Address::p2wpkh(&compressed, bitcoin::Network::Regtest);
+    let out_point = bitcoin::OutPoint::null();
 
     let token_data = WitnessData::Attach {
         output_index: 0,
