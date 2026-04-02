@@ -22,10 +22,9 @@ import!(
 async fn test_native_token_attach_contract() -> Result<()> {
     let secp = Secp256k1::new();
 
-    let mut rt = runtime.reg_tester().unwrap();
+    let rt = runtime.reg_tester().unwrap();
 
-    let mut identity = rt.identity().await?;
-    rt.instruction(&mut identity, Inst::Issuance).await?;
+    let identity = rt.identity().await?;
     let buyer_identity = rt.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;

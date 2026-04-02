@@ -11,7 +11,6 @@ async fn test_get_ops_from_api() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    rt.instruction(&mut ident, Inst::Issuance).await?;
     let InstructionResult { reveal_tx_hex, .. } = rt
         .instruction(
             &mut ident,
