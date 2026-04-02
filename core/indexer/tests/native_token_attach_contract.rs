@@ -176,9 +176,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         .generate_to_address(1, &seller_address.to_string())
         .await?;
     let reveal_txid = reveal_transaction.compute_txid().to_string();
-    let id = OpResultId::builder()
-        .txid(reveal_txid.clone())
-        .build();
+    let id = OpResultId::builder().txid(reveal_txid.clone()).build();
 
     rt.wait_for_txids(&[reveal_txid]).await?;
     let attach_result = rt
@@ -210,9 +208,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         .await?;
 
     let detach_txid = detach_transaction.compute_txid().to_string();
-    let id = OpResultId::builder()
-        .txid(detach_txid.clone())
-        .build();
+    let id = OpResultId::builder().txid(detach_txid.clone()).build();
 
     rt.wait_for_txids(&[detach_txid]).await?;
     let detach_result = rt

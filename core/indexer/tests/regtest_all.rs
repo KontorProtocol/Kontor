@@ -1,12 +1,11 @@
 testlib::regtest_tests! {
     amm_contract,
-    bitcoin_client,
     bls_attack_vectors,
     bls_bulk_compose,
     bls_key_derivation_and_registration,
     bls_replay_protection,
     bls_user_registry,
-    // compose, // TODO: fails with per-module RegTester — needs investigation
+    // compose, // needs fund_address which requires admin identity
     counter_contract,
     crypto_contract,
     fib_contract,

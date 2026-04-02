@@ -55,8 +55,12 @@ async fn test_native_token_contract() -> Result<()> {
 
     let balances = token::balances(runtime).await?;
     assert!(balances.len() >= 2);
-    let total = balances.iter().fold(Decimal::from(0), |acc, x| acc + x.amt);
-    assert_eq!(total, token::total_supply(runtime).await?);
+    // Total supply vs sum-of-balances check: only valid in local mode where
+    // no concurrent modules modify native token state between the two queries.
+    if runtime.reg_tester().is_none() {
+        let total = balances.iter().fold(Decimal::from(0), |acc, x| acc + x.amt);
+        assert_eq!(total, token::total_supply(runtime).await?);
+    }
 
     Ok(())
 }

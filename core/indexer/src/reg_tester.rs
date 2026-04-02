@@ -213,30 +213,58 @@ pub struct P2wpkhIdentity {
     pub next_funding_utxo: (OutPoint, TxOut),
 }
 
-fn generate_random_ecdsa_key(network: Network) -> (PrivateKey, CompressedPublicKey) {
-    let secp = Secp256k1::new();
-    let secret_key = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
-    let private_key = PrivateKey::new(secret_key, network);
-    let public_key = bitcoin::key::PublicKey::from_private_key(&secp, &private_key);
-    let compressed_pubkey = CompressedPublicKey(public_key.inner);
-    (private_key, compressed_pubkey)
+/// Thread-safe identity pool shared between the cluster and module RegTesters.
+#[derive(Clone)]
+pub struct IdentityPool {
+    registered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
+    unregistered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
+}
+
+impl IdentityPool {
+    pub fn new() -> Self {
+        Self {
+            registered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            unregistered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        }
+    }
+
+    pub async fn pop_registered(&self) -> Result<Identity> {
+        self.registered
+            .lock()
+            .await
+            .pop_front()
+            .ok_or_else(|| anyhow!("Identity pool exhausted"))
+    }
+
+    pub async fn pop_unregistered(&self) -> Result<Identity> {
+        self.unregistered
+            .lock()
+            .await
+            .pop_front()
+            .ok_or_else(|| anyhow!("Unregistered identity pool exhausted"))
+    }
+
+    pub async fn extend_registered(&self, identities: Vec<Identity>) {
+        self.registered.lock().await.extend(identities);
+    }
+
+    pub async fn extend_unregistered(&self, identities: Vec<Identity>) {
+        self.unregistered.lock().await.extend(identities);
+    }
 }
 
 pub struct RegTesterInner {
     pub bitcoin_client: BitcoinClient,
     kontor_client: KontorClient,
     ws_client: WebSocketClient,
-    identity: Identity,
+    /// Address to mine blocks to (cluster admin identity's address).
+    mine_address: String,
     /// When true, batchable ops skip mining and rely on consensus batching.
-    /// Set for RegTesters created from a RegTesterCluster (which has an auto-miner).
     pub cluster_mode: bool,
     /// Cache of published contracts by name — enables idempotent publish.
     pub published_contracts: HashMap<String, ContractAddress>,
-    /// Pre-created identities with BLS registration and issuance complete.
-    /// Arc<Mutex> allows sharing across module RegTesters in concurrent test execution.
-    pub identity_pool: Arc<Mutex<std::collections::VecDeque<Identity>>>,
-    /// Pre-created funded identities without BLS registration or issuance.
-    pub unregistered_identity_pool: Arc<Mutex<std::collections::VecDeque<Identity>>>,
+    /// Shared identity pool for popping pre-created identities.
+    pub pool: IdentityPool,
 }
 
 pub struct SendInstructionResult {
@@ -252,30 +280,22 @@ pub struct InstructionResult {
 }
 
 impl RegTesterInner {
-    pub async fn new(
-        identity: Identity,
-        bitcoin_client: BitcoinClient,
-        kontor_client: KontorClient,
-    ) -> Result<Self> {
-        Self::with_port(identity, bitcoin_client, kontor_client, 9333).await
-    }
-
     pub async fn with_port(
-        identity: Identity,
         bitcoin_client: BitcoinClient,
         kontor_client: KontorClient,
         api_port: u16,
+        mine_address: String,
+        pool: IdentityPool,
     ) -> Result<Self> {
         let ws_client = WebSocketClient::new(api_port).await?;
         Ok(Self {
-            identity,
             ws_client,
             bitcoin_client,
             kontor_client,
+            mine_address,
             cluster_mode: false,
             published_contracts: HashMap::new(),
-            identity_pool: Arc::new(Mutex::new(std::collections::VecDeque::new())),
-            unregistered_identity_pool: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            pool,
         })
     }
 
@@ -310,10 +330,9 @@ impl RegTesterInner {
         Ok(txids)
     }
 
-    /// Mine blocks, sending coinbase rewards to the initial identity's address.
-    pub async fn mine(&mut self, count: u64) -> Result<()> {
+    pub async fn mine(&self, count: u64) -> Result<()> {
         self.bitcoin_client
-            .generate_to_address(count, &self.identity.address.to_string())
+            .generate_to_address(count, &self.mine_address)
             .await?;
         Ok(())
     }
@@ -475,12 +494,8 @@ impl RegTesterInner {
     }
 
     /// Pop a pre-created funded identity without BLS registration from the pool.
-    pub async fn unregistered_identity(&mut self) -> Result<Identity> {
-        self.unregistered_identity_pool
-            .lock()
-            .await
-            .pop_front()
-            .ok_or_else(|| anyhow!("Unregistered identity pool exhausted — increase pre_create_unregistered_identities count"))
+    pub async fn unregistered_identity(&self) -> Result<Identity> {
+        self.pool.pop_unregistered().await
     }
 
     /// Wait for multiple txids to appear in websocket events (batch or block).
@@ -510,249 +525,8 @@ impl RegTesterInner {
     }
 
     /// Pop a pre-created identity with BLS registration and issuance from the pool.
-    pub async fn identity(&mut self) -> Result<Identity> {
-        self.identity_pool.lock().await.pop_front().ok_or_else(|| {
-            anyhow!("Identity pool exhausted — increase pre_create_identities count")
-        })
-    }
-
-    /// Pre-create both identity pools in a single funding transaction.
-    /// One tx with (registered + unregistered) outputs, one mine, then
-    /// pipelines RegisterBlsKey + Issuance for the registered subset.
-    pub async fn pre_create_identity_pools(
-        &mut self,
-        registered: usize,
-        unregistered: usize,
-    ) -> Result<()> {
-        let total = registered + unregistered;
-        if total == 0 {
-            return Ok(());
-        }
-
-        let secp = Secp256k1::new();
-        let per_identity_amount = Amount::from_sat(100_000);
-
-        let mut identities: Vec<Identity> = Vec::with_capacity(total);
-        let mut outputs = Vec::with_capacity(total + 1);
-        for _ in 0..total {
-            let mut seed = [0u8; 64];
-            rand::thread_rng().fill_bytes(&mut seed);
-            let taproot_path = taproot_derivation_path(Network::Regtest);
-            let bls_path = bls_derivation_path(Network::Regtest);
-            let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
-            let (x_only_public_key, ..) = keypair.x_only_public_key();
-            let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
-            let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
-
-            outputs.push(TxOut {
-                value: per_identity_amount,
-                script_pubkey: address.script_pubkey(),
-            });
-            identities.push(Identity {
-                address: address.clone(),
-                keypair,
-                next_funding_utxo: (
-                    OutPoint::null(),
-                    TxOut {
-                        value: Amount::ZERO,
-                        script_pubkey: address.script_pubkey(),
-                    },
-                ),
-                bls_secret_key: bls_sk.to_bytes(),
-                bls_pubkey: bls_sk.sk_to_pk().to_bytes(),
-            });
-        }
-
-        // Change output back to the main identity. Fee scales with outputs (~34 bytes each).
-        let fee = Amount::from_sat(1000 + (total as u64) * 50);
-        let total_needed = per_identity_amount * total as u64 + fee;
-        let change = self.identity.next_funding_utxo.1.value - total_needed;
-        outputs.push(TxOut {
-            value: change,
-            script_pubkey: self.identity.address.script_pubkey(),
-        });
-
-        // Build and sign the funding tx
-        let mut funding_tx = Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: self.identity.next_funding_utxo.0,
-                ..Default::default()
-            }],
-            output: outputs,
-        };
-        test_utils::sign_key_spend(
-            &secp,
-            &mut funding_tx,
-            std::slice::from_ref(&self.identity.next_funding_utxo.1),
-            &self.identity.keypair,
-            0,
-            None,
-        )?;
-
-        let funding_txid = funding_tx.compute_txid();
-        let raw_tx = hex::encode(serialize_tx(&funding_tx));
-        self.send_to_mempool(&[raw_tx]).await?;
-
-        // Update main identity's UTXO to the change output
-        self.identity.next_funding_utxo = (
-            OutPoint {
-                txid: funding_txid,
-                vout: total as u32,
-            },
-            funding_tx.output[total].clone(),
-        );
-
-        // Set each identity's funding UTXO
-        for (i, ident) in identities.iter_mut().enumerate() {
-            ident.next_funding_utxo = (
-                OutPoint {
-                    txid: funding_txid,
-                    vout: i as u32,
-                },
-                funding_tx.output[i].clone(),
-            );
-        }
-
-        // Mine once to confirm all funding outputs
-        self.mine(1).await?;
-
-        // Split: unregistered go straight to pool, registered get BLS + issuance
-        let unregistered_identities = identities.split_off(registered);
-        self.unregistered_identity_pool
-            .lock()
-            .await
-            .extend(unregistered_identities);
-
-        // Pipeline RegisterBlsKey + Issuance for registered identities
-        let mut txids = Vec::with_capacity(registered * 2);
-        for ident in &mut identities {
-            let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
-            let reg = self
-                .send_instruction(
-                    ident,
-                    Inst::RegisterBlsKey {
-                        bls_pubkey: proof.bls_pubkey.to_vec(),
-                        schnorr_sig: proof.schnorr_sig.to_vec(),
-                        bls_sig: proof.bls_sig.to_vec(),
-                    },
-                )
-                .await?;
-            let iss = self.send_instruction(ident, Inst::Issuance).await?;
-            txids.push(reg.reveal_txid.to_string());
-            txids.push(iss.reveal_txid.to_string());
-        }
-
-        if !txids.is_empty() {
-            self.wait_for_txids(&txids).await?;
-        }
-
-        self.identity_pool.lock().await.extend(identities);
-        tracing::info!(registered, unregistered, "Pre-created identity pools");
-
-        Ok(())
-    }
-
-    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
-        let network = Network::Regtest;
-        let secp = Secp256k1::new();
-        let (private_key, compressed_public_key) = generate_random_ecdsa_key(network);
-        let address = Address::p2wpkh(&compressed_public_key, network);
-        let keypair = Keypair::new(&secp, &mut rand::thread_rng());
-        let mut funded = self.fund_address(&address, 1).await?;
-        let next_funding_utxo = funded
-            .pop()
-            .ok_or_else(|| anyhow!("failed to fund p2wpkh identity"))?;
-        Ok(P2wpkhIdentity {
-            address,
-            compressed_public_key,
-            private_key,
-            keypair,
-            next_funding_utxo,
-        })
-    }
-
-    pub async fn fund_address(
-        &mut self,
-        address: &Address,
-        count: u32,
-    ) -> Result<Vec<(OutPoint, TxOut)>> {
-        if count == 0 {
-            return Ok(vec![]);
-        }
-
-        let total_output_value = self.identity.next_funding_utxo.1.value - Amount::from_sat(1000);
-        let value_per_output = total_output_value.to_sat() / count as u64;
-        let remainder = total_output_value.to_sat() % count as u64;
-
-        let mut outputs = Vec::with_capacity(count as usize);
-        for i in 0..count {
-            let mut value = value_per_output;
-            if i == 0 {
-                value += remainder;
-            }
-            outputs.push(TxOut {
-                value: Amount::from_sat(value),
-                script_pubkey: address.script_pubkey(),
-            });
-        }
-
-        let mut tx = Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: self.identity.next_funding_utxo.0,
-                ..Default::default()
-            }],
-            output: outputs,
-        };
-        let secp = Secp256k1::new();
-        test_utils::sign_key_spend(
-            &secp,
-            &mut tx,
-            std::slice::from_ref(&self.identity.next_funding_utxo.1),
-            &self.identity.keypair,
-            0,
-            None,
-        )?;
-
-        let raw_tx = hex::encode(serialize_tx(&tx));
-        let txids = self.send_to_mempool(&[raw_tx]).await?;
-        let txid = txids[0];
-        self.mine(1).await?;
-
-        // Refresh self.identity's funding UTXO from the newly matured coinbase
-        let info = self.bitcoin_client.get_blockchain_info().await?;
-        let block_hash = self
-            .bitcoin_client
-            .get_block_hash(info.blocks - 100)
-            .await?;
-        let block = self.bitcoin_client.get_block(&block_hash).await?;
-        self.identity.next_funding_utxo = (
-            OutPoint {
-                txid: block.txdata[0].compute_txid(),
-                vout: 0,
-            },
-            block.txdata[0].output[0].clone(),
-        );
-
-        let next_funding_utxos = tx
-            .output
-            .into_iter()
-            .enumerate()
-            .map(|(i, tx_out)| {
-                (
-                    OutPoint {
-                        txid,
-                        vout: i as u32,
-                    },
-                    tx_out,
-                )
-            })
-            .collect();
-
-        Ok(next_funding_utxos)
+    pub async fn identity(&self) -> Result<Identity> {
+        self.pool.pop_registered().await
     }
 
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
@@ -782,18 +556,6 @@ pub struct RegTester {
 }
 
 impl RegTester {
-    pub async fn new(
-        identity: Identity,
-        bitcoin_client: BitcoinClient,
-        kontor_client: KontorClient,
-    ) -> Result<Self> {
-        Ok(Self {
-            inner: Arc::new(Mutex::new(
-                RegTesterInner::new(identity, bitcoin_client, kontor_client).await?,
-            )),
-        })
-    }
-
     pub async fn bitcoin_client(&self) -> BitcoinClient {
         self.inner.lock().await.bitcoin_client.clone()
     }
@@ -885,7 +647,7 @@ impl RegTester {
     }
 
     pub async fn send_instruction(
-        &mut self,
+        &self,
         ident: &mut Identity,
         inst: Inst,
     ) -> Result<SendInstructionResult> {
@@ -932,32 +694,8 @@ impl RegTester {
         self.inner.lock().await.identity().await
     }
 
-    pub async fn pre_create_identity_pools(
-        &self,
-        registered: usize,
-        unregistered: usize,
-    ) -> Result<()> {
-        self.inner
-            .lock()
-            .await
-            .pre_create_identity_pools(registered, unregistered)
-            .await
-    }
-
     pub async fn cluster_mode(&self) -> bool {
         self.inner.lock().await.cluster_mode
-    }
-
-    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
-        self.inner.lock().await.identity_p2wpkh().await
-    }
-
-    pub async fn fund_address(
-        &mut self,
-        address: &Address,
-        count: u32,
-    ) -> Result<Vec<(OutPoint, TxOut)>> {
-        self.inner.lock().await.fund_address(address, count).await
     }
 
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
@@ -966,6 +704,19 @@ impl RegTester {
 
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
+    }
+
+    // TODO: reimplement for compose tests — needs admin identity for funding
+    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
+        bail!("identity_p2wpkh not available on module RegTester — use cluster method")
+    }
+
+    pub async fn fund_address(
+        &mut self,
+        _address: &Address,
+        _count: u32,
+    ) -> Result<Vec<(OutPoint, TxOut)>> {
+        bail!("fund_address not available on module RegTester — use cluster method")
     }
 
     pub async fn get_published(&self, name: &str) -> Option<ContractAddress> {
@@ -1069,6 +820,7 @@ pub struct RegTesterCluster {
     pub node_configs: Vec<NodeConfig>,
     pub identity: Identity,
     pub reg_tester: RegTester,
+    pub pool: IdentityPool,
     node_counter: AtomicUsize,
     genesis_path: std::path::PathBuf,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
@@ -1223,16 +975,20 @@ impl RegTesterCluster {
             }
         });
 
+        let pool = IdentityPool::new();
+
         let client = &node_configs[0]
             .running
             .as_ref()
             .expect("Node 0 not running")
             .client;
+        let mine_address = identity.address.to_string();
         let mut inner = RegTesterInner::with_port(
-            identity.clone(),
             bitcoin_client.clone(),
             client.clone(),
             node_configs[0].api_port,
+            mine_address,
+            pool.clone(),
         )
         .await?;
         inner.cluster_mode = true;
@@ -1245,6 +1001,7 @@ impl RegTesterCluster {
             node_configs,
             identity,
             reg_tester,
+            pool,
             node_counter: AtomicUsize::new(0),
             genesis_path,
             miner_cmd_tx,
@@ -1258,7 +1015,6 @@ impl RegTesterCluster {
 
         if registered > 0 || unregistered > 0 {
             cluster
-                .reg_tester
                 .pre_create_identity_pools(registered, unregistered)
                 .await?;
         }
@@ -1363,36 +1119,152 @@ impl RegTesterCluster {
 
         let nc = &self.node_configs[node_idx];
         let client = &nc.running.as_ref().unwrap().client;
-        let shared_inner = self.reg_tester.inner.lock().await;
-        let identity = shared_inner
-            .identity_pool
-            .lock()
-            .await
-            .pop_front()
-            .ok_or_else(|| anyhow!("Identity pool exhausted in new_module_reg_tester"))?;
-        let identity_pool = shared_inner.identity_pool.clone();
-        let unregistered_identity_pool = shared_inner.unregistered_identity_pool.clone();
-        drop(shared_inner);
-
         let mut inner = RegTesterInner::with_port(
-            identity,
             self.bitcoin_client.clone(),
             client.clone(),
             nc.api_port,
+            self.identity.address.to_string(),
+            self.pool.clone(),
         )
         .await?;
         inner.cluster_mode = true;
-        inner.identity_pool = identity_pool;
-        inner.unregistered_identity_pool = unregistered_identity_pool;
         Ok(RegTester {
             inner: Arc::new(Mutex::new(inner)),
         })
     }
 
+    /// Pre-create identity pools using the admin identity for funding.
+    /// Populates the cluster's shared IdentityPool.
+    async fn pre_create_identity_pools(
+        &self,
+        registered: usize,
+        unregistered: usize,
+    ) -> Result<()> {
+        let total = registered + unregistered;
+        if total == 0 {
+            return Ok(());
+        }
+
+        let secp = Secp256k1::new();
+        let per_identity_amount = Amount::from_sat(100_000);
+
+        let mut identities: Vec<Identity> = Vec::with_capacity(total);
+        let mut outputs = Vec::with_capacity(total + 1);
+        for _ in 0..total {
+            let mut seed = [0u8; 64];
+            rand::thread_rng().fill_bytes(&mut seed);
+            let taproot_path = taproot_derivation_path(Network::Regtest);
+            let bls_path = bls_derivation_path(Network::Regtest);
+            let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+            let (x_only_public_key, ..) = keypair.x_only_public_key();
+            let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+            let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
+
+            outputs.push(TxOut {
+                value: per_identity_amount,
+                script_pubkey: address.script_pubkey(),
+            });
+            identities.push(Identity {
+                address: address.clone(),
+                keypair,
+                next_funding_utxo: (
+                    OutPoint::null(),
+                    TxOut {
+                        value: Amount::ZERO,
+                        script_pubkey: address.script_pubkey(),
+                    },
+                ),
+                bls_secret_key: bls_sk.to_bytes(),
+                bls_pubkey: bls_sk.sk_to_pk().to_bytes(),
+            });
+        }
+
+        // Change output back to the admin identity
+        let fee = Amount::from_sat(1000 + (total as u64) * 50);
+        let total_needed = per_identity_amount * total as u64 + fee;
+        let change = self.identity.next_funding_utxo.1.value - total_needed;
+        outputs.push(TxOut {
+            value: change,
+            script_pubkey: self.identity.address.script_pubkey(),
+        });
+
+        let mut funding_tx = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: self.identity.next_funding_utxo.0,
+                ..Default::default()
+            }],
+            output: outputs,
+        };
+        test_utils::sign_key_spend(
+            &secp,
+            &mut funding_tx,
+            std::slice::from_ref(&self.identity.next_funding_utxo.1),
+            &self.identity.keypair,
+            0,
+            None,
+        )?;
+
+        let funding_txid = funding_tx.compute_txid();
+        let raw_tx = hex::encode(serialize_tx(&funding_tx));
+        self.reg_tester.send_to_mempool(&[raw_tx]).await?;
+
+        // Set each identity's funding UTXO
+        for (i, ident) in identities.iter_mut().enumerate() {
+            ident.next_funding_utxo = (
+                OutPoint {
+                    txid: funding_txid,
+                    vout: i as u32,
+                },
+                funding_tx.output[i].clone(),
+            );
+        }
+
+        // Mine once to confirm all funding outputs
+        self.mine(1).await?;
+
+        // Split: unregistered go straight to pool, registered get BLS + issuance
+        let unregistered_identities = identities.split_off(registered);
+        self.pool.extend_unregistered(unregistered_identities).await;
+
+        // Pipeline RegisterBlsKey + Issuance for registered identities
+        let mut txids = Vec::with_capacity(registered * 2);
+        for ident in &mut identities {
+            let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
+            let reg = self
+                .reg_tester
+                .send_instruction(
+                    ident,
+                    Inst::RegisterBlsKey {
+                        bls_pubkey: proof.bls_pubkey.to_vec(),
+                        schnorr_sig: proof.schnorr_sig.to_vec(),
+                        bls_sig: proof.bls_sig.to_vec(),
+                    },
+                )
+                .await?;
+            let iss = self
+                .reg_tester
+                .send_instruction(ident, Inst::Issuance)
+                .await?;
+            txids.push(reg.reveal_txid.to_string());
+            txids.push(iss.reveal_txid.to_string());
+        }
+
+        if !txids.is_empty() {
+            self.reg_tester.wait_for_txids(&txids).await?;
+        }
+
+        self.pool.extend_registered(identities).await;
+        tracing::info!(registered, unregistered, "Pre-created identity pools");
+
+        Ok(())
+    }
+
     /// Pop a pre-created identity (with BLS registration and issuance) from the shared pool.
     pub async fn identity(&self) -> Result<(RegTester, Identity)> {
         let rt = self.reg_tester();
-        let identity = rt.identity().await?;
+        let identity = self.pool.pop_registered().await?;
         Ok((rt, identity))
     }
 
