@@ -110,7 +110,7 @@ pub fn generate(config: Config) -> TokenStream {
 
     let contracts_dir_ident = format_ident!("contracts_dir");
 
-    // Generate a static list of test names per module for filter matching
+    // Generate per-module filter match arms
     let mut filter_match_arms = Vec::new();
     for module in &config.modules {
         let module_file = tests_dir.join(format!("{}.rs", module));
@@ -143,11 +143,15 @@ pub fn generate(config: Config) -> TokenStream {
             })
             .collect();
 
-        for name in &test_names {
-            filter_match_arms.push(quote! {
-                if #name.contains(filter) { return true; }
-            });
-        }
+        let name_checks: Vec<_> = test_names
+            .iter()
+            .map(|name| quote! { if #name.contains(filter) { return true; } })
+            .collect();
+        filter_match_arms.push(quote! {
+            if module == #module_str {
+                #(#name_checks)*
+            }
+        });
     }
 
     quote! {

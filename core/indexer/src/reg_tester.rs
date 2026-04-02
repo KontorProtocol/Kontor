@@ -996,7 +996,7 @@ impl RegTesterCluster {
             inner: Arc::new(Mutex::new(inner)),
         };
 
-        let cluster = Self {
+        let mut cluster = Self {
             bitcoin_client,
             node_configs,
             identity,
@@ -1136,7 +1136,7 @@ impl RegTesterCluster {
     /// Pre-create identity pools using the admin identity for funding.
     /// Populates the cluster's shared IdentityPool.
     async fn pre_create_identity_pools(
-        &self,
+        &mut self,
         registered: usize,
         unregistered: usize,
     ) -> Result<()> {
@@ -1209,6 +1209,15 @@ impl RegTesterCluster {
         let funding_txid = funding_tx.compute_txid();
         let raw_tx = hex::encode(serialize_tx(&funding_tx));
         self.reg_tester.send_to_mempool(&[raw_tx]).await?;
+
+        // Update admin identity's UTXO to the change output
+        self.identity.next_funding_utxo = (
+            OutPoint {
+                txid: funding_txid,
+                vout: total as u32,
+            },
+            funding_tx.output[total].clone(),
+        );
 
         // Set each identity's funding UTXO
         for (i, ident) in identities.iter_mut().enumerate() {
