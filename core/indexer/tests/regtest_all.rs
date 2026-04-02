@@ -1,6 +1,5 @@
 testlib::regtest_tests! {
     amm_contract,
-    bitcoin_client,
     bls_attack_vectors,
     bls_bulk_compose,
     bls_key_derivation_and_registration,

@@ -173,25 +173,8 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
-    let mut victim = rt.unregistered_identity().await?;
-    let victim_proof = RegistrationProof::new(&victim.keypair, &victim.bls_secret_key)?;
-    rt.instruction(
-        &mut victim,
-        Inst::RegisterBlsKey {
-            bls_pubkey: victim_proof.bls_pubkey.to_vec(),
-            schnorr_sig: victim_proof.schnorr_sig.to_vec(),
-            bls_sig: victim_proof.bls_sig.to_vec(),
-        },
-    )
-    .await?;
-
+    let victim = rt.identity().await?;
     let victim_xonly = victim.x_only_public_key().to_string();
-    assert!(
-        registry::get_signer_id(runtime, &victim_xonly)
-            .await?
-            .is_some(),
-        "Victim must be registered"
-    );
 
     let mut beta_ikm = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut beta_ikm);
@@ -247,7 +230,7 @@ async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
     );
     assert_eq!(
         registry::get_bls_pubkey(runtime, &victim_xonly).await?,
-        Some(victim_proof.bls_pubkey.to_vec()),
+        Some(victim.bls_pubkey.to_vec()),
         "victim's registered key must be unchanged"
     );
 
@@ -257,32 +240,16 @@ async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_attack_proof_replay_rejected() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
-    let mut alice = rt.unregistered_identity().await?;
-    let alice_proof = RegistrationProof::new(&alice.keypair, &alice.bls_secret_key)?;
-    rt.instruction(
-        &mut alice,
-        Inst::RegisterBlsKey {
-            bls_pubkey: alice_proof.bls_pubkey.to_vec(),
-            schnorr_sig: alice_proof.schnorr_sig.to_vec(),
-            bls_sig: alice_proof.bls_sig.to_vec(),
-        },
-    )
-    .await?;
-
+    let alice = rt.identity().await?;
     let alice_xonly = alice.x_only_public_key().to_string();
-    assert!(
-        registry::get_signer_id(runtime, &alice_xonly)
-            .await?
-            .is_some(),
-        "Alice must be registered before the replay attempt"
-    );
+    let alice_proof = RegistrationProof::new(&alice.keypair, &alice.bls_secret_key)?;
 
     let mut eve = rt.unregistered_identity().await?;
     let secp = Secp256k1::new();
     let eve_schnorr_msg = {
         let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
         preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
-        preimage.extend_from_slice(&alice_proof.bls_pubkey);
+        preimage.extend_from_slice(&alice.bls_pubkey);
         let digest = sha256::Hash::hash(&preimage).to_byte_array();
         Message::from_digest_slice(&digest).expect("32-byte digest")
     };
@@ -294,7 +261,7 @@ async fn bls_attack_proof_replay_rejected() -> Result<()> {
         .instruction(
             &mut eve,
             Inst::RegisterBlsKey {
-                bls_pubkey: alice_proof.bls_pubkey.to_vec(),
+                bls_pubkey: alice.bls_pubkey.to_vec(),
                 schnorr_sig: eve_schnorr_sig.to_vec(),
                 bls_sig: alice_proof.bls_sig.to_vec(),
             },
@@ -309,7 +276,7 @@ async fn bls_attack_proof_replay_rejected() -> Result<()> {
     );
     assert_eq!(
         registry::get_bls_pubkey(runtime, &alice_xonly).await?,
-        Some(alice_proof.bls_pubkey.to_vec()),
+        Some(alice.bls_pubkey.to_vec()),
         "Alice's registered key must be unchanged"
     );
 
