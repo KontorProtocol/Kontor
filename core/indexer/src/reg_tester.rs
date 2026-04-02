@@ -1,4 +1,12 @@
-use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::Path,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use backon::BackoffBuilder;
 
@@ -225,9 +233,10 @@ pub struct RegTesterInner {
     /// Cache of published contracts by name — enables idempotent publish.
     pub published_contracts: HashMap<String, ContractAddress>,
     /// Pre-created identities with BLS registration and issuance complete.
-    pub identity_pool: std::collections::VecDeque<Identity>,
+    /// Arc<Mutex> allows sharing across module RegTesters in concurrent test execution.
+    pub identity_pool: Arc<Mutex<std::collections::VecDeque<Identity>>>,
     /// Pre-created funded identities without BLS registration or issuance.
-    pub unregistered_identity_pool: std::collections::VecDeque<Identity>,
+    pub unregistered_identity_pool: Arc<Mutex<std::collections::VecDeque<Identity>>>,
 }
 
 pub struct SendInstructionResult {
@@ -265,8 +274,8 @@ impl RegTesterInner {
             kontor_client,
             cluster_mode: false,
             published_contracts: HashMap::new(),
-            identity_pool: std::collections::VecDeque::new(),
-            unregistered_identity_pool: std::collections::VecDeque::new(),
+            identity_pool: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            unregistered_identity_pool: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         })
     }
 
@@ -468,6 +477,8 @@ impl RegTesterInner {
     /// Pop a pre-created funded identity without BLS registration from the pool.
     pub async fn unregistered_identity(&mut self) -> Result<Identity> {
         self.unregistered_identity_pool
+            .lock()
+            .await
             .pop_front()
             .ok_or_else(|| anyhow!("Unregistered identity pool exhausted — increase pre_create_unregistered_identities count"))
     }
@@ -500,7 +511,7 @@ impl RegTesterInner {
 
     /// Pop a pre-created identity with BLS registration and issuance from the pool.
     pub async fn identity(&mut self) -> Result<Identity> {
-        self.identity_pool.pop_front().ok_or_else(|| {
+        self.identity_pool.lock().await.pop_front().ok_or_else(|| {
             anyhow!("Identity pool exhausted — increase pre_create_identities count")
         })
     }
@@ -610,6 +621,8 @@ impl RegTesterInner {
         // Split: unregistered go straight to pool, registered get BLS + issuance
         let unregistered_identities = identities.split_off(registered);
         self.unregistered_identity_pool
+            .lock()
+            .await
             .extend(unregistered_identities);
 
         // Pipeline RegisterBlsKey + Issuance for registered identities
@@ -635,7 +648,7 @@ impl RegTesterInner {
             self.wait_for_txids(&txids).await?;
         }
 
-        self.identity_pool.extend(identities);
+        self.identity_pool.lock().await.extend(identities);
         tracing::info!(registered, unregistered, "Pre-created identity pools");
 
         Ok(())
@@ -1056,6 +1069,7 @@ pub struct RegTesterCluster {
     pub node_configs: Vec<NodeConfig>,
     pub identity: Identity,
     pub reg_tester: RegTester,
+    node_counter: AtomicUsize,
     genesis_path: std::path::PathBuf,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
     _miner_handle: tokio::task::JoinHandle<()>,
@@ -1231,6 +1245,7 @@ impl RegTesterCluster {
             node_configs,
             identity,
             reg_tester,
+            node_counter: AtomicUsize::new(0),
             genesis_path,
             miner_cmd_tx,
             _miner_handle: miner_handle,
@@ -1329,6 +1344,49 @@ impl RegTesterCluster {
     /// node 0 RegTester (same pools, same state via Arc<Mutex>).
     pub fn reg_tester(&self) -> RegTester {
         self.reg_tester.clone()
+    }
+
+    /// Create an independent `RegTester` for a test module. Round-robins across
+    /// running nodes. Pops a funding identity from the shared pool. Each returned
+    /// `RegTester` has its own websocket, UTXO chain, and publish cache.
+    pub async fn new_module_reg_tester(&self) -> Result<RegTester> {
+        let running: Vec<usize> = self
+            .node_configs
+            .iter()
+            .enumerate()
+            .filter(|(_, nc)| nc.running.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert!(!running.is_empty(), "No running nodes");
+        let idx = self.node_counter.fetch_add(1, Ordering::Relaxed) % running.len();
+        let node_idx = running[idx];
+
+        let nc = &self.node_configs[node_idx];
+        let client = &nc.running.as_ref().unwrap().client;
+        let shared_inner = self.reg_tester.inner.lock().await;
+        let identity = shared_inner
+            .identity_pool
+            .lock()
+            .await
+            .pop_front()
+            .ok_or_else(|| anyhow!("Identity pool exhausted in new_module_reg_tester"))?;
+        let identity_pool = shared_inner.identity_pool.clone();
+        let unregistered_identity_pool = shared_inner.unregistered_identity_pool.clone();
+        drop(shared_inner);
+
+        let mut inner = RegTesterInner::with_port(
+            identity,
+            self.bitcoin_client.clone(),
+            client.clone(),
+            nc.api_port,
+        )
+        .await?;
+        inner.cluster_mode = true;
+        inner.identity_pool = identity_pool;
+        inner.unregistered_identity_pool = unregistered_identity_pool;
+        Ok(RegTester {
+            inner: Arc::new(Mutex::new(inner)),
+        })
     }
 
     /// Pop a pre-created identity (with BLS registration and issuance) from the shared pool.
