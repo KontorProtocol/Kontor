@@ -354,8 +354,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-    let utxos = reg_tester.fund_address(&seller_address, 2).await?;
-    let (out_point1, _utxo_for_output1) = utxos[0].clone();
+    let (out_point1, _utxo_for_output1) = identity.next_funding_utxo;
 
     let token_data = WitnessData::Attach {
         output_index: 0,

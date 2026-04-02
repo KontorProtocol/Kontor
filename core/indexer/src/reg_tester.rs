@@ -1146,7 +1146,7 @@ impl RegTesterCluster {
         }
 
         let secp = Secp256k1::new();
-        let per_identity_amount = Amount::from_sat(100_000);
+        let per_identity_amount = Amount::from_sat(1_000_000);
 
         let mut identities: Vec<Identity> = Vec::with_capacity(total);
         let mut outputs = Vec::with_capacity(total + 1);

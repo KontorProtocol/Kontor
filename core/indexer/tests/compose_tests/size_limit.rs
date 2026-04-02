@@ -18,7 +18,7 @@ pub async fn test_compose_progressive_size_limit_testnet(reg_tester: &mut RegTes
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-    let available_utxos = reg_tester.fund_address(&seller_address, 2).await?;
+    let available_utxos = vec![identity.next_funding_utxo];
 
     // Test progression: 10KB -> 20KB -> ... -> 390KB -> 397KB -> 400KB
     let mut current_size = 10_000;
