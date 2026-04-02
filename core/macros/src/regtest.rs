@@ -179,7 +179,7 @@ pub fn generate(config: Config) -> TokenStream {
             let filter = std::env::var("REGTEST_FILTER").unwrap_or_default();
 
             let local = tokio::task::LocalSet::new();
-            let failures = local.run_until(async {
+            let mut failures = local.run_until(async {
                 let handles: Vec<_> = vec![#(#module_tasks),*];
 
                 let mut failures = Vec::new();
@@ -194,16 +194,22 @@ pub fn generate(config: Config) -> TokenStream {
             }).await;
 
             match std::sync::Arc::try_unwrap(cluster) {
-                Ok(cluster) => cluster.teardown().await?,
-                Err(_) => anyhow::bail!("cluster still has references after all tasks completed"),
+                Ok(cluster) => {
+                    if let Err(e) = cluster.teardown().await {
+                        failures.push(anyhow::anyhow!("cluster teardown failed: {e:?}"));
+                    }
+                }
+                Err(_) => {
+                    failures.push(anyhow::anyhow!("cluster still has references after all tasks completed"));
+                }
             }
 
             if !failures.is_empty() {
-                anyhow::bail!(
-                    "{} module(s) failed:\n{}",
-                    failures.len(),
-                    failures.iter().map(|e| format!("  - {e:?}")).collect::<Vec<_>>().join("\n")
-                );
+                eprintln!("\n{} failure(s):", failures.len());
+                for e in &failures {
+                    eprintln!("  - {e:?}");
+                }
+                anyhow::bail!("{} failure(s)", failures.len());
             }
 
             Ok(())
