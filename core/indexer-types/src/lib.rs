@@ -177,6 +177,10 @@ pub enum WsResponse {
 pub enum Event {
     Processed {
         block: BlockRow,
+        txids: Vec<String>,
+    },
+    BatchProcessed {
+        txids: Vec<String>,
     },
     Rolledback {
         #[ts(type = "number")]

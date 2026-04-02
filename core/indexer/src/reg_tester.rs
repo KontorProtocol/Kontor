@@ -1,4 +1,4 @@
-use std::{path::Path, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use backon::BackoffBuilder;
 
@@ -33,8 +33,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstructionQuery, Insts, OpWithResult, ResultRow,
-    RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    ComposeOutputs, ComposeQuery, Event, Info, Inst, InstructionQuery, Insts, OpWithResult,
+    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult, WsResponse,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -111,7 +111,7 @@ async fn run_kontor(
     consensus: Option<&ConsensusNodeConfig>,
 ) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
-    let program = format!("{}/../target/debug/kontor", env!("CARGO_MANIFEST_DIR"));
+    let program = format!("{}/../target/release/kontor", env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(program);
     cmd.arg("--api-port")
         .arg(api_port.to_string())
@@ -134,7 +134,9 @@ async fn run_kontor(
             .arg("--consensus-listen-addr")
             .arg(&c.listen_addr)
             .arg("--genesis-file")
-            .arg(&c.genesis_file);
+            .arg(&c.genesis_file)
+            .arg("--consensus-propose-timeout-ms")
+            .arg("500");
         for peer in &c.peers {
             cmd.arg("--consensus-peers").arg(peer);
         }
@@ -217,7 +219,15 @@ pub struct RegTesterInner {
     kontor_client: KontorClient,
     ws_client: WebSocketClient,
     identity: Identity,
-    pub height: i64,
+    /// When true, batchable ops skip mining and rely on consensus batching.
+    /// Set for RegTesters created from a RegTesterCluster (which has an auto-miner).
+    pub cluster_mode: bool,
+    /// Cache of published contracts by name — enables idempotent publish.
+    pub published_contracts: HashMap<String, ContractAddress>,
+    /// Pre-created identities with BLS registration and issuance complete.
+    pub identity_pool: std::collections::VecDeque<Identity>,
+    /// Pre-created funded identities without BLS registration or issuance.
+    pub unregistered_identity_pool: std::collections::VecDeque<Identity>,
 }
 
 pub struct SendInstructionResult {
@@ -253,7 +263,10 @@ impl RegTesterInner {
             ws_client,
             bitcoin_client,
             kontor_client,
-            height: 101,
+            cluster_mode: false,
+            published_contracts: HashMap::new(),
+            identity_pool: std::collections::VecDeque::new(),
+            unregistered_identity_pool: std::collections::VecDeque::new(),
         })
     }
 
@@ -293,7 +306,6 @@ impl RegTesterInner {
         self.bitcoin_client
             .generate_to_address(count, &self.identity.address.to_string())
             .await?;
-        self.height += count as i64;
         Ok(())
     }
 
@@ -400,7 +412,10 @@ impl RegTesterInner {
         })
     }
 
-    /// Compose, sign, send an instruction to the mempool, mine a block, and wait for the result.
+    /// Compose, sign, send an instruction to the mempool, and wait for the result.
+    /// In cluster mode, only Publish mines immediately (needs block height for contract address).
+    /// All other ops are batchable and wait for consensus.
+    /// In standalone mode (no consensus), all ops mine immediately.
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -414,18 +429,24 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<InstructionResult> {
+        let needs_mine = !self.cluster_mode
+            || insts
+                .ops
+                .iter()
+                .any(|inst| matches!(inst, Inst::Publish { .. }));
         let sent = self.send_insts(ident, insts).await?;
         let id = OpResultId::builder()
             .txid(sent.reveal_txid.to_string())
             .input_index(0)
             .op_index(0)
             .build();
+        let target_txid = sent.reveal_txid.to_string();
 
-        self.mine(1).await?;
-        self.ws_client
-            .next()
-            .await
-            .context("Failed to receive response from websocket")?;
+        if needs_mine {
+            self.mine(1).await?;
+        }
+
+        self.wait_for_txids(&[target_txid]).await?;
 
         let result = self
             .kontor_client
@@ -444,87 +465,180 @@ impl RegTesterInner {
         }
     }
 
-    /// Create a new randomly-keyed identity with both Taproot and BLS keys, funded on-chain.
-    ///
-    /// Derivation paths are selected automatically based on the network (regtest → coin_type 1).
+    /// Pop a pre-created funded identity without BLS registration from the pool.
     pub async fn unregistered_identity(&mut self) -> Result<Identity> {
-        let mut seed = [0u8; 64];
-        rand::thread_rng().fill_bytes(&mut seed);
+        self.unregistered_identity_pool
+            .pop_front()
+            .ok_or_else(|| anyhow!("Unregistered identity pool exhausted — increase pre_create_unregistered_identities count"))
+    }
 
-        let taproot_path = taproot_derivation_path(Network::Regtest);
-        let bls_path = bls_derivation_path(Network::Regtest);
+    /// Wait for multiple txids to appear in websocket events (batch or block).
+    async fn wait_for_txids(&mut self, target_txids: &[String]) -> Result<()> {
+        let mut remaining: std::collections::HashSet<&str> =
+            target_txids.iter().map(|s| s.as_str()).collect();
+        while !remaining.is_empty() {
+            let response = self
+                .ws_client
+                .next()
+                .await
+                .context("Failed to receive response from websocket")?;
+            let txids = match &response {
+                WsResponse::Event {
+                    event: Event::Processed { txids, .. },
+                } => txids,
+                WsResponse::Event {
+                    event: Event::BatchProcessed { txids },
+                } => txids,
+                _ => continue,
+            };
+            for txid in txids {
+                remaining.remove(txid.as_str());
+            }
+        }
+        Ok(())
+    }
 
-        let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+    /// Pop a pre-created identity with BLS registration and issuance from the pool.
+    pub async fn identity(&mut self) -> Result<Identity> {
+        self.identity_pool.pop_front().ok_or_else(|| {
+            anyhow!("Identity pool exhausted — increase pre_create_identities count")
+        })
+    }
+
+    /// Pre-create both identity pools in a single funding transaction.
+    /// One tx with (registered + unregistered) outputs, one mine, then
+    /// pipelines RegisterBlsKey + Issuance for the registered subset.
+    pub async fn pre_create_identity_pools(
+        &mut self,
+        registered: usize,
+        unregistered: usize,
+    ) -> Result<()> {
+        let total = registered + unregistered;
+        if total == 0 {
+            return Ok(());
+        }
+
         let secp = Secp256k1::new();
-        let (x_only_public_key, ..) = keypair.x_only_public_key();
-        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+        let per_identity_amount = Amount::from_sat(100_000);
 
-        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
-        let bls_secret_key = bls_sk.to_bytes();
-        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
+        let mut identities: Vec<Identity> = Vec::with_capacity(total);
+        let mut outputs = Vec::with_capacity(total + 1);
+        for _ in 0..total {
+            let mut seed = [0u8; 64];
+            rand::thread_rng().fill_bytes(&mut seed);
+            let taproot_path = taproot_derivation_path(Network::Regtest);
+            let bls_path = bls_derivation_path(Network::Regtest);
+            let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
+            let (x_only_public_key, ..) = keypair.x_only_public_key();
+            let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
+            let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
 
-        let mut tx = Transaction {
+            outputs.push(TxOut {
+                value: per_identity_amount,
+                script_pubkey: address.script_pubkey(),
+            });
+            identities.push(Identity {
+                address: address.clone(),
+                keypair,
+                next_funding_utxo: (
+                    OutPoint::null(),
+                    TxOut {
+                        value: Amount::ZERO,
+                        script_pubkey: address.script_pubkey(),
+                    },
+                ),
+                bls_secret_key: bls_sk.to_bytes(),
+                bls_pubkey: bls_sk.sk_to_pk().to_bytes(),
+            });
+        }
+
+        // Change output back to the main identity. Fee scales with outputs (~34 bytes each).
+        let fee = Amount::from_sat(1000 + (total as u64) * 50);
+        let total_needed = per_identity_amount * total as u64 + fee;
+        let change = self.identity.next_funding_utxo.1.value - total_needed;
+        outputs.push(TxOut {
+            value: change,
+            script_pubkey: self.identity.address.script_pubkey(),
+        });
+
+        // Build and sign the funding tx
+        let mut funding_tx = Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
                 previous_output: self.identity.next_funding_utxo.0,
                 ..Default::default()
             }],
-            output: vec![TxOut {
-                value: self.identity.next_funding_utxo.1.value - Amount::from_sat(1000),
-                script_pubkey: address.script_pubkey(),
-            }],
+            output: outputs,
         };
         test_utils::sign_key_spend(
             &secp,
-            &mut tx,
+            &mut funding_tx,
             std::slice::from_ref(&self.identity.next_funding_utxo.1),
             &self.identity.keypair,
             0,
             None,
         )?;
 
-        let raw_tx = hex::encode(serialize_tx(&tx));
-        let txids = self.send_to_mempool(&[raw_tx]).await?;
-        let txid = txids[0];
-        self.mine(1).await?;
+        let funding_txid = funding_tx.compute_txid();
+        let raw_tx = hex::encode(serialize_tx(&funding_tx));
+        self.send_to_mempool(&[raw_tx]).await?;
 
-        let block_hash = self
-            .bitcoin_client
-            .get_block_hash((self.height - 100) as u64)
-            .await?;
-        let block = self.bitcoin_client.get_block(&block_hash).await?;
+        // Update main identity's UTXO to the change output
         self.identity.next_funding_utxo = (
             OutPoint {
-                txid: block.txdata[0].compute_txid(),
-                vout: 0,
+                txid: funding_txid,
+                vout: total as u32,
             },
-            block.txdata[0].output[0].clone(),
+            funding_tx.output[total].clone(),
         );
 
-        let next_funding_utxo = (OutPoint { txid, vout: 0 }, tx.output[0].clone());
-        Ok(Identity {
-            address,
-            keypair,
-            next_funding_utxo,
-            bls_secret_key,
-            bls_pubkey,
-        })
-    }
+        // Set each identity's funding UTXO
+        for (i, ident) in identities.iter_mut().enumerate() {
+            ident.next_funding_utxo = (
+                OutPoint {
+                    txid: funding_txid,
+                    vout: i as u32,
+                },
+                funding_tx.output[i].clone(),
+            );
+        }
 
-    pub async fn identity(&mut self) -> Result<Identity> {
-        let mut identity = self.unregistered_identity().await?;
-        let proof = RegistrationProof::new(&identity.keypair, &identity.bls_secret_key)?;
-        self.instruction(
-            &mut identity,
-            Inst::RegisterBlsKey {
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
-            },
-        )
-        .await?;
-        Ok(identity)
+        // Mine once to confirm all funding outputs
+        self.mine(1).await?;
+
+        // Split: unregistered go straight to pool, registered get BLS + issuance
+        let unregistered_identities = identities.split_off(registered);
+        self.unregistered_identity_pool
+            .extend(unregistered_identities);
+
+        // Pipeline RegisterBlsKey + Issuance for registered identities
+        let mut txids = Vec::with_capacity(registered * 2);
+        for ident in &mut identities {
+            let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
+            let reg = self
+                .send_instruction(
+                    ident,
+                    Inst::RegisterBlsKey {
+                        bls_pubkey: proof.bls_pubkey.to_vec(),
+                        schnorr_sig: proof.schnorr_sig.to_vec(),
+                        bls_sig: proof.bls_sig.to_vec(),
+                    },
+                )
+                .await?;
+            let iss = self.send_instruction(ident, Inst::Issuance).await?;
+            txids.push(reg.reveal_txid.to_string());
+            txids.push(iss.reveal_txid.to_string());
+        }
+
+        if !txids.is_empty() {
+            self.wait_for_txids(&txids).await?;
+        }
+
+        self.identity_pool.extend(identities);
+        tracing::info!(registered, unregistered, "Pre-created identity pools");
+
+        Ok(())
     }
 
     pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
@@ -596,9 +710,10 @@ impl RegTesterInner {
         self.mine(1).await?;
 
         // Refresh self.identity's funding UTXO from the newly matured coinbase
+        let info = self.bitcoin_client.get_blockchain_info().await?;
         let block_hash = self
             .bitcoin_client
-            .get_block_hash((self.height - 100) as u64)
+            .get_block_hash(info.blocks - 100)
             .await?;
         let block = self.bitcoin_client.get_block(&block_hash).await?;
         self.identity.next_funding_utxo = (
@@ -654,76 +769,6 @@ pub struct RegTester {
 }
 
 impl RegTester {
-    pub async fn setup() -> Result<(
-        TempDir,
-        Child,
-        BitcoinClient,
-        TempDir,
-        Child,
-        KontorClient,
-        Identity,
-    )> {
-        let bitcoin_data_dir = TempDir::new()?;
-        let kontor_data_dir = TempDir::new()?;
-        let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
-
-        let mut seed = [0u8; 64];
-        rand::thread_rng().fill_bytes(&mut seed);
-        let taproot_path = taproot_derivation_path(Network::Regtest);
-        let bls_path = bls_derivation_path(Network::Regtest);
-        let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
-        let secp = Secp256k1::new();
-        let (x_only_public_key, ..) = keypair.x_only_public_key();
-        let address = Address::p2tr(&secp, x_only_public_key, None, Network::Regtest);
-        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_path)?;
-        let bls_secret_key = bls_sk.to_bytes();
-        let bls_pubkey = bls_sk.sk_to_pk().to_bytes();
-        let block_hashes = bitcoin_client
-            .generate_to_address(101, &address.to_string())
-            .await?;
-        let block_hash = BlockHash::from_str(
-            block_hashes
-                .first()
-                .ok_or(anyhow!("One block not created"))?,
-        )?;
-        let block = bitcoin_client.get_block(&block_hash).await?;
-        let out_point = OutPoint {
-            txid: block.txdata[0].compute_txid(),
-            vout: 0,
-        };
-        let tx_out = block.txdata[0].output[0].clone();
-        let identity = Identity {
-            address,
-            keypair,
-            next_funding_utxo: (out_point, tx_out),
-            bls_secret_key,
-            bls_pubkey,
-        };
-        let (kontor_child, kontor_client) = run_kontor(kontor_data_dir.path(), 9333, None).await?;
-        Ok((
-            bitcoin_data_dir,
-            bitcoin_child,
-            bitcoin_client,
-            kontor_data_dir,
-            kontor_child,
-            kontor_client,
-            identity,
-        ))
-    }
-
-    pub async fn teardown(
-        bitcoin_client: BitcoinClient,
-        mut bitcoin_child: Child,
-        kontor_client: KontorClient,
-        mut kontor_child: Child,
-    ) -> Result<()> {
-        kontor_client.stop().await?;
-        kontor_child.wait().await?;
-        bitcoin_client.stop().await?;
-        bitcoin_child.wait().await?;
-        Ok(())
-    }
-
     pub async fn new(
         identity: Identity,
         bitcoin_client: BitcoinClient,
@@ -751,7 +796,6 @@ impl RegTester {
             .next()
             .await
             .context("Failed to receive response from websocket")?;
-        inner.height += 1;
         Ok(())
     }
 
@@ -843,6 +887,10 @@ impl RegTester {
         self.inner.lock().await.send_insts(ident, insts).await
     }
 
+    pub async fn wait_for_txids(&self, txids: &[String]) -> Result<()> {
+        self.inner.lock().await.wait_for_txids(txids).await
+    }
+
     pub async fn instruction(
         &mut self,
         ident: &mut Identity,
@@ -867,8 +915,24 @@ impl RegTester {
         self.inner.lock().await.unregistered_identity().await
     }
 
-    pub async fn identity(&mut self) -> Result<Identity> {
+    pub async fn identity(&self) -> Result<Identity> {
         self.inner.lock().await.identity().await
+    }
+
+    pub async fn pre_create_identity_pools(
+        &self,
+        registered: usize,
+        unregistered: usize,
+    ) -> Result<()> {
+        self.inner
+            .lock()
+            .await
+            .pre_create_identity_pools(registered, unregistered)
+            .await
+    }
+
+    pub async fn cluster_mode(&self) -> bool {
+        self.inner.lock().await.cluster_mode
     }
 
     pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
@@ -891,8 +955,21 @@ impl RegTester {
         self.inner.lock().await.wit(contract_address).await
     }
 
-    pub async fn height(&self) -> i64 {
-        self.inner.lock().await.height
+    pub async fn get_published(&self, name: &str) -> Option<ContractAddress> {
+        self.inner
+            .lock()
+            .await
+            .published_contracts
+            .get(name)
+            .cloned()
+    }
+
+    pub async fn set_published(&self, name: String, address: ContractAddress) {
+        self.inner
+            .lock()
+            .await
+            .published_contracts
+            .insert(name, address);
     }
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
@@ -966,13 +1043,22 @@ fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
     Ok(ports)
 }
 
+enum MinerCmd {
+    Pause(tokio::sync::oneshot::Sender<()>),
+    Resume(tokio::sync::oneshot::Sender<()>),
+    Reset,
+}
+
 /// A cluster of N Kontor instances sharing one regtest bitcoind,
 /// each with consensus enabled and its own DB.
 pub struct RegTesterCluster {
     pub bitcoin_client: BitcoinClient,
     pub node_configs: Vec<NodeConfig>,
     pub identity: Identity,
+    pub reg_tester: RegTester,
     genesis_path: std::path::PathBuf,
+    miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
+    _miner_handle: tokio::task::JoinHandle<()>,
     _bitcoin_child: Child,
     _bitcoin_data_dir: TempDir,
     _genesis_dir: TempDir,
@@ -980,12 +1066,19 @@ pub struct RegTesterCluster {
 
 impl RegTesterCluster {
     /// Start a cluster of `n` validators, all in genesis, all started.
-    pub async fn setup(n: usize) -> Result<Self> {
-        Self::setup_with(n, n, n).await
+    /// Pre-creates `registered` identities (with BLS + issuance) and `unregistered` (funded only).
+    pub async fn setup(n: usize, registered: usize, unregistered: usize) -> Result<Self> {
+        Self::setup_with(n, n, n, registered, unregistered).await
     }
 
     /// Create a cluster with `total` keys, `genesis_count` in genesis, `active` started.
-    pub async fn setup_with(total: usize, genesis_count: usize, active: usize) -> Result<Self> {
+    pub async fn setup_with(
+        total: usize,
+        genesis_count: usize,
+        active: usize,
+        registered: usize,
+        unregistered: usize,
+    ) -> Result<Self> {
         assert!(genesis_count <= total, "genesis_count must be <= total");
         assert!(active <= total, "active must be <= total");
 
@@ -1068,10 +1161,16 @@ impl RegTesterCluster {
         // Start active nodes
         let all_consensus_ports: Vec<u16> =
             node_configs.iter().map(|nc| nc.consensus_port).collect();
-        for (i, nc) in node_configs.iter_mut().enumerate().take(active) {
-            let (child, client) =
-                Self::launch_node(nc, i, &all_consensus_ports, &genesis_path).await?;
-            nc.running = Some(ClusterNode { client, child });
+        let launch_futures: Vec<_> = node_configs
+            .iter()
+            .enumerate()
+            .take(active)
+            .map(|(i, nc)| Self::launch_node(nc, i, &all_consensus_ports, &genesis_path))
+            .collect();
+        let results = futures_util::future::join_all(launch_futures).await;
+        for (i, result) in results.into_iter().enumerate() {
+            let (child, client) = result?;
+            node_configs[i].running = Some(ClusterNode { client, child });
         }
 
         // Mine a block so we can verify all nodes process it (proves peer connectivity).
@@ -1079,17 +1178,75 @@ impl RegTesterCluster {
             .generate_to_address(1, &identity.address.to_string())
             .await?;
 
+        // Start the auto-miner
+        let (miner_cmd_tx, mut miner_cmd_rx) = tokio::sync::mpsc::channel::<MinerCmd>(16);
+        let miner_client = bitcoin_client.clone();
+        let miner_address = identity.address.to_string();
+        let miner_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                        let _ = miner_client.generate_to_address(1, &miner_address).await;
+                    }
+                    cmd = miner_cmd_rx.recv() => {
+                        match cmd {
+                            Some(MinerCmd::Reset) => continue,
+                            Some(MinerCmd::Pause(done)) => {
+                                let _ = done.send(());
+                                // Wait for Resume
+                                while let Some(cmd) = miner_cmd_rx.recv().await {
+                                    if let MinerCmd::Resume(done) = cmd {
+                                        let _ = done.send(());
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(MinerCmd::Resume(_)) => {}
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        let client = &node_configs[0]
+            .running
+            .as_ref()
+            .expect("Node 0 not running")
+            .client;
+        let mut inner = RegTesterInner::with_port(
+            identity.clone(),
+            bitcoin_client.clone(),
+            client.clone(),
+            node_configs[0].api_port,
+        )
+        .await?;
+        inner.cluster_mode = true;
+        let reg_tester = RegTester {
+            inner: Arc::new(Mutex::new(inner)),
+        };
+
         let cluster = Self {
             bitcoin_client,
             node_configs,
             identity,
+            reg_tester,
             genesis_path,
+            miner_cmd_tx,
+            _miner_handle: miner_handle,
             _bitcoin_child: bitcoin_child,
             _bitcoin_data_dir: bitcoin_data_dir,
             _genesis_dir: genesis_dir,
         };
 
         cluster.poll_all_nodes_height(102, 60).await?;
+
+        if registered > 0 || unregistered > 0 {
+            cluster
+                .reg_tester
+                .pre_create_identity_pools(registered, unregistered)
+                .await?;
+        }
 
         Ok(cluster)
     }
@@ -1168,37 +1325,40 @@ impl RegTesterCluster {
         }
     }
 
-    /// Create a `RegTester` targeting a specific running node.
-    pub async fn reg_tester(&self, node_index: usize) -> Result<RegTester> {
-        let nc = &self.node_configs[node_index];
-        let client = &nc.running.as_ref().expect("Node not running").client;
-        let inner = RegTesterInner::with_port(
-            self.identity.clone(),
-            self.bitcoin_client.clone(),
-            client.clone(),
-            nc.api_port,
-        )
-        .await?;
-        Ok(RegTester {
-            inner: Arc::new(Mutex::new(inner)),
-        })
+    /// Get a `RegTester` for the cluster. Returns a clone of the shared
+    /// node 0 RegTester (same pools, same state via Arc<Mutex>).
+    pub fn reg_tester(&self) -> RegTester {
+        self.reg_tester.clone()
     }
 
-    /// Create an identity with issuance via node 0.
-    /// Returns the RegTester and Identity for subsequent operations.
-    pub async fn funded_identity(&self) -> Result<(RegTester, Identity)> {
-        let mut rt = self.reg_tester(0).await?;
-        let mut identity = rt.identity().await?;
-        rt.instruction(&mut identity, Inst::Issuance).await?;
+    /// Pop a pre-created identity (with BLS registration and issuance) from the shared pool.
+    pub async fn identity(&self) -> Result<(RegTester, Identity)> {
+        let rt = self.reg_tester();
+        let identity = rt.identity().await?;
         Ok((rt, identity))
     }
 
-    /// Mine blocks using the funded identity.
+    /// Mine blocks using the funded identity. Resets the auto-miner cooldown.
     pub async fn mine(&self, count: u64) -> Result<()> {
         self.bitcoin_client
             .generate_to_address(count, &self.identity.address.to_string())
             .await?;
+        let _ = self.miner_cmd_tx.send(MinerCmd::Reset).await;
         Ok(())
+    }
+
+    /// Pause the auto-miner. Blocks until the miner confirms it's stopped.
+    pub async fn pause_auto_miner(&self) {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let _ = self.miner_cmd_tx.send(MinerCmd::Pause(done_tx)).await;
+        let _ = done_rx.await;
+    }
+
+    /// Resume the auto-miner. Blocks until the miner confirms it's resumed.
+    pub async fn resume_auto_miner(&self) {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let _ = self.miner_cmd_tx.send(MinerCmd::Resume(done_tx)).await;
+        let _ = done_rx.await;
     }
 
     /// Poll all running nodes until a view call satisfies the check function.
@@ -1269,18 +1429,12 @@ impl RegTesterCluster {
 
     /// Shut down all nodes.
     pub async fn teardown(mut self) -> Result<()> {
-        for nc in &self.node_configs {
-            if let Some(cn) = &nc.running {
-                let _ = cn.client.stop().await;
-            }
-        }
         for nc in &mut self.node_configs {
             if let Some(cn) = &mut nc.running {
-                let _ = cn.child.wait().await;
+                cn.child.kill().await?;
             }
         }
-        self.bitcoin_client.stop().await?;
-        self._bitcoin_child.wait().await?;
+        self._bitcoin_child.kill().await?;
         Ok(())
     }
 }

@@ -43,21 +43,18 @@ fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> 
     }
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -101,7 +98,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1], true)
         .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
 
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -122,7 +119,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     assert_eq!(decoded0.value, 1);
 
     // Op1 (duplicate nonce=0) was skipped; nonce advanced to 1 from op0 only.
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer_id.to_string())
@@ -140,7 +137,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     );
     let msg2 = op2.aggregate_signing_message(signer_id)?;
     let sig2 = sk.sign(&msg2, KONTOR_BLS_DST, &[]);
-    let ok = reg_tester
+    let ok = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(vec![op2], vec![signer_id], sig2.to_bytes().to_vec()),
@@ -157,21 +154,18 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -204,18 +198,17 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
-    reg_tester
-        .instruction_insts(
-            &mut publisher,
-            aggregate_insts(vec![op0], vec![signer_id], sig0.to_bytes().to_vec()),
-        )
-        .await?;
+    rt.instruction_insts(
+        &mut publisher,
+        aggregate_insts(vec![op0], vec![signer_id], sig0.to_bytes().to_vec()),
+    )
+    .await?;
 
     let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
         .to_string()
         .parse()
         .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let last_op_before_wave = reg_tester
+    let last_op_before_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
@@ -228,7 +221,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     );
     let msg1 = op1.aggregate_signing_message(signer_id)?;
     let sig1 = sk.sign(&msg1, KONTOR_BLS_DST, &[]);
-    let _replay = reg_tester
+    let _replay = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(vec![op1], vec![signer_id], sig1.to_bytes().to_vec()),
@@ -236,14 +229,14 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         .await;
 
     // Replay op was skipped (nonce mismatch); contract state unchanged.
-    let last_op_after_wave = reg_tester
+    let last_op_after_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
     assert_eq!(last_op_after, last_op_before);
 
     // Nonce stays at 1 (only the first bundle's op consumed it).
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer_id.to_string())
@@ -255,14 +248,11 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
         .await?
@@ -283,7 +273,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let failing_sig = sk.sign(&failing_msg, KONTOR_BLS_DST, &[]);
 
-    let _failed = reg_tester
+    let _failed = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -294,7 +284,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         )
         .await;
 
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer_id.to_string())
@@ -308,7 +298,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -334,7 +324,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     );
     let recovery_msg = recovery_op.aggregate_signing_message(signer_id)?;
     let recovery_sig = sk.sign(&recovery_msg, KONTOR_BLS_DST, &[]);
-    let recovery = reg_tester
+    let recovery = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -362,23 +352,19 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest() -> Result<()> {
-    let mut signer1 = reg_tester.identity().await?;
-    let mut signer2 = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer1, Inst::Issuance).await?;
-    reg_tester.instruction(&mut signer2, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer1 = rt.identity().await?;
+    let signer2 = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -443,7 +429,7 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
     let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1, &sig2, &sig3], true)
         .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
 
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -455,7 +441,7 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .await?;
 
     let reveal_tx = deserialize_hex::<bitcoin::Transaction>(&res.reveal_tx_hex)?;
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     let op3_id = OpResultId::builder()
         .txid(reveal_tx.compute_txid().to_string())
         .op_index(3)
@@ -488,21 +474,18 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -524,7 +507,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer_id.to_string())
@@ -546,7 +529,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
-    let _ = reg_tester
+    let _ = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(vec![skipped_op], vec![signer_id], sig.to_bytes().to_vec()),
@@ -572,7 +555,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
     );
     let valid_msg = valid_op.aggregate_signing_message(signer_id)?;
     let valid_sig = sk.sign(&valid_msg, KONTOR_BLS_DST, &[]);
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -605,21 +588,18 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
 /// signature from a confirmed bundle and resubmits them in a new bundle.
 /// The nonce has already been consumed, so the replayed op must be skipped
 /// and contract state must not change.
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -654,14 +634,13 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
     let sig_bytes = sig.to_bytes().to_vec();
 
-    reg_tester
-        .instruction_insts(
-            &mut publisher,
-            aggregate_insts(vec![op.clone()], vec![signer_id], sig_bytes.clone()),
-        )
-        .await?;
+    rt.instruction_insts(
+        &mut publisher,
+        aggregate_insts(vec![op.clone()], vec![signer_id], sig_bytes.clone()),
+    )
+    .await?;
 
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     assert_eq!(
         client
             .registry_entry(&signer_id.to_string())
@@ -674,13 +653,13 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         .to_string()
         .parse()
         .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let state_before_wave = reg_tester
+    let state_before_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let state_before = arith::wave::last_op_parse_return_expr(&state_before_wave);
 
     // Replay the exact same op + signature bytes in a new bundle.
-    let _ = reg_tester
+    let _ = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(vec![op], vec![signer_id], sig_bytes),
@@ -698,7 +677,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
     );
 
     // Contract state unchanged.
-    let state_after_wave = reg_tester
+    let state_after_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let state_after = arith::wave::last_op_parse_return_expr(&state_after_wave);

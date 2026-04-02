@@ -2,22 +2,35 @@ use testlib::*;
 
 interface!(name = "amm", path = "../../test-contracts/amm/wit");
 
-interface!(name = "token", path = "../../test-contracts/token/wit");
+interface!(name = "token", path = "../../test-contracts/test-token/wit");
 
 async fn run_test_amm_swaps(runtime: &mut Runtime) -> Result<()> {
     tracing::info!("test_amm_swaps");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-swaps"),
+                ("test-token", "token-a-a-swaps"),
+                ("test-token", "token-b-a-swaps"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
 
-    token::mint(runtime, &token_a, &minter, 1000.into()).await??;
-    token::mint(runtime, &token_b, &minter, 1000.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 100.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 500.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, 1000.into()));
+    ops.push(token::mint_call(&token_b, 1000.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 100.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 500.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -105,15 +118,28 @@ async fn run_test_amm_swap_fee(runtime: &mut Runtime) -> Result<()> {
     tracing::info!("test_amm_swap_fee");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-fee"),
+                ("test-token", "token-a-a-fee"),
+                ("test-token", "token-b-a-fee"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
 
-    token::mint(runtime, &token_a, &minter, 1000.into()).await??;
-    token::mint(runtime, &token_b, &minter, 1000.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 100.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 500.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, 1000.into()));
+    ops.push(token::mint_call(&token_b, 1000.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 100.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 500.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -186,15 +212,28 @@ async fn run_test_amm_swap_low_slippage(runtime: &mut Runtime) -> Result<()> {
     tracing::info!("test_amm_swap_low_slippage");
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-slippage"),
+                ("test-token", "token-a-a-slippage"),
+                ("test-token", "token-b-a-slippage"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
 
-    token::mint(runtime, &token_a, &minter, 110000.into()).await??;
-    token::mint(runtime, &token_b, &minter, 510000.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 100000.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 500000.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, 110000.into()));
+    ops.push(token::mint_call(&token_b, 510000.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 100000.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 500000.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -272,15 +311,28 @@ async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
 
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-depwith"),
+                ("test-token", "token-a-a-depwith"),
+                ("test-token", "token-b-a-depwith"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
 
-    token::mint(runtime, &token_a, &minter, 1000.into()).await??;
-    token::mint(runtime, &token_b, &minter, 1000.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 100.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 500.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, 1000.into()));
+    ops.push(token::mint_call(&token_b, 1000.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 100.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 500.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -298,8 +350,12 @@ async fn run_test_amm_deposit_withdraw(runtime: &mut Runtime) -> Result<()> {
     .await?;
     assert_eq!(res, Ok(223.into()));
 
-    token::transfer(runtime, &token_a, &minter, &holder, 200.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &holder, 200.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::transfer_call(&token_a, &holder, 200.into()));
+    ops.push(token::transfer_call(&token_b, &holder, 200.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone()).await?;
     assert_eq!(bal_a, Ok(100.into()));
@@ -381,19 +437,32 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-limits"),
+                ("test-token", "token-a-a-limits"),
+                ("test-token", "token-b-a-limits"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
 
     let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
     let oversized_value = large_value + 1.into();
 
-    token::mint(runtime, &token_a, &minter, max_int.into()).await??;
-    token::mint(runtime, &token_b, &minter, max_int.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 1000.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 1000.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, max_int.into()));
+    ops.push(token::mint_call(&token_b, max_int.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 1000.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 1000.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let pair = amm::TokenPair {
         a: token_a.clone(),
@@ -499,18 +568,32 @@ async fn run_test_amm_pools(runtime: &mut Runtime) -> Result<()> {
     let admin = runtime.identity().await?;
     let minter = runtime.identity().await?;
 
-    let amm = runtime.publish(&admin, "amm").await?;
-    let token_a = runtime.publish_as(&admin, "token", "token-a").await?;
-    let token_b = runtime.publish_as(&admin, "token", "token-b").await?;
-    let token_c = runtime.publish_as(&admin, "token", "token-c").await?;
+    let addrs = runtime
+        .publish_many(
+            &admin,
+            &[
+                ("amm", "amm-a-pools"),
+                ("test-token", "token-a-a-pools"),
+                ("test-token", "token-b-a-pools"),
+                ("test-token", "token-c-a-pools"),
+            ],
+        )
+        .await?;
+    let amm = addrs[0].clone();
+    let token_a = addrs[1].clone();
+    let token_b = addrs[2].clone();
+    let token_c = addrs[3].clone();
 
-    token::mint(runtime, &token_a, &minter, 1000.into()).await??;
-    token::mint(runtime, &token_b, &minter, 1000.into()).await??;
-    token::mint(runtime, &token_c, &minter, 1000.into()).await??;
-
-    token::transfer(runtime, &token_a, &minter, &admin, 100.into()).await??;
-    token::transfer(runtime, &token_b, &minter, &admin, 600.into()).await??;
-    token::transfer(runtime, &token_c, &minter, &admin, 200.into()).await??;
+    let mut ops = Ops::new(&minter);
+    ops.push(token::mint_call(&token_a, 1000.into()));
+    ops.push(token::mint_call(&token_b, 1000.into()));
+    ops.push(token::mint_call(&token_c, 1000.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 100.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 600.into()));
+    ops.push(token::transfer_call(&token_c, &admin, 200.into()));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
 
     let bad_pair = amm::TokenPair {
         // wrong order
@@ -671,16 +754,4 @@ async fn test_amm_limits() -> Result<()> {
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_amm_pools() -> Result<()> {
     run_test_amm_pools(runtime).await
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_amm_contract_regtest() -> Result<()> {
-    logging::setup();
-    run_test_amm_swaps(runtime).await?;
-    run_test_amm_swap_fee(runtime).await?;
-    run_test_amm_swap_low_slippage(runtime).await?;
-    run_test_amm_deposit_withdraw(runtime).await?;
-    run_test_amm_limits(runtime).await?;
-    run_test_amm_pools(runtime).await?;
-    Ok(())
 }

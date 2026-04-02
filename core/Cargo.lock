@@ -7367,6 +7367,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blst",
  "bon 3.9.1",
  "glob",
  "indexer",

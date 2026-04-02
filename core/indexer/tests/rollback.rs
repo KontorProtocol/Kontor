@@ -73,6 +73,7 @@ async fn test_reactor_fetching() -> Result<()> {
         None,
         vec![],
         None,
+        None,
     );
 
     let target = 5;
@@ -115,6 +116,7 @@ async fn test_reactor_rollback_and_reinsert() -> Result<()> {
         None,
         None,
         vec![],
+        None,
         None,
     );
 
@@ -173,6 +175,7 @@ async fn test_reactor_deep_rollback() -> Result<()> {
         None,
         vec![],
         None,
+        None,
     );
 
     // Insert blocks 1-4
@@ -227,6 +230,7 @@ async fn test_reactor_rollback_then_extend() -> Result<()> {
         None,
         None,
         vec![],
+        None,
         None,
     );
 
@@ -288,7 +292,7 @@ async fn send_block_and_await_event(
         .await
         .unwrap();
     match output_rx.recv().await.unwrap() {
-        Event::Processed { block } => assert_eq!(block.height, expected_height),
+        Event::Processed { block, .. } => assert_eq!(block.height, expected_height),
         other => panic!("expected Processed at height {expected_height}, got {other:?}"),
     }
 }
@@ -321,6 +325,7 @@ async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
         None,
         None,
         vec![],
+        None,
         None,
     );
 
@@ -420,6 +425,7 @@ async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
         None,
         None,
         vec![],
+        None,
         None,
     );
 
@@ -591,6 +597,7 @@ async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
         None,
         None,
         vec![],
+        None,
         None,
     );
 

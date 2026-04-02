@@ -39,19 +39,14 @@ fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> 
     }
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
-    // Two distinct signers inside the bundle; a third identity publishes the Bitcoin tx.
-    let mut signer1 = reg_tester.identity().await?;
-    let mut signer2 = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
+    let mut rt = runtime.reg_tester().unwrap();
 
-    // Ensure all participants have KOR to pay gas.
-    reg_tester.instruction(&mut signer1, Inst::Issuance).await?;
-    reg_tester.instruction(&mut signer2, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    // Two distinct signers inside the bundle; a third identity publishes the Bitcoin tx.
+    let signer1 = rt.identity().await?;
+    let signer2 = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     // Publish the `arith` contract on-chain so we can call it.
     let arith_bytes = runtime
@@ -59,7 +54,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -129,7 +124,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     );
 
     // Compose + publish the BlsBulk container.
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -155,7 +150,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .txid(reveal_tx.compute_txid().to_string())
         .op_index(1)
         .build();
-    let client = reg_tester.kontor_client().await;
+    let client = rt.kontor_client().await;
     let result1 = client
         .result(&op1_id)
         .await?
@@ -186,7 +181,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .to_string()
         .parse()
         .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let last_op_wave = reg_tester
+    let last_op_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op = arith::wave::last_op_parse_return_expr(&last_op_wave);
@@ -195,21 +190,19 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -260,7 +253,7 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     let aggregate = AggregateSignature::aggregate(&[&sig0, &sig1, &sig2], true)
         .map_err(|e| anyhow!("aggregate signature failed: {e:?}"))?;
 
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -280,21 +273,19 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
-    let mut signer = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+
+    let signer = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -316,7 +307,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         .to_string()
         .parse()
         .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let last_op_before_wave = reg_tester
+    let last_op_before_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
@@ -332,7 +323,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(vec![op], vec![999_999_999], sig.to_bytes().to_vec()),
@@ -340,7 +331,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         .await;
     assert!(res.is_err(), "expected unregistered signer_id to fail");
 
-    let last_op_after_wave = reg_tester
+    let last_op_after_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);
@@ -348,23 +339,20 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result<()> {
-    let mut signer1 = reg_tester.identity().await?;
-    let mut signer2 = reg_tester.identity().await?;
-    let mut publisher = reg_tester.identity().await?;
-    reg_tester.instruction(&mut signer1, Inst::Issuance).await?;
-    reg_tester.instruction(&mut signer2, Inst::Issuance).await?;
-    reg_tester
-        .instruction(&mut publisher, Inst::Issuance)
-        .await?;
+    let mut rt = runtime.reg_tester().unwrap();
+
+    let signer1 = rt.identity().await?;
+    let signer2 = rt.identity().await?;
+    let mut publisher = rt.identity().await?;
 
     let arith_bytes = runtime
         .contract_reader
         .read("arith")
         .await?
         .expect("arith contract bytes not found");
-    let publish = reg_tester
+    let publish = rt
         .instruction(
             &mut publisher,
             Inst::Publish {
@@ -422,12 +410,12 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         .to_string()
         .parse()
         .map_err(|e| anyhow!("invalid runtime contract address: {e}"))?;
-    let last_op_before_wave = reg_tester
+    let last_op_before_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
-    let res = reg_tester
+    let res = rt
         .instruction_insts(
             &mut publisher,
             aggregate_insts(
@@ -442,7 +430,7 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         "expected tampered op payload to fail aggregate verification"
     );
 
-    let last_op_after_wave = reg_tester
+    let last_op_after_wave = rt
         .view(&arith_runtime_contract, &arith::wave::last_op_call_expr())
         .await?;
     let last_op_after = arith::wave::last_op_parse_return_expr(&last_op_after_wave);

@@ -107,6 +107,13 @@ pub struct Config {
         help = "Path to genesis JSON file containing the initial validator set"
     )]
     pub genesis_file: Option<PathBuf>,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_PROPOSE_TIMEOUT_MS",
+        help = "Consensus propose timeout in milliseconds (default: 3000)"
+    )]
+    pub consensus_propose_timeout_ms: Option<u64>,
 }
 
 impl Config {
@@ -126,6 +133,7 @@ impl Config {
             consensus_listen_addr: None,
             consensus_peers: Vec::new(),
             genesis_file: None,
+            consensus_propose_timeout_ms: None,
         }
     }
 }

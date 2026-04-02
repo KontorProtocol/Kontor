@@ -24,7 +24,7 @@ use crate::consensus::codec::{
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
-    Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
+    Address, BatchTx, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     ValidatorSet, Value, ValueId,
 };
 use crate::database::queries::{
@@ -36,6 +36,24 @@ use crate::database::queries::{
 
 use super::bitcoin_state::BitcoinState;
 use super::executor::Executor;
+
+/// Result from processing a consensus message.
+pub enum ConsensusResult {
+    /// No action needed by the reactor.
+    None,
+    /// A block was decided — the reactor should execute it.
+    Block(indexer_types::Block),
+    /// A batch was decided and executed — the reactor should emit a websocket event.
+    BatchProcessed { txids: Vec<String> },
+}
+
+pub struct DeferredBatch {
+    pub anchor_height: u64,
+    pub anchor_hash: bitcoin::BlockHash,
+    pub consensus_height: Height,
+    pub certificate: Vec<u8>,
+    pub txs: Vec<bitcoin::Transaction>,
+}
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
@@ -75,6 +93,10 @@ pub struct ConsensusState {
     // it should be executed immediately without re-proposing.
     pub missed_block_decisions: HashSet<u64>,
 
+    // Batches decided via sync whose anchor block hasn't been processed yet.
+    // Drained after handle_block processes the anchor.
+    pub deferred_batches: Vec<DeferredBatch>,
+
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
     pub block_cache: HashMap<u64, indexer_types::Block>,
@@ -85,6 +107,9 @@ pub struct ConsensusState {
 
     // Observation channels (optional, for testing)
     pub observation: Option<ObservationChannels>,
+
+    // Consensus timeouts — defaults to LinearTimeouts::default() (3s propose).
+    pub timeouts: LinearTimeouts,
 }
 
 pub struct ObservationChannels {
@@ -117,9 +142,11 @@ impl ConsensusState {
             parsed_tx_cache: HashMap::new(),
             pending_blocks: VecDeque::new(),
             missed_block_decisions: HashSet::new(),
+            deferred_batches: Vec::new(),
             block_cache: HashMap::new(),
             cached_validator_set,
             observation: None,
+            timeouts: LinearTimeouts::default(),
         }
     }
 
@@ -129,6 +156,7 @@ impl ConsensusState {
         self.pending_blocks.clear();
         self.block_cache.clear();
         self.missed_block_decisions.clear();
+        self.deferred_batches.clear();
         self.pending_batches.clear();
         self.tx_cache.clear();
         self.parsed_tx_cache.clear();
@@ -141,7 +169,7 @@ impl ConsensusState {
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
-        HeightParams::new(self.validator_set(), LinearTimeouts::default(), None)
+        HeightParams::new(self.validator_set(), self.timeouts, None)
     }
 
     fn stream_id(&self) -> StreamId {
@@ -738,8 +766,8 @@ pub async fn handle_consensus_msg(
     validator_index: Option<usize>,
     last_height: u64,
     last_hash: bitcoin::BlockHash,
-) -> Result<Option<indexer_types::Block>> {
-    let mut decided_block = None;
+) -> Result<ConsensusResult> {
+    let mut result = ConsensusResult::None;
     match msg {
         AppMsg::ConsensusReady { reply } => {
             let start_height = state.current_height;
@@ -952,28 +980,66 @@ pub async fn handle_consensus_msg(
                     Value::Batch {
                         anchor_height,
                         anchor_hash,
-                        ..
+                        txs,
                     } => {
-                        let full_txs = state
+                        // Try tx_cache first (normal path), fall back to
+                        // raw txs embedded in the Value, then resolve from
+                        // bitcoind via executor (sync path for finalized batches).
+                        let mut full_txs = state
                             .tx_cache
                             .remove(&proposal.value.id())
                             .unwrap_or_default();
+                        if full_txs.is_empty() {
+                            for entry in txs {
+                                match entry {
+                                    BatchTx::Raw(tx) => full_txs.push(tx.clone()),
+                                    BatchTx::Id(txid) => {
+                                        if let Some(tx) = executor.resolve_transaction(txid).await {
+                                            full_txs.push(tx);
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         let cert_bytes = encode_commit_certificate(&certificate)
                             .map(|p| p.encode_to_vec())
                             .unwrap_or_default();
 
-                        state
-                            .process_decided_batch(
-                                executor,
-                                runtime,
-                                *anchor_height,
-                                *anchor_hash,
-                                certificate.height,
-                                &cert_bytes,
-                                &full_txs,
-                            )
-                            .await;
+                        // Defer if anchor block hasn't been processed yet (sync path)
+                        if *anchor_height > last_height {
+                            info!(
+                                anchor = anchor_height,
+                                last_height,
+                                consensus_height = %certificate.height,
+                                "Deferring batch — anchor block not yet processed"
+                            );
+                            state.deferred_batches.push(DeferredBatch {
+                                anchor_height: *anchor_height,
+                                anchor_hash: *anchor_hash,
+                                consensus_height: certificate.height,
+                                certificate: cert_bytes,
+                                txs: full_txs,
+                            });
+                        } else {
+                            state
+                                .process_decided_batch(
+                                    executor,
+                                    runtime,
+                                    *anchor_height,
+                                    *anchor_hash,
+                                    certificate.height,
+                                    &cert_bytes,
+                                    &full_txs,
+                                )
+                                .await;
+                            result = ConsensusResult::BatchProcessed {
+                                txids: full_txs
+                                    .iter()
+                                    .map(|tx| tx.compute_txid().to_string())
+                                    .collect(),
+                            };
+                        }
                     }
                     Value::Block { height, hash } => {
                         // Store block decision for sync protocol
@@ -997,7 +1063,7 @@ pub async fn handle_consensus_msg(
                         // the decision via sync before the block arrived from poller)
                         state.pending_blocks.retain(|(h, _)| *h != *height);
                         if let Some(block) = state.block_cache.remove(height) {
-                            decided_block = Some(block);
+                            result = ConsensusResult::Block(block);
                         } else {
                             // Only record if this block height is relevant (not stale from
                             // a pre-rollback decision that arrived late)
@@ -1121,5 +1187,5 @@ pub async fn handle_consensus_msg(
         }
     }
 
-    Ok(decided_block)
+    Ok(result)
 }

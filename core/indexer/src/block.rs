@@ -135,12 +135,12 @@ pub async fn inspect(
                     input_index: input.input_index,
                     signer: input.witness_signer.clone(),
                 };
-                for inst in &input.insts.ops {
+                for (op_index, inst) in input.insts.ops.iter().enumerate() {
                     let op = op_from_inst(inst.clone(), metadata.clone());
                     let id = OpResultId::builder()
                         .txid(tx.txid.to_string())
                         .input_index(input.input_index)
-                        .op_index(0)
+                        .op_index(op_index as i64)
                         .build();
                     let result = get_op_result(conn, &id).await?.map(Into::into);
                     ops.push(OpWithResult { op, result });

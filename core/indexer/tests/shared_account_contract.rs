@@ -1,20 +1,24 @@
 use testlib::*;
 
-interface!(name = "token", path = "../../test-contracts/token/wit",);
+interface!(name = "token", path = "../../test-contracts/test-token/wit",);
 
 interface!(
-    name = "shared-account",
+    name = "shared_account",
     path = "../../test-contracts/shared-account/wit",
 );
 
-async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_shared_account_contract() -> Result<()> {
     let alice = runtime.identity().await?;
     let bob = runtime.identity().await?;
     let claire = runtime.identity().await?;
     let dara = runtime.identity().await?;
 
-    let token = runtime.publish(&alice, "token").await?;
-    let shared_account = runtime.publish(&alice, "shared-account").await?;
+    let addrs = runtime
+        .publish_many(&alice, &["test-token", "shared-account"])
+        .await?;
+    let token = addrs[0].clone();
+    let shared_account = addrs[1].clone();
 
     token::mint(runtime, &token, &alice, 100.into()).await??;
 
@@ -70,30 +74,25 @@ async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     let result = shared_account::balance(runtime, &shared_account, &account_id).await?;
     assert_eq!(result, Some(0.into()));
 
-    let result = shared_account::withdraw(
-        runtime,
-        &shared_account,
+    // Two independent error cases — batch them
+    let mut submit = runtime.submit();
+    let h_insufficient = submit.push(
         &bob,
-        token.clone(),
-        &account_id,
-        1.into(),
-    )
-    .await?;
+        shared_account::withdraw_call(&shared_account, token.clone(), &account_id, 1.into()),
+    );
+    let h_unauthorized = submit.push(
+        &claire,
+        shared_account::withdraw_call(&shared_account, token.clone(), &account_id, 1.into()),
+    );
+    let results = submit.execute().await?;
     assert_eq!(
-        result,
+        results.get(&h_insufficient),
         Err(Error::Message("insufficient balance".to_string()))
     );
-
-    let result = shared_account::withdraw(
-        runtime,
-        &shared_account,
-        &claire,
-        token.clone(),
-        &account_id,
-        1.into(),
-    )
-    .await?;
-    assert_eq!(result, Err(Error::Message("unauthorized".to_string())));
+    assert_eq!(
+        results.get(&h_unauthorized),
+        Err(Error::Message("unauthorized".to_string()))
+    );
 
     let result =
         shared_account::token_balance(runtime, &shared_account, token.clone(), &alice).await?;
@@ -111,14 +110,4 @@ async fn run_test_shared_account_contract(runtime: &mut Runtime) -> Result<()> {
     assert!(result.contains(&bob.to_string()));
 
     Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_shared_account_contract() -> Result<()> {
-    run_test_shared_account_contract(runtime).await
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_shared_account_contract_regtest() -> Result<()> {
-    run_test_shared_account_contract(runtime).await
 }

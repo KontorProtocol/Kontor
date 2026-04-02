@@ -43,18 +43,9 @@ world root {
 }
 "#;
 
-async fn run_test(runtime: &mut Runtime) -> Result<()> {
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_get_wit_from_api() -> Result<()> {
     let wit = runtime.wit(&token::address()).await?;
     assert_eq!(WIT, wit);
     Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_get_wit_from_api() -> Result<()> {
-    run_test(runtime).await
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_get_wit_from_api_regtest() -> Result<()> {
-    run_test(runtime).await
 }

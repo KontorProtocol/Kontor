@@ -23,6 +23,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::types::core::VotingPower;
+use malachitebft_core_types::LinearTimeouts;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::finality_types::StateEvent;
@@ -210,7 +211,6 @@ impl<E: Executor> Reactor<E> {
         let height = block.height;
         let hash = block.hash;
         let prev_hash = block.prev_hash;
-
         if height != self.last_height + 1 {
             bail!(
                 "Unexpected block height {}, expected {}",
@@ -320,9 +320,15 @@ impl<E: Executor> Reactor<E> {
         }
 
         if let Some(tx) = &self.event_tx {
+            let txids = block
+                .transactions
+                .iter()
+                .map(|t| t.txid.to_string())
+                .collect();
             let _ = tx
                 .send(Event::Processed {
                     block: (&block).into(),
+                    txids,
                 })
                 .await;
         }
@@ -416,6 +422,7 @@ impl<E: Executor> Reactor<E> {
                             block.height
                         );
                         self.handle_block(block).await?;
+                        self.drain_deferred_batches().await?;
                     } else {
                         handle.state.block_cache.insert(block.height, block.clone());
                         handle
@@ -501,7 +508,7 @@ impl<E: Executor> Reactor<E> {
                     debug!("REACTOR: processing consensus msg");
                     let handle = self.consensus_handle.as_mut().unwrap();
                     let validator_index = handle.validator_index;
-                    let decided_block = consensus::handle_consensus_msg(
+                    let consensus_result = consensus::handle_consensus_msg(
                         &mut handle.state,
                         &self.executor,
                         &mut self.runtime,
@@ -512,8 +519,18 @@ impl<E: Executor> Reactor<E> {
                         self.last_height,
                         self.last_hash.unwrap_or(BlockHash::all_zeros()),
                     ).await?;
-                    if let Some(block) = decided_block {
+                    if let consensus::ConsensusResult::BatchProcessed { txids } = &consensus_result
+                        && let Some(tx) = &self.event_tx
+                    {
+                        let _ = tx
+                            .send(Event::BatchProcessed {
+                                txids: txids.clone(),
+                            })
+                            .await;
+                    }
+                    if let consensus::ConsensusResult::Block(block) = consensus_result {
                         self.handle_block(block).await?;
+                        self.drain_deferred_batches().await?;
                         // Check finality after block execution — batch txids may now be confirmed
                         let handle = self.consensus_handle.as_mut().unwrap();
                         if handle.state
@@ -556,6 +573,53 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
 
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute any deferred batches whose anchor block has now been processed.
+    async fn drain_deferred_batches(&mut self) -> Result<()> {
+        let Some(handle) = self.consensus_handle.as_mut() else {
+            return Ok(());
+        };
+        let last_height = self.last_height;
+        let mut still_deferred = Vec::new();
+        let mut ready = Vec::new();
+        for batch in handle.state.deferred_batches.drain(..) {
+            if batch.anchor_height <= last_height {
+                ready.push(batch);
+            } else {
+                still_deferred.push(batch);
+            }
+        }
+        handle.state.deferred_batches = still_deferred;
+
+        for batch in ready {
+            info!(
+                anchor = batch.anchor_height,
+                consensus_height = %batch.consensus_height,
+                "Executing deferred batch — anchor block now processed"
+            );
+            handle
+                .state
+                .process_decided_batch(
+                    &self.executor,
+                    &mut self.runtime,
+                    batch.anchor_height,
+                    batch.anchor_hash,
+                    batch.consensus_height,
+                    &batch.certificate,
+                    &batch.txs,
+                )
+                .await;
+            if let Some(tx) = &self.event_tx {
+                let txids: Vec<String> = batch
+                    .txs
+                    .iter()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .collect();
+                let _ = tx.send(Event::BatchProcessed { txids }).await;
             }
         }
         Ok(())
@@ -682,6 +746,7 @@ pub async fn start_consensus(
     engine_config: engine::EngineConfig,
     runtime: &mut Runtime,
     observation_channels: Option<consensus::ObservationChannels>,
+    timeouts: Option<LinearTimeouts>,
 ) -> Result<ConsensusHandle> {
     let genesis = build_genesis_from_staking(runtime).await?;
 
@@ -701,6 +766,9 @@ pub async fn start_consensus(
         engine_output.address,
     );
     state.observation = observation_channels;
+    if let Some(t) = timeouts {
+        state.timeouts = t;
+    }
 
     Ok(ConsensusHandle {
         state,
@@ -724,6 +792,7 @@ pub fn run(
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus::ObservationChannels>,
+    consensus_propose_timeout_ms: Option<u64>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -743,8 +812,15 @@ pub fn run(
                     bs = bs.with_tx_cache(client.tx_cache().clone());
                 }
 
+                let timeouts = consensus_propose_timeout_ms.map(|ms| LinearTimeouts {
+                    propose: std::time::Duration::from_millis(ms),
+                    ..LinearTimeouts::default()
+                });
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
-                    Some(start_consensus(engine_cfg, &mut runtime, observation_channels).await?)
+                    Some(
+                        start_consensus(engine_cfg, &mut runtime, observation_channels, timeouts)
+                            .await?,
+                    )
                 } else {
                     None
                 };

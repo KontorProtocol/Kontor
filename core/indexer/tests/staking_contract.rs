@@ -14,7 +14,7 @@ import!(
     path = "../../native-contracts/token/wit",
 );
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator() -> Result<()> {
     let validator = runtime.identity().await?;
     let ed25519_key = vec![1u8; 32];
@@ -40,7 +40,7 @@ async fn test_register_validator() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_errors() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -82,7 +82,7 @@ async fn test_register_validator_errors() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -119,7 +119,7 @@ async fn test_add_stake() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -146,7 +146,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_begin_unstake_from_pending() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -167,7 +167,7 @@ async fn test_begin_unstake_from_pending() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_unstake_returns_tokens() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -190,7 +190,7 @@ async fn test_unstake_returns_tokens() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_multiple_validators() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -207,7 +207,7 @@ async fn test_multiple_validators() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -226,7 +226,7 @@ async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
@@ -243,7 +243,7 @@ async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     Ok(())
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts")]
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_token_balance() -> Result<()> {
     let validator = runtime.identity().await?;
 
@@ -255,126 +255,6 @@ async fn test_register_validator_token_balance() -> Result<()> {
     let diff = balance_before - balance_after;
     assert!(diff >= Decimal::from(5));
     assert!(diff < Decimal::from(6));
-
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_register_and_activate_regtest() -> Result<()> {
-    let validator = runtime.identity().await?;
-    let ed25519_key = vec![1u8; 32];
-
-    staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
-
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
-
-    // Mine blocks past activation delay (ACTIVATION_DELAY = 12)
-    for _ in 0..12 {
-        runtime.issuance(&validator).await?;
-    }
-
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.status, staking::ValidatorStatus::Active);
-
-    let active_set = staking::get_active_set(runtime).await?;
-    assert_eq!(active_set.len(), 1);
-    assert_eq!(active_set[0].x_only_pubkey, validator.to_string());
-
-    let epoch = staking::get_staking_info(runtime).await?;
-    assert_eq!(epoch.active_count, 1);
-    assert_eq!(epoch.total_stake, Decimal::from(5));
-
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_add_stake_rejected_during_pending_exit_regtest() -> Result<()> {
-    let validator = runtime.identity().await?;
-
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
-
-    // Mine past activation delay
-    for _ in 0..12 {
-        runtime.issuance(&validator).await?;
-    }
-    assert_eq!(
-        staking::get_validator(runtime, &validator)
-            .await?
-            .unwrap()
-            .status,
-        staking::ValidatorStatus::Active
-    );
-
-    // Begin unstake → pending_exit, but still in active set
-    staking::begin_unstake(runtime, &validator).await??;
-    assert_eq!(
-        staking::get_validator(runtime, &validator)
-            .await?
-            .unwrap()
-            .status,
-        staking::ValidatorStatus::PendingExit
-    );
-    assert_eq!(staking::get_active_set(runtime).await?.len(), 1);
-    assert_eq!(staking::get_active_count(runtime).await?, 1);
-
-    // add_stake should be rejected
-    let result = staking::add_stake(runtime, &validator, 3.into()).await?;
-    assert_eq!(
-        result,
-        Err(Error::Message(
-            "cannot add stake while inactive or pending exit".to_string()
-        ))
-    );
-
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", mode = "regtest")]
-async fn test_full_lifecycle_regtest() -> Result<()> {
-    let validator = runtime.identity().await?;
-    let ed25519_key = vec![1u8; 32];
-
-    // Register
-    staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
-
-    // Mine past activation delay
-    for _ in 0..12 {
-        runtime.issuance(&validator).await?;
-    }
-    assert_eq!(
-        staking::get_validator(runtime, &validator)
-            .await?
-            .unwrap()
-            .status,
-        staking::ValidatorStatus::Active
-    );
-
-    // Begin unstake
-    staking::begin_unstake(runtime, &validator).await??;
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.status, staking::ValidatorStatus::PendingExit);
-
-    // Mine past deactivation delay
-    for _ in 0..12 {
-        runtime.issuance(&validator).await?;
-    }
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.status, staking::ValidatorStatus::Inactive);
-
-    // After deactivation: active_count and total_stake should be 0
-    let epoch = staking::get_staking_info(runtime).await?;
-    assert_eq!(epoch.active_count, 0);
-    assert_eq!(epoch.total_stake, Decimal::from(0));
-    assert_eq!(staking::get_active_set(runtime).await?.len(), 0);
-
-    // Tokens returned automatically on deactivation (minus gas)
-    let balance = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance > Decimal::from(9));
-
-    // Stake is zeroed
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.stake, Decimal::from(0));
 
     Ok(())
 }

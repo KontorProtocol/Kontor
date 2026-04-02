@@ -11,6 +11,7 @@ mod impls;
 mod import;
 mod interface;
 mod model;
+mod regtest;
 mod root;
 mod store;
 mod test;
@@ -273,6 +274,12 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let func = parse_macro_input!(item as ItemFn);
     test::generate(config, func).into()
+}
+
+#[proc_macro]
+pub fn regtest_tests(input: TokenStream) -> TokenStream {
+    let config = parse_macro_input!(input as regtest::Config);
+    regtest::generate(config).into()
 }
 
 #[proc_macro]

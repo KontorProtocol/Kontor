@@ -358,6 +358,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-token"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -375,13 +382,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "token"
-version = "0.1.0"
-dependencies = [
- "stdlib",
 ]
 
 [[package]]

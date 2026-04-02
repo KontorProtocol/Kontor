@@ -49,10 +49,10 @@ export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
 
-export type Event = { "type": "Processed"; block: BlockRow } | {
-  "type": "Rolledback";
-  height: number;
-};
+export type Event =
+  | { "type": "Processed"; block: BlockRow; txids: Array<string> }
+  | { "type": "BatchProcessed"; txids: Array<string> }
+  | { "type": "Rolledback"; height: number };
 
 export type Info = {
   version: string;
@@ -70,7 +70,7 @@ export type Inst =
     "Call": {
       gas_limit: number;
       contract: string;
-      nonce?: number | null;
+      nonce: number | null;
       expr: string;
     };
   }
@@ -107,7 +107,7 @@ export type Op =
       metadata: OpMetadata;
       gas_limit: number;
       contract: string;
-      nonce?: number | null;
+      nonce: number | null;
       expr: string;
     };
   }
