@@ -695,6 +695,7 @@ async fn test_file_metadata_operations() -> Result<()> {
     let nonce = vec![3u8; 32];
 
     let entry1 = FileMetadataRow::builder()
+        .ledger_index(0)
         .file_id(file_id.clone())
         .object_id(object_id.clone())
         .nonce(nonce.clone())
@@ -744,6 +745,7 @@ async fn test_file_metadata_operations() -> Result<()> {
     let filename2 = "file_def456.dat".to_string();
 
     let entry2 = FileMetadataRow::builder()
+        .ledger_index(1)
         .file_id(file_id2.clone())
         .object_id(object_id2)
         .nonce(nonce2)
