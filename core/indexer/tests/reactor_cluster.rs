@@ -476,6 +476,10 @@ impl ReactorCluster {
                 genesis,
                 engine_output.address,
             );
+            state.timeouts = malachitebft_core_types::LinearTimeouts {
+                propose: Duration::from_millis(500),
+                ..Default::default()
+            };
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,
                 finality_tx: ftx,
@@ -560,7 +564,6 @@ impl ReactorCluster {
         for _ in 0..self.node_count {
             let _ = self.ready_rx.recv().await;
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
     fn send_block_event(&self, event: BlockEvent) {
