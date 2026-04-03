@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -32,6 +32,16 @@ use testlib::ContractReader;
 use testlib::*;
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
+fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
+    static ENGINE: OnceLock<wasmtime::Engine> = OnceLock::new();
+    static CACHE: OnceLock<ComponentCache> = OnceLock::new();
+    let engine = ENGINE
+        .get_or_init(|| Runtime::new_engine().expect("Failed to create shared engine"))
+        .clone();
+    let cache = CACHE.get_or_init(ComponentCache::new).clone();
+    (engine, cache)
+}
+
 struct LiteExecutor {
     _db_dir: tempfile::TempDir,
     counter_address: ContractAddress,
@@ -49,6 +59,8 @@ impl LiteExecutor {
         mock_bitcoin: Arc<Mutex<MockBitcoin>>,
         shared_pubkey: String,
         genesis_validators: &[indexer::runtime::GenesisValidator],
+        engine: wasmtime::Engine,
+        component_cache: ComponentCache,
     ) -> Result<(Self, Runtime)> {
         let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
@@ -64,7 +76,8 @@ impl LiteExecutor {
         .await?;
 
         let storage = Storage::builder().height(0).conn(conn).build();
-        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        let linker = Runtime::new_linker(&engine)?;
+        let mut runtime = Runtime::new_with(engine, linker, component_cache, storage).await?;
         runtime.publish_native_contracts(genesis_validators).await?;
 
         let signer = Signer::XOnlyPubKey(shared_pubkey);
@@ -257,6 +270,8 @@ struct ReactorCluster {
     private_keys: Vec<PrivateKey>,
     ports: Vec<u16>,
     shared_pubkey: String,
+    engine: wasmtime::Engine,
+    component_cache: ComponentCache,
     decided_tx: mpsc::Sender<DecidedBatch>,
     finality_tx: mpsc::Sender<FinalityEvent>,
     state_tx: mpsc::Sender<StateEvent>,
@@ -305,6 +320,7 @@ impl ReactorCluster {
         let mut block_txs = Vec::new();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = indexer::reg_tester::random_x_only_pubkey();
+        let (engine, component_cache) = shared_engine_and_cache();
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -335,6 +351,8 @@ impl ReactorCluster {
                 ready_tx.clone(),
                 mock_bitcoin.clone(),
                 shared_pubkey.clone(),
+                engine.clone(),
+                component_cache.clone(),
                 &mut join_set,
             );
             started_nodes[i] = true;
@@ -356,6 +374,8 @@ impl ReactorCluster {
             private_keys,
             ports,
             shared_pubkey,
+            engine,
+            component_cache,
             decided_tx,
             finality_tx,
             state_tx,
@@ -407,13 +427,16 @@ impl ReactorCluster {
         rtx: mpsc::Sender<usize>,
         mock_btc: Arc<Mutex<MockBitcoin>>,
         pubkey: String,
+        engine: wasmtime::Engine,
+        component_cache: ComponentCache,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
         let ports = ports.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey, &genesis_vals)
+            let (executor, runtime) =
+                LiteExecutor::new(mock_btc, pubkey, &genesis_vals, engine, component_cache)
                 .await
                 .expect("LiteExecutor setup failed");
 
@@ -519,6 +542,8 @@ impl ReactorCluster {
             self.ready_tx.clone(),
             self.mock_bitcoin.clone(),
             self.shared_pubkey.clone(),
+            self.engine.clone(),
+            self.component_cache.clone(),
             &mut self.join_set,
         );
 
