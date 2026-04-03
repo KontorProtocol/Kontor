@@ -437,8 +437,8 @@ impl ReactorCluster {
         join_set.spawn(async move {
             let (executor, runtime) =
                 LiteExecutor::new(mock_btc, pubkey, &genesis_vals, engine, component_cache)
-                .await
-                .expect("LiteExecutor setup failed");
+                    .await
+                    .expect("LiteExecutor setup failed");
 
             let engine_config = EngineConfig {
                 private_key,
@@ -659,7 +659,7 @@ impl Drop for ReactorCluster {
 async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs
@@ -679,10 +679,10 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
         "Expected a batch decision with txids"
     );
 
-    // Wait for all 4 nodes to produce BatchApplied
+    // Wait for all nodes to produce BatchApplied
     let state_events = cluster
         .wait_for_n_state_events_matching(
-            4,
+            cluster.node_count,
             |e| matches!(e, StateEvent::BatchApplied { .. }),
             Duration::from_secs(10),
         )
@@ -693,8 +693,9 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
         .filter(|e| matches!(e, StateEvent::BatchApplied { .. }))
         .count();
     assert!(
-        batch_applied_count >= 4,
-        "Expected at least 4 BatchApplied events (one per node), got {batch_applied_count}"
+        batch_applied_count >= cluster.node_count,
+        "Expected at least {} BatchApplied events (one per node), got {batch_applied_count}",
+        cluster.node_count
     );
 
     cluster.shutdown().await;
@@ -709,7 +710,7 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
 async fn prod_reactor_block_updates_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs and wait for a batch at anchor 0
@@ -783,7 +784,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 async fn prod_reactor_happy_path_finalization() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs and wait for batch at anchor 0
@@ -836,7 +837,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Mine block 1 (empty) so the batch anchors at height 1 (not 0)
@@ -865,7 +866,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     // Wait for all 3 txids to be batched (may be across multiple batches)
     cluster
         .wait_for_n_state_events_matching(
-            4, // 4 nodes each emit BatchApplied
+            cluster.node_count,
             |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count > 0),
             Duration::from_secs(30),
         )
@@ -937,7 +938,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 async fn prod_reactor_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch 1 at anchor 0
@@ -1021,7 +1022,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch at anchor 0 — will be confirmed and finalized
@@ -1139,7 +1140,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Generate mempool txs
@@ -1216,7 +1217,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
 async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch at anchor 0: 2 txs
@@ -1333,7 +1334,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
 async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     indexer::logging::setup();
 
-    let num_nodes = 4;
+    let num_nodes = 3;
     let mut cluster = ReactorCluster::start(num_nodes).await?;
     cluster.wait_for_ready().await;
 
@@ -1446,7 +1447,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // First batch of mempool txs
@@ -1525,7 +1526,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
 async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Mine and decide blocks 1-3
