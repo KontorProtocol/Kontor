@@ -13,9 +13,7 @@ use backon::BackoffBuilder;
 use crate::{
     api::{client::Client as KontorClient, ws_client::WebSocketClient},
     bitcoin_client::{
-        self, Client as BitcoinClient,
-        client::RegtestRpc,
-        types::{GetMempoolInfoResult, TestMempoolAcceptResult},
+        self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
     },
     bls::{
         RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
@@ -259,8 +257,6 @@ pub struct RegTesterInner {
     ws_client: WebSocketClient,
     /// Address to mine blocks to (cluster admin identity's address).
     mine_address: String,
-    /// When true, batchable ops skip mining and rely on consensus batching.
-    pub cluster_mode: bool,
     /// Cache of published contracts by name — enables idempotent publish.
     pub published_contracts: HashMap<String, ContractAddress>,
     /// Shared identity pool for popping pre-created identities.
@@ -293,7 +289,6 @@ impl RegTesterInner {
             bitcoin_client,
             kontor_client,
             mine_address,
-            cluster_mode: false,
             published_contracts: HashMap::new(),
             pool,
         })
@@ -335,11 +330,6 @@ impl RegTesterInner {
             .generate_to_address(count, &self.mine_address)
             .await?;
         Ok(())
-    }
-
-    pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
-        let result = self.bitcoin_client.get_mempool_info().await?;
-        Ok(result)
     }
 
     pub async fn compose_instruction(
@@ -457,11 +447,10 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<InstructionResult> {
-        let needs_mine = !self.cluster_mode
-            || insts
-                .ops
-                .iter()
-                .any(|inst| matches!(inst, Inst::Publish { .. }));
+        let needs_mine = insts
+            .ops
+            .iter()
+            .any(|inst| matches!(inst, Inst::Publish { .. }));
         let sent = self.send_insts(ident, insts).await?;
         let id = OpResultId::builder()
             .txid(sent.reveal_txid.to_string())
@@ -564,16 +553,6 @@ impl RegTester {
         self.inner.lock().await.kontor_client.clone()
     }
 
-    pub async fn wait_next_block(&self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-        inner
-            .ws_client
-            .next()
-            .await
-            .context("Failed to receive response from websocket")?;
-        Ok(())
-    }
-
     pub async fn mempool_accept_result(
         &self,
         raw_txs: &[String],
@@ -620,10 +599,6 @@ impl RegTester {
             .kontor_client
             .compose_reveal(query)
             .await
-    }
-
-    pub async fn mempool_info(&self) -> Result<GetMempoolInfoResult> {
-        self.inner.lock().await.mempool_info().await
     }
 
     pub async fn compose_instruction(
@@ -694,10 +669,6 @@ impl RegTester {
         self.inner.lock().await.identity().await
     }
 
-    pub async fn cluster_mode(&self) -> bool {
-        self.inner.lock().await.cluster_mode
-    }
-
     pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<String> {
         self.inner.lock().await.view(contract_address, expr).await
     }
@@ -740,7 +711,7 @@ impl RegTester {
         self.inner.lock().await.checkpoint().await
     }
 
-    pub async fn info(&mut self) -> Result<Info> {
+    pub async fn info(&self) -> Result<Info> {
         self.inner.lock().await.kontor_client.index().await
     }
 }
@@ -983,7 +954,7 @@ impl RegTesterCluster {
             .expect("Node 0 not running")
             .client;
         let mine_address = identity.address.to_string();
-        let mut inner = RegTesterInner::with_port(
+        let inner = RegTesterInner::with_port(
             bitcoin_client.clone(),
             client.clone(),
             node_configs[0].api_port,
@@ -991,7 +962,7 @@ impl RegTesterCluster {
             pool.clone(),
         )
         .await?;
-        inner.cluster_mode = true;
+
         let reg_tester = RegTester {
             inner: Arc::new(Mutex::new(inner)),
         };
@@ -1119,7 +1090,7 @@ impl RegTesterCluster {
 
         let nc = &self.node_configs[node_idx];
         let client = &nc.running.as_ref().unwrap().client;
-        let mut inner = RegTesterInner::with_port(
+        let inner = RegTesterInner::with_port(
             self.bitcoin_client.clone(),
             client.clone(),
             nc.api_port,
@@ -1127,7 +1098,7 @@ impl RegTesterCluster {
             self.pool.clone(),
         )
         .await?;
-        inner.cluster_mode = true;
+
         Ok(RegTester {
             inner: Arc::new(Mutex::new(inner)),
         })

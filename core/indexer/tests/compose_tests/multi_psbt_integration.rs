@@ -65,14 +65,9 @@ pub async fn test_portal_coordinated_commit_reveal_flow_integration(
 
     let secp = Secp256k1::new();
 
-    // Fee environment
-    let mp = reg_tester.mempool_info().await?;
-    let min_btc_per_kvb = mp
-        .mempool_min_fee_btc_per_kvb
-        .max(mp.min_relay_tx_fee_btc_per_kvb);
-    let min_sat_per_vb: u64 = ((min_btc_per_kvb * 100_000_000.0) / 1000.0).ceil() as u64;
+    // Fee environment (regtest defaults: 1 sat/vbyte min relay fee)
+    let min_sat_per_vb: u64 = 2;
     let dust_limit_sat: u64 = 330;
-    info!("min_sat_per_vb={}", min_sat_per_vb);
 
     // Phase 1: Nodes sign up for agreement with address + x-only pubkey
     let (signups, node_secrets) = get_node_addresses(&mut reg_tester.clone()).await?;
