@@ -32,13 +32,58 @@ use testlib::ContractReader;
 use testlib::*;
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
-fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
-    static ENGINE: OnceLock<wasmtime::Engine> = OnceLock::new();
-    static CACHE: OnceLock<ComponentCache> = OnceLock::new();
-    let engine = ENGINE
-        .get_or_init(|| Runtime::new_engine().expect("Failed to create shared engine"))
-        .clone();
-    let cache = CACHE.get_or_init(ComponentCache::new).clone();
+async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
+    static ONCE: OnceLock<(wasmtime::Engine, ComponentCache)> = OnceLock::new();
+    if let Some(cached) = ONCE.get() {
+        return cached.clone();
+    }
+
+    // Pre-warm: compile all contracts once into the shared cache
+    let engine = Runtime::new_engine().expect("Failed to create shared engine");
+    let cache = ComponentCache::new();
+
+    let (_reader, writer, (_db_dir, _db_name)) = new_test_db().await.expect("test db");
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await
+    .expect("insert block");
+
+    let storage = Storage::builder().height(0).conn(conn).build();
+    let linker = Runtime::new_linker(&engine).expect("linker");
+    let mut runtime = Runtime::new_with(engine.clone(), linker, cache.clone(), storage)
+        .await
+        .expect("runtime");
+    let signer = Signer::XOnlyPubKey("prewarm".to_string());
+    runtime
+        .publish_native_contracts(&[])
+        .await
+        .expect("publish native");
+    runtime
+        .issuance(&signer)
+        .await
+        .expect("prewarm issuance");
+
+    let contract_reader = ContractReader::new("../../test-contracts")
+        .await
+        .expect("contract reader");
+    let counter_bytes = contract_reader
+        .read("counter")
+        .await
+        .expect("read counter")
+        .expect("counter not found");
+    runtime
+        .publish(&signer, "counter", &counter_bytes)
+        .await
+        .expect("publish counter");
+
+    let _ = ONCE.set((engine.clone(), cache.clone()));
     (engine, cache)
 }
 
@@ -220,9 +265,9 @@ impl Executor for LiteExecutor {
     }
 }
 
-fn allocate_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    Ok(listener.local_addr()?.port())
+fn allocate_port() -> u16 {
+    static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(19000);
+    NEXT_PORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Collect events from a channel until `n` events match the predicate, or timeout.
@@ -311,16 +356,14 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = (0..total)
-            .map(|_| allocate_port().expect("Failed to allocate port"))
-            .collect();
+        let ports: Vec<u16> = (0..total).map(|_| allocate_port()).collect();
 
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
         let mut block_txs = Vec::new();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = indexer::reg_tester::random_x_only_pubkey();
-        let (engine, component_cache) = shared_engine_and_cache();
+        let (engine, component_cache) = shared_engine_and_cache().await;
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -658,7 +701,7 @@ impl Drop for ReactorCluster {
 /// Basic test: 4 validators decide a batch with mempool txs.
 /// Same as consensus-sim's `validators_agree_on_values` but through the prod reactor.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     indexer::logging::setup();
 
@@ -709,7 +752,7 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
 /// After mining, the block is decided through consensus (Value::Block),
 /// and the next batch anchors at the new height.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_block_updates_anchor() -> Result<()> {
     indexer::logging::setup();
 
@@ -783,7 +826,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 /// Happy path finalization: batch txs are confirmed on chain within
 /// the finality window, and a BatchFinalized event is emitted.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_happy_path_finalization() -> Result<()> {
     indexer::logging::setup();
 
@@ -836,7 +879,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 /// Missing tx invalidation: a batched tx that is never confirmed on chain
 /// triggers a finality rollback when the deadline passes.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     indexer::logging::setup();
 
@@ -937,7 +980,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 /// Cascade invalidation: a missing tx at anchor 0 also invalidates a
 /// second batch decided at anchor 1 (same finality window).
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
@@ -1021,7 +1064,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 /// Cross-block cascade: a missing tx at anchor 1 invalidates batches at
 /// anchors 1, 2, and 3. Batch at anchor 0 (already finalized) survives.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
@@ -1139,7 +1182,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 /// The batch executes first (counter increments), then the block decision skips
 /// the already-batched txids via dedup.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
@@ -1216,7 +1259,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
 /// Finality rollback from anchor 1 — checkpoint after rollback should match
 /// the checkpoint from right after the batch at anchor 0.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     indexer::logging::setup();
 
@@ -1333,7 +1376,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
 /// IGNORED: Checkpoint computation is non-deterministic across nodes due to
 /// autoincrement tx_id values differing per-node DB. Needs investigation.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     indexer::logging::setup();
 
@@ -1446,7 +1489,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 /// Test 11: Multiple batches decided at the same anchor height.
 /// Two separate rounds of mempool txs both anchor at height 0 (no blocks mined between them).
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
@@ -1525,7 +1568,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
 /// Process blocks 1-3, then send a Rollback to height 1. Blocks 2-3 are deleted.
 /// New blocks 2-3 arrive with different hashes.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     indexer::logging::setup();
 
@@ -1600,7 +1643,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
 /// Late joiner: start 3 of 4 validators, process batches + blocks,
 /// then start the 4th. It syncs via Malachite and reaches the same checkpoint.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     indexer::logging::setup();
 
