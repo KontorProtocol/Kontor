@@ -16,7 +16,7 @@ pub fn new_backoff_unlimited() -> ExponentialBuilder {
 }
 
 pub fn new_backoff_limited() -> ExponentialBuilder {
-    new_backoff().with_max_times(5)
+    new_backoff().with_max_times(6)
 }
 
 pub fn notify<E: std::fmt::Debug>(action: &str) -> impl FnMut(&E, Duration) {
