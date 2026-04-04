@@ -65,10 +65,7 @@ async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
         .publish_native_contracts(&[])
         .await
         .expect("publish native");
-    runtime
-        .issuance(&signer)
-        .await
-        .expect("prewarm issuance");
+    runtime.issuance(&signer).await.expect("prewarm issuance");
 
     let contract_reader = ContractReader::new("../../test-contracts")
         .await

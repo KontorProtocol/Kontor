@@ -50,19 +50,26 @@ use tokio::{
     sync::Mutex,
 };
 
-const REGTEST_CONF: &str = r#"
-regtest=1
-rpcuser=rpc
-rpcpassword=rpc
+fn regtest_conf(rpc_port: u16, zmq_port: u16, p2p_port: u16) -> String {
+    format!(
+        r#"regtest=1
 server=1
 txindex=1
 prune=0
 dbcache=4000
-zmqpubsequence=tcp://127.0.0.1:28332
+
+[regtest]
+rpcuser=rpc
+rpcpassword=rpc
+rpcport={rpc_port}
+port={p2p_port}
+zmqpubsequence=tcp://127.0.0.1:{zmq_port}
 zmqpubsequencehwm=0
-zmqpubrawtx=tcp://127.0.0.1:28332
+zmqpubrawtx=tcp://127.0.0.1:{zmq_port}
 zmqpubrawtxhwm=0
-"#;
+"#
+    )
+}
 
 /// Derive a BLS12-381 secret key from a BIP-39 seed using EIP-2333.
 ///
@@ -70,14 +77,24 @@ zmqpubrawtxhwm=0
 /// on BLS12-381 scalars (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child
 /// derivation is hardened by design, so paths are written without the `'` marker.
 ///
-async fn create_bitcoin_conf(data_dir: &Path) -> Result<()> {
+async fn create_bitcoin_conf(
+    data_dir: &Path,
+    rpc_port: u16,
+    zmq_port: u16,
+    p2p_port: u16,
+) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
-    f.write_all(REGTEST_CONF.as_bytes()).await?;
+    f.write_all(regtest_conf(rpc_port, zmq_port, p2p_port).as_bytes())
+        .await?;
     Ok(())
 }
 
-async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)> {
-    create_bitcoin_conf(data_dir).await?;
+/// Returns (child, client, rpc_url, zmq_port)
+async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, String, u16)> {
+    let rpc_port = allocate_ports(1)?[0];
+    let zmq_port = allocate_ports(1)?[0];
+    let p2p_port = allocate_ports(1)?[0];
+    create_bitcoin_conf(data_dir, rpc_port, zmq_port, p2p_port).await?;
 
     // Check if bitcoind is in PATH
     let bitcoind_check = Command::new("which").arg("bitcoind").output().await;
@@ -92,7 +109,11 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
     let process = Command::new("bitcoind")
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
         .spawn()?;
-    let client = bitcoin_client::Client::new_from_config(&RegtestConfig::default())?;
+    let config = RegtestConfig {
+        bitcoin_rpc_url: format!("http://127.0.0.1:{rpc_port}"),
+        ..RegtestConfig::default()
+    };
+    let client = bitcoin_client::Client::new_from_config(&config)?;
     retry_simple(async || {
         let i = client.get_blockchain_info().await?;
         if i.chain != Network::Regtest {
@@ -101,7 +122,8 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client)>
         Ok(())
     })
     .await?;
-    Ok((process, client))
+    let rpc_url = config.bitcoin_rpc_url;
+    Ok((process, client, rpc_url, zmq_port))
 }
 
 struct ConsensusNodeConfig {
@@ -114,6 +136,8 @@ struct ConsensusNodeConfig {
 async fn run_kontor(
     data_dir: &Path,
     api_port: u16,
+    bitcoin_rpc_url: &str,
+    zmq_port: u16,
     consensus: Option<&ConsensusNodeConfig>,
 ) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
@@ -128,11 +152,13 @@ async fn run_kontor(
         .arg("--starting-block-height")
         .arg("102")
         .arg("--bitcoin-rpc-url")
-        .arg(config.bitcoin_rpc_url)
+        .arg(bitcoin_rpc_url)
         .arg("--bitcoin-rpc-user")
         .arg(config.bitcoin_rpc_user)
         .arg("--bitcoin-rpc-password")
-        .arg(config.bitcoin_rpc_password);
+        .arg(config.bitcoin_rpc_password)
+        .arg("--zmq-address")
+        .arg(format!("tcp://127.0.0.1:{zmq_port}"));
 
     if let Some(c) = consensus {
         cmd.arg("--consensus-private-key")
@@ -792,6 +818,8 @@ pub struct RegTesterCluster {
     pub identity: Identity,
     pub reg_tester: RegTester,
     pub pool: IdentityPool,
+    bitcoin_rpc_url: String,
+    zmq_port: u16,
     node_counter: AtomicUsize,
     genesis_path: std::path::PathBuf,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
@@ -820,7 +848,8 @@ impl RegTesterCluster {
         assert!(active <= total, "active must be <= total");
 
         let bitcoin_data_dir = TempDir::new()?;
-        let (bitcoin_child, bitcoin_client) = run_bitcoin(bitcoin_data_dir.path()).await?;
+        let (bitcoin_child, bitcoin_client, bitcoin_rpc_url, zmq_port) =
+            run_bitcoin(bitcoin_data_dir.path()).await?;
 
         // Create a funded identity for transaction building
         let mut seed = [0u8; 64];
@@ -902,7 +931,16 @@ impl RegTesterCluster {
             .iter()
             .enumerate()
             .take(active)
-            .map(|(i, nc)| Self::launch_node(nc, i, &all_consensus_ports, &genesis_path))
+            .map(|(i, nc)| {
+                Self::launch_node(
+                    nc,
+                    i,
+                    &all_consensus_ports,
+                    &genesis_path,
+                    &bitcoin_rpc_url,
+                    zmq_port,
+                )
+            })
             .collect();
         let results = futures_util::future::join_all(launch_futures).await;
         for (i, result) in results.into_iter().enumerate() {
@@ -973,6 +1011,8 @@ impl RegTesterCluster {
             identity,
             reg_tester,
             pool,
+            bitcoin_rpc_url,
+            zmq_port,
             node_counter: AtomicUsize::new(0),
             genesis_path,
             miner_cmd_tx,
@@ -998,6 +1038,8 @@ impl RegTesterCluster {
         index: usize,
         all_consensus_ports: &[u16],
         genesis_path: &std::path::Path,
+        bitcoin_rpc_url: &str,
+        zmq_port: u16,
     ) -> Result<(Child, KontorClient)> {
         let consensus_config = ConsensusNodeConfig {
             private_key_hex: hex::encode(nc.ed25519_key.inner().to_bytes()),
@@ -1010,7 +1052,14 @@ impl RegTesterCluster {
                 .collect(),
             genesis_file: genesis_path.to_string_lossy().into_owned(),
         };
-        run_kontor(nc.data_dir.path(), nc.api_port, Some(&consensus_config)).await
+        run_kontor(
+            nc.data_dir.path(),
+            nc.api_port,
+            bitcoin_rpc_url,
+            zmq_port,
+            Some(&consensus_config),
+        )
+        .await
     }
 
     /// Get the client for a running node.
@@ -1043,8 +1092,15 @@ impl RegTesterCluster {
             .map(|nc| nc.consensus_port)
             .collect();
         let nc = &self.node_configs[index];
-        let (child, client) =
-            Self::launch_node(nc, index, &all_consensus_ports, &self.genesis_path).await?;
+        let (child, client) = Self::launch_node(
+            nc,
+            index,
+            &all_consensus_ports,
+            &self.genesis_path,
+            &self.bitcoin_rpc_url,
+            self.zmq_port,
+        )
+        .await?;
         self.node_configs[index].running = Some(ClusterNode { client, child });
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);

@@ -734,3 +734,32 @@ pub mod reactor_harness {
         }
     }
 }
+
+/// BLS test helpers shared between unit and regtest attack vector tests.
+pub mod bls_test {
+    use blst::min_sig::{AggregatePublicKey, PublicKey as BlsPublicKey};
+
+    pub fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
+        let seed = [seed_byte; 64];
+        crate::bls::derive_bls_secret_key_eip2333(
+            &seed,
+            &crate::bls::bls_derivation_path(bitcoin::Network::Regtest),
+        )
+        .expect("failed to derive EIP-2333 secret key")
+    }
+
+    pub fn construct_rogue_g2_pubkey(
+        beta_pk_compressed: &[u8; 96],
+        victim_pk_compressed: &[u8; 96],
+    ) -> [u8; 96] {
+        let beta_pk =
+            BlsPublicKey::key_validate(beta_pk_compressed).expect("beta pk must be valid G2");
+        let mut neg_victim_bytes = *victim_pk_compressed;
+        neg_victim_bytes[0] ^= 0x20;
+        let neg_victim_pk = BlsPublicKey::key_validate(&neg_victim_bytes)
+            .expect("negated victim pk must be valid G2");
+        let agg = AggregatePublicKey::aggregate(&[&beta_pk, &neg_victim_pk], false)
+            .expect("aggregation must succeed");
+        agg.to_public_key().to_bytes()
+    }
+}
