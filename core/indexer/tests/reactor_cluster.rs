@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -33,55 +33,26 @@ use testlib::*;
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
 async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
-    static ONCE: OnceLock<(wasmtime::Engine, ComponentCache)> = OnceLock::new();
-    if let Some(cached) = ONCE.get() {
-        return cached.clone();
-    }
-
-    // Pre-warm: compile all contracts once into the shared cache
-    let engine = Runtime::new_engine().expect("Failed to create shared engine");
-    let cache = ComponentCache::new();
-
-    let (_reader, writer, (_db_dir, _db_name)) = new_test_db().await.expect("test db");
-    let conn = writer.connection();
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(0)
-            .hash(new_mock_block_hash(0))
-            .relevant(true)
-            .build(),
-    )
+    static ONCE: tokio::sync::OnceCell<(wasmtime::Engine, ComponentCache)> =
+        tokio::sync::OnceCell::const_new();
+    ONCE.get_or_init(|| async {
+        let engine = Runtime::new_engine().expect("Failed to create shared engine");
+        let cache = ComponentCache::new();
+        let mock_btc = Arc::new(Mutex::new(MockBitcoin::new(0)));
+        let (_executor, runtime) = LiteExecutor::new(
+            mock_btc,
+            "prewarm".to_string(),
+            &[],
+            engine.clone(),
+            cache.clone(),
+        )
+        .await
+        .expect("pre-warm setup failed");
+        drop(runtime);
+        (engine, cache)
+    })
     .await
-    .expect("insert block");
-
-    let storage = Storage::builder().height(0).conn(conn).build();
-    let linker = Runtime::new_linker(&engine).expect("linker");
-    let mut runtime = Runtime::new_with(engine.clone(), linker, cache.clone(), storage)
-        .await
-        .expect("runtime");
-    let signer = Signer::XOnlyPubKey("prewarm".to_string());
-    runtime
-        .publish_native_contracts(&[])
-        .await
-        .expect("publish native");
-    runtime.issuance(&signer).await.expect("prewarm issuance");
-
-    let contract_reader = ContractReader::new("../../test-contracts")
-        .await
-        .expect("contract reader");
-    let counter_bytes = contract_reader
-        .read("counter")
-        .await
-        .expect("read counter")
-        .expect("counter not found");
-    runtime
-        .publish(&signer, "counter", &counter_bytes)
-        .await
-        .expect("publish counter");
-
-    let _ = ONCE.set((engine.clone(), cache.clone()));
-    (engine, cache)
+    .clone()
 }
 
 struct LiteExecutor {
