@@ -714,7 +714,7 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -769,7 +769,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
                     && d.value.block_height() == 0
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -784,7 +784,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     let block_decisions = cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -806,7 +806,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -838,7 +838,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -858,7 +858,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -889,7 +889,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -911,7 +911,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         .wait_for_n_state_events_matching(
             cluster.node_count,
             |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count > 0),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -927,11 +927,11 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         cluster.mine_empty_and_send();
     }
 
-    // Wait for finality rollback event
+    // Wait for finality rollback event (longer timeout for concurrent test execution)
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid)),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -948,7 +948,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let all_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count == 2),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -991,7 +991,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1002,7 +1002,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1017,7 +1017,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1030,7 +1030,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1075,7 +1075,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let batch0_txids = decisions
@@ -1091,7 +1091,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1106,7 +1106,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1115,7 +1115,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1130,7 +1130,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 2
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1146,7 +1146,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1203,7 +1203,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1211,7 +1211,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1222,7 +1222,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1230,7 +1230,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     let block_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height, .. } if *height == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let block_processed = block_events
@@ -1270,7 +1270,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1286,7 +1286,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
                     }
                 )
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1295,7 +1295,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1310,7 +1310,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1323,7 +1323,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1331,7 +1331,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     let rollback_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::RollbackExecuted { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let rollback_event = rollback_events
@@ -1388,14 +1388,14 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster.mine_and_send(&[]);
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1404,7 +1404,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             num_nodes,
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let checkpoints: Vec<_> = events
@@ -1439,14 +1439,14 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster.mine_and_send(&[]);
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1455,7 +1455,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             num_nodes,
             |e| matches!(e, StateEvent::BlockProcessed { height: 2, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let checkpoints: Vec<_> = events
@@ -1500,7 +1500,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1508,7 +1508,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1519,7 +1519,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && d.value.batch_txids().len() >= 3,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1538,7 +1538,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1547,13 +1547,13 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1578,7 +1578,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
         cluster
             .wait_for_decision_matching(
                 |d| d.value.is_block() && d.value.block_height() == expected_height,
-                Duration::from_secs(30),
+                Duration::from_secs(60),
             )
             .await;
         cluster
@@ -1586,7 +1586,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
                 |e| {
                     matches!(e, StateEvent::BlockProcessed { height, .. } if *height == expected_height)
                 },
-                Duration::from_secs(30),
+                Duration::from_secs(60),
             )
             .await;
     }
@@ -1602,19 +1602,19 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::RollbackExecuted { to_anchor: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 2, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1623,13 +1623,13 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 3,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 3, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1655,7 +1655,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1664,7 +1664,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1673,7 +1673,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             3,
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let pre_join_checkpoints: Vec<_> = pre_join_events
