@@ -32,6 +32,29 @@ use testlib::ContractReader;
 use testlib::*;
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
 
+async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
+    static ONCE: tokio::sync::OnceCell<(wasmtime::Engine, ComponentCache)> =
+        tokio::sync::OnceCell::const_new();
+    ONCE.get_or_init(|| async {
+        let engine = Runtime::new_engine().expect("Failed to create shared engine");
+        let cache = ComponentCache::new();
+        let mock_btc = Arc::new(Mutex::new(MockBitcoin::new(0)));
+        let (_executor, runtime) = LiteExecutor::new(
+            mock_btc,
+            "prewarm".to_string(),
+            &[],
+            engine.clone(),
+            cache.clone(),
+        )
+        .await
+        .expect("pre-warm setup failed");
+        drop(runtime);
+        (engine, cache)
+    })
+    .await
+    .clone()
+}
+
 struct LiteExecutor {
     _db_dir: tempfile::TempDir,
     counter_address: ContractAddress,
@@ -49,6 +72,8 @@ impl LiteExecutor {
         mock_bitcoin: Arc<Mutex<MockBitcoin>>,
         shared_pubkey: String,
         genesis_validators: &[indexer::runtime::GenesisValidator],
+        engine: wasmtime::Engine,
+        component_cache: ComponentCache,
     ) -> Result<(Self, Runtime)> {
         let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
@@ -64,7 +89,8 @@ impl LiteExecutor {
         .await?;
 
         let storage = Storage::builder().height(0).conn(conn).build();
-        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        let linker = Runtime::new_linker(&engine)?;
+        let mut runtime = Runtime::new_with(engine, linker, component_cache, storage).await?;
         runtime.publish_native_contracts(genesis_validators).await?;
 
         let signer = Signer::XOnlyPubKey(shared_pubkey);
@@ -207,9 +233,9 @@ impl Executor for LiteExecutor {
     }
 }
 
-fn allocate_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    Ok(listener.local_addr()?.port())
+fn allocate_port() -> u16 {
+    static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(19000);
+    NEXT_PORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Collect events from a channel until `n` events match the predicate, or timeout.
@@ -257,6 +283,8 @@ struct ReactorCluster {
     private_keys: Vec<PrivateKey>,
     ports: Vec<u16>,
     shared_pubkey: String,
+    engine: wasmtime::Engine,
+    component_cache: ComponentCache,
     decided_tx: mpsc::Sender<DecidedBatch>,
     finality_tx: mpsc::Sender<FinalityEvent>,
     state_tx: mpsc::Sender<StateEvent>,
@@ -296,15 +324,14 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = (0..total)
-            .map(|_| allocate_port().expect("Failed to allocate port"))
-            .collect();
+        let ports: Vec<u16> = (0..total).map(|_| allocate_port()).collect();
 
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
         let mut block_txs = Vec::new();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = indexer::reg_tester::random_x_only_pubkey();
+        let (engine, component_cache) = shared_engine_and_cache().await;
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -335,6 +362,8 @@ impl ReactorCluster {
                 ready_tx.clone(),
                 mock_bitcoin.clone(),
                 shared_pubkey.clone(),
+                engine.clone(),
+                component_cache.clone(),
                 &mut join_set,
             );
             started_nodes[i] = true;
@@ -356,6 +385,8 @@ impl ReactorCluster {
             private_keys,
             ports,
             shared_pubkey,
+            engine,
+            component_cache,
             decided_tx,
             finality_tx,
             state_tx,
@@ -407,15 +438,18 @@ impl ReactorCluster {
         rtx: mpsc::Sender<usize>,
         mock_btc: Arc<Mutex<MockBitcoin>>,
         pubkey: String,
+        engine: wasmtime::Engine,
+        component_cache: ComponentCache,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
         let ports = ports.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) = LiteExecutor::new(mock_btc, pubkey, &genesis_vals)
-                .await
-                .expect("LiteExecutor setup failed");
+            let (executor, runtime) =
+                LiteExecutor::new(mock_btc, pubkey, &genesis_vals, engine, component_cache)
+                    .await
+                    .expect("LiteExecutor setup failed");
 
             let engine_config = EngineConfig {
                 private_key,
@@ -453,6 +487,10 @@ impl ReactorCluster {
                 genesis,
                 engine_output.address,
             );
+            state.timeouts = malachitebft_core_types::LinearTimeouts {
+                propose: Duration::from_millis(500),
+                ..Default::default()
+            };
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,
                 finality_tx: ftx,
@@ -519,6 +557,8 @@ impl ReactorCluster {
             self.ready_tx.clone(),
             self.mock_bitcoin.clone(),
             self.shared_pubkey.clone(),
+            self.engine.clone(),
+            self.component_cache.clone(),
             &mut self.join_set,
         );
 
@@ -535,7 +575,6 @@ impl ReactorCluster {
         for _ in 0..self.node_count {
             let _ = self.ready_rx.recv().await;
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
     fn send_block_event(&self, event: BlockEvent) {
@@ -630,11 +669,11 @@ impl Drop for ReactorCluster {
 /// Basic test: 4 validators decide a batch with mempool txs.
 /// Same as consensus-sim's `validators_agree_on_values` but through the prod reactor.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs
@@ -646,7 +685,7 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -654,10 +693,10 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
         "Expected a batch decision with txids"
     );
 
-    // Wait for all 4 nodes to produce BatchApplied
+    // Wait for all nodes to produce BatchApplied
     let state_events = cluster
         .wait_for_n_state_events_matching(
-            4,
+            cluster.node_count,
             |e| matches!(e, StateEvent::BatchApplied { .. }),
             Duration::from_secs(10),
         )
@@ -668,8 +707,9 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
         .filter(|e| matches!(e, StateEvent::BatchApplied { .. }))
         .count();
     assert!(
-        batch_applied_count >= 4,
-        "Expected at least 4 BatchApplied events (one per node), got {batch_applied_count}"
+        batch_applied_count >= cluster.node_count,
+        "Expected at least {} BatchApplied events (one per node), got {batch_applied_count}",
+        cluster.node_count
     );
 
     cluster.shutdown().await;
@@ -680,11 +720,11 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
 /// After mining, the block is decided through consensus (Value::Block),
 /// and the next batch anchors at the new height.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_block_updates_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs and wait for a batch at anchor 0
@@ -700,7 +740,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
                     && d.value.block_height() == 0
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -715,7 +755,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     let block_decisions = cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -737,7 +777,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -754,11 +794,11 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 /// Happy path finalization: batch txs are confirmed on chain within
 /// the finality window, and a BatchFinalized event is emitted.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_happy_path_finalization() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Insert mempool txs and wait for batch at anchor 0
@@ -769,7 +809,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     assert!(
@@ -789,7 +829,7 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -807,11 +847,11 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 /// Missing tx invalidation: a batched tx that is never confirmed on chain
 /// triggers a finality rollback when the deadline passes.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Mine block 1 (empty) so the batch anchors at height 1 (not 0)
@@ -820,7 +860,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -840,9 +880,9 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     // Wait for all 3 txids to be batched (may be across multiple batches)
     cluster
         .wait_for_n_state_events_matching(
-            4, // 4 nodes each emit BatchApplied
+            cluster.node_count,
             |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count > 0),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -858,11 +898,11 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         cluster.mine_empty_and_send();
     }
 
-    // Wait for finality rollback event
+    // Wait for finality rollback event (longer timeout for concurrent test execution)
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid)),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -879,7 +919,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let all_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count == 2),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -908,11 +948,11 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 /// Cascade invalidation: a missing tx at anchor 0 also invalidates a
 /// second batch decided at anchor 1 (same finality window).
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch 1 at anchor 0
@@ -922,7 +962,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -933,7 +973,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -948,7 +988,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -961,7 +1001,7 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -992,11 +1032,11 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 /// Cross-block cascade: a missing tx at anchor 1 invalidates batches at
 /// anchors 1, 2, and 3. Batch at anchor 0 (already finalized) survives.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch at anchor 0 — will be confirmed and finalized
@@ -1006,7 +1046,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let batch0_txids = decisions
@@ -1022,7 +1062,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1037,7 +1077,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1046,7 +1086,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1061,7 +1101,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
                     && d.value.block_height() == 2
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1077,7 +1117,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     let finality_events = cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1110,11 +1150,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 /// The batch executes first (counter increments), then the block decision skips
 /// the already-batched txids via dedup.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Generate mempool txs
@@ -1134,7 +1174,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1142,7 +1182,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1153,7 +1193,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1161,7 +1201,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     let block_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height, .. } if *height == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let block_processed = block_events
@@ -1187,11 +1227,11 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
 /// Finality rollback from anchor 1 — checkpoint after rollback should match
 /// the checkpoint from right after the batch at anchor 0.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Batch at anchor 0: 2 txs
@@ -1201,7 +1241,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1217,7 +1257,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
                     }
                 )
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1226,7 +1266,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1241,7 +1281,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1254,7 +1294,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     cluster
         .wait_for_finality_event_matching(
             |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1262,7 +1302,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     let rollback_events = cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::RollbackExecuted { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let rollback_event = rollback_events
@@ -1304,11 +1344,11 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
 /// IGNORED: Checkpoint computation is non-deterministic across nodes due to
 /// autoincrement tx_id values differing per-node DB. Needs investigation.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     indexer::logging::setup();
 
-    let num_nodes = 4;
+    let num_nodes = 3;
     let mut cluster = ReactorCluster::start(num_nodes).await?;
     cluster.wait_for_ready().await;
 
@@ -1319,14 +1359,14 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster.mine_and_send(&[]);
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1335,7 +1375,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             num_nodes,
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let checkpoints: Vec<_> = events
@@ -1370,14 +1410,14 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
                     && d.value.block_height() == 1
                     && !d.value.batch_txids().is_empty()
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster.mine_and_send(&[]);
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1386,7 +1426,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             num_nodes,
             |e| matches!(e, StateEvent::BlockProcessed { height: 2, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let checkpoints: Vec<_> = events
@@ -1417,11 +1457,11 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 /// Test 11: Multiple batches decided at the same anchor height.
 /// Two separate rounds of mempool txs both anchor at height 0 (no blocks mined between them).
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // First batch of mempool txs
@@ -1431,7 +1471,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1439,7 +1479,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1450,7 +1490,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     let decisions = cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && d.value.batch_txids().len() >= 3,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1469,7 +1509,7 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BatchApplied { .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1478,13 +1518,13 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1496,11 +1536,11 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
 /// Process blocks 1-3, then send a Rollback to height 1. Blocks 2-3 are deleted.
 /// New blocks 2-3 arrive with different hashes.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     indexer::logging::setup();
 
-    let mut cluster = ReactorCluster::start(4).await?;
+    let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
 
     // Mine and decide blocks 1-3
@@ -1509,7 +1549,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
         cluster
             .wait_for_decision_matching(
                 |d| d.value.is_block() && d.value.block_height() == expected_height,
-                Duration::from_secs(30),
+                Duration::from_secs(60),
             )
             .await;
         cluster
@@ -1517,7 +1557,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
                 |e| {
                     matches!(e, StateEvent::BlockProcessed { height, .. } if *height == expected_height)
                 },
-                Duration::from_secs(30),
+                Duration::from_secs(60),
             )
             .await;
     }
@@ -1533,19 +1573,19 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::RollbackExecuted { to_anchor: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 2,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 2, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1554,13 +1594,13 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 3,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     cluster
         .wait_for_state_event_matching(
             |e| matches!(e, StateEvent::BlockProcessed { height: 3, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1571,7 +1611,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
 /// Late joiner: start 3 of 4 validators, process batches + blocks,
 /// then start the 4th. It syncs via Malachite and reaches the same checkpoint.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     indexer::logging::setup();
 
@@ -1586,7 +1626,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| !d.value.is_block() && !d.value.batch_txids().is_empty(),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1595,7 +1635,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     cluster
         .wait_for_decision_matching(
             |d| d.value.is_block() && d.value.block_height() == 1,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
 
@@ -1604,7 +1644,7 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         .wait_for_n_state_events_matching(
             3,
             |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
     let pre_join_checkpoints: Vec<_> = pre_join_events

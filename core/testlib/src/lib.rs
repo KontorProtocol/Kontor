@@ -16,7 +16,6 @@ use indexer::{
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
 use indexer_types::{Inst, Insts, TransactionRow};
-pub use serial_test;
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;

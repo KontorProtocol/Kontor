@@ -162,7 +162,6 @@ pub fn generate(config: Config) -> TokenStream {
         #(#mod_decls)*
 
         #[tokio::test(flavor = "multi_thread")]
-        #[serial_test::serial]
         async fn regtest_all() -> Result<()> {
             let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 

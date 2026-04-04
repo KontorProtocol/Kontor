@@ -20,7 +20,7 @@ fn active_count_is(expected: u64) -> impl Fn(&str) -> bool {
 /// Basic cluster test: start 4 validators, publish a counter contract,
 /// increment via consensus batch, verify all nodes agree on state.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn cluster_counter_increment_via_consensus() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
@@ -127,7 +127,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
 /// Multi-batch convergence: submit 5 increments in rapid succession,
 /// verify all nodes converge, then mine to confirm and verify dedup.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn cluster_multi_batch_convergence() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
@@ -239,7 +239,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
 /// Node restart: kill a node, continue batching on remaining 3,
 /// restart the killed node, verify it catches up via sync.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn cluster_node_restart_recovery() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
@@ -363,7 +363,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
 /// Late joiner: start 3 of 4 validators, process batches + blocks,
 /// then start the 4th from scratch. It syncs via Malachite and converges.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn cluster_late_joiner_sync() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
@@ -469,7 +469,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
 /// Validator lifecycle: register a new validator, activate it, verify participation,
 /// then unstake and verify deactivation.
 #[tokio::test]
-#[serial_test::serial]
+
 async fn cluster_validator_lifecycle() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
