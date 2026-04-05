@@ -876,3 +876,203 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
 
     Ok(funding_utxos)
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use bitcoin::key::{Keypair, Secp256k1, XOnlyPublicKey, rand};
+    use bitcoin::opcodes::all::OP_ENDIF;
+    use bitcoin::script::Instruction;
+    use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+    use tracing::info;
+
+    use super::build_tap_script_and_script_address;
+
+    fn generate_test_key() -> XOnlyPublicKey {
+        let secp = Secp256k1::new();
+        let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        keypair.x_only_public_key().0
+    }
+
+    fn verify_control_block(
+        key: XOnlyPublicKey,
+        script: &bitcoin::ScriptBuf,
+        control_block: &bitcoin::taproot::ControlBlock,
+    ) {
+        let secp = Secp256k1::new();
+        let tap_info = TaprootBuilder::new()
+            .add_leaf(0, script.clone())
+            .expect("add leaf")
+            .finalize(&secp, key)
+            .expect("finalize taproot");
+        let expected_cb = tap_info
+            .control_block(&(script.clone(), LeafVersion::TapScript))
+            .expect("derive control block");
+        assert_eq!(
+            control_block.serialize(),
+            expected_cb.serialize(),
+            "Control block should match independently derived one"
+        );
+        assert_eq!(control_block.leaf_version, LeafVersion::TapScript);
+        let cb_bytes = control_block.serialize();
+        assert!(cb_bytes.len() >= 33);
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_empty() {
+        let key = generate_test_key();
+        let result = build_tap_script_and_script_address(key, vec![]);
+        assert!(result.is_err(), "Data cannot be empty");
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
+        let key = generate_test_key();
+        let data = vec![0xFF; 519];
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        verify_control_block(key, &script, &control_block);
+        let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(instructions.len(), 8);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        if let [Instruction::PushBytes(data), Instruction::Op(op)] = push_bytes.as_slice() {
+            assert_eq!(data.len(), 519);
+            assert_eq!(*op, OP_ENDIF);
+        } else {
+            panic!("Script structure doesn't match expected pattern");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
+        let key = generate_test_key();
+        let data = vec![0xFF; 520];
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        verify_control_block(key, &script, &control_block);
+        let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(instructions.len(), 8);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        if let [Instruction::PushBytes(data), Instruction::Op(op)] = push_bytes.as_slice() {
+            assert_eq!(data.len(), 520);
+            assert_eq!(*op, OP_ENDIF);
+        } else {
+            panic!("Script structure doesn't match expected pattern");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
+        let key = generate_test_key();
+        let data = vec![0xFF; 521];
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        verify_control_block(key, &script, &control_block);
+        let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(instructions.len(), 9);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        if let [
+            Instruction::PushBytes(d1),
+            Instruction::PushBytes(d2),
+            Instruction::Op(op),
+        ] = push_bytes.as_slice()
+        {
+            assert_eq!(d1.len(), 520);
+            assert_eq!(d2.len(), 1);
+            assert_eq!(*op, OP_ENDIF);
+        } else {
+            panic!("Script structure doesn't match expected pattern");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_small_chunking() -> Result<()> {
+        let key = generate_test_key();
+        let data = vec![0xFF; 1000];
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        verify_control_block(key, &script, &control_block);
+        let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(instructions.len(), 9);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        if let [
+            Instruction::PushBytes(d1),
+            Instruction::PushBytes(d2),
+            Instruction::Op(op),
+        ] = push_bytes.as_slice()
+        {
+            assert_eq!(d1.len(), 520);
+            assert_eq!(d2.len(), 480);
+            assert_eq!(*op, OP_ENDIF);
+        } else {
+            panic!("Script structure doesn't match expected pattern");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tap_script_and_script_address_large_chunking() -> Result<()> {
+        let key = generate_test_key();
+        let data = vec![0xFF; 2700];
+        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        verify_control_block(key, &script, &control_block);
+        let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(instructions.len(), 13);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        if let [
+            Instruction::PushBytes(d1),
+            Instruction::PushBytes(d2),
+            Instruction::PushBytes(d3),
+            Instruction::PushBytes(d4),
+            Instruction::PushBytes(d5),
+            Instruction::PushBytes(d6),
+            _,
+        ] = push_bytes.as_slice()
+        {
+            assert_eq!(d1.len(), 520);
+            assert_eq!(d2.len(), 520);
+            assert_eq!(d3.len(), 520);
+            assert_eq!(d4.len(), 520);
+            assert_eq!(d5.len(), 520);
+            assert_eq!(d6.len(), 100);
+        } else {
+            panic!("Script structure doesn't match expected pattern");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tap_script_progressive_size_limit() -> Result<()> {
+        let key = generate_test_key();
+        crate::logging::setup();
+
+        let mut current_size = 500_000;
+        let increment = 100_000;
+        let max_size = 5_500_000;
+
+        while current_size <= max_size {
+            let data = vec![0xFF; current_size];
+            let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+
+            let cb_bytes = control_block.serialize();
+            assert!(cb_bytes.len() >= 33);
+            assert_eq!(control_block.leaf_version, LeafVersion::TapScript);
+
+            let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
+            assert!(instructions.len() > 6);
+
+            let expected_chunks = current_size.div_ceil(520);
+            let actual_chunks = instructions.len() - 7;
+            info!(
+                "expected_chunks: {}, actual_chunks: {}",
+                expected_chunks, actual_chunks
+            );
+            assert_eq!(actual_chunks, expected_chunks);
+            assert!(script.len() > current_size);
+
+            current_size += increment;
+        }
+
+        assert!(current_size > 5_000_000);
+        Ok(())
+    }
+}
