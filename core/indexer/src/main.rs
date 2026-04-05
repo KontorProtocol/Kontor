@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
 
     let known_hashes = {
         let conn = reader.connection().await?;
-        let recent_blocks = select_recent_blocks(&*conn, 50).await?;
+        let recent_blocks = select_recent_blocks(&conn, 50).await?;
         recent_blocks
             .iter()
             .map(|b| (b.height as u64, b.hash))
