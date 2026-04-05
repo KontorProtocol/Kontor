@@ -50,19 +50,19 @@ use tokio::{
     sync::Mutex,
 };
 
-fn regtest_conf(rpc_port: u16, zmq_port: u16, p2p_port: u16) -> String {
+fn regtest_conf(rpc_port: u16, zmq_port: u16) -> String {
     format!(
         r#"regtest=1
 server=1
 txindex=1
 prune=0
 dbcache=4000
+listen=0
 
 [regtest]
 rpcuser=rpc
 rpcpassword=rpc
 rpcport={rpc_port}
-port={p2p_port}
 zmqpubsequence=tcp://127.0.0.1:{zmq_port}
 zmqpubsequencehwm=0
 zmqpubrawtx=tcp://127.0.0.1:{zmq_port}
@@ -77,14 +77,9 @@ zmqpubrawtxhwm=0
 /// on BLS12-381 scalars (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child
 /// derivation is hardened by design, so paths are written without the `'` marker.
 ///
-async fn create_bitcoin_conf(
-    data_dir: &Path,
-    rpc_port: u16,
-    zmq_port: u16,
-    p2p_port: u16,
-) -> Result<()> {
+async fn create_bitcoin_conf(data_dir: &Path, rpc_port: u16, zmq_port: u16) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
-    f.write_all(regtest_conf(rpc_port, zmq_port, p2p_port).as_bytes())
+    f.write_all(regtest_conf(rpc_port, zmq_port).as_bytes())
         .await?;
     Ok(())
 }
@@ -93,8 +88,7 @@ async fn create_bitcoin_conf(
 async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, String, u16)> {
     let rpc_port = allocate_ports(1)?[0];
     let zmq_port = allocate_ports(1)?[0];
-    let p2p_port = allocate_ports(1)?[0];
-    create_bitcoin_conf(data_dir, rpc_port, zmq_port, p2p_port).await?;
+    create_bitcoin_conf(data_dir, rpc_port, zmq_port).await?;
 
     // Check if bitcoind is in PATH
     let bitcoind_check = Command::new("which").arg("bitcoind").output().await;
