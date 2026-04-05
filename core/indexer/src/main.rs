@@ -67,12 +67,14 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    let conn = &*reader.connection().await?;
-    let recent_blocks = select_recent_blocks(conn, 50).await?;
-    let known_hashes: Vec<_> = recent_blocks
-        .iter()
-        .map(|b| (b.height as u64, b.hash))
-        .collect();
+    let known_hashes = {
+        let conn = reader.connection().await?;
+        let recent_blocks = select_recent_blocks(&*conn, 50).await?;
+        recent_blocks
+            .iter()
+            .map(|b| (b.height as u64, b.hash))
+            .collect::<Vec<_>>()
+    };
 
     let (bitcoin_event_rx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
