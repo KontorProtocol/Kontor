@@ -424,3 +424,118 @@ pub async fn execute_op(runtime: &mut Runtime, op: &Op) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use indexer_types::{Block, BlockRow};
+
+    use super::{batch_handler, block_handler};
+    use crate::consensus::Height;
+    use crate::database::queries::{get_transaction_by_txid, insert_block};
+    use crate::test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime};
+
+    #[tokio::test]
+    async fn batch_then_block_deduplicates_transaction() -> Result<()> {
+        let (mut runtime, _db_dir, _) = test_runtime().await?;
+        let conn = runtime.get_storage_conn();
+
+        let mock_tx = new_mock_transaction(42);
+        let txid_str = mock_tx.txid.to_string();
+
+        let cert = vec![0u8; 8];
+        batch_handler(
+            &mut runtime,
+            1,
+            new_mock_block_hash(1),
+            Height::new(1),
+            &cert,
+            std::slice::from_ref(&mock_tx),
+            &[],
+        )
+        .await?;
+
+        let row = get_transaction_by_txid(&conn, &txid_str)
+            .await?
+            .expect("Transaction should exist after batch");
+        assert!(row.batch_height.is_some());
+        assert!(row.confirmed_height.is_none());
+
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(2)
+                .hash(new_mock_block_hash(2))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
+
+        let block = Block {
+            height: 2,
+            hash: new_mock_block_hash(2),
+            prev_hash: new_mock_block_hash(1),
+            transactions: vec![mock_tx],
+        };
+        block_handler(&mut runtime, &block).await?;
+
+        let row = get_transaction_by_txid(&conn, &txid_str)
+            .await?
+            .expect("Transaction should still exist");
+        assert_eq!(row.confirmed_height, Some(2));
+        assert_eq!(row.tx_index, Some(0));
+        assert!(row.batch_height.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reactor_generate_challenges_with_lucky_hash() -> Result<()> {
+        use crate::runtime::{Decimal, filestorage, token, wit::Signer};
+        use crate::test_utils::{LUCKY_HASH_100000, lucky_hash, make_descriptor};
+        use bitcoin::{BlockHash, hashes::Hash};
+
+        let (mut runtime, _temp_dir, _) = crate::test_utils::test_runtime().await?;
+
+        let descriptor = make_descriptor(
+            "reactor_lucky".to_string(),
+            vec![1u8; 32],
+            16,
+            100,
+            "reactor_lucky.txt".to_string(),
+        );
+        let core_signer = Signer::Core(Box::new(Signer::Nobody));
+        token::api::issuance(&mut runtime, &core_signer, Decimal::from(100u64)).await??;
+
+        let signer = Signer::Nobody;
+        let created =
+            filestorage::api::create_agreement(&mut runtime, &signer, descriptor).await??;
+        let min_nodes = filestorage::api::get_min_nodes(&mut runtime).await?;
+        for node_index in 0..min_nodes {
+            let node_id = format!("node_{}", node_index);
+            filestorage::api::join_agreement(
+                &mut runtime,
+                &signer,
+                &created.agreement_id,
+                &node_id,
+            )
+            .await??;
+        }
+
+        let block_height = 100000u64;
+        let block = Block {
+            height: block_height,
+            hash: BlockHash::from_byte_array(lucky_hash(LUCKY_HASH_100000)),
+            prev_hash: BlockHash::from_byte_array([0x00; 32]),
+            transactions: vec![],
+        };
+        block_handler(&mut runtime, &block).await?;
+
+        let after = filestorage::api::get_active_challenges(&mut runtime).await?;
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].agreement_id, created.agreement_id);
+        assert_eq!(after[0].block_height, block_height);
+
+        Ok(())
+    }
+}
