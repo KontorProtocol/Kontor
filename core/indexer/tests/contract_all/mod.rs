@@ -1,0 +1,11 @@
+mod amm_contract;
+mod counter_contract;
+mod crypto_contract;
+mod fib_contract;
+mod file_storage;
+mod native_token_contract;
+mod pool_contract;
+mod shared_account_contract;
+mod staking_contract;
+mod token_contract;
+mod wit_contract;

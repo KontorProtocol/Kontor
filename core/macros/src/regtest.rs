@@ -37,7 +37,7 @@ pub fn generate(config: Config) -> TokenStream {
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");
         let syntax = syn::parse_file(&source).expect("Failed to parse test file");
 
-        let module_path = format!("contract_all/{}.rs", module);
+        let module_path = format!("../contract_all/{}.rs", module);
         mod_decls.push(quote! {
             #[allow(dead_code, unused_imports)]
             #[path = #module_path]

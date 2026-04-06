@@ -1,24 +1,2 @@
-#[path = "regtest_all/regtester_cluster.rs"]
-mod regtester_cluster;
-
-testlib::regtest_tests! {
-    amm_contract,
-    bls_attack_vectors,
-    bls_bulk_compose,
-    bls_key_derivation_and_registration,
-    bls_replay_protection,
-    bls_user_registry,
-    compose,
-    counter_contract,
-    crypto_contract,
-    fib_contract,
-    file_storage,
-    native_token_attach_contract,
-    native_token_contract,
-    ops_contract,
-    pool_contract,
-    shared_account_contract,
-    simulate_contract,
-    token_contract,
-    wit_contract,
-}
+#[path = "regtest_all/mod.rs"]
+mod regtest_all;
