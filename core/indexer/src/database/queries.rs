@@ -3000,7 +3000,7 @@ mod tests {
         assert_eq!(meta4.next_cursor, Some(page4[0].id));
 
         // Verify no overlap
-        let all_txids: Vec<String> = [&page1, &page2, &page3]
+        let all_txids: Vec<String> = [&page1, &page2, &page3, &page4]
             .iter()
             .flat_map(|page| page.iter().map(|tx| tx.txid.clone()))
             .collect();

@@ -713,6 +713,7 @@ mod tests {
         use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
         use libsql::params;
         use serde::{Deserialize, Serialize};
+        use tempfile::TempDir;
 
         #[derive(Debug, Serialize, Deserialize)]
         struct BlockResponse {
@@ -729,7 +730,7 @@ mod tests {
             result: TransactionRow,
         }
 
-        async fn create_test_app() -> Result<Router> {
+        async fn create_test_app() -> Result<(Router, TempDir)> {
             let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
 
             let conn = writer.connection();
@@ -793,7 +794,7 @@ mod tests {
 
             let env = Env::new_test(reader, db_dir.path(), db_name).await?;
 
-            Ok(Router::new()
+            let router = Router::new()
                 .route("/api/blocks/{identifier}", get(get_block))
                 .route(
                     "/api/blocks/{identifier}/transactions",
@@ -802,13 +803,14 @@ mod tests {
                 .route("/api/blocks/latest", get(get_block_latest))
                 .route("/api/transactions", get(get_transactions))
                 .route("/api/transactions/{txid}", get(get_transaction))
-                .with_state(env))
+                .with_state(env);
+            Ok((router, db_dir))
         }
 
         // Block API Tests
         #[tokio::test]
         async fn test_get_block_by_height() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/800000").await;
@@ -826,7 +828,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_by_hash() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server
@@ -846,7 +848,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_not_found() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/999999").await;
@@ -860,7 +862,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_invalid_hash() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/invalidhash123").await;
@@ -871,7 +873,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_latest() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/latest").await;
@@ -890,7 +892,7 @@ mod tests {
         // Transaction API Tests
         #[tokio::test]
         async fn test_get_transactions_all() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions").await;
@@ -914,7 +916,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_with_limit() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions?limit=3").await;
@@ -933,7 +935,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_with_offset() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions?limit=2&offset=1").await;
@@ -950,7 +952,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_with_cursor() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             // First get transactions with limit to get cursor
@@ -986,7 +988,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_cursor_and_offset_error() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions?cursor=1&offset=10").await;
@@ -1000,7 +1002,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_at_height() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions?height=800000").await;
@@ -1021,7 +1023,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_at_height_empty() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions?height=999999").await;
@@ -1037,7 +1039,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transaction_by_txid() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server
@@ -1058,7 +1060,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transaction_not_found() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/transactions/nonexistent_txid").await;
@@ -1072,7 +1074,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_limit_bounds() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             // Test minimum limit
@@ -1094,7 +1096,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_transactions_invalid_cursor() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse =
@@ -1106,7 +1108,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_transactions_by_height() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/800000/transactions").await;
@@ -1126,7 +1128,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_transactions_by_hash() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             // Use block hash for height 800000
@@ -1149,7 +1151,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_get_block_transactions_not_found() -> Result<()> {
-            let app = create_test_app().await?;
+            let (app, _db) = create_test_app().await?;
             let server = TestServer::new(app);
 
             let response: TestResponse = server.get("/api/blocks/999999/transactions").await;
