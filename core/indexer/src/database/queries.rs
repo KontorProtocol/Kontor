@@ -1755,9 +1755,11 @@ mod tests {
         let block2 = BlockRow::builder().height(height2).hash(hash2).build();
         insert_block(&conn, block2).await?;
 
+        let tx4_txid =
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".to_string();
         let tx4 = TransactionRow::builder()
             .height(height2)
-            .txid("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".to_string())
+            .txid(tx4_txid.clone())
             .tx_index(0)
             .build();
 
@@ -1772,8 +1774,8 @@ mod tests {
 
         // Check the transaction details
         let tx4 = &txs_at_height2[0];
-        assert_eq!(tx4.tx_index, tx4.tx_index);
-        assert_eq!(tx4.txid, tx4.txid);
+        assert_eq!(tx4.tx_index, Some(0));
+        assert_eq!(tx4.txid, tx4_txid);
         assert_eq!(tx4.height, height2);
 
         Ok(())
