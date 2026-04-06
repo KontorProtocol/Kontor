@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn test_proof_from_bytes_invalid_bytes_fails() {
         assert!(matches!(
-            Proof::from_bytes(&vec![0u8; 100]),
+            Proof::from_bytes(&[0u8; 100]),
             Err(Error::Validation(_))
         ));
     }
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_proof_from_bytes_truncated_header_fails() {
-        assert!(Proof::from_bytes(&vec![0u8; 5]).is_err());
+        assert!(Proof::from_bytes(&[0u8; 5]).is_err());
     }
 
     #[test]

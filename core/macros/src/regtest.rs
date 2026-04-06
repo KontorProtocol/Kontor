@@ -23,7 +23,9 @@ pub fn generate(config: Config) -> TokenStream {
     let mut module_tasks = Vec::new();
 
     for module in &config.modules {
-        let module_file = tests_dir.join(format!("{}.rs", module));
+        let module_file = tests_dir
+            .join("contract_all")
+            .join(format!("{}.rs", module));
         if !module_file.exists() {
             return syn::Error::new(
                 module.span(),
@@ -35,8 +37,10 @@ pub fn generate(config: Config) -> TokenStream {
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");
         let syntax = syn::parse_file(&source).expect("Failed to parse test file");
 
+        let module_path = format!("contract_all/{}.rs", module);
         mod_decls.push(quote! {
             #[allow(dead_code, unused_imports)]
+            #[path = #module_path]
             mod #module;
         });
 
@@ -113,7 +117,9 @@ pub fn generate(config: Config) -> TokenStream {
     // Generate per-module filter match arms
     let mut filter_match_arms = Vec::new();
     for module in &config.modules {
-        let module_file = tests_dir.join(format!("{}.rs", module));
+        let module_file = tests_dir
+            .join("contract_all")
+            .join(format!("{}.rs", module));
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");
         let syntax = syn::parse_file(&source).expect("Failed to parse test file");
         let module_str = module.to_string();

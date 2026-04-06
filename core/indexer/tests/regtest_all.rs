@@ -1,3 +1,6 @@
+#[path = "regtest_all/regtester_cluster.rs"]
+mod regtester_cluster;
+
 testlib::regtest_tests! {
     amm_contract,
     bls_attack_vectors,

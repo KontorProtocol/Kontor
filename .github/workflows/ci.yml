@@ -144,7 +144,7 @@ jobs:
         run: cargo build --release -p indexer
       - name: Run tests (regtest)
         working-directory: ./core
-        run: cargo test --features regtest-runner --test regtester_cluster --test regtest_all
+        run: cargo test --features regtest-runner --test regtest_all
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
