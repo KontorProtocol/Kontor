@@ -3,7 +3,11 @@ pub mod block_handler;
 pub mod consensus;
 pub mod engine;
 pub mod executor;
+#[cfg(test)]
+pub(crate) mod lite_executor;
 pub mod mock_bitcoin;
+#[cfg(test)]
+mod reactor_cluster_tests;
 pub mod types;
 
 use anyhow::{Result, bail};
