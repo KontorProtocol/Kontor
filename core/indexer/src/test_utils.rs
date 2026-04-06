@@ -311,6 +311,55 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
+/// Shared engine + pre-compiled native contract components.
+/// First caller compiles all native contracts; subsequent callers get cached results.
+async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::component::Component)>) {
+    static ONCE: tokio::sync::OnceCell<(
+        wasmtime::Engine,
+        Vec<(i64, wasmtime::component::Component)>,
+    )> = tokio::sync::OnceCell::const_new();
+
+    ONCE.get_or_init(|| async {
+        let engine = Runtime::new_engine().expect("Failed to create engine");
+        let cache = ComponentCache::new();
+
+        let (_reader, writer, (_db_dir, _db_name)) = new_test_db().await.expect("test db");
+        let conn = writer.connection();
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await
+        .expect("insert block");
+
+        let storage = Storage::builder().height(0).conn(conn).build();
+        let linker = Runtime::new_linker(&engine).expect("linker");
+        let mut runtime = Runtime::new_with(engine.clone(), linker, cache.clone(), storage)
+            .await
+            .expect("runtime");
+        runtime
+            .publish_native_contracts(&[])
+            .await
+            .expect("publish native");
+
+        // Extract compiled components from cache (IDs 1-4 for native contracts)
+        let mut components = Vec::new();
+        for id in 1..=4i64 {
+            if let Some(component) = cache.get(&id).await {
+                components.push((id, component));
+            }
+        }
+
+        (engine, components)
+    })
+    .await
+    .clone()
+}
+
 pub async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis(&[]).await
 }
@@ -341,7 +390,13 @@ pub async fn test_runtime_with_genesis(
     .await?;
 
     let storage = Storage::builder().height(1).conn(conn).build();
-    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    let (engine, prewarmed) = shared_test_engine().await;
+    let cache = ComponentCache::new();
+    for (id, component) in &prewarmed {
+        cache.put(*id, component.clone()).await;
+    }
+    let linker = Runtime::new_linker(&engine)?;
+    let mut runtime = Runtime::new_with(engine, linker, cache, storage).await?;
     runtime.publish_native_contracts(genesis_validators).await?;
 
     Ok((runtime, db_dir, db_name))
