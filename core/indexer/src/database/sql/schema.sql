@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS contract_state (
   deleted BOOLEAN NOT NULL DEFAULT 0,
   UNIQUE (contract_id, height, path),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
-  FOREIGN KEY (tx_id) REFERENCES transactions (id) ON DELETE CASCADE
+  FOREIGN KEY (tx_id) REFERENCES transactions (id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC);
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS contract_results (
     result_index
   ),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
-  FOREIGN KEY (tx_id) REFERENCES transactions (id) ON DELETE CASCADE
+  FOREIGN KEY (tx_id) REFERENCES transactions (id)
 );
 
 CREATE TABLE IF NOT EXISTS file_metadata (
