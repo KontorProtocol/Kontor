@@ -180,17 +180,24 @@ impl Runtime {
             && let Some(signer) = signer
             && !signer.is_core()
         {
+            let hold_amount = Decimal::from(fuel_limit)
+                .div(Decimal::from(self.gas_to_fuel_multiplier))
+                .expect("Failed to convert fuel limit into gas limit")
+                .mul(self.gas_to_token_multiplier)
+                .expect("Failed to convert gas limit into token limit");
+            tracing::info!(
+                node = %self.node_label,
+                %hold_amount,
+                signer = ?signer,
+                "Gas hold"
+            );
             Box::pin({
                 let mut runtime = self.clone();
                 async move {
                     token::api::hold(
                         &mut runtime,
                         &Signer::Core(Box::new(signer.clone())),
-                        Decimal::from(fuel_limit)
-                            .div(Decimal::from(self.gas_to_fuel_multiplier))
-                            .expect("Failed to convert fuel limit into gas limit")
-                            .mul(self.gas_to_token_multiplier)
-                            .expect("Failed to convert gas limit into token limit"),
+                        hold_amount,
                     )
                     .await
                 }
@@ -297,23 +304,29 @@ impl Runtime {
             .max(1);
 
         if is_op_result && !signer.is_core() {
+            let burn_amount = Decimal::from(gas)
+                .mul(self.gas_to_token_multiplier)
+                .expect("Failed to convert gas consumed to token amount");
             tracing::info!(
-                "Gas consumed: {} {} {}",
+                node = %self.node_label,
                 gas,
                 starting_fuel,
-                store.get_fuel().unwrap()
+                remaining_fuel = store.get_fuel().unwrap(),
+                %burn_amount,
+                call_succeeded = result.is_ok(),
+                contract = %contract_address,
+                func = func_name,
+                signer = ?signer,
+                "Gas release"
             );
             Box::pin({
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
-                let gas_to_token_multiplier = self.gas_to_token_multiplier;
                 async move {
                     token::api::release(
                         &mut runtime,
                         &Signer::Core(Box::new(signer.clone())),
-                        Decimal::from(gas)
-                            .mul(gas_to_token_multiplier)
-                            .expect("Failed to convert gas consumed to token amount"),
+                        burn_amount,
                     )
                     .await
                 }

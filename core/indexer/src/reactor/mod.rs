@@ -99,6 +99,13 @@ impl<E: Executor> Reactor<E> {
         last_height: u64,
         last_hash: Option<BlockHash>,
     ) -> Self {
+        let mut runtime = runtime;
+        if let Some(handle) = &consensus_handle {
+            runtime.node_label = handle
+                .validator_index
+                .map(|i| format!("node_{i}"))
+                .unwrap_or_else(|| "follower".to_string());
+        }
         Self {
             executor,
             runtime,
