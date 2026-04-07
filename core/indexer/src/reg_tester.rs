@@ -231,12 +231,14 @@ pub struct P2wpkhIdentity {
     pub next_funding_utxo: (OutPoint, TxOut),
 }
 
+type PublishCache = Arc<Mutex<HashMap<String, Arc<Mutex<Option<ContractAddress>>>>>>;
+
 /// Thread-safe identity pool shared between the cluster and module RegTesters.
 #[derive(Clone)]
 pub struct IdentityPool {
     registered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
     unregistered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
-    publish_cache: Arc<Mutex<HashMap<String, Arc<Mutex<Option<ContractAddress>>>>>>,
+    publish_cache: PublishCache,
 }
 
 impl IdentityPool {
