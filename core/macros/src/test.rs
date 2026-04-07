@@ -42,7 +42,6 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
     if local_only {
         // Local-only: standard test, not discoverable by regtest_tests! macro
         quote! {
-            #[cfg(not(feature = "regtest-runner"))]
             #[tokio::test]
             #(#attrs)*
             async fn #fn_name() -> Result<()> {
@@ -63,8 +62,6 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
         }
     } else {
         // Default: public reusable function + _local test wrapper
-        // The _local wrapper is suppressed when compiled with the regtest-runner feature
-        // to avoid duplicate tests in the regtest_all binary.
         let local_test_name = format_ident!("{}_local", fn_name);
 
         quote! {
@@ -72,7 +69,6 @@ pub fn generate(config: Config, func: ItemFn) -> TokenStream {
             pub async fn #fn_name(runtime: &mut Runtime) -> Result<()>
             #fn_block
 
-            #[cfg(not(feature = "regtest-runner"))]
             #[tokio::test]
             async fn #local_test_name() -> Result<()> {
                 let abs_path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).canonicalize().unwrap();

@@ -1139,10 +1139,15 @@ impl RegTesterCluster {
         let node_idx = running[idx];
 
         let nc = &self.node_configs[node_idx];
-        let client = &nc.running.as_ref().unwrap().client;
+        let kontor_client = KontorClient::new(format!("http://localhost:{}/api", nc.api_port))?;
+        let bitcoin_config = RegtestConfig {
+            bitcoin_rpc_url: self.bitcoin_rpc_url.clone(),
+            ..RegtestConfig::default()
+        };
+        let bitcoin_client = BitcoinClient::new_from_config(&bitcoin_config)?;
         let inner = RegTesterInner::with_port(
-            self.bitcoin_client.clone(),
-            client.clone(),
+            bitcoin_client,
+            kontor_client,
             nc.api_port,
             self.identity.address.to_string(),
             self.pool.clone(),

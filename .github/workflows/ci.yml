@@ -136,15 +136,9 @@ jobs:
         run: cargo binstall cargo-expand --no-confirm
       - name: Install wasm-opt
         run: cargo binstall wasm-opt --no-confirm
-      - name: Run tests (local)
+      - name: Run tests
         working-directory: ./core
-        run: cargo test --workspace
-      - name: Build release kontor binary
-        working-directory: ./core
-        run: cargo build --release -p indexer
-      - name: Run tests (regtest)
-        working-directory: ./core
-        run: cargo test --features regtest-runner --test regtest_all
+        run: REGTEST=1 cargo test --release --workspace
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
