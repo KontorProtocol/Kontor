@@ -236,6 +236,7 @@ pub struct P2wpkhIdentity {
 pub struct IdentityPool {
     registered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
     unregistered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
+    publish_cache: Arc<Mutex<HashMap<String, Arc<Mutex<Option<ContractAddress>>>>>>,
 }
 
 impl IdentityPool {
@@ -243,7 +244,24 @@ impl IdentityPool {
         Self {
             registered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             unregistered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            publish_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Returns a per-key lock guard. If the inner Option is Some, the contract
+    /// is already published. If None, the caller should publish and set it.
+    pub async fn lock_published(
+        &self,
+        name: &str,
+    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+        let entry = {
+            let mut cache = self.publish_cache.lock().await;
+            cache
+                .entry(name.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(None)))
+                .clone()
+        };
+        entry.lock_owned().await
     }
 
     pub async fn pop_registered(&self) -> Result<Identity> {
@@ -277,8 +295,6 @@ pub struct RegTesterInner {
     ws_client: WebSocketClient,
     /// Address to mine blocks to (cluster admin identity's address).
     mine_address: String,
-    /// Cache of published contracts by name — enables idempotent publish.
-    pub published_contracts: HashMap<String, ContractAddress>,
     /// Shared identity pool for popping pre-created identities.
     pub pool: IdentityPool,
 }
@@ -309,7 +325,6 @@ impl RegTesterInner {
             bitcoin_client,
             kontor_client,
             mine_address,
-            published_contracts: HashMap::new(),
             pool,
         })
     }
@@ -710,21 +725,12 @@ impl RegTester {
         bail!("fund_address not available on module RegTester — use cluster method")
     }
 
-    pub async fn get_published(&self, name: &str) -> Option<ContractAddress> {
-        self.inner
-            .lock()
-            .await
-            .published_contracts
-            .get(name)
-            .cloned()
-    }
-
-    pub async fn set_published(&self, name: String, address: ContractAddress) {
-        self.inner
-            .lock()
-            .await
-            .published_contracts
-            .insert(name, address);
+    pub async fn lock_published(
+        &self,
+        name: &str,
+    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+        let pool = self.inner.lock().await.pool.clone();
+        pool.lock_published(name).await
     }
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
