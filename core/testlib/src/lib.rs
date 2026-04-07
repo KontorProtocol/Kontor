@@ -517,7 +517,9 @@ impl RuntimeImpl for RuntimeRegtest {
             .await?;
         let txid = sent.reveal_txid.to_string();
         self.reg_tester.mine(1).await?;
-        self.reg_tester.wait_for_txids(std::slice::from_ref(&txid)).await?;
+        self.reg_tester
+            .wait_for_txids(std::slice::from_ref(&txid))
+            .await?;
 
         let client = self.reg_tester.kontor_client().await;
         let id = OpResultId::builder().txid(txid).build();
