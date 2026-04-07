@@ -19,7 +19,6 @@ pub fn generate(config: Config) -> TokenStream {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let tests_dir = std::path::Path::new(&manifest_dir).join("tests");
 
-    let mut mod_decls = Vec::new();
     let mut test_fns = Vec::new();
 
     for module in &config.modules {
@@ -36,13 +35,6 @@ pub fn generate(config: Config) -> TokenStream {
 
         let source = std::fs::read_to_string(&module_file).expect("Failed to read test file");
         let syntax = syn::parse_file(&source).expect("Failed to parse test file");
-
-        let module_path = format!("../contract_all/{}.rs", module);
-        mod_decls.push(quote! {
-            #[allow(dead_code, unused_imports)]
-            #[path = #module_path]
-            mod #module;
-        });
 
         for item in &syntax.items {
             if let syn::Item::Fn(func) = item {
@@ -87,7 +79,6 @@ pub fn generate(config: Config) -> TokenStream {
     }
 
     quote! {
-        #(#mod_decls)*
         #(#test_fns)*
     }
 }

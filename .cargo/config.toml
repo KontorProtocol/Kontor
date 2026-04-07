@@ -1,2 +1,2 @@
 [alias]
-regtest = "test -p indexer --test regtest_all"
+regtest = "test -p indexer --test contract_all"
