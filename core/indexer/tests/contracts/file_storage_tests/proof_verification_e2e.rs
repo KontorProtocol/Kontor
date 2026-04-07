@@ -55,7 +55,7 @@ struct PorProofFixtures {
 }
 
 fn load_por_fixtures() -> Result<PorProofFixtures> {
-    let raw = include_str!("../fixtures/por_proof_fixtures.json");
+    let raw = include_str!("../../fixtures/por_proof_fixtures.json");
     let fixtures: PorProofFixtures =
         serde_json::from_str(raw).map_err(|e| anyhow!("Invalid fixtures JSON: {e}"))?;
     Ok(fixtures)

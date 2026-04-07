@@ -50,19 +50,19 @@ use tokio::{
     sync::Mutex,
 };
 
-fn regtest_conf(rpc_port: u16, zmq_port: u16, p2p_port: u16) -> String {
+fn regtest_conf(rpc_port: u16, zmq_port: u16) -> String {
     format!(
         r#"regtest=1
 server=1
 txindex=1
 prune=0
 dbcache=4000
+listen=0
 
 [regtest]
 rpcuser=rpc
 rpcpassword=rpc
 rpcport={rpc_port}
-port={p2p_port}
 zmqpubsequence=tcp://127.0.0.1:{zmq_port}
 zmqpubsequencehwm=0
 zmqpubrawtx=tcp://127.0.0.1:{zmq_port}
@@ -77,14 +77,9 @@ zmqpubrawtxhwm=0
 /// on BLS12-381 scalars (unlike BIP-32, which is secp256k1-specific). All EIP-2333 child
 /// derivation is hardened by design, so paths are written without the `'` marker.
 ///
-async fn create_bitcoin_conf(
-    data_dir: &Path,
-    rpc_port: u16,
-    zmq_port: u16,
-    p2p_port: u16,
-) -> Result<()> {
+async fn create_bitcoin_conf(data_dir: &Path, rpc_port: u16, zmq_port: u16) -> Result<()> {
     let mut f = fs::File::create(data_dir.join("bitcoin.conf")).await?;
-    f.write_all(regtest_conf(rpc_port, zmq_port, p2p_port).as_bytes())
+    f.write_all(regtest_conf(rpc_port, zmq_port).as_bytes())
         .await?;
     Ok(())
 }
@@ -93,8 +88,7 @@ async fn create_bitcoin_conf(
 async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, String, u16)> {
     let rpc_port = allocate_ports(1)?[0];
     let zmq_port = allocate_ports(1)?[0];
-    let p2p_port = allocate_ports(1)?[0];
-    create_bitcoin_conf(data_dir, rpc_port, zmq_port, p2p_port).await?;
+    create_bitcoin_conf(data_dir, rpc_port, zmq_port).await?;
 
     // Check if bitcoind is in PATH
     let bitcoind_check = Command::new("which").arg("bitcoind").output().await;
@@ -237,11 +231,14 @@ pub struct P2wpkhIdentity {
     pub next_funding_utxo: (OutPoint, TxOut),
 }
 
+type PublishCache = Arc<Mutex<HashMap<String, Arc<Mutex<Option<ContractAddress>>>>>>;
+
 /// Thread-safe identity pool shared between the cluster and module RegTesters.
 #[derive(Clone)]
 pub struct IdentityPool {
     registered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
     unregistered: Arc<Mutex<std::collections::VecDeque<Identity>>>,
+    publish_cache: PublishCache,
 }
 
 impl IdentityPool {
@@ -249,7 +246,24 @@ impl IdentityPool {
         Self {
             registered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             unregistered: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            publish_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Returns a per-key lock guard. If the inner Option is Some, the contract
+    /// is already published. If None, the caller should publish and set it.
+    pub async fn lock_published(
+        &self,
+        name: &str,
+    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+        let entry = {
+            let mut cache = self.publish_cache.lock().await;
+            cache
+                .entry(name.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(None)))
+                .clone()
+        };
+        entry.lock_owned().await
     }
 
     pub async fn pop_registered(&self) -> Result<Identity> {
@@ -283,8 +297,6 @@ pub struct RegTesterInner {
     ws_client: WebSocketClient,
     /// Address to mine blocks to (cluster admin identity's address).
     mine_address: String,
-    /// Cache of published contracts by name — enables idempotent publish.
-    pub published_contracts: HashMap<String, ContractAddress>,
     /// Shared identity pool for popping pre-created identities.
     pub pool: IdentityPool,
 }
@@ -315,7 +327,6 @@ impl RegTesterInner {
             bitcoin_client,
             kontor_client,
             mine_address,
-            published_contracts: HashMap::new(),
             pool,
         })
     }
@@ -716,21 +727,12 @@ impl RegTester {
         bail!("fund_address not available on module RegTester — use cluster method")
     }
 
-    pub async fn get_published(&self, name: &str) -> Option<ContractAddress> {
-        self.inner
-            .lock()
-            .await
-            .published_contracts
-            .get(name)
-            .cloned()
-    }
-
-    pub async fn set_published(&self, name: String, address: ContractAddress) {
-        self.inner
-            .lock()
-            .await
-            .published_contracts
-            .insert(name, address);
+    pub async fn lock_published(
+        &self,
+        name: &str,
+    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+        let pool = self.inner.lock().await.pool.clone();
+        pool.lock_published(name).await
     }
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
@@ -1145,10 +1147,15 @@ impl RegTesterCluster {
         let node_idx = running[idx];
 
         let nc = &self.node_configs[node_idx];
-        let client = &nc.running.as_ref().unwrap().client;
+        let kontor_client = KontorClient::new(format!("http://localhost:{}/api", nc.api_port))?;
+        let bitcoin_config = RegtestConfig {
+            bitcoin_rpc_url: self.bitcoin_rpc_url.clone(),
+            ..RegtestConfig::default()
+        };
+        let bitcoin_client = BitcoinClient::new_from_config(&bitcoin_config)?;
         let inner = RegTesterInner::with_port(
-            self.bitcoin_client.clone(),
-            client.clone(),
+            bitcoin_client,
+            kontor_client,
             nc.api_port,
             self.identity.address.to_string(),
             self.pool.clone(),

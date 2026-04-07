@@ -118,6 +118,7 @@ pub struct Runtime {
     pub gas_to_token_multiplier: Decimal,
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
+    pub node_label: String,
 }
 
 impl Runtime {
@@ -168,6 +169,7 @@ impl Runtime {
             gas_to_token_multiplier: Decimal::from("1e-9"),
             previous_output: None,
             op_return_data: None,
+            node_label: String::new(),
         })
     }
 

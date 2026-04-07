@@ -82,20 +82,10 @@ bytes = { workspace = true }
 prost = { workspace = true }
 sha3 = { workspace = true }
 
-[features]
-regtest-runner = []
-
-[[test]]
-name = "regtest_all"
-required-features = ["regtest-runner"]
-
-[[test]]
-name = "regtester_cluster"
-required-features = ["regtest-runner"]
-
 [dev-dependencies]
 testlib = { path = "../testlib" }
 serial_test = "=3.4.0"
+ctor = "=0.8.0"
 
 once_cell = "=1.21.4"
 axum-test = "=19.1.1"

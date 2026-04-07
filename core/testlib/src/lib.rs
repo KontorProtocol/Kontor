@@ -495,10 +495,45 @@ impl RuntimeImpl for RuntimeRegtest {
         name: &str,
         contract: &[u8],
     ) -> Result<ContractAddress> {
-        Ok(self
-            .publish_many(signer, &[(name, contract)])
+        let mut guard = self.reg_tester.lock_published(name).await;
+        if let Some(addr) = guard.as_ref() {
+            return Ok(addr.clone());
+        }
+
+        let identity = self
+            .identities
+            .get_mut(signer)
+            .ok_or_else(|| anyhow!("Identity not found"))?;
+        let sent = self
+            .reg_tester
+            .send_instruction(
+                identity,
+                Inst::Publish {
+                    gas_limit: 10_000,
+                    name: name.to_string(),
+                    bytes: contract.to_vec(),
+                },
+            )
+            .await?;
+        let txid = sent.reveal_txid.to_string();
+        self.reg_tester.mine(1).await?;
+        self.reg_tester
+            .wait_for_txids(std::slice::from_ref(&txid))
+            .await?;
+
+        let client = self.reg_tester.kontor_client().await;
+        let id = OpResultId::builder().txid(txid).build();
+        let result = client
+            .result(&id)
             .await?
-            .remove(0))
+            .ok_or(anyhow!("Could not find op result for {}", name))?;
+        let addr: ContractAddress = result
+            .contract
+            .parse()
+            .map_err(|e: String| anyhow!("Failed to parse contract address: {}", e))?;
+
+        *guard = Some(addr.clone());
+        Ok(addr)
     }
 
     async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
@@ -553,66 +588,12 @@ impl RuntimeImpl for RuntimeRegtest {
         signer: &Signer,
         contracts: &[(&str, &[u8])],
     ) -> Result<Vec<ContractAddress>> {
-        // Check cache — filter out already-published contracts
-        let mut addresses: Vec<Option<ContractAddress>> = Vec::with_capacity(contracts.len());
-        let mut to_publish = Vec::new();
-        for (i, (name, bytes)) in contracts.iter().enumerate() {
-            if let Some(addr) = self.reg_tester.get_published(name).await {
-                addresses.push(Some(addr));
-            } else {
-                addresses.push(None);
-                to_publish.push((i, *name, *bytes));
-            }
+        let mut addresses = Vec::with_capacity(contracts.len());
+        for &(name, bytes) in contracts {
+            let addr = self.publish(signer, name, bytes).await?;
+            addresses.push(addr);
         }
-
-        if to_publish.is_empty() {
-            return Ok(addresses.into_iter().map(|a| a.unwrap()).collect());
-        }
-
-        // Send all publish instructions without mining
-        let identity = self
-            .identities
-            .get_mut(signer)
-            .ok_or_else(|| anyhow!("Identity not found"))?;
-        let mut txids = Vec::new();
-        for &(_, name, bytes) in &to_publish {
-            let sent = self
-                .reg_tester
-                .send_instruction(
-                    identity,
-                    Inst::Publish {
-                        gas_limit: 10_000,
-                        name: name.to_string(),
-                        bytes: bytes.to_vec(),
-                    },
-                )
-                .await?;
-            txids.push(sent.reveal_txid.to_string());
-        }
-
-        // Mine once, wait for all
-        self.reg_tester.mine(1).await?;
-        self.reg_tester.wait_for_txids(&txids).await?;
-
-        // Query results for contract addresses
-        let client = self.reg_tester.kontor_client().await;
-        for (j, &(i, name, _)) in to_publish.iter().enumerate() {
-            let id = OpResultId::builder().txid(txids[j].clone()).build();
-            let result = client
-                .result(&id)
-                .await?
-                .ok_or(anyhow!("Could not find op result for {}", name))?;
-            let addr: ContractAddress = result
-                .contract
-                .parse()
-                .map_err(|e: String| anyhow!("Failed to parse contract address: {}", e))?;
-            self.reg_tester
-                .set_published(name.to_string(), addr.clone())
-                .await;
-            addresses[i] = Some(addr);
-        }
-
-        Ok(addresses.into_iter().map(|a| a.unwrap()).collect())
+        Ok(addresses)
     }
 
     async fn execute_submit(&mut self, groups: &[SubmitGroup<'_>]) -> Result<Vec<Vec<String>>> {
