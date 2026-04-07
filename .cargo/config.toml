@@ -1,2 +1,0 @@
-[alias]
-regtest = "test -p indexer --test contract_all"

@@ -23,7 +23,7 @@ pub fn generate(config: Config) -> TokenStream {
 
     for module in &config.modules {
         let module_file = tests_dir
-            .join("contract_all")
+            .join("contracts")
             .join(format!("{}.rs", module));
         if !module_file.exists() {
             return syn::Error::new(
