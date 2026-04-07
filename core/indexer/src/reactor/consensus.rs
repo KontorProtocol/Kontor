@@ -880,11 +880,11 @@ pub async fn handle_consensus_msg(
                                     anchor_hash,
                                     ..
                                 } => {
-                                    if *anchor_height > last_height {
+                                    if *anchor_height != last_height {
                                         warn!(
                                             anchor = anchor_height,
                                             tip = last_height,
-                                            "Rejecting proposal with unknown anchor height"
+                                            "Rejecting proposal with stale or unknown anchor height"
                                         );
                                         None
                                     } else if let Some(local_hash) =
@@ -1006,8 +1006,24 @@ pub async fn handle_consensus_msg(
                             .map(|p| p.encode_to_vec())
                             .unwrap_or_default();
 
-                        // Defer if anchor block hasn't been processed yet (sync path)
-                        if *anchor_height > last_height {
+                        if *anchor_height < last_height {
+                            warn!(
+                                anchor = anchor_height,
+                                last_height,
+                                consensus_height = %certificate.height,
+                                "Skipping stale batch — anchor below current height"
+                            );
+                            // Still record the batch for sync protocol
+                            let _ = insert_batch(
+                                &state.conn,
+                                certificate.height.as_u64() as i64,
+                                *anchor_height as i64,
+                                &anchor_hash.to_string(),
+                                &cert_bytes,
+                                false,
+                            )
+                            .await;
+                        } else if *anchor_height > last_height {
                             info!(
                                 anchor = anchor_height,
                                 last_height,
