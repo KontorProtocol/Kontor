@@ -36,7 +36,8 @@ use crate::{
     database::{
         self,
         queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
+            confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
+            insert_transaction,
             rollback_to_height, select_block_at_height, select_block_latest,
             select_unconfirmed_batch_tx,
         },
@@ -249,6 +250,26 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
+    async fn handle_block_with_decision(
+        &mut self,
+        block: Block,
+        decision: &consensus::DeferredDecision,
+    ) -> Result<()> {
+        if let Err(e) = insert_batch(
+            &self.db_conn(),
+            decision.consensus_height.as_u64() as i64,
+            block.height as i64,
+            &block.hash.to_string(),
+            &decision.certificate,
+            true,
+        )
+        .await
+        {
+            error!("insert_batch (block) error: {e}");
+        }
+        self.handle_block(block).await
+    }
+
     async fn handle_block(&mut self, block: Block) -> Result<()> {
         let height = block.height;
         let hash = block.hash;
@@ -386,11 +407,11 @@ impl<E: Executor> Reactor<E> {
 
         loop {
             let handle = self.consensus_handle.as_mut().unwrap();
-            let Some((height, value)) = handle.state.next_deferred_decision() else {
+            let Some(decision) = handle.state.next_deferred_decision() else {
                 break;
             };
 
-            match &value {
+            match &decision.value {
                 crate::consensus::Value::Block { height: bh, .. } => {
                     let bh = *bh;
                     let block = {
@@ -398,11 +419,11 @@ impl<E: Executor> Reactor<E> {
                         handle.state.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
-                        self.handle_block(block).await?;
+                        self.handle_block_with_decision(block, &decision).await?;
                     } else {
                         // Block data not yet available — put back and stop
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.deferred_decisions.push_front((height, value));
+                        handle.state.deferred_decisions.push_front(decision);
                         break;
                     }
                 }
@@ -439,7 +460,7 @@ impl<E: Executor> Reactor<E> {
                             }
                         }
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.record_decided_batch(height, &value);
+                        handle.state.record_decided_batch(decision.consensus_height, &decision.value);
                         handle
                             .state
                             .process_decided_batch(
@@ -447,8 +468,8 @@ impl<E: Executor> Reactor<E> {
                                 &mut self.runtime,
                                 anchor_height,
                                 anchor_hash,
-                                height,
-                                &[],
+                                decision.consensus_height,
+                                &decision.certificate,
                                 &resolved_txs,
                             )
                             .await;
@@ -462,7 +483,7 @@ impl<E: Executor> Reactor<E> {
                     } else {
                         // Anchor not yet processed — put back and stop
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.deferred_decisions.push_front((height, value));
+                        handle.state.deferred_decisions.push_front(decision);
                         break;
                     }
                 }
@@ -583,8 +604,8 @@ impl<E: Executor> Reactor<E> {
                             })
                             .await;
                     }
-                    if let consensus::ConsensusResult::Block(block) = consensus_result {
-                        self.handle_block(block).await?;
+                    if let consensus::ConsensusResult::Block(block, decision) = consensus_result {
+                        self.handle_block_with_decision(block, &decision).await?;
                         self.drain_deferred_decisions().await?;
                         // Check finality after block execution — batch txids may now be confirmed
                         let handle = self.consensus_handle.as_mut().unwrap();
