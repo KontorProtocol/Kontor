@@ -434,7 +434,7 @@ impl<E: Executor> Reactor<E> {
                 crate::consensus::Value::Block { height: bh, .. } => {
                     let block = {
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.block_cache.remove(bh)
+                        handle.state.pending_blocks.remove(bh)
                     };
                     if let Some(block) = block
                         && let Err(e) = self.handle_block(block).await
@@ -466,11 +466,10 @@ impl<E: Executor> Reactor<E> {
                         self.handle_block(block).await?;
                         self.drain_deferred_batches().await?;
                     } else {
-                        handle.state.block_cache.insert(block.height, block.clone());
                         handle
                             .state
                             .pending_blocks
-                            .push_back((block.height, block.hash));
+                            .insert(block.height, block.clone());
                     }
                 } else {
                     self.handle_block(block).await?;

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -75,9 +75,7 @@ pub struct ConsensusState {
 
     // Blocks waiting for consensus decision — pushed when new Bitcoin blocks arrive,
     // popped from the front when Value::Block decisions are finalized.
-    pub pending_blocks: VecDeque<(u64, bitcoin::BlockHash)>,
-
-    // Block heights that were decided by consensus but not yet in block_cache
+    // Block heights that were decided by consensus but haven't arrived from poller yet
     // (block arrived via poller after the decision). When the block arrives,
     // it should be executed immediately without re-proposing.
     pub missed_block_decisions: HashSet<u64>,
@@ -88,7 +86,7 @@ pub struct ConsensusState {
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
-    pub block_cache: HashMap<u64, indexer_types::Block>,
+    pub pending_blocks: BTreeMap<u64, indexer_types::Block>,
 
     // Cached validator set — updated after each block decision.
     // Used by height_params() to provide Malachite with the current set.
@@ -127,10 +125,9 @@ impl ConsensusState {
             last_processed_anchor: 0,
             replay_queue: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
-            pending_blocks: VecDeque::new(),
+            pending_blocks: BTreeMap::new(),
             missed_block_decisions: HashSet::new(),
             deferred_batches: Vec::new(),
-            block_cache: HashMap::new(),
             cached_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
@@ -141,7 +138,6 @@ impl ConsensusState {
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
-        self.block_cache.clear();
         self.missed_block_decisions.clear();
         self.deferred_batches.clear();
         self.pending_batches.clear();
@@ -239,8 +235,8 @@ impl ConsensusState {
         last_hash: bitcoin::BlockHash,
     ) -> Option<Value> {
         // If blocks are pending, always propose the next one first
-        if let Some(&(height, hash)) = self.pending_blocks.front() {
-            return Some(Value::new_block(height, hash));
+        if let Some((&height, block)) = self.pending_blocks.first_key_value() {
+            return Some(Value::new_block(height, block.hash));
         }
 
         // Collect candidate txids from the mempool
@@ -1029,8 +1025,7 @@ pub async fn handle_consensus_msg(
 
                         // Remove from pending if present (may not be if we received
                         // the decision via sync before the block arrived from poller)
-                        state.pending_blocks.retain(|(h, _)| *h != *height);
-                        if let Some(block) = state.block_cache.remove(height) {
+                        if let Some(block) = state.pending_blocks.remove(height) {
                             result = ConsensusResult::Block(block);
                         } else {
                             // Only record if this block height is relevant (not stale from
