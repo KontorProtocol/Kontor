@@ -64,7 +64,7 @@ ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"
 
-# Malachite BFT consensus
+# Malachite BFT consensus (rev pinned so indexer resolves when used as external git dep, e.g. Horizon)
 malachitebft-app-channel = { workspace = true }
 malachitebft-app = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-app" }
 malachitebft-core-types = { git = "https://github.com/circlefin/malachite", package = "arc-malachitebft-core-types", features = ["serde"] }
