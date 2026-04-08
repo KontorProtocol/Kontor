@@ -1,4 +1,3 @@
-pub mod bitcoin_state;
 pub mod block_handler;
 pub mod consensus;
 pub mod engine;
@@ -37,8 +36,8 @@ use crate::{
     database::{
         self,
         queries::{
-            confirm_transaction, get_transaction_by_txid, insert_block, insert_transaction,
-            rollback_to_height, select_block_at_height, select_block_latest,
+            confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
             select_unconfirmed_batch_tx,
         },
     },
@@ -68,6 +67,39 @@ pub struct ConsensusHandle {
     pub validator_index: Option<usize>,
 }
 
+pub struct ReactorCaches {
+    pub mempool: std::collections::HashMap<Txid, bitcoin::Transaction>,
+}
+
+impl ReactorCaches {
+    pub fn new() -> Self {
+        Self {
+            mempool: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn remove_confirmed_txids(&mut self, txids: &[Txid]) {
+        for txid in txids {
+            self.mempool.remove(txid);
+        }
+    }
+
+    pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
+        self.mempool.insert(tx.compute_txid(), tx);
+    }
+
+    pub fn track_mempool_remove(&mut self, txid: &Txid) {
+        self.mempool.remove(txid);
+    }
+
+    pub fn track_mempool_sync(&mut self, txs: impl Iterator<Item = bitcoin::Transaction>) {
+        self.mempool.clear();
+        for tx in txs {
+            self.mempool.insert(tx.compute_txid(), tx);
+        }
+    }
+}
+
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
@@ -77,7 +109,7 @@ pub struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    bitcoin_state: bitcoin_state::BitcoinState,
+    caches: ReactorCaches,
     consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
@@ -94,7 +126,6 @@ impl<E: Executor> Reactor<E> {
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-        bitcoin_state: bitcoin_state::BitcoinState,
         consensus_handle: Option<ConsensusHandle>,
         last_height: u64,
         last_hash: Option<BlockHash>,
@@ -113,7 +144,7 @@ impl<E: Executor> Reactor<E> {
             block_rx,
             mempool_rx,
             simulate_rx,
-            bitcoin_state,
+            caches: ReactorCaches::new(),
             last_height,
             last_hash,
             ready_tx,
@@ -216,6 +247,26 @@ impl<E: Executor> Reactor<E> {
                 block.height, change.activated, change.deactivated
             );
         }
+    }
+
+    async fn handle_block_with_decision(
+        &mut self,
+        block: Block,
+        decision: &consensus::DeferredDecision,
+    ) -> Result<()> {
+        if let Err(e) = insert_batch(
+            &self.db_conn(),
+            decision.consensus_height.as_u64() as i64,
+            block.height as i64,
+            &block.hash.to_string(),
+            &decision.certificate,
+            true,
+        )
+        .await
+        {
+            error!("insert_batch (block) error: {e}");
+        }
+        self.handle_block(block).await
     }
 
     async fn handle_block(&mut self, block: Block) -> Result<()> {
@@ -348,71 +399,95 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    async fn process_replay_queue(&mut self) {
-        loop {
-            let Some(handle) = self.consensus_handle.as_mut() else {
-                return;
-            };
-            if handle
-                .state
-                .replay_queue
-                .front()
-                .is_none_or(|(_, v)| v.block_height() > self.last_height)
-            {
-                break;
-            }
-            let (height, value) = handle.state.next_replay_batch().unwrap();
+    async fn drain_deferred_decisions(&mut self) -> Result<()> {
+        if self.consensus_handle.is_none() {
+            return Ok(());
+        }
 
-            match &value {
+        loop {
+            let handle = self.consensus_handle.as_mut().unwrap();
+            let Some(decision) = handle.state.next_deferred_decision() else {
+                break;
+            };
+
+            match &decision.value {
+                crate::consensus::Value::Block { height: bh, .. } => {
+                    let bh = *bh;
+                    let block = {
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        handle.state.pending_blocks.remove(&bh)
+                    };
+                    if let Some(block) = block {
+                        self.handle_block_with_decision(block, &decision).await?;
+                    } else {
+                        // Block data not yet available — put back and stop
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        handle.state.deferred_decisions.push_front(decision);
+                        break;
+                    }
+                }
                 crate::consensus::Value::Batch {
                     anchor_height,
                     anchor_hash,
                     txs,
                     ..
                 } => {
-                    let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
-                    let mut resolved_txs = Vec::with_capacity(txids.len());
-                    for txid in &txids {
-                        if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
-                            resolved_txs.push(tx.clone());
-                        } else if let Some(tx) =
-                            Self::resolve_tx_from_db(&self.db_conn(), txid).await
-                        {
-                            resolved_txs.push(tx);
-                        } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
-                            resolved_txs.push(tx);
-                        } else {
-                            warn!(%txid, "Could not resolve txid during replay — skipping");
+                    if *anchor_height <= self.last_height {
+                        let anchor_height = *anchor_height;
+                        let anchor_hash = *anchor_hash;
+                        let mut resolved_txs = Vec::with_capacity(txs.len());
+                        for tx in txs {
+                            match tx {
+                                crate::consensus::BatchTx::Raw(raw) => {
+                                    resolved_txs.push(raw.clone());
+                                }
+                                crate::consensus::BatchTx::Id(txid) => {
+                                    if let Some(tx) = self.caches.mempool.get(txid) {
+                                        resolved_txs.push(tx.clone());
+                                    } else if let Some(tx) =
+                                        Self::resolve_tx_from_db(&self.db_conn(), txid).await
+                                    {
+                                        resolved_txs.push(tx);
+                                    } else if let Some(tx) =
+                                        self.executor.resolve_transaction(txid).await
+                                    {
+                                        resolved_txs.push(tx);
+                                    } else {
+                                        warn!(%txid, "Could not resolve txid during deferred execution — skipping");
+                                    }
+                                }
+                            }
                         }
-                    }
-                    let handle = self.consensus_handle.as_mut().unwrap();
-                    handle.state.record_decided_batch(height, &value);
-                    handle
-                        .state
-                        .process_decided_batch(
-                            &self.executor,
-                            &mut self.runtime,
-                            *anchor_height,
-                            *anchor_hash,
-                            height,
-                            &[],
-                            &resolved_txs,
-                        )
-                        .await;
-                }
-                crate::consensus::Value::Block { height: bh, .. } => {
-                    let block = {
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.block_cache.remove(bh)
-                    };
-                    if let Some(block) = block
-                        && let Err(e) = self.handle_block(block).await
-                    {
-                        error!("replay block execution error: {e}");
+                        handle
+                            .state
+                            .process_decided_batch(
+                                &self.executor,
+                                &mut self.runtime,
+                                anchor_height,
+                                anchor_hash,
+                                decision.consensus_height,
+                                &decision.certificate,
+                                &resolved_txs,
+                            )
+                            .await;
+                        if let Some(tx) = &self.event_tx {
+                            let txids: Vec<String> = resolved_txs
+                                .iter()
+                                .map(|tx| tx.compute_txid().to_string())
+                                .collect();
+                            let _ = tx.send(Event::BatchProcessed { txids }).await;
+                        }
+                    } else {
+                        // Anchor not yet processed — put back and stop
+                        let handle = self.consensus_handle.as_mut().unwrap();
+                        handle.state.deferred_decisions.push_front(decision);
+                        break;
                     }
                 }
             }
         }
+        Ok(())
     }
 
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
@@ -422,30 +497,18 @@ impl<E: Executor> Reactor<E> {
                 block,
             } => {
                 let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                self.bitcoin_state.remove_confirmed_txids(&txids);
+                self.caches.remove_confirmed_txids(&txids);
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
-                    // Check if this block was already decided (arrived late)
-                    if handle.state.missed_block_decisions.remove(&block.height) {
-                        info!(
-                            "Block {} arrived after consensus decision — executing immediately",
-                            block.height
-                        );
-                        self.handle_block(block).await?;
-                        self.drain_deferred_batches().await?;
-                    } else {
-                        handle.state.block_cache.insert(block.height, block.clone());
-                        handle
-                            .state
-                            .pending_blocks
-                            .push_back((block.height, block.hash));
-                    }
+                    handle
+                        .state
+                        .pending_blocks
+                        .insert(block.height, block.clone());
+                    self.drain_deferred_decisions().await?;
                 } else {
                     self.handle_block(block).await?;
                 }
-                // Process replay queue entries whose anchor has been reached
-                self.process_replay_queue().await;
             }
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
@@ -501,16 +564,16 @@ impl<E: Executor> Reactor<E> {
                     match event {
                         MempoolEvent::Sync(txs) => {
                             let count = txs.len();
-                            self.bitcoin_state.track_mempool_sync(txs.into_iter()).await;
+                            self.caches.track_mempool_sync(txs.into_iter());
                             info!("MempoolSync {}", count);
                         },
                         MempoolEvent::Insert(tx) => {
                             let txid = tx.compute_txid();
-                            self.bitcoin_state.track_mempool_insert(tx).await;
+                            self.caches.track_mempool_insert(tx);
                             debug!("MempoolInsert {}", txid);
                         },
                         MempoolEvent::Remove(txid) => {
-                            self.bitcoin_state.track_mempool_remove(&txid).await;
+                            self.caches.track_mempool_remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
                     }
@@ -523,7 +586,7 @@ impl<E: Executor> Reactor<E> {
                         &mut handle.state,
                         &self.executor,
                         &mut self.runtime,
-                        &mut self.bitcoin_state,
+                        &mut self.caches,
                         &mut handle.channels,
                         msg,
                         validator_index,
@@ -539,9 +602,9 @@ impl<E: Executor> Reactor<E> {
                             })
                             .await;
                     }
-                    if let consensus::ConsensusResult::Block(block) = consensus_result {
-                        self.handle_block(block).await?;
-                        self.drain_deferred_batches().await?;
+                    if let consensus::ConsensusResult::Block(block, decision) = consensus_result {
+                        self.handle_block_with_decision(block, &decision).await?;
+                        self.drain_deferred_decisions().await?;
                         // Check finality after block execution — batch txids may now be confirmed
                         let handle = self.consensus_handle.as_mut().unwrap();
                         if handle.state
@@ -549,8 +612,17 @@ impl<E: Executor> Reactor<E> {
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
                             && let Some((rollback_anchor, excluded)) = handle.state.run_finality_checks(self.last_height).await {
-                                // DB truncation + executor resync + notify clients
-                                self.rollback(rollback_anchor).await?;
+                                // Read replay decisions from DB before deleting state
+                                let handle = self.consensus_handle.as_mut().unwrap();
+                                handle.state.initiate_rollback(
+                                    &mut self.executor,
+                                    rollback_anchor,
+                                    excluded,
+                                ).await;
+
+                                // Rollback to before the invalid anchor so all state at the
+                                // anchor height (including invalid tx effects) is wiped cleanly.
+                                self.rollback(rollback_anchor - 1).await?;
 
                                 // Emit rollback event
                                 let handle = self.consensus_handle.as_mut().unwrap();
@@ -561,16 +633,8 @@ impl<E: Executor> Reactor<E> {
                                     checkpoint,
                                 });
 
-                                // Consensus state rollback (replay queue, pending batches)
-                                let handle = self.consensus_handle.as_mut().unwrap();
-                                handle.state.initiate_rollback(
-                                    &mut self.executor,
-                                    rollback_anchor,
-                                    excluded,
-                                ).await;
-
-                                // Process replay queue entries using already-cached blocks
-                                self.process_replay_queue().await;
+                                // Process deferred decisions using already-cached blocks
+                                self.drain_deferred_decisions().await?;
                             }
                     }
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
@@ -584,53 +648,6 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
 
-            }
-        }
-        Ok(())
-    }
-
-    /// Execute any deferred batches whose anchor block has now been processed.
-    async fn drain_deferred_batches(&mut self) -> Result<()> {
-        let Some(handle) = self.consensus_handle.as_mut() else {
-            return Ok(());
-        };
-        let last_height = self.last_height;
-        let mut still_deferred = Vec::new();
-        let mut ready = Vec::new();
-        for batch in handle.state.deferred_batches.drain(..) {
-            if batch.anchor_height <= last_height {
-                ready.push(batch);
-            } else {
-                still_deferred.push(batch);
-            }
-        }
-        handle.state.deferred_batches = still_deferred;
-
-        for batch in ready {
-            info!(
-                anchor = batch.anchor_height,
-                consensus_height = %batch.consensus_height,
-                "Executing deferred batch — anchor block now processed"
-            );
-            handle
-                .state
-                .process_decided_batch(
-                    &self.executor,
-                    &mut self.runtime,
-                    batch.anchor_height,
-                    batch.anchor_hash,
-                    batch.consensus_height,
-                    &batch.certificate,
-                    &batch.txs,
-                )
-                .await;
-            if let Some(tx) = &self.event_tx {
-                let txids: Vec<String> = batch
-                    .txs
-                    .iter()
-                    .map(|tx| tx.compute_txid().to_string())
-                    .collect();
-                let _ = tx.send(Event::BatchProcessed { txids }).await;
             }
         }
         Ok(())
@@ -818,11 +835,6 @@ pub fn run(
                 )
                 .await?;
 
-                let mut bs = bitcoin_state::BitcoinState::new();
-                if let Some(client) = &bitcoin_client {
-                    bs = bs.with_tx_cache(client.tx_cache().clone());
-                }
-
                 let timeouts = consensus_propose_timeout_ms.map(|ms| LinearTimeouts {
                     propose: std::time::Duration::from_millis(ms),
                     ..LinearTimeouts::default()
@@ -845,7 +857,6 @@ pub fn run(
                     ready_tx,
                     event_tx,
                     simulate_rx,
-                    bs,
                     consensus_handle,
                     last_height,
                     last_hash,

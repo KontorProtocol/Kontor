@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -25,7 +25,7 @@ use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
     Address, BatchTx, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ValidatorSet, Value, ValueId,
+    ValidatorSet, Value,
 };
 use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
@@ -34,7 +34,7 @@ use crate::database::queries::{
     select_unconfirmed_batch_txs,
 };
 
-use super::bitcoin_state::BitcoinState;
+use super::ReactorCaches;
 use super::executor::Executor;
 
 /// Result from processing a consensus message.
@@ -42,17 +42,15 @@ pub enum ConsensusResult {
     /// No action needed by the reactor.
     None,
     /// A block was decided — the reactor should execute it.
-    Block(indexer_types::Block),
+    Block(indexer_types::Block, DeferredDecision),
     /// A batch was decided and executed — the reactor should emit a websocket event.
     BatchProcessed { txids: Vec<String> },
 }
 
-pub struct DeferredBatch {
-    pub anchor_height: u64,
-    pub anchor_hash: bitcoin::BlockHash,
+pub struct DeferredDecision {
     pub consensus_height: Height,
+    pub value: Value,
     pub certificate: Vec<u8>,
-    pub txs: Vec<bitcoin::Transaction>,
 }
 
 /// All consensus-related state for the reactor.
@@ -69,37 +67,15 @@ pub struct ConsensusState {
     pub pending_batches: Vec<PendingBatch>,
     pub last_processed_anchor: u64,
 
-    // Replay queue — populated after a rollback, drained before Malachite decisions
-    pub replay_queue: VecDeque<(Height, Value)>,
+    // Decided values waiting for block data or anchor block processing.
+    // Used during sync (decisions arrive before blocks from poller) and
+    // rollback replay (decisions replayed from DB while blocks redeliver).
+    pub deferred_decisions: VecDeque<DeferredDecision>,
     pub replay_excluded_txids: HashSet<Txid>,
-
-    // Full transaction cache: ValueId → full txs. Populated when proposing or
-    // receiving proposals (live consensus). Consumed when the value is decided.
-    // Not used for sync/replay — those paths resolve txids via Executor.
-    pub tx_cache: HashMap<ValueId, Vec<bitcoin::Transaction>>,
-
-    // Parsed transaction cache: Txid → parsed indexer_types::Transaction.
-    // Populated during validate_transaction (proposing or receiving proposals).
-    // Consumed during execute_batch to avoid double-parsing.
-    // Cleared after process_decided_batch completes for a batch's txids.
-    pub parsed_tx_cache: HashMap<Txid, indexer_types::Transaction>,
-
-    // Blocks waiting for consensus decision — pushed when new Bitcoin blocks arrive,
-    // popped from the front when Value::Block decisions are finalized.
-    pub pending_blocks: VecDeque<(u64, bitcoin::BlockHash)>,
-
-    // Block heights that were decided by consensus but not yet in block_cache
-    // (block arrived via poller after the decision). When the block arrives,
-    // it should be executed immediately without re-proposing.
-    pub missed_block_decisions: HashSet<u64>,
-
-    // Batches decided via sync whose anchor block hasn't been processed yet.
-    // Drained after handle_block processes the anchor.
-    pub deferred_batches: Vec<DeferredBatch>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
-    pub block_cache: HashMap<u64, indexer_types::Block>,
+    pub pending_blocks: BTreeMap<u64, indexer_types::Block>,
 
     // Cached validator set — updated after each block decision.
     // Used by height_params() to provide Malachite with the current set.
@@ -136,14 +112,9 @@ impl ConsensusState {
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
             last_processed_anchor: 0,
-            replay_queue: VecDeque::new(),
+            deferred_decisions: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
-            tx_cache: HashMap::new(),
-            parsed_tx_cache: HashMap::new(),
-            pending_blocks: VecDeque::new(),
-            missed_block_decisions: HashSet::new(),
-            deferred_batches: Vec::new(),
-            block_cache: HashMap::new(),
+            pending_blocks: BTreeMap::new(),
             cached_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
@@ -154,14 +125,9 @@ impl ConsensusState {
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
-        self.block_cache.clear();
-        self.missed_block_decisions.clear();
-        self.deferred_batches.clear();
-        self.pending_batches.clear();
-        self.tx_cache.clear();
-        self.parsed_tx_cache.clear();
-        self.replay_queue.clear();
+        self.deferred_decisions.clear();
         self.replay_excluded_txids.clear();
+        self.pending_batches.clear();
     }
 
     fn validator_set(&self) -> ValidatorSet {
@@ -200,12 +166,7 @@ impl ConsensusState {
                 for tx in txs {
                     hasher.update(tx.txid().to_byte_array());
                 }
-                let txs = self
-                    .tx_cache
-                    .get(&value.value.id())
-                    .cloned()
-                    .unwrap_or_default();
-                ProposalData::new_batch(*anchor_height, *anchor_hash, txs)
+                ProposalData::new_batch(*anchor_height, *anchor_hash, value.value.batch_raw_txs())
             }
             Value::Block { height, hash } => {
                 hasher.update(height.to_be_bytes());
@@ -250,17 +211,17 @@ impl ConsensusState {
     async fn make_value(
         &mut self,
         executor: &impl Executor,
-        bitcoin_state: &BitcoinState,
+        caches: &ReactorCaches,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Option<Value> {
         // If blocks are pending, always propose the next one first
-        if let Some(&(height, hash)) = self.pending_blocks.front() {
-            return Some(Value::new_block(height, hash));
+        if let Some((&height, block)) = self.pending_blocks.first_key_value() {
+            return Some(Value::new_block(height, block.hash));
         }
 
         // Collect candidate txids from the mempool
-        let mempool_txids: Vec<Txid> = bitcoin_state.mempool.keys().copied().collect();
+        let mempool_txids: Vec<Txid> = caches.mempool.keys().copied().collect();
 
         // Filter out txids already in the system (batched or confirmed)
         let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
@@ -273,18 +234,12 @@ impl ConsensusState {
             .collect();
 
         let mut txs = Vec::new();
-        for tx in bitcoin_state.mempool.values() {
+        for tx in caches.mempool.values() {
             let txid = tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            // Skip validation if already parsed and cached
-            if self.parsed_tx_cache.contains_key(&txid) {
-                txs.push(tx.clone());
-                continue;
-            }
-            if let Some(parsed) = executor.validate_transaction(tx).await {
-                self.parsed_tx_cache.insert(txid, parsed);
+            if executor.validate_transaction(tx).await.is_some() {
                 txs.push(tx.clone());
             }
         }
@@ -294,49 +249,11 @@ impl ConsensusState {
             return None;
         }
 
-        let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let value = Value::new_batch(last_height, last_hash, txids);
-        self.tx_cache.insert(value.id(), txs);
+        let value = Value::new_batch_raw(last_height, last_hash, txs);
         Some(value)
     }
 
     // --- Finality tracking ---
-
-    pub fn record_decided_batch(&mut self, consensus_height: Height, value: &Value) {
-        match value {
-            Value::Batch {
-                anchor_height,
-                anchor_hash,
-                txs,
-                ..
-            } => {
-                let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
-                let pending = PendingBatch {
-                    consensus_height,
-                    anchor_height: *anchor_height,
-                    anchor_hash: *anchor_hash,
-                    txids: txids.clone(),
-                    deadline: anchor_height + FINALITY_WINDOW,
-                };
-                info!(
-                    consensus_height = %consensus_height,
-                    anchor = anchor_height,
-                    deadline = pending.deadline,
-                    txs = txids.len(),
-                    "Tracking batch for finality"
-                );
-                self.pending_batches.push(pending);
-            }
-            Value::Block { height, hash } => {
-                info!(
-                    consensus_height = %consensus_height,
-                    block_height = height,
-                    block_hash = %hash,
-                    "Block decided — no finality tracking needed"
-                );
-            }
-        }
-    }
 
     pub async fn check_finality(&mut self, last_height: u64) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
@@ -442,7 +359,7 @@ impl ConsensusState {
         }
     }
 
-    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<(Height, Value)> {
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<DeferredDecision> {
         let batches = match select_batches_from_anchor(&self.conn, from_anchor as i64).await {
             Ok(r) => r,
             Err(e) => {
@@ -461,7 +378,11 @@ impl ConsensusState {
                     let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
                     Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
                 };
-                Some((Height::new(b.consensus_height as u64), value))
+                Some(DeferredDecision {
+                    consensus_height: Height::new(b.consensus_height as u64),
+                    value,
+                    certificate: b.certificate,
+                })
             })
             .collect()
     }
@@ -551,7 +472,7 @@ impl ConsensusState {
             "Initiating rollback"
         );
 
-        self.replay_queue = replay_batches.into();
+        self.deferred_decisions = replay_batches.into();
         self.replay_excluded_txids = excluded_txids;
         self.pending_batches
             .retain(|b| b.anchor_height < from_anchor);
@@ -562,14 +483,14 @@ impl ConsensusState {
 
     /// Pop the next replay batch, filtering out excluded txids.
     /// Returns None when the queue is empty (back to normal Malachite flow).
-    pub fn next_replay_batch(&mut self) -> Option<(Height, Value)> {
-        if let Some((height, mut value)) = self.replay_queue.pop_front() {
+    pub fn next_deferred_decision(&mut self) -> Option<DeferredDecision> {
+        if let Some(mut decision) = self.deferred_decisions.pop_front() {
             if !self.replay_excluded_txids.is_empty()
-                && let Value::Batch { ref mut txs, .. } = value
+                && let Value::Batch { ref mut txs, .. } = decision.value
             {
                 txs.retain(|tx| !self.replay_excluded_txids.contains(&tx.txid()));
             }
-            return Some((height, value));
+            return Some(decision);
         }
         // Queue drained — clear excluded set
         self.replay_excluded_txids.clear();
@@ -607,19 +528,20 @@ impl ConsensusState {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) {
-        // Resolve batch txs to parsed form: check parsed_tx_cache first,
-        // fall back to executor.parse_transaction for replay/sync path
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
-            .filter_map(|btx| {
-                let txid = btx.compute_txid();
-                if let Some(parsed) = self.parsed_tx_cache.remove(&txid) {
-                    Some(parsed)
-                } else {
-                    executor.parse_transaction(btx)
-                }
-            })
+            .filter_map(|btx| executor.parse_transaction(btx))
             .collect();
+
+        // Track for finality — must happen once per batch execution
+        let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
+        self.pending_batches.push(PendingBatch {
+            consensus_height,
+            anchor_height,
+            anchor_hash,
+            txids,
+            deadline: anchor_height + FINALITY_WINDOW,
+        });
 
         runtime
             .storage
@@ -707,7 +629,23 @@ async fn validate_and_accept_proposal(
 ) -> Option<ProposedValue<Ctx>> {
     let value = match data {
         ProposalData::Block { height, hash } => {
-            // Block proposals need no tx validation
+            if let Some(block) = state.pending_blocks.get(height) {
+                if block.hash != *hash {
+                    warn!(
+                        block_height = height,
+                        proposed = %hash,
+                        local = %block.hash,
+                        "Rejecting block proposal: hash mismatch"
+                    );
+                    return None;
+                }
+            } else {
+                warn!(
+                    block_height = height,
+                    "Rejecting block proposal: block not yet received"
+                );
+                return None;
+            }
             Value::new_block(*height, *hash)
         }
         ProposalData::Batch {
@@ -721,24 +659,15 @@ async fn validate_and_accept_proposal(
                 return None;
             }
             for tx in transactions {
-                let txid = tx.compute_txid();
-                if state.parsed_tx_cache.contains_key(&txid) {
-                    continue;
-                }
-                if let Some(parsed) = executor.validate_transaction(tx).await {
-                    state.parsed_tx_cache.insert(txid, parsed);
-                } else {
+                if executor.validate_transaction(tx).await.is_none() {
                     warn!(
-                        %txid,
+                        txid = %tx.compute_txid(),
                         "Rejecting proposal: transaction failed validation"
                     );
                     return None;
                 }
             }
-            let txids = data.txids();
-            let value = Value::new_batch(*anchor_height, *anchor_hash, txids);
-            state.tx_cache.insert(value.id(), transactions.clone());
-            value
+            Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
         }
     };
 
@@ -760,7 +689,7 @@ pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
     executor: &impl Executor,
     runtime: &mut crate::runtime::Runtime,
-    bitcoin_state: &mut BitcoinState,
+    caches: &mut ReactorCaches,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
     validator_index: Option<usize>,
@@ -825,7 +754,7 @@ pub async fn handle_consensus_msg(
                     error!("Failed to send GetValue reply");
                 }
             } else if let Some(value) = state
-                .make_value(executor, bitcoin_state, last_height, last_hash)
+                .make_value(executor, caches, last_height, last_hash)
                 .await
             {
                 let proposed = ProposedValue {
@@ -974,29 +903,21 @@ pub async fn handle_consensus_msg(
                         value: proposal.value.clone(),
                     });
                 }
-                state.record_decided_batch(certificate.height, &proposal.value);
-
                 match &proposal.value {
                     Value::Batch {
                         anchor_height,
                         anchor_hash,
                         txs,
                     } => {
-                        // Try tx_cache first (normal path), fall back to
-                        // raw txs embedded in the Value, then resolve from
-                        // bitcoind via executor (sync path for finalized batches).
-                        let mut full_txs = state
-                            .tx_cache
-                            .remove(&proposal.value.id())
-                            .unwrap_or_default();
-                        if full_txs.is_empty() {
-                            for entry in txs {
-                                match entry {
-                                    BatchTx::Raw(tx) => full_txs.push(tx.clone()),
-                                    BatchTx::Id(txid) => {
-                                        if let Some(tx) = executor.resolve_transaction(txid).await {
-                                            full_txs.push(tx);
-                                        }
+                        // Resolve full txs: Raw entries used directly (live path),
+                        // Id entries resolved via executor (sync path for finalized batches).
+                        let mut full_txs = Vec::new();
+                        for entry in txs {
+                            match entry {
+                                BatchTx::Raw(tx) => full_txs.push(tx.clone()),
+                                BatchTx::Id(txid) => {
+                                    if let Some(tx) = executor.resolve_transaction(txid).await {
+                                        full_txs.push(tx);
                                     }
                                 }
                             }
@@ -1030,12 +951,10 @@ pub async fn handle_consensus_msg(
                                 consensus_height = %certificate.height,
                                 "Deferring batch — anchor block not yet processed"
                             );
-                            state.deferred_batches.push(DeferredBatch {
-                                anchor_height: *anchor_height,
-                                anchor_hash: *anchor_hash,
+                            state.deferred_decisions.push_back(DeferredDecision {
                                 consensus_height: certificate.height,
+                                value: proposal.value.clone(),
                                 certificate: cert_bytes,
-                                txs: full_txs,
                             });
                         } else {
                             state
@@ -1058,30 +977,23 @@ pub async fn handle_consensus_msg(
                         }
                     }
                     Value::Block { height, hash } => {
-                        // Store block decision for sync protocol
                         let cert_bytes = encode_commit_certificate(&certificate)
                             .map(|p| p.encode_to_vec())
                             .unwrap_or_default();
-                        if let Err(e) = insert_batch(
-                            &state.conn,
-                            certificate.height.as_u64() as i64,
-                            *height as i64,
-                            &hash.to_string(),
-                            &cert_bytes,
-                            true,
-                        )
-                        .await
-                        {
-                            error!("insert_batch (block) error: {e}");
-                        }
 
                         // Remove from pending if present (may not be if we received
                         // the decision via sync before the block arrived from poller)
-                        state.pending_blocks.retain(|(h, _)| *h != *height);
-                        if let Some(block) = state.block_cache.remove(height) {
-                            result = ConsensusResult::Block(block);
+                        if let Some(block) = state.pending_blocks.remove(height) {
+                            result = ConsensusResult::Block(
+                                block,
+                                DeferredDecision {
+                                    consensus_height: certificate.height,
+                                    value: proposal.value.clone(),
+                                    certificate: cert_bytes.clone(),
+                                },
+                            );
                         } else {
-                            // Only record if this block height is relevant (not stale from
+                            // Only defer if this block height is relevant (not stale from
                             // a pre-rollback decision that arrived late)
                             let is_stale =
                                 match select_block_at_height(&state.conn, *height as i64).await {
@@ -1092,9 +1004,13 @@ pub async fn handle_consensus_msg(
                                 info!(
                                     block_height = height,
                                     block_hash = %hash,
-                                    "Block decided but not yet cached — will execute on arrival"
+                                    "Block decided but not yet received — deferring"
                                 );
-                                state.missed_block_decisions.insert(*height);
+                                state.deferred_decisions.push_back(DeferredDecision {
+                                    consensus_height: certificate.height,
+                                    value: proposal.value.clone(),
+                                    certificate: cert_bytes.clone(),
+                                });
                             } else {
                                 warn!(
                                     block_height = height,

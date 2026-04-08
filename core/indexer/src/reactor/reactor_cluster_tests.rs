@@ -11,7 +11,6 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
-use crate::reactor::bitcoin_state::BitcoinState;
 use crate::reactor::consensus::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
@@ -127,7 +126,7 @@ impl ReactorCluster {
 
         for i in 0..initial {
             let (node_block_tx, node_block_rx) = mpsc::channel(256);
-            block_txs.push(node_block_tx);
+            block_txs.push(node_block_tx.clone());
 
             let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
 
@@ -137,6 +136,7 @@ impl ReactorCluster {
                 &genesis,
                 &genesis_validators,
                 &ports,
+                node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),
@@ -213,6 +213,7 @@ impl ReactorCluster {
         genesis: &Genesis,
         genesis_validators: &[GenesisValidator],
         ports: &[u16],
+        node_block_tx: mpsc::Sender<BlockEvent>,
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
         cancel: CancellationToken,
@@ -230,10 +231,16 @@ impl ReactorCluster {
         let genesis_vals = genesis_validators.to_vec();
         let ports = ports.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) =
-                LiteExecutor::new(mock_btc, pubkey, &genesis_vals, engine, component_cache)
-                    .await
-                    .expect("LiteExecutor setup failed");
+            let (executor, runtime) = LiteExecutor::new(
+                mock_btc,
+                pubkey,
+                &genesis_vals,
+                engine,
+                component_cache,
+                node_block_tx,
+            )
+            .await
+            .expect("LiteExecutor setup failed");
 
             let engine_config = EngineConfig {
                 private_key,
@@ -288,8 +295,6 @@ impl ReactorCluster {
                 validator_index,
             };
 
-            let bitcoin_state = BitcoinState::new();
-
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
@@ -299,7 +304,6 @@ impl ReactorCluster {
                 None,
                 None,
                 None,
-                bitcoin_state,
                 Some(consensus_handle),
                 0,
                 None,
@@ -321,7 +325,7 @@ impl ReactorCluster {
             .ok_or_else(|| anyhow::anyhow!("All nodes already started"))?;
 
         let (node_block_tx, node_block_rx) = mpsc::channel(256);
-        self.block_txs.push(node_block_tx);
+        self.block_txs.push(node_block_tx.clone());
 
         let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
 
@@ -331,6 +335,7 @@ impl ReactorCluster {
             &self.genesis,
             &self.genesis_validators,
             &self.ports,
+            node_block_tx,
             node_block_rx,
             node_mempool_rx,
             self.cancel.clone(),
