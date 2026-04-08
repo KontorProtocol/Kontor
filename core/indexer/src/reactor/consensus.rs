@@ -670,7 +670,23 @@ async fn validate_and_accept_proposal(
 ) -> Option<ProposedValue<Ctx>> {
     let value = match data {
         ProposalData::Block { height, hash } => {
-            // Block proposals need no tx validation
+            if let Some(block) = state.pending_blocks.get(height) {
+                if block.hash != *hash {
+                    warn!(
+                        block_height = height,
+                        proposed = %hash,
+                        local = %block.hash,
+                        "Rejecting block proposal: hash mismatch"
+                    );
+                    return None;
+                }
+            } else {
+                warn!(
+                    block_height = height,
+                    "Rejecting block proposal: block not yet received"
+                );
+                return None;
+            }
             Value::new_block(*height, *hash)
         }
         ProposalData::Batch {
