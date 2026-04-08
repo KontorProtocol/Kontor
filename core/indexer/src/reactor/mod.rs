@@ -608,7 +608,7 @@ impl<E: Executor> Reactor<E> {
                         // Check finality after block execution — batch txids may now be confirmed
                         let handle = self.consensus_handle.as_mut().unwrap();
                         if handle.state
-                            .pending_batches
+                            .unfinalized_batches
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
                             && let Some((rollback_anchor, excluded)) = handle.state.run_finality_checks(self.last_height).await {

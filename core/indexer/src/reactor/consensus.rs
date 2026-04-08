@@ -63,7 +63,7 @@ pub struct ConsensusState {
     pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
 
     // Finality tracking
-    pub pending_batches: Vec<PendingBatch>,
+    pub unfinalized_batches: Vec<UnfinalizedBatch>,
 
     // Decided values waiting for block data or anchor block processing.
     // Used during sync (decisions arrive before blocks from poller) and
@@ -106,7 +106,7 @@ impl ConsensusState {
             current_height: Height::new(1),
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
-            pending_batches: Vec::new(),
+            unfinalized_batches: Vec::new(),
             deferred_decisions: VecDeque::new(),
             pending_blocks: BTreeMap::new(),
             cached_validator_set,
@@ -120,7 +120,7 @@ impl ConsensusState {
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
-        self.pending_batches.clear();
+        self.unfinalized_batches.clear();
     }
 
     fn validator_set(&self) -> ValidatorSet {
@@ -255,7 +255,7 @@ impl ConsensusState {
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
 
-        for batch in self.pending_batches.drain(..) {
+        for batch in self.unfinalized_batches.drain(..) {
             if batch.deadline <= tip {
                 at_deadline.push(batch);
             } else {
@@ -318,7 +318,7 @@ impl ConsensusState {
             }
         }
 
-        self.pending_batches = still_pending;
+        self.unfinalized_batches = still_pending;
         events
     }
 
@@ -474,7 +474,7 @@ impl ConsensusState {
             }
         }
         self.deferred_decisions = deferred;
-        self.pending_batches
+        self.unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
 
         executor.replay_blocks_from(from_anchor).await;
@@ -518,7 +518,7 @@ impl ConsensusState {
 
         // Track for finality — must happen once per batch execution
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
-        self.pending_batches.push(PendingBatch {
+        self.unfinalized_batches.push(UnfinalizedBatch {
             consensus_height,
             anchor_height,
             anchor_hash,
