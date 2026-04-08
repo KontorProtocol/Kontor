@@ -67,39 +67,6 @@ pub struct ConsensusHandle {
     pub validator_index: Option<usize>,
 }
 
-pub struct ReactorCaches {
-    pub mempool: std::collections::HashMap<Txid, bitcoin::Transaction>,
-}
-
-impl ReactorCaches {
-    pub fn new() -> Self {
-        Self {
-            mempool: std::collections::HashMap::new(),
-        }
-    }
-
-    pub fn remove_confirmed_txids(&mut self, txids: &[Txid]) {
-        for txid in txids {
-            self.mempool.remove(txid);
-        }
-    }
-
-    pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
-        self.mempool.insert(tx.compute_txid(), tx);
-    }
-
-    pub fn track_mempool_remove(&mut self, txid: &Txid) {
-        self.mempool.remove(txid);
-    }
-
-    pub fn track_mempool_sync(&mut self, txs: impl Iterator<Item = bitcoin::Transaction>) {
-        self.mempool.clear();
-        for tx in txs {
-            self.mempool.insert(tx.compute_txid(), tx);
-        }
-    }
-}
-
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
@@ -109,7 +76,6 @@ pub struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    caches: ReactorCaches,
     consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
@@ -144,7 +110,6 @@ impl<E: Executor> Reactor<E> {
             block_rx,
             mempool_rx,
             simulate_rx,
-            caches: ReactorCaches::new(),
             last_height,
             last_hash,
             ready_tx,
@@ -442,9 +407,7 @@ impl<E: Executor> Reactor<E> {
                                     resolved_txs.push(raw.clone());
                                 }
                                 crate::consensus::BatchTx::Id(txid) => {
-                                    if let Some(tx) = self.caches.mempool.get(txid) {
-                                        resolved_txs.push(tx.clone());
-                                    } else if let Some(tx) =
+                                    if let Some(tx) =
                                         Self::resolve_tx_from_db(&self.db_conn(), txid).await
                                     {
                                         resolved_txs.push(tx);
@@ -496,8 +459,12 @@ impl<E: Executor> Reactor<E> {
                 target_height,
                 block,
             } => {
-                let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                self.caches.remove_confirmed_txids(&txids);
+                if let Some(handle) = self.consensus_handle.as_mut() {
+                    let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                    for txid in &txids {
+                        handle.state.mempool.remove(txid);
+                    }
+                }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
@@ -561,21 +528,26 @@ impl<E: Executor> Reactor<E> {
                     self.process_block_event(event).await?;
                 }
                 Some(event) = self.mempool_rx.recv() => {
-                    match event {
-                        MempoolEvent::Sync(txs) => {
-                            let count = txs.len();
-                            self.caches.track_mempool_sync(txs.into_iter());
-                            info!("MempoolSync {}", count);
-                        },
-                        MempoolEvent::Insert(tx) => {
-                            let txid = tx.compute_txid();
-                            self.caches.track_mempool_insert(tx);
-                            debug!("MempoolInsert {}", txid);
-                        },
-                        MempoolEvent::Remove(txid) => {
-                            self.caches.track_mempool_remove(&txid);
-                            debug!("MempoolRemove {}", txid);
-                        },
+                    if let Some(handle) = self.consensus_handle.as_mut() {
+                        match event {
+                            MempoolEvent::Sync(txs) => {
+                                let count = txs.len();
+                                handle.state.mempool.clear();
+                                for tx in txs {
+                                    handle.state.mempool.insert(tx.compute_txid(), tx);
+                                }
+                                info!("MempoolSync {}", count);
+                            },
+                            MempoolEvent::Insert(tx) => {
+                                let txid = tx.compute_txid();
+                                handle.state.mempool.insert(txid, tx);
+                                debug!("MempoolInsert {}", txid);
+                            },
+                            MempoolEvent::Remove(txid) => {
+                                handle.state.mempool.remove(&txid);
+                                debug!("MempoolRemove {}", txid);
+                            },
+                        }
                     }
                 }
                 Some(msg) = consensus_rx => {
@@ -586,7 +558,6 @@ impl<E: Executor> Reactor<E> {
                         &mut handle.state,
                         &self.executor,
                         &mut self.runtime,
-                        &mut self.caches,
                         &mut handle.channels,
                         msg,
                         validator_index,
