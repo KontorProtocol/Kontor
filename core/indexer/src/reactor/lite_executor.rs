@@ -22,12 +22,14 @@ pub async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
         let engine = Runtime::new_engine().expect("Failed to create shared engine");
         let cache = ComponentCache::new();
         let mock_btc = Arc::new(Mutex::new(MockBitcoin::new(0)));
+        let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
         let (_executor, runtime) = LiteExecutor::new(
             mock_btc,
             "prewarm".to_string(),
             &[],
             engine.clone(),
             cache.clone(),
+            dummy_tx,
         )
         .await
         .expect("pre-warm setup failed");
@@ -43,7 +45,7 @@ pub struct LiteExecutor {
     counter_address: ContractAddress,
     signer: Signer,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
-    replay_requests: Vec<u64>,
+    block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
 }
 
 impl LiteExecutor {
@@ -57,6 +59,7 @@ impl LiteExecutor {
         genesis_validators: &[crate::runtime::GenesisValidator],
         engine: wasmtime::Engine,
         component_cache: ComponentCache,
+        block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
     ) -> Result<(Self, Runtime)> {
         let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
@@ -144,7 +147,7 @@ impl LiteExecutor {
                 counter_address,
                 signer,
                 mock_bitcoin,
-                replay_requests: Vec::new(),
+                block_tx,
             },
             runtime,
         ))
@@ -199,7 +202,14 @@ impl Executor for LiteExecutor {
     }
 
     async fn replay_blocks_from(&mut self, height: u64) {
-        self.replay_requests.push(height);
+        let events = self.mock_bitcoin.lock().unwrap().get_all_block_events();
+        for event in events {
+            if let crate::bitcoin_follower::event::BlockEvent::BlockInsert { block, .. } = &event
+                && block.height >= height
+            {
+                let _ = self.block_tx.send(event).await;
+            }
+        }
     }
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {

@@ -47,14 +47,6 @@ pub enum ConsensusResult {
     BatchProcessed { txids: Vec<String> },
 }
 
-pub struct DeferredBatch {
-    pub anchor_height: u64,
-    pub anchor_hash: bitcoin::BlockHash,
-    pub consensus_height: Height,
-    pub certificate: Vec<u8>,
-    pub txs: Vec<bitcoin::Transaction>,
-}
-
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
     pub conn: libsql::Connection,
@@ -69,20 +61,11 @@ pub struct ConsensusState {
     pub pending_batches: Vec<PendingBatch>,
     pub last_processed_anchor: u64,
 
-    // Replay queue — populated after a rollback, drained before Malachite decisions
-    pub replay_queue: VecDeque<(Height, Value)>,
+    // Decided values waiting for block data or anchor block processing.
+    // Used during sync (decisions arrive before blocks from poller) and
+    // rollback replay (decisions replayed from DB while blocks redeliver).
+    pub deferred_decisions: VecDeque<(Height, Value)>,
     pub replay_excluded_txids: HashSet<Txid>,
-
-    // Blocks waiting for consensus decision — pushed when new Bitcoin blocks arrive,
-    // popped from the front when Value::Block decisions are finalized.
-    // Block heights that were decided by consensus but haven't arrived from poller yet
-    // (block arrived via poller after the decision). When the block arrives,
-    // it should be executed immediately without re-proposing.
-    pub missed_block_decisions: HashSet<u64>,
-
-    // Batches decided via sync whose anchor block hasn't been processed yet.
-    // Drained after handle_block processes the anchor.
-    pub deferred_batches: Vec<DeferredBatch>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
@@ -123,11 +106,9 @@ impl ConsensusState {
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
             last_processed_anchor: 0,
-            replay_queue: VecDeque::new(),
+            deferred_decisions: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
             pending_blocks: BTreeMap::new(),
-            missed_block_decisions: HashSet::new(),
-            deferred_batches: Vec::new(),
             cached_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
@@ -138,11 +119,9 @@ impl ConsensusState {
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
-        self.missed_block_decisions.clear();
-        self.deferred_batches.clear();
-        self.pending_batches.clear();
-        self.replay_queue.clear();
+        self.deferred_decisions.clear();
         self.replay_excluded_txids.clear();
+        self.pending_batches.clear();
     }
 
     fn validator_set(&self) -> ValidatorSet {
@@ -181,11 +160,7 @@ impl ConsensusState {
                 for tx in txs {
                     hasher.update(tx.txid().to_byte_array());
                 }
-                ProposalData::new_batch(
-                    *anchor_height,
-                    *anchor_hash,
-                    value.value.batch_raw_txs(),
-                )
+                ProposalData::new_batch(*anchor_height, *anchor_hash, value.value.batch_raw_txs())
             }
             Value::Block { height, hash } => {
                 hasher.update(height.to_be_bytes());
@@ -523,7 +498,7 @@ impl ConsensusState {
             "Initiating rollback"
         );
 
-        self.replay_queue = replay_batches.into();
+        self.deferred_decisions = replay_batches.into();
         self.replay_excluded_txids = excluded_txids;
         self.pending_batches
             .retain(|b| b.anchor_height < from_anchor);
@@ -534,8 +509,8 @@ impl ConsensusState {
 
     /// Pop the next replay batch, filtering out excluded txids.
     /// Returns None when the queue is empty (back to normal Malachite flow).
-    pub fn next_replay_batch(&mut self) -> Option<(Height, Value)> {
-        if let Some((height, mut value)) = self.replay_queue.pop_front() {
+    pub fn next_deferred_decision(&mut self) -> Option<(Height, Value)> {
+        if let Some((height, mut value)) = self.deferred_decisions.pop_front() {
             if !self.replay_excluded_txids.is_empty()
                 && let Value::Batch { ref mut txs, .. } = value
             {
@@ -994,13 +969,9 @@ pub async fn handle_consensus_msg(
                                 consensus_height = %certificate.height,
                                 "Deferring batch — anchor block not yet processed"
                             );
-                            state.deferred_batches.push(DeferredBatch {
-                                anchor_height: *anchor_height,
-                                anchor_hash: *anchor_hash,
-                                consensus_height: certificate.height,
-                                certificate: cert_bytes,
-                                txs: full_txs,
-                            });
+                            state
+                                .deferred_decisions
+                                .push_back((certificate.height, proposal.value.clone()));
                         } else {
                             state
                                 .process_decided_batch(
@@ -1044,7 +1015,7 @@ pub async fn handle_consensus_msg(
                         if let Some(block) = state.pending_blocks.remove(height) {
                             result = ConsensusResult::Block(block);
                         } else {
-                            // Only record if this block height is relevant (not stale from
+                            // Only defer if this block height is relevant (not stale from
                             // a pre-rollback decision that arrived late)
                             let is_stale =
                                 match select_block_at_height(&state.conn, *height as i64).await {
@@ -1055,9 +1026,11 @@ pub async fn handle_consensus_msg(
                                 info!(
                                     block_height = height,
                                     block_hash = %hash,
-                                    "Block decided but not yet cached — will execute on arrival"
+                                    "Block decided but not yet received — deferring"
                                 );
-                                state.missed_block_decisions.insert(*height);
+                                state
+                                    .deferred_decisions
+                                    .push_back((certificate.height, proposal.value.clone()));
                             } else {
                                 warn!(
                                     block_height = height,

@@ -103,9 +103,7 @@ impl RuntimeExecutor {
             bitcoin_client: None,
             replay_tx: None,
             cancel_token,
-            parsed_tx_cache: moka::sync::Cache::builder()
-                .max_capacity(10_000)
-                .build(),
+            parsed_tx_cache: moka::sync::Cache::builder().max_capacity(10_000).build(),
         }
     }
 
