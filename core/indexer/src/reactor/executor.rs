@@ -86,12 +86,15 @@ impl Executor for NoopExecutor {
     }
 }
 
+type ParsedTxCache = moka::sync::Cache<Txid, indexer_types::Transaction>;
+
 /// Production executor: handles transaction validation, resolution, and op execution.
 /// Does NOT own the Runtime — the reactor owns it and passes &mut Runtime when needed.
 pub struct RuntimeExecutor {
     pub bitcoin_client: Option<Client>,
     pub replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
     pub cancel_token: CancellationToken,
+    parsed_tx_cache: ParsedTxCache,
 }
 
 impl RuntimeExecutor {
@@ -100,6 +103,9 @@ impl RuntimeExecutor {
             bitcoin_client: None,
             replay_tx: None,
             cancel_token,
+            parsed_tx_cache: moka::sync::Cache::builder()
+                .max_capacity(10_000)
+                .build(),
         }
     }
 
@@ -119,8 +125,7 @@ impl Executor for RuntimeExecutor {
         &self,
         tx: &bitcoin::Transaction,
     ) -> Option<indexer_types::Transaction> {
-        // Parse Kontor ops — reject if no valid ops
-        let parsed = filter_map((0, tx.clone()))?;
+        let parsed = self.parse_transaction(tx)?;
 
         if !is_batchable(&parsed.inputs) {
             return None;
@@ -208,6 +213,12 @@ impl Executor for RuntimeExecutor {
     }
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        filter_map((0, tx.clone()))
+        let txid = tx.compute_txid();
+        if let Some(parsed) = self.parsed_tx_cache.get(&txid) {
+            return Some(parsed);
+        }
+        let parsed = filter_map((0, tx.clone()))?;
+        self.parsed_tx_cache.insert(txid, parsed.clone());
+        Some(parsed)
     }
 }

@@ -73,12 +73,6 @@ pub struct ConsensusState {
     pub replay_queue: VecDeque<(Height, Value)>,
     pub replay_excluded_txids: HashSet<Txid>,
 
-    // Parsed transaction cache: Txid → parsed indexer_types::Transaction.
-    // Populated during validate_transaction (proposing or receiving proposals).
-    // Consumed during execute_batch to avoid double-parsing.
-    // Cleared after process_decided_batch completes for a batch's txids.
-    pub parsed_tx_cache: HashMap<Txid, indexer_types::Transaction>,
-
     // Blocks waiting for consensus decision — pushed when new Bitcoin blocks arrive,
     // popped from the front when Value::Block decisions are finalized.
     pub pending_blocks: VecDeque<(u64, bitcoin::BlockHash)>,
@@ -133,7 +127,6 @@ impl ConsensusState {
             last_processed_anchor: 0,
             replay_queue: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
-            parsed_tx_cache: HashMap::new(),
             pending_blocks: VecDeque::new(),
             missed_block_decisions: HashSet::new(),
             deferred_batches: Vec::new(),
@@ -152,7 +145,6 @@ impl ConsensusState {
         self.missed_block_decisions.clear();
         self.deferred_batches.clear();
         self.pending_batches.clear();
-        self.parsed_tx_cache.clear();
         self.replay_queue.clear();
         self.replay_excluded_txids.clear();
     }
@@ -270,13 +262,7 @@ impl ConsensusState {
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            // Skip validation if already parsed and cached
-            if self.parsed_tx_cache.contains_key(&txid) {
-                txs.push(tx.clone());
-                continue;
-            }
-            if let Some(parsed) = executor.validate_transaction(tx).await {
-                self.parsed_tx_cache.insert(txid, parsed);
+            if executor.validate_transaction(tx).await.is_some() {
                 txs.push(tx.clone());
             }
         }
@@ -597,18 +583,9 @@ impl ConsensusState {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) {
-        // Resolve batch txs to parsed form: check parsed_tx_cache first,
-        // fall back to executor.parse_transaction for replay/sync path
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
-            .filter_map(|btx| {
-                let txid = btx.compute_txid();
-                if let Some(parsed) = self.parsed_tx_cache.remove(&txid) {
-                    Some(parsed)
-                } else {
-                    executor.parse_transaction(btx)
-                }
-            })
+            .filter_map(|btx| executor.parse_transaction(btx))
             .collect();
 
         runtime
@@ -711,15 +688,9 @@ async fn validate_and_accept_proposal(
                 return None;
             }
             for tx in transactions {
-                let txid = tx.compute_txid();
-                if state.parsed_tx_cache.contains_key(&txid) {
-                    continue;
-                }
-                if let Some(parsed) = executor.validate_transaction(tx).await {
-                    state.parsed_tx_cache.insert(txid, parsed);
-                } else {
+                if executor.validate_transaction(tx).await.is_none() {
                     warn!(
-                        %txid,
+                        txid = %tx.compute_txid(),
                         "Rejecting proposal: transaction failed validation"
                     );
                     return None;
