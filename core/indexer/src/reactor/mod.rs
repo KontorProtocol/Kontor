@@ -51,7 +51,7 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-pub use block_handler::{block_handler, simulate_handler};
+use crate::block;
 use executor::Executor;
 
 pub type Simulation = (
@@ -176,6 +176,85 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
+    /// Execute a block: insert block row, process transactions, run lifecycle.
+    /// Returns the number of unbatched (non-deduped) transactions.
+    async fn execute_block(&mut self, block: &Block) -> usize {
+        let _ = insert_block(
+            &self.db_conn(),
+            BlockRow::builder()
+                .height(block.height as i64)
+                .hash(block.hash)
+                .relevant(!block.transactions.is_empty())
+                .build(),
+        )
+        .await;
+
+        let mut unbatched_count = 0;
+        for (i, t) in block.transactions.iter().enumerate() {
+            if let Ok(Some(_)) =
+                get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
+            {
+                let _ = confirm_transaction(
+                    &self.db_conn(),
+                    &t.txid.to_string(),
+                    block.height as i64,
+                    i as i64,
+                )
+                .await;
+                continue;
+            }
+
+            unbatched_count += 1;
+            let tx_id = match insert_transaction(
+                &self.db_conn(),
+                indexer_types::TransactionRow::builder()
+                    .height(block.height as i64)
+                    .tx_index(i as i64)
+                    .confirmed_height(block.height as i64)
+                    .txid(t.txid.to_string())
+                    .build(),
+            )
+            .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("insert_transaction error: {e}");
+                    continue;
+                }
+            };
+
+            self.executor
+                .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
+                .await;
+        }
+
+        unbatched_count
+    }
+
+    /// Simulate a transaction: execute in a temporary block, inspect results, then rollback.
+    async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
+        let tx = block::filter_map((0, btx.clone())).ok_or(anyhow::anyhow!("Invalid transaction"))?;
+        self.runtime.storage.savepoint().await?;
+        let block_row = select_block_latest(&self.db_conn()).await?;
+        let height = block_row.as_ref().map_or(1, |row| row.height as u64 + 1);
+        let block = Block {
+            height,
+            hash: new_mock_block_hash(height as u32),
+            prev_hash: block_row
+                .as_ref()
+                .map_or(new_mock_block_hash(0), |row| row.hash),
+            transactions: vec![tx],
+        };
+        self.execute_block(&block).await;
+        let result = block::inspect(&self.db_conn(), btx).await;
+        self.runtime
+            .storage
+            .rollback()
+            .await
+            .expect("Failed to rollback simulation");
+        result
+    }
+
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
     async fn run_block_lifecycle(&mut self, block: &Block) {
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
@@ -271,54 +350,7 @@ impl<E: Executor> Reactor<E> {
             .await
             .expect("Failed to begin block transaction");
 
-        let _ = insert_block(
-            &self.db_conn(),
-            BlockRow::builder()
-                .height(block.height as i64)
-                .hash(block.hash)
-                .relevant(!block.transactions.is_empty())
-                .build(),
-        )
-        .await;
-
-        let mut unbatched_count = 0;
-        for (i, t) in block.transactions.iter().enumerate() {
-            if let Ok(Some(_)) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
-            {
-                let _ = confirm_transaction(
-                    &self.db_conn(),
-                    &t.txid.to_string(),
-                    block.height as i64,
-                    i as i64,
-                )
-                .await;
-                continue;
-            }
-
-            unbatched_count += 1;
-            let tx_id = match insert_transaction(
-                &self.db_conn(),
-                indexer_types::TransactionRow::builder()
-                    .height(block.height as i64)
-                    .tx_index(i as i64)
-                    .confirmed_height(block.height as i64)
-                    .txid(t.txid.to_string())
-                    .build(),
-            )
-            .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    error!("insert_transaction error: {e}");
-                    continue;
-                }
-            };
-
-            self.executor
-                .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
-                .await;
-        }
-
+        let unbatched_count = self.execute_block(&block).await;
         self.run_block_lifecycle(&block).await;
 
         self.runtime
@@ -614,7 +646,7 @@ impl<E: Executor> Reactor<E> {
                 option_event = simulate_rx => {
                     if let Some((btx, ret_tx)) = option_event {
                         let _ = ret_tx.send(
-                            simulate_handler(&mut self.runtime, btx).await
+                            self.simulate(btx).await
                         );
                     }
                 }
