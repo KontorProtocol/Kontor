@@ -37,8 +37,7 @@ use crate::{
         self,
         queries::{
             confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
-            insert_transaction,
-            rollback_to_height, select_block_at_height, select_block_latest,
+            insert_transaction, rollback_to_height, select_block_at_height, select_block_latest,
             select_unconfirmed_batch_tx,
         },
     },
@@ -460,7 +459,6 @@ impl<E: Executor> Reactor<E> {
                             }
                         }
                         let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.record_decided_batch(decision.consensus_height, &decision.value);
                         handle
                             .state
                             .process_decided_batch(

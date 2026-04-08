@@ -255,42 +255,6 @@ impl ConsensusState {
 
     // --- Finality tracking ---
 
-    pub fn record_decided_batch(&mut self, consensus_height: Height, value: &Value) {
-        match value {
-            Value::Batch {
-                anchor_height,
-                anchor_hash,
-                txs,
-                ..
-            } => {
-                let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
-                let pending = PendingBatch {
-                    consensus_height,
-                    anchor_height: *anchor_height,
-                    anchor_hash: *anchor_hash,
-                    txids: txids.clone(),
-                    deadline: anchor_height + FINALITY_WINDOW,
-                };
-                info!(
-                    consensus_height = %consensus_height,
-                    anchor = anchor_height,
-                    deadline = pending.deadline,
-                    txs = txids.len(),
-                    "Tracking batch for finality"
-                );
-                self.pending_batches.push(pending);
-            }
-            Value::Block { height, hash } => {
-                info!(
-                    consensus_height = %consensus_height,
-                    block_height = height,
-                    block_hash = %hash,
-                    "Block decided — no finality tracking needed"
-                );
-            }
-        }
-    }
-
     pub async fn check_finality(&mut self, last_height: u64) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
         let tip = last_height;
@@ -568,6 +532,16 @@ impl ConsensusState {
             .iter()
             .filter_map(|btx| executor.parse_transaction(btx))
             .collect();
+
+        // Track for finality — must happen once per batch execution
+        let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
+        self.pending_batches.push(PendingBatch {
+            consensus_height,
+            anchor_height,
+            anchor_hash,
+            txids,
+            deadline: anchor_height + FINALITY_WINDOW,
+        });
 
         runtime
             .storage
@@ -929,8 +903,6 @@ pub async fn handle_consensus_msg(
                         value: proposal.value.clone(),
                     });
                 }
-                state.record_decided_batch(certificate.height, &proposal.value);
-
                 match &proposal.value {
                     Value::Batch {
                         anchor_height,
