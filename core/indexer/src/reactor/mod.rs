@@ -406,7 +406,7 @@ impl<E: Executor> Reactor<E> {
 
         loop {
             let handle = self.consensus_handle.as_mut().unwrap();
-            let Some(decision) = handle.state.next_deferred_decision() else {
+            let Some(decision) = handle.state.deferred_decisions.pop_front() else {
                 break;
             };
 

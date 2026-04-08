@@ -70,7 +70,6 @@ pub struct ConsensusState {
     // Used during sync (decisions arrive before blocks from poller) and
     // rollback replay (decisions replayed from DB while blocks redeliver).
     pub deferred_decisions: VecDeque<DeferredDecision>,
-    pub replay_excluded_txids: HashSet<Txid>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
@@ -111,7 +110,6 @@ impl ConsensusState {
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
             deferred_decisions: VecDeque::new(),
-            replay_excluded_txids: HashSet::new(),
             pending_blocks: BTreeMap::new(),
             cached_validator_set,
             observation: None,
@@ -124,7 +122,6 @@ impl ConsensusState {
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
-        self.replay_excluded_txids.clear();
         self.pending_batches.clear();
     }
 
@@ -470,28 +467,19 @@ impl ConsensusState {
             "Initiating rollback"
         );
 
-        self.deferred_decisions = replay_batches.into();
-        self.replay_excluded_txids = excluded_txids;
+        let mut deferred: VecDeque<DeferredDecision> = replay_batches.into();
+        if !excluded_txids.is_empty() {
+            for decision in &mut deferred {
+                if let Value::Batch { ref mut txs, .. } = decision.value {
+                    txs.retain(|tx| !excluded_txids.contains(&tx.txid()));
+                }
+            }
+        }
+        self.deferred_decisions = deferred;
         self.pending_batches
             .retain(|b| b.anchor_height < from_anchor);
 
         executor.replay_blocks_from(from_anchor).await;
-    }
-
-    /// Pop the next replay batch, filtering out excluded txids.
-    /// Returns None when the queue is empty (back to normal Malachite flow).
-    pub fn next_deferred_decision(&mut self) -> Option<DeferredDecision> {
-        if let Some(mut decision) = self.deferred_decisions.pop_front() {
-            if !self.replay_excluded_txids.is_empty()
-                && let Value::Batch { ref mut txs, .. } = decision.value
-            {
-                txs.retain(|tx| !self.replay_excluded_txids.contains(&tx.txid()));
-            }
-            return Some(decision);
-        }
-        // Queue drained — clear excluded set
-        self.replay_excluded_txids.clear();
-        None
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
