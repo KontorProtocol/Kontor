@@ -585,7 +585,6 @@ impl ConsensusState {
             .await
             .expect("Failed to commit batch transaction");
 
-
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
@@ -734,10 +733,7 @@ pub async fn handle_consensus_msg(
                 if reply.send(proposal).is_err() {
                     error!("Failed to send GetValue reply");
                 }
-            } else if let Some(value) = state
-                .make_value(executor, last_height, last_hash)
-                .await
-            {
+            } else if let Some(value) = state.make_value(executor, last_height, last_hash).await {
                 let proposed = ProposedValue {
                     height,
                     round,
