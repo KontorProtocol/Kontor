@@ -11,7 +11,6 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
-use crate::reactor::bitcoin_state::BitcoinState;
 use crate::reactor::consensus::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
@@ -288,8 +287,6 @@ impl ReactorCluster {
                 validator_index,
             };
 
-            let bitcoin_state = BitcoinState::new();
-
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
@@ -299,7 +296,6 @@ impl ReactorCluster {
                 None,
                 None,
                 None,
-                bitcoin_state,
                 Some(consensus_handle),
                 0,
                 None,

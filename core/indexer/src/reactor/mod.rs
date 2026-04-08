@@ -1,4 +1,3 @@
-pub mod bitcoin_state;
 pub mod block_handler;
 pub mod consensus;
 pub mod engine;
@@ -68,6 +67,39 @@ pub struct ConsensusHandle {
     pub validator_index: Option<usize>,
 }
 
+pub struct ReactorCaches {
+    pub mempool: std::collections::HashMap<Txid, bitcoin::Transaction>,
+}
+
+impl ReactorCaches {
+    pub fn new() -> Self {
+        Self {
+            mempool: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn remove_confirmed_txids(&mut self, txids: &[Txid]) {
+        for txid in txids {
+            self.mempool.remove(txid);
+        }
+    }
+
+    pub fn track_mempool_insert(&mut self, tx: bitcoin::Transaction) {
+        self.mempool.insert(tx.compute_txid(), tx);
+    }
+
+    pub fn track_mempool_remove(&mut self, txid: &Txid) {
+        self.mempool.remove(txid);
+    }
+
+    pub fn track_mempool_sync(&mut self, txs: impl Iterator<Item = bitcoin::Transaction>) {
+        self.mempool.clear();
+        for tx in txs {
+            self.mempool.insert(tx.compute_txid(), tx);
+        }
+    }
+}
+
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
@@ -77,7 +109,7 @@ pub struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    bitcoin_state: bitcoin_state::BitcoinState,
+    caches: ReactorCaches,
     consensus_handle: Option<ConsensusHandle>,
 
     last_height: u64,
@@ -94,7 +126,6 @@ impl<E: Executor> Reactor<E> {
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-        bitcoin_state: bitcoin_state::BitcoinState,
         consensus_handle: Option<ConsensusHandle>,
         last_height: u64,
         last_hash: Option<BlockHash>,
@@ -113,7 +144,7 @@ impl<E: Executor> Reactor<E> {
             block_rx,
             mempool_rx,
             simulate_rx,
-            bitcoin_state,
+            caches: ReactorCaches::new(),
             last_height,
             last_hash,
             ready_tx,
@@ -373,7 +404,7 @@ impl<E: Executor> Reactor<E> {
                     let txids: Vec<Txid> = txs.iter().map(|t| t.txid()).collect();
                     let mut resolved_txs = Vec::with_capacity(txids.len());
                     for txid in &txids {
-                        if let Some(tx) = self.bitcoin_state.mempool.get(txid) {
+                        if let Some(tx) = self.caches.mempool.get(txid) {
                             resolved_txs.push(tx.clone());
                         } else if let Some(tx) =
                             Self::resolve_tx_from_db(&self.db_conn(), txid).await
@@ -422,7 +453,7 @@ impl<E: Executor> Reactor<E> {
                 block,
             } => {
                 let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                self.bitcoin_state.remove_confirmed_txids(&txids);
+                self.caches.remove_confirmed_txids(&txids);
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
@@ -501,16 +532,16 @@ impl<E: Executor> Reactor<E> {
                     match event {
                         MempoolEvent::Sync(txs) => {
                             let count = txs.len();
-                            self.bitcoin_state.track_mempool_sync(txs.into_iter()).await;
+                            self.caches.track_mempool_sync(txs.into_iter());
                             info!("MempoolSync {}", count);
                         },
                         MempoolEvent::Insert(tx) => {
                             let txid = tx.compute_txid();
-                            self.bitcoin_state.track_mempool_insert(tx).await;
+                            self.caches.track_mempool_insert(tx);
                             debug!("MempoolInsert {}", txid);
                         },
                         MempoolEvent::Remove(txid) => {
-                            self.bitcoin_state.track_mempool_remove(&txid).await;
+                            self.caches.track_mempool_remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
                     }
@@ -523,7 +554,7 @@ impl<E: Executor> Reactor<E> {
                         &mut handle.state,
                         &self.executor,
                         &mut self.runtime,
-                        &mut self.bitcoin_state,
+                        &mut self.caches,
                         &mut handle.channels,
                         msg,
                         validator_index,
@@ -818,11 +849,6 @@ pub fn run(
                 )
                 .await?;
 
-                let mut bs = bitcoin_state::BitcoinState::new();
-                if let Some(client) = &bitcoin_client {
-                    bs = bs.with_tx_cache(client.tx_cache().clone());
-                }
-
                 let timeouts = consensus_propose_timeout_ms.map(|ms| LinearTimeouts {
                     propose: std::time::Duration::from_millis(ms),
                     ..LinearTimeouts::default()
@@ -845,7 +871,6 @@ pub fn run(
                     ready_tx,
                     event_tx,
                     simulate_rx,
-                    bs,
                     consensus_handle,
                     last_height,
                     last_hash,

@@ -34,7 +34,7 @@ use crate::database::queries::{
     select_unconfirmed_batch_txs,
 };
 
-use super::bitcoin_state::BitcoinState;
+use super::ReactorCaches;
 use super::executor::Executor;
 
 /// Result from processing a consensus message.
@@ -250,7 +250,7 @@ impl ConsensusState {
     async fn make_value(
         &mut self,
         executor: &impl Executor,
-        bitcoin_state: &BitcoinState,
+        caches: &ReactorCaches,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Option<Value> {
@@ -260,7 +260,7 @@ impl ConsensusState {
         }
 
         // Collect candidate txids from the mempool
-        let mempool_txids: Vec<Txid> = bitcoin_state.mempool.keys().copied().collect();
+        let mempool_txids: Vec<Txid> = caches.mempool.keys().copied().collect();
 
         // Filter out txids already in the system (batched or confirmed)
         let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
@@ -273,7 +273,7 @@ impl ConsensusState {
             .collect();
 
         let mut txs = Vec::new();
-        for tx in bitcoin_state.mempool.values() {
+        for tx in caches.mempool.values() {
             let txid = tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
@@ -760,7 +760,7 @@ pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
     executor: &impl Executor,
     runtime: &mut crate::runtime::Runtime,
-    bitcoin_state: &mut BitcoinState,
+    caches: &mut ReactorCaches,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
     validator_index: Option<usize>,
@@ -825,7 +825,7 @@ pub async fn handle_consensus_msg(
                     error!("Failed to send GetValue reply");
                 }
             } else if let Some(value) = state
-                .make_value(executor, bitcoin_state, last_height, last_hash)
+                .make_value(executor, caches, last_height, last_hash)
                 .await
             {
                 let proposed = ProposedValue {
