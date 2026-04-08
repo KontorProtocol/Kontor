@@ -88,8 +88,35 @@ impl Value {
         }
     }
 
+    pub fn new_batch_raw(
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        txs: Vec<bitcoin::Transaction>,
+    ) -> Self {
+        Self::Batch {
+            anchor_height,
+            anchor_hash,
+            txs: txs.into_iter().map(BatchTx::Raw).collect(),
+        }
+    }
+
     pub fn new_block(height: u64, hash: BlockHash) -> Self {
         Self::Block { height, hash }
+    }
+
+    /// Extract full raw transactions from a batch. Returns empty vec for blocks
+    /// or batches that only contain txids.
+    pub fn batch_raw_txs(&self) -> Vec<bitcoin::Transaction> {
+        match self {
+            Value::Batch { txs, .. } => txs
+                .iter()
+                .filter_map(|tx| match tx {
+                    BatchTx::Raw(raw) => Some(raw.clone()),
+                    BatchTx::Id(_) => None,
+                })
+                .collect(),
+            Value::Block { .. } => vec![],
+        }
     }
 
     /// Stable identity hash — always based on txids regardless of BatchTx variant.

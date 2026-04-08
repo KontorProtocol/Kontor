@@ -25,7 +25,7 @@ use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
     Address, BatchTx, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ValidatorSet, Value, ValueId,
+    ValidatorSet, Value,
 };
 use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
@@ -72,11 +72,6 @@ pub struct ConsensusState {
     // Replay queue — populated after a rollback, drained before Malachite decisions
     pub replay_queue: VecDeque<(Height, Value)>,
     pub replay_excluded_txids: HashSet<Txid>,
-
-    // Full transaction cache: ValueId → full txs. Populated when proposing or
-    // receiving proposals (live consensus). Consumed when the value is decided.
-    // Not used for sync/replay — those paths resolve txids via Executor.
-    pub tx_cache: HashMap<ValueId, Vec<bitcoin::Transaction>>,
 
     // Parsed transaction cache: Txid → parsed indexer_types::Transaction.
     // Populated during validate_transaction (proposing or receiving proposals).
@@ -138,7 +133,6 @@ impl ConsensusState {
             last_processed_anchor: 0,
             replay_queue: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
-            tx_cache: HashMap::new(),
             parsed_tx_cache: HashMap::new(),
             pending_blocks: VecDeque::new(),
             missed_block_decisions: HashSet::new(),
@@ -158,7 +152,6 @@ impl ConsensusState {
         self.missed_block_decisions.clear();
         self.deferred_batches.clear();
         self.pending_batches.clear();
-        self.tx_cache.clear();
         self.parsed_tx_cache.clear();
         self.replay_queue.clear();
         self.replay_excluded_txids.clear();
@@ -200,12 +193,11 @@ impl ConsensusState {
                 for tx in txs {
                     hasher.update(tx.txid().to_byte_array());
                 }
-                let txs = self
-                    .tx_cache
-                    .get(&value.value.id())
-                    .cloned()
-                    .unwrap_or_default();
-                ProposalData::new_batch(*anchor_height, *anchor_hash, txs)
+                ProposalData::new_batch(
+                    *anchor_height,
+                    *anchor_hash,
+                    value.value.batch_raw_txs(),
+                )
             }
             Value::Block { height, hash } => {
                 hasher.update(height.to_be_bytes());
@@ -294,9 +286,7 @@ impl ConsensusState {
             return None;
         }
 
-        let txids = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let value = Value::new_batch(last_height, last_hash, txids);
-        self.tx_cache.insert(value.id(), txs);
+        let value = Value::new_batch_raw(last_height, last_hash, txs);
         Some(value)
     }
 
@@ -735,10 +725,7 @@ async fn validate_and_accept_proposal(
                     return None;
                 }
             }
-            let txids = data.txids();
-            let value = Value::new_batch(*anchor_height, *anchor_hash, txids);
-            state.tx_cache.insert(value.id(), transactions.clone());
-            value
+            Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
         }
     };
 
@@ -982,21 +969,15 @@ pub async fn handle_consensus_msg(
                         anchor_hash,
                         txs,
                     } => {
-                        // Try tx_cache first (normal path), fall back to
-                        // raw txs embedded in the Value, then resolve from
-                        // bitcoind via executor (sync path for finalized batches).
-                        let mut full_txs = state
-                            .tx_cache
-                            .remove(&proposal.value.id())
-                            .unwrap_or_default();
-                        if full_txs.is_empty() {
-                            for entry in txs {
-                                match entry {
-                                    BatchTx::Raw(tx) => full_txs.push(tx.clone()),
-                                    BatchTx::Id(txid) => {
-                                        if let Some(tx) = executor.resolve_transaction(txid).await {
-                                            full_txs.push(tx);
-                                        }
+                        // Resolve full txs: Raw entries used directly (live path),
+                        // Id entries resolved via executor (sync path for finalized batches).
+                        let mut full_txs = Vec::new();
+                        for entry in txs {
+                            match entry {
+                                BatchTx::Raw(tx) => full_txs.push(tx.clone()),
+                                BatchTx::Id(txid) => {
+                                    if let Some(tx) = executor.resolve_transaction(txid).await {
+                                        full_txs.push(tx);
                                     }
                                 }
                             }
