@@ -57,7 +57,6 @@ pub struct DeferredDecision {
 pub struct ConsensusState {
     pub conn: libsql::Connection,
     pub signing_provider: Ed25519Provider,
-    pub genesis: Genesis,
     pub address: Address,
     pub current_height: Height,
     pub current_round: Round,
@@ -99,11 +98,10 @@ impl ConsensusState {
         genesis: Genesis,
         address: Address,
     ) -> Self {
-        let cached_validator_set = genesis.validator_set.clone();
+        let cached_validator_set = genesis.validator_set;
         Self {
             conn,
             signing_provider,
-            genesis,
             address,
             current_height: Height::new(1),
             current_round: Round::new(0),
