@@ -65,7 +65,6 @@ pub struct ConsensusState {
 
     // Finality tracking
     pub pending_batches: Vec<PendingBatch>,
-    pub last_processed_anchor: u64,
 
     // Decided values waiting for block data or anchor block processing.
     // Used during sync (decisions arrive before blocks from poller) and
@@ -111,7 +110,6 @@ impl ConsensusState {
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
             pending_batches: Vec::new(),
-            last_processed_anchor: 0,
             deferred_decisions: VecDeque::new(),
             replay_excluded_txids: HashSet::new(),
             pending_blocks: BTreeMap::new(),
@@ -476,7 +474,6 @@ impl ConsensusState {
         self.replay_excluded_txids = excluded_txids;
         self.pending_batches
             .retain(|b| b.anchor_height < from_anchor);
-        self.last_processed_anchor = from_anchor.saturating_sub(1);
 
         executor.replay_blocks_from(from_anchor).await;
     }
@@ -602,7 +599,6 @@ impl ConsensusState {
             .await
             .expect("Failed to commit batch transaction");
 
-        self.last_processed_anchor = anchor_height;
 
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
