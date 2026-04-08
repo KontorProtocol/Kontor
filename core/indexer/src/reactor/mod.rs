@@ -201,7 +201,7 @@ impl<E: Executor> Reactor<E> {
                 .validators
                 .iter()
                 .position(|v| v.address == handle.state.address);
-            handle.state.cached_validator_set = vs;
+            handle.state.current_validator_set = vs;
         }
 
         if let Some(tx) = &self.event_tx {
@@ -370,7 +370,7 @@ impl<E: Executor> Reactor<E> {
                     .validators
                     .iter()
                     .position(|v| v.address == handle.state.address);
-                handle.state.cached_validator_set = vs;
+                handle.state.current_validator_set = vs;
             }
 
             let checkpoint = handle.state.get_checkpoint().await;
