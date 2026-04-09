@@ -5,7 +5,7 @@ use super::{Height, Value};
 pub const FINALITY_WINDOW: u64 = 6;
 
 #[derive(Debug, Clone)]
-pub struct PendingBatch {
+pub struct UnfinalizedBatch {
     pub consensus_height: Height,
     pub anchor_height: u64,
     pub anchor_hash: BlockHash,

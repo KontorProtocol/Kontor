@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -34,7 +34,6 @@ use crate::database::queries::{
     select_unconfirmed_batch_txs,
 };
 
-use super::ReactorCaches;
 use super::executor::Executor;
 
 /// Result from processing a consensus message.
@@ -57,21 +56,19 @@ pub struct DeferredDecision {
 pub struct ConsensusState {
     pub conn: libsql::Connection,
     pub signing_provider: Ed25519Provider,
-    pub genesis: Genesis,
     pub address: Address,
+    pub mempool: HashMap<Txid, bitcoin::Transaction>,
     pub current_height: Height,
     pub current_round: Round,
     pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
 
     // Finality tracking
-    pub pending_batches: Vec<PendingBatch>,
-    pub last_processed_anchor: u64,
+    pub unfinalized_batches: Vec<UnfinalizedBatch>,
 
     // Decided values waiting for block data or anchor block processing.
     // Used during sync (decisions arrive before blocks from poller) and
     // rollback replay (decisions replayed from DB while blocks redeliver).
     pub deferred_decisions: VecDeque<DeferredDecision>,
-    pub replay_excluded_txids: HashSet<Txid>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
@@ -79,7 +76,7 @@ pub struct ConsensusState {
 
     // Cached validator set — updated after each block decision.
     // Used by height_params() to provide Malachite with the current set.
-    pub cached_validator_set: ValidatorSet,
+    pub current_validator_set: ValidatorSet,
 
     // Observation channels (optional, for testing)
     pub observation: Option<ObservationChannels>,
@@ -101,21 +98,19 @@ impl ConsensusState {
         genesis: Genesis,
         address: Address,
     ) -> Self {
-        let cached_validator_set = genesis.validator_set.clone();
+        let current_validator_set = genesis.validator_set;
         Self {
             conn,
             signing_provider,
-            genesis,
             address,
+            mempool: std::collections::HashMap::new(),
             current_height: Height::new(1),
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
-            pending_batches: Vec::new(),
-            last_processed_anchor: 0,
+            unfinalized_batches: Vec::new(),
             deferred_decisions: VecDeque::new(),
-            replay_excluded_txids: HashSet::new(),
             pending_blocks: BTreeMap::new(),
-            cached_validator_set,
+            current_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
         }
@@ -126,12 +121,11 @@ impl ConsensusState {
     pub fn clear_on_rollback(&mut self) {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
-        self.replay_excluded_txids.clear();
-        self.pending_batches.clear();
+        self.unfinalized_batches.clear();
     }
 
     fn validator_set(&self) -> ValidatorSet {
-        self.cached_validator_set.clone()
+        self.current_validator_set.clone()
     }
 
     fn height_params(&self) -> HeightParams<Ctx> {
@@ -211,7 +205,6 @@ impl ConsensusState {
     async fn make_value(
         &mut self,
         executor: &impl Executor,
-        caches: &ReactorCaches,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Option<Value> {
@@ -221,7 +214,7 @@ impl ConsensusState {
         }
 
         // Collect candidate txids from the mempool
-        let mempool_txids: Vec<Txid> = caches.mempool.keys().copied().collect();
+        let mempool_txids: Vec<Txid> = self.mempool.keys().copied().collect();
 
         // Filter out txids already in the system (batched or confirmed)
         let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
@@ -234,7 +227,7 @@ impl ConsensusState {
             .collect();
 
         let mut txs = Vec::new();
-        for tx in caches.mempool.values() {
+        for tx in self.mempool.values() {
             let txid = tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
@@ -262,7 +255,7 @@ impl ConsensusState {
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
 
-        for batch in self.pending_batches.drain(..) {
+        for batch in self.unfinalized_batches.drain(..) {
             if batch.deadline <= tip {
                 at_deadline.push(batch);
             } else {
@@ -325,7 +318,7 @@ impl ConsensusState {
             }
         }
 
-        self.pending_batches = still_pending;
+        self.unfinalized_batches = still_pending;
         events
     }
 
@@ -472,29 +465,19 @@ impl ConsensusState {
             "Initiating rollback"
         );
 
-        self.deferred_decisions = replay_batches.into();
-        self.replay_excluded_txids = excluded_txids;
-        self.pending_batches
+        let mut deferred: VecDeque<DeferredDecision> = replay_batches.into();
+        if !excluded_txids.is_empty() {
+            for decision in &mut deferred {
+                if let Value::Batch { ref mut txs, .. } = decision.value {
+                    txs.retain(|tx| !excluded_txids.contains(&tx.txid()));
+                }
+            }
+        }
+        self.deferred_decisions = deferred;
+        self.unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
-        self.last_processed_anchor = from_anchor.saturating_sub(1);
 
         executor.replay_blocks_from(from_anchor).await;
-    }
-
-    /// Pop the next replay batch, filtering out excluded txids.
-    /// Returns None when the queue is empty (back to normal Malachite flow).
-    pub fn next_deferred_decision(&mut self) -> Option<DeferredDecision> {
-        if let Some(mut decision) = self.deferred_decisions.pop_front() {
-            if !self.replay_excluded_txids.is_empty()
-                && let Value::Batch { ref mut txs, .. } = decision.value
-            {
-                txs.retain(|tx| !self.replay_excluded_txids.contains(&tx.txid()));
-            }
-            return Some(decision);
-        }
-        // Queue drained — clear excluded set
-        self.replay_excluded_txids.clear();
-        None
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
@@ -535,7 +518,7 @@ impl ConsensusState {
 
         // Track for finality — must happen once per batch execution
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
-        self.pending_batches.push(PendingBatch {
+        self.unfinalized_batches.push(UnfinalizedBatch {
             consensus_height,
             anchor_height,
             anchor_hash,
@@ -601,8 +584,6 @@ impl ConsensusState {
             .commit()
             .await
             .expect("Failed to commit batch transaction");
-
-        self.last_processed_anchor = anchor_height;
 
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
@@ -689,7 +670,6 @@ pub async fn handle_consensus_msg(
     state: &mut ConsensusState,
     executor: &impl Executor,
     runtime: &mut crate::runtime::Runtime,
-    caches: &mut ReactorCaches,
     channels: &mut Channels<Ctx>,
     msg: AppMsg<Ctx>,
     validator_index: Option<usize>,
@@ -753,10 +733,7 @@ pub async fn handle_consensus_msg(
                 if reply.send(proposal).is_err() {
                     error!("Failed to send GetValue reply");
                 }
-            } else if let Some(value) = state
-                .make_value(executor, caches, last_height, last_hash)
-                .await
-            {
+            } else if let Some(value) = state.make_value(executor, last_height, last_hash).await {
                 let proposed = ProposedValue {
                     height,
                     round,
