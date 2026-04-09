@@ -124,27 +124,25 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 
 pub async fn inspect(
     conn: &Connection,
-    btx: bitcoin::Transaction,
+    tx: &indexer_types::Transaction,
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
-    if let Some(tx) = filter_map((0, btx)) {
-        for input in &tx.inputs {
-            if !input.insts.is_aggregate() {
-                let metadata = OpMetadata {
-                    previous_output: input.previous_output,
-                    input_index: input.input_index,
-                    signer: input.witness_signer.clone(),
-                };
-                for (op_index, inst) in input.insts.ops.iter().enumerate() {
-                    let op = op_from_inst(inst.clone(), metadata.clone());
-                    let id = OpResultId::builder()
-                        .txid(tx.txid.to_string())
-                        .input_index(input.input_index)
-                        .op_index(op_index as i64)
-                        .build();
-                    let result = get_op_result(conn, &id).await?.map(Into::into);
-                    ops.push(OpWithResult { op, result });
-                }
+    for input in &tx.inputs {
+        if !input.insts.is_aggregate() {
+            let metadata = OpMetadata {
+                previous_output: input.previous_output,
+                input_index: input.input_index,
+                signer: input.witness_signer.clone(),
+            };
+            for (op_index, inst) in input.insts.ops.iter().enumerate() {
+                let op = op_from_inst(inst.clone(), metadata.clone());
+                let id = OpResultId::builder()
+                    .txid(tx.txid.to_string())
+                    .input_index(input.input_index)
+                    .op_index(op_index as i64)
+                    .build();
+                let result = get_op_result(conn, &id).await?.map(Into::into);
+                ops.push(OpWithResult { op, result });
             }
         }
     }

@@ -54,7 +54,7 @@ use crate::block;
 use executor::Executor;
 
 pub type Simulation = (
-    bitcoin::Transaction,
+    indexer_types::Transaction,
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
 
@@ -233,9 +233,8 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results, then rollback.
-    async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
-        let tx =
-            block::filter_map((0, btx.clone())).ok_or(anyhow::anyhow!("Invalid transaction"))?;
+    /// The caller (API layer) must validate with block::filter_map before sending.
+    async fn simulate(&mut self, tx: indexer_types::Transaction) -> Result<Vec<OpWithResult>> {
         self.runtime
             .storage
             .savepoint()
@@ -256,7 +255,7 @@ impl<E: Executor> Reactor<E> {
         self.execute_block(&block)
             .await
             .context("execute_block failed during simulation")?;
-        let result = block::inspect(&self.db_conn(), btx).await;
+        let result = block::inspect(&self.db_conn(), &block.transactions[0]).await;
         self.runtime
             .storage
             .rollback()
@@ -692,8 +691,8 @@ impl<E: Executor> Reactor<E> {
                     tokio::task::yield_now().await;
                 }
                 option_event = simulate_rx => {
-                    if let Some((btx, ret_tx)) = option_event {
-                        let result = self.simulate(btx).await;
+                    if let Some((tx, ret_tx)) = option_event {
+                        let result = self.simulate(tx).await;
                         let err_msg = result.as_ref().err().map(|e| format!("{e:#}"));
                         let _ = ret_tx.send(result);
                         if let Some(msg) = err_msg {
