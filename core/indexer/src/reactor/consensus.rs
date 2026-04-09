@@ -104,16 +104,13 @@ impl ConsensusState {
         // Delete batch decisions that reference anchor heights above what we've
         // actually processed. These were committed to the batches table but never
         // executed before the node shut down.
-        if let Ok(deleted) =
-            delete_batches_above_anchor(&conn, last_block_height as i64).await
+        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height as i64).await
+            && deleted > 0
         {
-            if deleted > 0 {
-                info!(
-                    deleted,
-                    last_block_height,
-                    "Deleted unprocessed batches above last block height"
-                );
-            }
+            info!(
+                deleted,
+                last_block_height, "Deleted unprocessed batches above last block height"
+            );
         }
 
         let current_height = match select_latest_consensus_height(&conn).await {
@@ -556,6 +553,14 @@ impl ConsensusState {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) -> Result<()> {
+        info!(
+            %consensus_height,
+            anchor_height,
+            %anchor_hash,
+            num_txs = batch_txs.len(),
+            "Processing decided batch"
+        );
+
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
             .filter_map(|btx| executor.parse_transaction(btx))
@@ -1020,6 +1025,12 @@ pub async fn handle_consensus_msg(
                         // Remove from pending if present (may not be if we received
                         // the decision via sync before the block arrived from poller)
                         if let Some(block) = state.pending_blocks.remove(height) {
+                            info!(
+                                block_height = height,
+                                block_hash = %hash,
+                                consensus_height = %certificate.height,
+                                "Block decided and ready to process"
+                            );
                             result = ConsensusResult::Block(
                                 block,
                                 DeferredDecision {
@@ -1040,6 +1051,7 @@ pub async fn handle_consensus_msg(
                                 info!(
                                     block_height = height,
                                     block_hash = %hash,
+                                    consensus_height = %certificate.height,
                                     "Block decided but not yet received — deferring"
                                 );
                                 state.deferred_decisions.push_back(DeferredDecision {

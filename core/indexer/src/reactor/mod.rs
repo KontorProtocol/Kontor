@@ -412,7 +412,13 @@ impl<E: Executor> Reactor<E> {
                 warn!("Event receiver dropped, cannot send Processed event");
             }
         }
-        info!("Block processed (unbatched_count={unbatched_count})");
+        info!(
+            height,
+            %hash,
+            unbatched_count,
+            tx_count = block.transactions.len(),
+            "Block processed"
+        );
 
         Ok(())
     }
@@ -436,11 +442,21 @@ impl<E: Executor> Reactor<E> {
                         handle.state.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
+                        info!(
+                            block_height = bh,
+                            consensus_height = %decision.consensus_height,
+                            "Draining deferred block decision"
+                        );
                         self.handle_block_with_decision(block, &decision)
                             .await
                             .context("handle_block_with_decision failed in deferred drain")?;
                     } else {
                         // Block data not yet available — put back and stop
+                        info!(
+                            block_height = bh,
+                            consensus_height = %decision.consensus_height,
+                            "Deferred block still waiting for data"
+                        );
                         let handle = self.consensus_handle.as_mut().unwrap();
                         handle.state.deferred_decisions.push_front(decision);
                         break;
@@ -453,6 +469,12 @@ impl<E: Executor> Reactor<E> {
                     ..
                 } => {
                     if *anchor_height <= self.last_height {
+                        info!(
+                            anchor_height = *anchor_height,
+                            consensus_height = %decision.consensus_height,
+                            num_txs = txs.len(),
+                            "Draining deferred batch decision"
+                        );
                         let anchor_height = *anchor_height;
                         let anchor_hash = *anchor_hash;
                         let mut resolved_txs = Vec::with_capacity(txs.len());
@@ -500,7 +522,12 @@ impl<E: Executor> Reactor<E> {
                             }
                         }
                     } else {
-                        // Anchor not yet processed — put back and stop
+                        info!(
+                            anchor_height = *anchor_height,
+                            last_height = self.last_height,
+                            consensus_height = %decision.consensus_height,
+                            "Deferred batch still waiting for anchor"
+                        );
                         let handle = self.consensus_handle.as_mut().unwrap();
                         handle.state.deferred_decisions.push_front(decision);
                         break;
@@ -526,6 +553,12 @@ impl<E: Executor> Reactor<E> {
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
                 if let Some(handle) = self.consensus_handle.as_mut() {
+                    info!(
+                        block_height = block.height,
+                        %block.hash,
+                        pending_count = handle.state.pending_blocks.len() + 1,
+                        "Adding block to pending_blocks"
+                    );
                     handle
                         .state
                         .pending_blocks
@@ -706,6 +739,7 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
         self.run_event_loop().await
     }
@@ -925,9 +959,15 @@ pub fn run(
                 });
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
                     Some(
-                        start_consensus(engine_cfg, &mut runtime, observation_channels, timeouts, last_height)
-                            .await
-                            .context("start_consensus failed")?,
+                        start_consensus(
+                            engine_cfg,
+                            &mut runtime,
+                            observation_channels,
+                            timeouts,
+                            last_height,
+                        )
+                        .await
+                        .context("start_consensus failed")?,
                     )
                 } else {
                     None
