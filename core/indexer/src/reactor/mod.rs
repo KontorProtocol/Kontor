@@ -851,6 +851,7 @@ pub async fn start_consensus(
     runtime: &mut Runtime,
     observation_channels: Option<consensus::ObservationChannels>,
     timeouts: Option<LinearTimeouts>,
+    last_block_height: u64,
 ) -> Result<ConsensusHandle> {
     let genesis = build_genesis_from_staking(runtime)
         .await
@@ -872,6 +873,7 @@ pub async fn start_consensus(
         engine_output.signing_provider,
         genesis,
         engine_output.address,
+        last_block_height,
     )
     .await;
     state.observation = observation_channels;
@@ -923,7 +925,7 @@ pub fn run(
                 });
                 let consensus_handle = if let Some(engine_cfg) = engine_config {
                     Some(
-                        start_consensus(engine_cfg, &mut runtime, observation_channels, timeouts)
+                        start_consensus(engine_cfg, &mut runtime, observation_channels, timeouts, last_height)
                             .await
                             .context("start_consensus failed")?,
                     )

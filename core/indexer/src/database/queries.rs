@@ -522,6 +522,16 @@ pub async fn insert_batch(
     Ok(())
 }
 
+pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> Result<u64, Error> {
+    let rows = conn
+        .execute(
+            "DELETE FROM batches WHERE anchor_height > ?",
+            params![max_anchor],
+        )
+        .await?;
+    Ok(rows)
+}
+
 pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
     Ok(conn
         .query("SELECT MAX(consensus_height) FROM batches", ())

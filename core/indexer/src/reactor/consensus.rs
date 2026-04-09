@@ -28,10 +28,10 @@ use crate::consensus::{
     ValidatorSet, Value,
 };
 use crate::database::queries::{
-    get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
-    insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor, select_block_at_height,
-    select_block_latest, select_existing_txids, select_latest_consensus_height,
-    select_min_batch_height, select_unconfirmed_batch_txs,
+    delete_batches_above_anchor, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
+    insert_transaction, insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor,
+    select_block_at_height, select_block_latest, select_existing_txids,
+    select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
 };
 
 use super::executor::Executor;
@@ -97,8 +97,25 @@ impl ConsensusState {
         signing_provider: Ed25519Provider,
         genesis: Genesis,
         address: Address,
+        last_block_height: u64,
     ) -> Self {
         let current_validator_set = genesis.validator_set;
+
+        // Delete batch decisions that reference anchor heights above what we've
+        // actually processed. These were committed to the batches table but never
+        // executed before the node shut down.
+        if let Ok(deleted) =
+            delete_batches_above_anchor(&conn, last_block_height as i64).await
+        {
+            if deleted > 0 {
+                info!(
+                    deleted,
+                    last_block_height,
+                    "Deleted unprocessed batches above last block height"
+                );
+            }
+        }
+
         let current_height = match select_latest_consensus_height(&conn).await {
             Ok(Some(h)) => {
                 let resume = Height::new(h as u64 + 1);
