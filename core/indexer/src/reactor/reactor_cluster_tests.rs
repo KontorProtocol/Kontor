@@ -9,16 +9,18 @@ use tracing::info;
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
-use indexer_types::Event;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
 use crate::reactor::consensus::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
 use crate::reactor::mock_bitcoin::MockBitcoin;
-use crate::reactor::{ConsensusHandle, Reactor};
+use crate::reactor::{ConsensusHandle, Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
+use bitcoin::hashes::Hash;
+use indexer_types::Event;
+use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::LinearTimeouts;
 
@@ -77,6 +79,7 @@ struct ReactorCluster {
     ready_tx: mpsc::Sender<usize>,
     event_rx: mpsc::Receiver<Event>,
     event_tx: mpsc::Sender<Event>,
+    simulate_txs: Vec<mpsc::Sender<Simulation>>,
     started_nodes: Vec<bool>,
 }
 
@@ -146,12 +149,15 @@ impl ReactorCluster {
 
         let mut join_set = JoinSet::new();
         let mut started_nodes = vec![false; total];
+        let mut simulate_txs = Vec::new();
 
         for i in 0..initial {
             let (node_block_tx, node_block_rx) = mpsc::channel(256);
             block_txs.push(node_block_tx.clone());
 
             let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
+            let (sim_tx, sim_rx) = mpsc::channel(1);
+            simulate_txs.push(sim_tx);
 
             Self::spawn_node(
                 i,
@@ -168,6 +174,7 @@ impl ReactorCluster {
                 state_tx.clone(),
                 ready_tx.clone(),
                 event_tx.clone(),
+                Some(sim_rx),
                 mock_bitcoin.clone(),
                 shared_pubkey.clone(),
                 engine.clone(),
@@ -201,6 +208,7 @@ impl ReactorCluster {
             ready_tx,
             event_rx,
             event_tx,
+            simulate_txs,
             started_nodes,
         })
     }
@@ -248,6 +256,7 @@ impl ReactorCluster {
         stx: mpsc::Sender<StateEvent>,
         rtx: mpsc::Sender<usize>,
         etx: mpsc::Sender<Event>,
+        sim_rx: Option<mpsc::Receiver<Simulation>>,
         mock_btc: Arc<Mutex<MockBitcoin>>,
         pubkey: String,
         engine: wasmtime::Engine,
@@ -332,7 +341,7 @@ impl ReactorCluster {
                 cancel.clone(),
                 None,
                 Some(etx),
-                None,
+                sim_rx,
                 Some(consensus_handle),
                 0,
                 None,
@@ -357,6 +366,8 @@ impl ReactorCluster {
         self.block_txs.push(node_block_tx.clone());
 
         let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
+        let (sim_tx, sim_rx) = mpsc::channel(1);
+        self.simulate_txs.push(sim_tx);
 
         Self::spawn_node(
             i,
@@ -373,6 +384,7 @@ impl ReactorCluster {
             self.state_tx.clone(),
             self.ready_tx.clone(),
             self.event_tx.clone(),
+            Some(sim_rx),
             self.mock_bitcoin.clone(),
             self.shared_pubkey.clone(),
             self.engine.clone(),
@@ -476,7 +488,11 @@ impl ReactorCluster {
                 }
             }
         }
-        BatchResult { txids, state_events, events }
+        BatchResult {
+            txids,
+            state_events,
+            events,
+        }
     }
 
     /// Wait until a block is decided, processed by all nodes, and events emitted.
@@ -521,7 +537,10 @@ impl ReactorCluster {
                 }
             }
         }
-        BlockResult { state_events, events }
+        BlockResult {
+            state_events,
+            events,
+        }
     }
 
     /// Wait until a rollback is executed and events emitted.
@@ -558,7 +577,10 @@ impl ReactorCluster {
                 }
             }
         }
-        RollbackResult { state_events, events }
+        RollbackResult {
+            state_events,
+            events,
+        }
     }
 
     /// Wait until a finality event matching the predicate arrives.
@@ -599,6 +621,44 @@ impl ReactorCluster {
         timeout: Duration,
     ) -> Vec<StateEvent> {
         wait_matching(&mut self.state_rx, pred, n, timeout).await
+    }
+
+    /// Send a transaction to a specific node for simulation and await the result.
+    async fn simulate(
+        &self,
+        node: usize,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
+        self.simulate_txs[node]
+            .send((tx, ret_tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("simulate channel closed"))?;
+        ret_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("simulate response channel closed"))?
+    }
+
+    /// Assert all nodes produced the same checkpoint for a block result.
+    fn assert_checkpoints_match(result: &BlockResult, expected_count: usize) {
+        let checkpoints: Vec<_> = result
+            .state_events
+            .iter()
+            .filter_map(|e| match e {
+                StateEvent::BlockProcessed { checkpoint, .. } => Some(*checkpoint),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            checkpoints.len(),
+            expected_count,
+            "Expected {expected_count} checkpoints, got {}",
+            checkpoints.len()
+        );
+        assert!(
+            checkpoints.windows(2).all(|w| w[0] == w[1]),
+            "Checkpoints diverged across nodes: {checkpoints:?}"
+        );
     }
 
     async fn shutdown(mut self) {
@@ -907,10 +967,13 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     cluster.mine_and_send(&batch_txids);
     let block_result = cluster.wait_for_block(1, Duration::from_secs(60)).await;
     assert!(
-        block_result
-            .state_events
-            .iter()
-            .any(|e| matches!(e, StateEvent::BlockProcessed { unbatched_count: 0, .. })),
+        block_result.state_events.iter().any(|e| matches!(
+            e,
+            StateEvent::BlockProcessed {
+                unbatched_count: 0,
+                ..
+            }
+        )),
         "All block txs should be deduped (unbatched_count=0), got: {:?}",
         block_result.state_events
     );
@@ -953,14 +1016,28 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     // Verify rollback preserves checkpoint from pre-anchor state
     let rollback_events = cluster
         .wait_for_state_event_matching(
-            |e| matches!(e, StateEvent::RollbackExecuted { to_anchor: 1, checkpoint: Some(_), .. }),
+            |e| {
+                matches!(
+                    e,
+                    StateEvent::RollbackExecuted {
+                        to_anchor: 1,
+                        checkpoint: Some(_),
+                        ..
+                    }
+                )
+            },
             Duration::from_secs(60),
         )
         .await;
     assert!(
-        rollback_events
-            .iter()
-            .any(|e| matches!(e, StateEvent::RollbackExecuted { to_anchor: 1, checkpoint: Some(_), .. })),
+        rollback_events.iter().any(|e| matches!(
+            e,
+            StateEvent::RollbackExecuted {
+                to_anchor: 1,
+                checkpoint: Some(_),
+                ..
+            }
+        )),
         "Expected RollbackExecuted to anchor 1 with checkpoint, got: {rollback_events:?}"
     );
 
@@ -983,19 +1060,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 
     cluster.mine_and_send(&[]);
     let block1 = cluster.wait_for_block(1, Duration::from_secs(60)).await;
-    let checkpoints: Vec<_> = block1
-        .state_events
-        .iter()
-        .filter_map(|e| match e {
-            StateEvent::BlockProcessed { checkpoint, .. } => Some(*checkpoint),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(checkpoints.len(), num_nodes);
-    assert!(
-        checkpoints.windows(2).all(|w| w[0] == w[1]),
-        "All nodes should have the same checkpoint at height 1: {checkpoints:?}"
-    );
+    ReactorCluster::assert_checkpoints_match(&block1, num_nodes);
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
@@ -1004,19 +1069,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 
     cluster.mine_and_send(&[]);
     let block2 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    let checkpoints: Vec<_> = block2
-        .state_events
-        .iter()
-        .filter_map(|e| match e {
-            StateEvent::BlockProcessed { checkpoint, .. } => Some(*checkpoint),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(checkpoints.len(), num_nodes);
-    assert!(
-        checkpoints.windows(2).all(|w| w[0] == w[1]),
-        "All nodes should have the same checkpoint at height 2: {checkpoints:?}"
-    );
+    ReactorCluster::assert_checkpoints_match(&block2, num_nodes);
 
     cluster.shutdown().await;
     Ok(())
@@ -1065,9 +1118,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
 
     cluster.mock_bitcoin().reset_to(1);
     cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster
-        .wait_for_rollback(1, Duration::from_secs(60))
-        .await;
+    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
 
     cluster.mine_empty_and_send();
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
@@ -1135,6 +1186,42 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         pre_join_checkpoints.contains(&late_checkpoint.unwrap()),
         "Late joiner checkpoint should match existing nodes"
     );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn prod_reactor_simulate_transaction() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+
+    // Mine a block so the node has processed at least one block
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+
+    // Create a stub transaction for simulation
+    let tx = indexer_types::Transaction {
+        txid: bitcoin::Txid::from_slice(&[0xAA; 32]).unwrap(),
+        index: 0,
+        inputs: vec![],
+        op_return_data: Default::default(),
+    };
+
+    // Simulate on node 0 — exercises savepoint → execute → inspect → rollback
+    let result = cluster.simulate(0, tx).await?;
+    assert!(
+        result.is_empty(),
+        "Expected empty results for stub transaction, got: {result:?}"
+    );
+
+    // Mine another block and verify all nodes agree on checkpoint.
+    // If simulation leaked state on node 0, its checkpoint would diverge.
+    cluster.mine_empty_and_send();
+    let block2 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    ReactorCluster::assert_checkpoints_match(&block2, cluster.node_count);
 
     cluster.shutdown().await;
     Ok(())
