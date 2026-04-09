@@ -256,7 +256,7 @@ impl ReactorCluster {
 
             let conn = runtime.get_storage_conn();
 
-            let engine_output = match engine::start(engine_config, &genesis).await {
+            let engine_output = match engine::start(engine_config).await {
                 Ok(o) => o,
                 Err(e) => {
                     tracing::error!(node = i, %e, "Failed to start engine");
@@ -277,7 +277,9 @@ impl ReactorCluster {
                 engine_output.signing_provider,
                 genesis,
                 engine_output.address,
-            );
+                0,
+            )
+            .await;
             state.timeouts = LinearTimeouts {
                 propose: Duration::from_millis(500),
                 ..Default::default()
@@ -312,7 +314,7 @@ impl ReactorCluster {
             let _ = rtx.send(i).await;
 
             if let Err(e) = reactor.run().await {
-                tracing::error!(node = i, %e, "Reactor error");
+                tracing::error!(node = i, e = format!("{e:#}"), "Reactor error");
             }
         });
     }

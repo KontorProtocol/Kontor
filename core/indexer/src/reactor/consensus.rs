@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
@@ -28,10 +28,10 @@ use crate::consensus::{
     ValidatorSet, Value,
 };
 use crate::database::queries::{
-    get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_transaction,
-    insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor, select_block_at_height,
-    select_block_latest, select_existing_txids, select_min_batch_height,
-    select_unconfirmed_batch_txs,
+    delete_batches_above_anchor, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
+    insert_transaction, insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor,
+    select_block_at_height, select_block_latest, select_existing_txids,
+    select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
 };
 
 use super::executor::Executor;
@@ -92,19 +92,41 @@ pub struct ObservationChannels {
 }
 
 impl ConsensusState {
-    pub fn new(
+    pub async fn new(
         conn: libsql::Connection,
         signing_provider: Ed25519Provider,
         genesis: Genesis,
         address: Address,
+        last_block_height: u64,
     ) -> Self {
         let current_validator_set = genesis.validator_set;
+
+        // Delete batch decisions that reference anchor heights above what we've
+        // actually processed. These were committed to the batches table but never
+        // executed before the node shut down.
+        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height as i64).await
+            && deleted > 0
+        {
+            info!(
+                deleted,
+                last_block_height, "Deleted unprocessed batches above last block height"
+            );
+        }
+
+        let current_height = match select_latest_consensus_height(&conn).await {
+            Ok(Some(h)) => {
+                let resume = Height::new(h as u64 + 1);
+                info!(%resume, "Resuming consensus from DB");
+                resume
+            }
+            _ => Height::new(1),
+        };
         Self {
             conn,
             signing_provider,
             address,
             mempool: std::collections::HashMap::new(),
-            current_height: Height::new(1),
+            current_height,
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
             unfinalized_batches: Vec::new(),
@@ -135,7 +157,13 @@ impl ConsensusState {
     fn stream_id(&self) -> StreamId {
         let mut bytes = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.current_height.as_u64().to_be_bytes());
-        bytes.extend_from_slice(&self.current_round.as_u32().unwrap().to_be_bytes());
+        bytes.extend_from_slice(
+            &self
+                .current_round
+                .as_u32()
+                .expect("stream_id called during active round, current_round must not be Nil")
+                .to_be_bytes(),
+        );
         StreamId::new(bytes.into())
     }
 
@@ -213,10 +241,8 @@ impl ConsensusState {
             return Some(Value::new_block(height, block.hash));
         }
 
-        // Collect candidate txids from the mempool
+        // Pre-filter already-processed txids from mempool to avoid unnecessary validation
         let mempool_txids: Vec<Txid> = self.mempool.keys().copied().collect();
-
-        // Filter out txids already in the system (batched or confirmed)
         let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
         let existing = select_existing_txids(&self.conn, &txid_strs)
             .await
@@ -226,6 +252,7 @@ impl ConsensusState {
             .filter(|t| !existing.contains(&t.to_string()))
             .collect();
 
+        // Per-tx validation
         let mut txs = Vec::new();
         for tx in self.mempool.values() {
             let txid = tx.compute_txid();
@@ -236,9 +263,24 @@ impl ConsensusState {
                 txs.push(tx.clone());
             }
         }
-        // Don't propose empty batches — avoids flooding consensus heights
-        // and allows lagging nodes to catch up via sync
         if txs.is_empty() {
+            return None;
+        }
+
+        // Batch-level validation (already-processed check will pass since we pre-filtered)
+        let candidate_txids: Vec<String> =
+            txs.iter().map(|tx| tx.compute_txid().to_string()).collect();
+        if let Some(reason) = validate_batch(
+            self,
+            last_height,
+            last_hash,
+            &candidate_txids,
+            last_height,
+            last_hash,
+        )
+        .await
+        {
+            info!("Not proposing batch: {reason}");
             return None;
         }
 
@@ -510,7 +552,15 @@ impl ConsensusState {
         consensus_height: Height,
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
-    ) {
+    ) -> Result<()> {
+        info!(
+            %consensus_height,
+            anchor_height,
+            %anchor_hash,
+            num_txs = batch_txs.len(),
+            "Processing decided batch"
+        );
+
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
             .filter_map(|btx| executor.parse_transaction(btx))
@@ -530,7 +580,7 @@ impl ConsensusState {
             .storage
             .savepoint()
             .await
-            .expect("Failed to begin batch transaction");
+            .context("Failed to begin batch transaction")?;
 
         insert_batch(
             &self.conn,
@@ -541,23 +591,24 @@ impl ConsensusState {
             false,
         )
         .await
-        .expect("Failed to insert batch");
+        .context("Failed to insert batch")?;
 
         // Store raw txs for replay/sync recovery
         for raw_tx in batch_txs {
             let txid = raw_tx.compute_txid();
             let serialized = bitcoin::consensus::serialize(raw_tx);
-            let _ = insert_unconfirmed_batch_tx(
+            insert_unconfirmed_batch_tx(
                 &self.conn,
                 &txid.to_string(),
                 consensus_height.as_u64() as i64,
                 &serialized,
             )
-            .await;
+            .await
+            .context("Failed to insert unconfirmed batch tx")?;
         }
 
         for t in &parsed_txs {
-            let tx_id = match insert_transaction(
+            let tx_id = insert_transaction(
                 &self.conn,
                 indexer_types::TransactionRow::builder()
                     .height(anchor_height as i64)
@@ -566,13 +617,7 @@ impl ConsensusState {
                     .build(),
             )
             .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    error!("insert_transaction error: {e}");
-                    continue;
-                }
-            };
+            .context("Failed to insert transaction")?;
 
             executor
                 .execute_transaction(runtime, anchor_height as i64, tx_id, t)
@@ -583,7 +628,7 @@ impl ConsensusState {
             .storage
             .commit()
             .await
-            .expect("Failed to commit batch transaction");
+            .context("Failed to commit batch transaction")?;
 
         self.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
@@ -597,7 +642,42 @@ impl ConsensusState {
             consensus_height = %consensus_height,
             "Batch processing complete"
         );
+
+        Ok(())
     }
+}
+
+/// Validate batch-level rules. Returns a rejection reason if any rule fails.
+async fn validate_batch(
+    state: &ConsensusState,
+    anchor_height: u64,
+    anchor_hash: bitcoin::BlockHash,
+    txids: &[String],
+    last_height: u64,
+    last_hash: bitcoin::BlockHash,
+) -> Option<&'static str> {
+    if txids.is_empty() {
+        return Some("batch is empty");
+    }
+    if !state.pending_blocks.is_empty() {
+        return Some("block is pending");
+    }
+    if state.deferred_decisions.iter().any(|d| d.value.is_block()) {
+        return Some("deferred block decision waiting");
+    }
+    if anchor_height != last_height {
+        return Some("anchor height mismatch");
+    }
+    if anchor_hash != last_hash {
+        return Some("anchor hash mismatch");
+    }
+    let existing = select_existing_txids(&state.conn, txids)
+        .await
+        .unwrap_or_default();
+    if !existing.is_empty() {
+        return Some("contains already-processed transactions");
+    }
+    None
 }
 
 /// Validate a received proposal and accept it. Returns None if validation fails.
@@ -607,6 +687,8 @@ async fn validate_and_accept_proposal(
     data: &ProposalData,
     height: Height,
     round: Round,
+    last_height: u64,
+    last_hash: bitcoin::BlockHash,
 ) -> Option<ProposedValue<Ctx>> {
     let value = match data {
         ProposalData::Block { height, hash } => {
@@ -634,9 +716,21 @@ async fn validate_and_accept_proposal(
             anchor_hash,
             transactions,
         } => {
-            // Reject batch proposals when a block is pending
-            if !state.pending_blocks.is_empty() {
-                warn!("Rejecting batch proposal: block is pending");
+            let txid_strs: Vec<String> = transactions
+                .iter()
+                .map(|tx| tx.compute_txid().to_string())
+                .collect();
+            if let Some(reason) = validate_batch(
+                state,
+                *anchor_height,
+                *anchor_hash,
+                &txid_strs,
+                last_height,
+                last_hash,
+            )
+            .await
+            {
+                warn!("Rejecting batch proposal: {reason}");
                 return None;
             }
             for tx in transactions {
@@ -728,7 +822,8 @@ pub async fn handle_consensus_msg(
                     channels
                         .network
                         .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await?;
+                        .await
+                        .context("Failed to send proposal part to network")?;
                 }
                 if reply.send(proposal).is_err() {
                     error!("Failed to send GetValue reply");
@@ -748,7 +843,8 @@ pub async fn handle_consensus_msg(
                     channels
                         .network
                         .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await?;
+                        .await
+                        .context("Failed to send proposal part to network")?;
                 }
                 if reply.send(proposal).is_err() {
                     error!("Failed to send GetValue reply");
@@ -774,50 +870,16 @@ pub async fn handle_consensus_msg(
                 match &part.content {
                     StreamContent::Data(ProposalPart::Data(data)) => {
                         if !state.undecided.contains_key(&(height, round)) {
-                            match data {
-                                ProposalData::Block { .. } => {
-                                    validate_and_accept_proposal(
-                                        state, executor, data, height, round,
-                                    )
-                                    .await
-                                }
-                                ProposalData::Batch {
-                                    anchor_height,
-                                    anchor_hash,
-                                    ..
-                                } => {
-                                    if *anchor_height != last_height {
-                                        warn!(
-                                            anchor = anchor_height,
-                                            tip = last_height,
-                                            "Rejecting proposal with stale or unknown anchor height"
-                                        );
-                                        None
-                                    } else if let Some(local_hash) =
-                                        state.block_hash_at_height(*anchor_height).await
-                                    {
-                                        if local_hash != *anchor_hash {
-                                            warn!(
-                                                anchor = anchor_height,
-                                                proposed = %anchor_hash,
-                                                local = %local_hash,
-                                                "Rejecting proposal with mismatched anchor hash"
-                                            );
-                                            None
-                                        } else {
-                                            validate_and_accept_proposal(
-                                                state, executor, data, height, round,
-                                            )
-                                            .await
-                                        }
-                                    } else {
-                                        validate_and_accept_proposal(
-                                            state, executor, data, height, round,
-                                        )
-                                        .await
-                                    }
-                                }
-                            }
+                            validate_and_accept_proposal(
+                                state,
+                                executor,
+                                data,
+                                height,
+                                round,
+                                last_height,
+                                last_hash,
+                            )
+                            .await
                         } else {
                             None
                         }
@@ -912,7 +974,7 @@ pub async fn handle_consensus_msg(
                                 "Skipping stale batch — anchor below current height"
                             );
                             // Still record the batch for sync protocol
-                            let _ = insert_batch(
+                            insert_batch(
                                 &state.conn,
                                 certificate.height.as_u64() as i64,
                                 *anchor_height as i64,
@@ -920,7 +982,8 @@ pub async fn handle_consensus_msg(
                                 &cert_bytes,
                                 false,
                             )
-                            .await;
+                            .await
+                            .context("Failed to record stale batch for sync")?;
                         } else if *anchor_height > last_height {
                             info!(
                                 anchor = anchor_height,
@@ -944,7 +1007,8 @@ pub async fn handle_consensus_msg(
                                     &cert_bytes,
                                     &full_txs,
                                 )
-                                .await;
+                                .await
+                                .context("process_decided_batch failed in Finalized handler")?;
                             result = ConsensusResult::BatchProcessed {
                                 txids: full_txs
                                     .iter()
@@ -961,6 +1025,12 @@ pub async fn handle_consensus_msg(
                         // Remove from pending if present (may not be if we received
                         // the decision via sync before the block arrived from poller)
                         if let Some(block) = state.pending_blocks.remove(height) {
+                            info!(
+                                block_height = height,
+                                block_hash = %hash,
+                                consensus_height = %certificate.height,
+                                "Block decided and ready to process"
+                            );
                             result = ConsensusResult::Block(
                                 block,
                                 DeferredDecision {
@@ -981,6 +1051,7 @@ pub async fn handle_consensus_msg(
                                 info!(
                                     block_height = height,
                                     block_hash = %hash,
+                                    consensus_height = %certificate.height,
                                     "Block decided but not yet received — deferring"
                                 );
                                 state.deferred_decisions.push_back(DeferredDecision {
@@ -1090,7 +1161,8 @@ pub async fn handle_consensus_msg(
                     channels
                         .network
                         .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await?;
+                        .await
+                        .context("Failed to send proposal part to network")?;
                 }
             }
         }

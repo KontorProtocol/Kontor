@@ -21,8 +21,17 @@ pub async fn get() -> Arc<RegTesterCluster> {
 
 #[ctor::dtor]
 fn cleanup() {
-    if let Ok(mut guard) = CLUSTER.lock() {
-        drop(guard.take());
+    let cluster = {
+        let mut guard = match CLUSTER.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        guard.take().and_then(|arc| Arc::try_unwrap(arc).ok())
+    };
+    if let Some(cluster) = cluster
+        && let Ok(rt) = tokio::runtime::Runtime::new()
+    {
+        let _ = rt.block_on(cluster.teardown());
     }
 }
 

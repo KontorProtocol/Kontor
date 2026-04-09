@@ -34,7 +34,7 @@ pub enum Error {
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
     conn.execute(
-        "INSERT OR REPLACE INTO blocks (height, hash, relevant) VALUES (?, ?, ?)",
+        "INSERT INTO blocks (height, hash, relevant) VALUES (?, ?, ?)",
         (block.height, block.hash.to_string(), block.relevant),
     )
     .await?;
@@ -373,7 +373,7 @@ pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<b
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
     conn.execute(
         r#"
-            INSERT OR REPLACE INTO contracts (
+            INSERT INTO contracts (
                 name,
                 height,
                 tx_index,
@@ -520,6 +520,16 @@ pub async fn insert_batch(
     )
     .await?;
     Ok(())
+}
+
+pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> Result<u64, Error> {
+    let rows = conn
+        .execute(
+            "DELETE FROM batches WHERE anchor_height > ?",
+            params![max_anchor],
+        )
+        .await?;
+    Ok(rows)
 }
 
 pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
@@ -1029,7 +1039,7 @@ pub async fn insert_contract_result(
 ) -> Result<i64, Error> {
     conn.execute(
         r#"
-            INSERT OR REPLACE INTO contract_results (
+            INSERT INTO contract_results (
                 contract_id,
                 size,
                 func,

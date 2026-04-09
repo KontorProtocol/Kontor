@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::net::Multiaddr;
@@ -12,7 +12,7 @@ use malachitebft_app_channel::{
 
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
-use crate::consensus::{Address, Ctx, Genesis};
+use crate::consensus::{Address, Ctx};
 
 pub struct EngineConfig {
     pub private_key: PrivateKey,
@@ -55,17 +55,22 @@ pub struct EngineOutput {
 }
 
 /// Start the Malachite consensus engine and return channels + metadata.
-pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOutput> {
+pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     let public_key = config.private_key.public_key();
     let address = Address::from_public_key(&public_key);
-    let keypair = Keypair::ed25519_from_bytes(config.private_key.inner().to_bytes())?;
+    let keypair = Keypair::ed25519_from_bytes(config.private_key.inner().to_bytes())
+        .context("Failed to create Ed25519 keypair from private key")?;
 
-    let listen_addr: Multiaddr = config.listen_addr.parse()?;
+    let listen_addr: Multiaddr = config
+        .listen_addr
+        .parse()
+        .context("Failed to parse consensus listen address")?;
     let persistent_peers: Vec<Multiaddr> = config
         .persistent_peers
         .iter()
         .map(|s| s.parse())
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, _>>()
+        .context("Failed to parse persistent peer address")?;
 
     let node_config = MalachiteNodeConfig {
         moniker: format!("kontor-{}", &address.to_string()[..8]),
@@ -83,7 +88,8 @@ pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOut
     };
 
     let ctx = Ctx::new();
-    std::fs::create_dir_all(&config.data_dir)?;
+    std::fs::create_dir_all(&config.data_dir)
+        .context("Failed to create consensus data directory")?;
     let wal_path = config.data_dir.join("consensus.wal");
 
     let identity = NetworkIdentity::new(

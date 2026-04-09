@@ -201,8 +201,10 @@ pub async fn post_transaction_hex_inspect(
 ) -> Result<Vec<OpWithResult>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let tx = crate::block::filter_map((0, btx))
+        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, btx).await?.into())
+    Ok(inspect(&conn, &tx).await?.into())
 }
 
 pub async fn get_transaction_inspect(
@@ -212,8 +214,10 @@ pub async fn get_transaction_inspect(
     let txid = bitcoin::Txid::from_str(&txid)
         .map_err(|e| HttpError::BadRequest(format!("Invalid txid: {}", e)))?;
     let btx = env.bitcoin.get_raw_transaction(&txid).await?;
+    let tx = crate::block::filter_map((0, btx))
+        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, btx).await?.into())
+    Ok(inspect(&conn, &tx).await?.into())
 }
 
 pub async fn post_simulate(
@@ -222,8 +226,10 @@ pub async fn post_simulate(
 ) -> Result<Vec<OpWithResult>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let tx = crate::block::filter_map((0, btx))
+        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-    env.simulate_tx.send((btx, ret_tx)).await?;
+    env.simulate_tx.send((tx, ret_tx)).await?;
     Ok(ret_rx
         .await?
         .map_err(|e| HttpError::BadRequest(e.to_string()))?
