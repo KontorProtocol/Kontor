@@ -1,4 +1,3 @@
-pub mod block_handler;
 pub mod consensus;
 pub mod engine;
 pub mod executor;
@@ -191,8 +190,7 @@ impl<E: Executor> Reactor<E> {
 
         let mut unbatched_count = 0;
         for (i, t) in block.transactions.iter().enumerate() {
-            if let Ok(Some(_)) =
-                get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
+            if let Ok(Some(_)) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string()).await
             {
                 let _ = confirm_transaction(
                     &self.db_conn(),
@@ -233,7 +231,8 @@ impl<E: Executor> Reactor<E> {
 
     /// Simulate a transaction: execute in a temporary block, inspect results, then rollback.
     async fn simulate(&mut self, btx: bitcoin::Transaction) -> Result<Vec<OpWithResult>> {
-        let tx = block::filter_map((0, btx.clone())).ok_or(anyhow::anyhow!("Invalid transaction"))?;
+        let tx =
+            block::filter_map((0, btx.clone())).ok_or(anyhow::anyhow!("Invalid transaction"))?;
         self.runtime.storage.savepoint().await?;
         let block_row = select_block_latest(&self.db_conn()).await?;
         let height = block_row.as_ref().map_or(1, |row| row.height as u64 + 1);
