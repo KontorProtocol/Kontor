@@ -313,7 +313,7 @@ impl ReactorCluster {
             let _ = rtx.send(i).await;
 
             if let Err(e) = reactor.run().await {
-                tracing::error!(node = i, %e, "Reactor error");
+                tracing::error!(node = i, e = format!("{e:#}"), "Reactor error");
             }
         });
     }

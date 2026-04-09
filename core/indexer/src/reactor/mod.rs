@@ -669,7 +669,7 @@ impl<E: Executor> Reactor<E> {
 
                                 // Rollback to before the invalid anchor so all state at the
                                 // anchor height (including invalid tx effects) is wiped cleanly.
-                                self.rollback(rollback_anchor - 1)
+                                self.rollback(rollback_anchor.saturating_sub(1))
                                     .await
                                     .context("rollback failed during finality rollback")?;
 

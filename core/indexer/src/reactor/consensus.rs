@@ -227,10 +227,8 @@ impl ConsensusState {
             return Some(Value::new_block(height, block.hash));
         }
 
-        // Collect candidate txids from the mempool
+        // Pre-filter already-processed txids from mempool to avoid unnecessary validation
         let mempool_txids: Vec<Txid> = self.mempool.keys().copied().collect();
-
-        // Filter out txids already in the system (batched or confirmed)
         let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
         let existing = select_existing_txids(&self.conn, &txid_strs)
             .await
@@ -240,6 +238,7 @@ impl ConsensusState {
             .filter(|t| !existing.contains(&t.to_string()))
             .collect();
 
+        // Per-tx validation
         let mut txs = Vec::new();
         for tx in self.mempool.values() {
             let txid = tx.compute_txid();
@@ -250,9 +249,24 @@ impl ConsensusState {
                 txs.push(tx.clone());
             }
         }
-        // Don't propose empty batches — avoids flooding consensus heights
-        // and allows lagging nodes to catch up via sync
         if txs.is_empty() {
+            return None;
+        }
+
+        // Batch-level validation (already-processed check will pass since we pre-filtered)
+        let candidate_txids: Vec<String> =
+            txs.iter().map(|tx| tx.compute_txid().to_string()).collect();
+        if let Some(reason) = validate_batch(
+            self,
+            last_height,
+            last_hash,
+            &candidate_txids,
+            last_height,
+            last_hash,
+        )
+        .await
+        {
+            info!("Not proposing batch: {reason}");
             return None;
         }
 
@@ -611,6 +625,39 @@ impl ConsensusState {
     }
 }
 
+/// Validate batch-level rules. Returns a rejection reason if any rule fails.
+async fn validate_batch(
+    state: &ConsensusState,
+    anchor_height: u64,
+    anchor_hash: bitcoin::BlockHash,
+    txids: &[String],
+    last_height: u64,
+    last_hash: bitcoin::BlockHash,
+) -> Option<&'static str> {
+    if txids.is_empty() {
+        return Some("batch is empty");
+    }
+    if !state.pending_blocks.is_empty() {
+        return Some("block is pending");
+    }
+    if state.deferred_decisions.iter().any(|d| d.value.is_block()) {
+        return Some("deferred block decision waiting");
+    }
+    if anchor_height != last_height {
+        return Some("anchor height mismatch");
+    }
+    if anchor_hash != last_hash {
+        return Some("anchor hash mismatch");
+    }
+    let existing = select_existing_txids(&state.conn, txids)
+        .await
+        .unwrap_or_default();
+    if !existing.is_empty() {
+        return Some("contains already-processed transactions");
+    }
+    None
+}
+
 /// Validate a received proposal and accept it. Returns None if validation fails.
 async fn validate_and_accept_proposal(
     state: &mut ConsensusState,
@@ -618,6 +665,8 @@ async fn validate_and_accept_proposal(
     data: &ProposalData,
     height: Height,
     round: Round,
+    last_height: u64,
+    last_hash: bitcoin::BlockHash,
 ) -> Option<ProposedValue<Ctx>> {
     let value = match data {
         ProposalData::Block { height, hash } => {
@@ -645,9 +694,21 @@ async fn validate_and_accept_proposal(
             anchor_hash,
             transactions,
         } => {
-            // Reject batch proposals when a block is pending
-            if !state.pending_blocks.is_empty() {
-                warn!("Rejecting batch proposal: block is pending");
+            let txid_strs: Vec<String> = transactions
+                .iter()
+                .map(|tx| tx.compute_txid().to_string())
+                .collect();
+            if let Some(reason) = validate_batch(
+                state,
+                *anchor_height,
+                *anchor_hash,
+                &txid_strs,
+                last_height,
+                last_hash,
+            )
+            .await
+            {
+                warn!("Rejecting batch proposal: {reason}");
                 return None;
             }
             for tx in transactions {
@@ -787,50 +848,16 @@ pub async fn handle_consensus_msg(
                 match &part.content {
                     StreamContent::Data(ProposalPart::Data(data)) => {
                         if !state.undecided.contains_key(&(height, round)) {
-                            match data {
-                                ProposalData::Block { .. } => {
-                                    validate_and_accept_proposal(
-                                        state, executor, data, height, round,
-                                    )
-                                    .await
-                                }
-                                ProposalData::Batch {
-                                    anchor_height,
-                                    anchor_hash,
-                                    ..
-                                } => {
-                                    if *anchor_height != last_height {
-                                        warn!(
-                                            anchor = anchor_height,
-                                            tip = last_height,
-                                            "Rejecting proposal with stale or unknown anchor height"
-                                        );
-                                        None
-                                    } else if let Some(local_hash) =
-                                        state.block_hash_at_height(*anchor_height).await
-                                    {
-                                        if local_hash != *anchor_hash {
-                                            warn!(
-                                                anchor = anchor_height,
-                                                proposed = %anchor_hash,
-                                                local = %local_hash,
-                                                "Rejecting proposal with mismatched anchor hash"
-                                            );
-                                            None
-                                        } else {
-                                            validate_and_accept_proposal(
-                                                state, executor, data, height, round,
-                                            )
-                                            .await
-                                        }
-                                    } else {
-                                        validate_and_accept_proposal(
-                                            state, executor, data, height, round,
-                                        )
-                                        .await
-                                    }
-                                }
-                            }
+                            validate_and_accept_proposal(
+                                state,
+                                executor,
+                                data,
+                                height,
+                                round,
+                                last_height,
+                                last_hash,
+                            )
+                            .await
                         } else {
                             None
                         }
