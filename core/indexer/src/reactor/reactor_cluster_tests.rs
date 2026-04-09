@@ -277,7 +277,8 @@ impl ReactorCluster {
                 engine_output.signing_provider,
                 genesis,
                 engine_output.address,
-            );
+            )
+            .await;
             state.timeouts = LinearTimeouts {
                 propose: Duration::from_millis(500),
                 ..Default::default()

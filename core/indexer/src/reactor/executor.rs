@@ -316,7 +316,11 @@ async fn process_aggregate_input(
         }
     };
 
-    let agg = input.insts.aggregate.as_ref().unwrap();
+    let agg = input
+        .insts
+        .aggregate
+        .as_ref()
+        .expect("aggregate must be present after successful verification");
 
     for (op_index, (inst, &signer_id)) in input
         .insts
