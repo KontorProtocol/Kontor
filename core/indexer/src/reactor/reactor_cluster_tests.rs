@@ -639,13 +639,17 @@ impl ReactorCluster {
             .map_err(|_| anyhow::anyhow!("simulate response channel closed"))?
     }
 
-    /// Assert all nodes produced the same checkpoint for a block result.
-    fn assert_checkpoints_match(result: &BlockResult, expected_count: usize) {
+    /// Assert all nodes produced the same checkpoint for a block at a given height.
+    fn assert_checkpoints_match(result: &BlockResult, height: u64, expected_count: usize) {
         let checkpoints: Vec<_> = result
             .state_events
             .iter()
             .filter_map(|e| match e {
-                StateEvent::BlockProcessed { checkpoint, .. } => Some(*checkpoint),
+                StateEvent::BlockProcessed {
+                    height: h,
+                    checkpoint,
+                    ..
+                } if *h == height => Some(*checkpoint),
                 _ => None,
             })
             .collect();
@@ -1060,7 +1064,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 
     cluster.mine_and_send(&[]);
     let block1 = cluster.wait_for_block(1, Duration::from_secs(60)).await;
-    ReactorCluster::assert_checkpoints_match(&block1, num_nodes);
+    ReactorCluster::assert_checkpoints_match(&block1, 1, num_nodes);
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
@@ -1069,7 +1073,7 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
 
     cluster.mine_and_send(&[]);
     let block2 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    ReactorCluster::assert_checkpoints_match(&block2, num_nodes);
+    ReactorCluster::assert_checkpoints_match(&block2, 2, num_nodes);
 
     cluster.shutdown().await;
     Ok(())
@@ -1221,7 +1225,7 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
     // If simulation leaked state on node 0, its checkpoint would diverge.
     cluster.mine_empty_and_send();
     let block2 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    ReactorCluster::assert_checkpoints_match(&block2, cluster.node_count);
+    ReactorCluster::assert_checkpoints_match(&block2, 2, cluster.node_count);
 
     cluster.shutdown().await;
     Ok(())
