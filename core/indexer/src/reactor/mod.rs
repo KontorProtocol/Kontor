@@ -780,7 +780,7 @@ pub async fn start_consensus(
 ) -> Result<ConsensusHandle> {
     let genesis = build_genesis_from_staking(runtime).await?;
 
-    let engine_output = engine::start(engine_config, &genesis).await?;
+    let engine_output = engine::start(engine_config).await?;
     info!(address = %engine_output.address, "Consensus engine started");
 
     let validator_index = genesis
@@ -1180,8 +1180,8 @@ mod tests {
     /// Proves that rolling back a block containing a BLS key registration
     /// reverts the registry contract_state created by that registration.
     ///
-    /// This exercises the full pipeline: reactor → block_handler →
-    /// process_transaction → WASM runtime (registry contract execution) →
+    /// This exercises the full pipeline: reactor → execute_block →
+    /// executor.execute_transaction → WASM runtime (registry contract execution) →
     /// contract_state write, then rollback → CASCADE delete → state gone.
     #[tokio::test]
     async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {

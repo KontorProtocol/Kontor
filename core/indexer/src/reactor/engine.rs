@@ -12,7 +12,7 @@ use malachitebft_app_channel::{
 
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
-use crate::consensus::{Address, Ctx, Genesis};
+use crate::consensus::{Address, Ctx};
 
 pub struct EngineConfig {
     pub private_key: PrivateKey,
@@ -55,7 +55,7 @@ pub struct EngineOutput {
 }
 
 /// Start the Malachite consensus engine and return channels + metadata.
-pub async fn start(config: EngineConfig, _genesis: &Genesis) -> Result<EngineOutput> {
+pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     let public_key = config.private_key.public_key();
     let address = Address::from_public_key(&public_key);
     let keypair = Keypair::ed25519_from_bytes(config.private_key.inner().to_bytes())?;

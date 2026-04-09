@@ -91,9 +91,9 @@ type ParsedTxCache = moka::sync::Cache<Txid, indexer_types::Transaction>;
 /// Production executor: handles transaction validation, resolution, and op execution.
 /// Does NOT own the Runtime — the reactor owns it and passes &mut Runtime when needed.
 pub struct RuntimeExecutor {
-    pub bitcoin_client: Option<Client>,
-    pub replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
-    pub cancel_token: CancellationToken,
+    bitcoin_client: Option<Client>,
+    replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
+    cancel_token: CancellationToken,
     parsed_tx_cache: ParsedTxCache,
 }
 

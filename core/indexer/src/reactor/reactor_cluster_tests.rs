@@ -256,7 +256,7 @@ impl ReactorCluster {
 
             let conn = runtime.get_storage_conn();
 
-            let engine_output = match engine::start(engine_config, &genesis).await {
+            let engine_output = match engine::start(engine_config).await {
                 Ok(o) => o,
                 Err(e) => {
                     tracing::error!(node = i, %e, "Failed to start engine");
