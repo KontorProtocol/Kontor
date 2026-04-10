@@ -52,12 +52,21 @@ pub struct DeferredDecision {
     pub certificate: Vec<u8>,
 }
 
+/// A GetValue reply that we're holding until transactions arrive.
+pub struct PendingProposal {
+    pub height: Height,
+    pub round: Round,
+    pub reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
+    pub timeout: std::time::Duration,
+    pub created_at: std::time::Instant,
+}
+
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
     pub conn: libsql::Connection,
     pub signing_provider: Ed25519Provider,
     pub address: Address,
-    pub mempool: HashMap<Txid, bitcoin::Transaction>,
+    pub pending_transactions: HashMap<Txid, bitcoin::Transaction>,
     pub current_height: Height,
     pub current_round: Round,
     pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
@@ -83,6 +92,9 @@ pub struct ConsensusState {
 
     // Consensus timeouts — defaults to LinearTimeouts::default() (3s propose).
     pub timeouts: LinearTimeouts,
+
+    // Held GetValue reply — waiting for pending_transactions to arrive.
+    pub pending_proposal: Option<PendingProposal>,
 }
 
 pub struct ObservationChannels {
@@ -125,7 +137,7 @@ impl ConsensusState {
             conn,
             signing_provider,
             address,
-            mempool: std::collections::HashMap::new(),
+            pending_transactions: std::collections::HashMap::new(),
             current_height,
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
@@ -135,6 +147,7 @@ impl ConsensusState {
             current_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
+            pending_proposal: None,
         }
     }
 
@@ -241,27 +254,40 @@ impl ConsensusState {
             return Some(Value::new_block(height, block.hash));
         }
 
-        // Pre-filter already-processed txids from mempool to avoid unnecessary validation
-        let mempool_txids: Vec<Txid> = self.mempool.keys().copied().collect();
-        let txid_strs: Vec<String> = mempool_txids.iter().map(|t| t.to_string()).collect();
+        // Pre-filter already-processed txids to avoid unnecessary validation
+        let pending_txids: Vec<Txid> = self.pending_transactions.keys().copied().collect();
+        let txid_strs: Vec<String> = pending_txids.iter().map(|t| t.to_string()).collect();
         let existing = select_existing_txids(&self.conn, &txid_strs)
             .await
             .unwrap_or_default();
-        let unbatched_set: HashSet<Txid> = mempool_txids
+        let unbatched_set: HashSet<Txid> = pending_txids
             .into_iter()
             .filter(|t| !existing.contains(&t.to_string()))
             .collect();
 
-        // Per-tx validation
+        // Remove already-processed txids from the pool
+        for txid_str in &existing {
+            if let Ok(txid) = txid_str.parse::<Txid>() {
+                self.pending_transactions.remove(&txid);
+            }
+        }
+
+        // Per-tx validation — remove invalid txs from the pool
         let mut txs = Vec::new();
-        for tx in self.mempool.values() {
+        let mut invalid_txids = Vec::new();
+        for tx in self.pending_transactions.values() {
             let txid = tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
             }
             if executor.validate_transaction(tx).await.is_some() {
                 txs.push(tx.clone());
+            } else {
+                invalid_txids.push(txid);
             }
+        }
+        for txid in &invalid_txids {
+            self.pending_transactions.remove(txid);
         }
         if txs.is_empty() {
             return None;
@@ -648,6 +674,59 @@ impl ConsensusState {
 
         Ok(())
     }
+
+    /// Try to fulfill a pending GetValue reply with a new batch.
+    /// Called from the reactor event loop when pending transactions arrive.
+    /// Returns true if the proposal was sent.
+    pub async fn try_fulfill_pending_proposal(
+        &mut self,
+        executor: &impl Executor,
+        channels: &mut Channels<Ctx>,
+        last_height: u64,
+        last_hash: bitcoin::BlockHash,
+    ) -> Result<bool> {
+        let pending = match &self.pending_proposal {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        // Don't try to fulfill if we've exceeded the hard deadline — Malachite's
+        // propose timeout is about to fire. StartedRound will clean up the stale reply.
+        let hard_deadline = pending
+            .timeout
+            .saturating_sub(std::time::Duration::from_secs(1));
+        if pending.created_at.elapsed() >= hard_deadline {
+            return Ok(false);
+        }
+
+        let Some(value) = self.make_value(executor, last_height, last_hash).await else {
+            return Ok(false);
+        };
+
+        let pending = self.pending_proposal.take().unwrap();
+        let proposed = ProposedValue {
+            height: pending.height,
+            round: pending.round,
+            valid_round: Round::Nil,
+            proposer: self.address,
+            value: value.clone(),
+            validity: Validity::Valid,
+        };
+        self.undecided
+            .insert((pending.height, pending.round), proposed);
+        let proposal = LocallyProposedValue::new(pending.height, pending.round, value);
+        for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
+            channels
+                .network
+                .send(NetworkMsg::PublishProposalPart(stream_msg))
+                .await
+                .context("Failed to send proposal part to network")?;
+        }
+        // Reply may fail if Malachite already moved on — that's fine
+        let _ = pending.reply.send(proposal);
+
+        Ok(true)
+    }
 }
 
 /// Validate batch-level rules. Returns a rejection reason if any rule fails.
@@ -795,6 +874,18 @@ pub async fn handle_consensus_msg(
             state.current_height = height;
             state.current_round = round;
 
+            // Clear any stale pending proposal from a previous round
+            if let Some(pending) = &state.pending_proposal
+                && (pending.height != height || pending.round != round)
+            {
+                info!(
+                    pending_height = %pending.height,
+                    pending_round = %pending.round,
+                    "Clearing stale pending proposal"
+                );
+                state.pending_proposal = None;
+            }
+
             let proposals: Vec<_> = state
                 .undecided
                 .get(&(height, round))
@@ -810,7 +901,7 @@ pub async fn handle_consensus_msg(
         AppMsg::GetValue {
             height,
             round,
-            timeout: _,
+            timeout,
             reply,
         } => {
             info!(%height, %round, "Building value to propose");
@@ -853,9 +944,15 @@ pub async fn handle_consensus_msg(
                     .send(proposal)
                     .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
             } else {
-                // Nothing to propose — drop reply so Malachite times out the round
-                info!(%height, %round, "Nothing to propose, skipping round");
-                drop(reply);
+                // Nothing to propose yet — hold the reply and wait for transactions
+                info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
+                state.pending_proposal = Some(PendingProposal {
+                    height,
+                    round,
+                    reply,
+                    timeout,
+                    created_at: std::time::Instant::now(),
+                });
             }
         }
 
@@ -963,6 +1060,11 @@ pub async fn handle_consensus_msg(
                                     }
                                 }
                             }
+                        }
+
+                        // Remove decided txids from pending_transactions
+                        for tx in &full_txs {
+                            state.pending_transactions.remove(&tx.compute_txid());
                         }
 
                         let cert_bytes = encode_commit_certificate(&certificate)

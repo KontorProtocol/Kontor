@@ -544,7 +544,7 @@ impl<E: Executor> Reactor<E> {
                 if let Some(handle) = self.consensus_handle.as_mut() {
                     let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
                     for txid in &txids {
-                        handle.state.mempool.remove(txid);
+                        handle.state.pending_transactions.remove(txid);
                     }
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
@@ -568,6 +568,21 @@ impl<E: Executor> Reactor<E> {
                         .await
                         .context("handle_block failed (no consensus)")?;
                 }
+                // A pending block may be what we're waiting to propose
+                if let Some(handle) = self.consensus_handle.as_mut()
+                    && handle.state.pending_proposal.is_some()
+                {
+                    handle
+                        .state
+                        .try_fulfill_pending_proposal(
+                            &self.executor,
+                            &mut handle.channels,
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        )
+                        .await
+                        .context("try_fulfill_pending_proposal failed after block insert")?;
+                }
             }
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
@@ -590,6 +605,9 @@ impl<E: Executor> Reactor<E> {
 
     async fn run_event_loop(&mut self) -> Result<()> {
         self.ready_tx.take().map(|tx| tx.send(true));
+
+        let debounce_duration = std::time::Duration::from_millis(500);
+        let mut debounce_deadline: Option<tokio::time::Instant> = None;
 
         loop {
             // Drain pending block events before entering select
@@ -615,6 +633,13 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
+            let debounce_sleep = async {
+                match debounce_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => pending().await,
+                }
+            };
+
             select! {
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
@@ -630,22 +655,38 @@ impl<E: Executor> Reactor<E> {
                         match event {
                             MempoolEvent::Sync(txs) => {
                                 let count = txs.len();
-                                handle.state.mempool.clear();
+                                handle.state.pending_transactions.clear();
                                 for tx in txs {
-                                    handle.state.mempool.insert(tx.compute_txid(), tx);
+                                    handle.state.pending_transactions.insert(tx.compute_txid(), tx);
                                 }
                                 info!("MempoolSync {}", count);
                             },
                             MempoolEvent::Insert(tx) => {
                                 let txid = tx.compute_txid();
-                                handle.state.mempool.insert(txid, tx);
+                                handle.state.pending_transactions.insert(txid, tx);
                                 debug!("MempoolInsert {}", txid);
                             },
                             MempoolEvent::Remove(txid) => {
-                                handle.state.mempool.remove(&txid);
+                                handle.state.pending_transactions.remove(&txid);
                                 debug!("MempoolRemove {}", txid);
                             },
                         }
+                        // Reset debounce timer if we're holding a pending proposal
+                        if handle.state.pending_proposal.is_some() {
+                            debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                        }
+                    }
+                }
+                _ = debounce_sleep => {
+                    debounce_deadline = None;
+                    if let Some(handle) = self.consensus_handle.as_mut() {
+                        handle.state.try_fulfill_pending_proposal(
+                            &self.executor,
+                            &mut handle.channels,
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        ).await
+                        .context("try_fulfill_pending_proposal failed")?;
                     }
                 }
                 Some(msg) = consensus_rx => {
