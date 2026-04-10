@@ -617,6 +617,17 @@ impl<E: Executor> Reactor<E> {
                     .context("process_block_event failed (try_recv drain)")?;
             }
 
+            let hard_deadline_instant = self
+                .consensus_handle
+                .as_ref()
+                .and_then(|h| h.state.pending_proposal.as_ref())
+                .map(|p| {
+                    let deadline = p.created_at
+                        + p.timeout.saturating_sub(std::time::Duration::from_secs(1));
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    tokio::time::Instant::now() + remaining
+                });
+
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
                     rx.recv().await
@@ -640,6 +651,13 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
+            let hard_deadline_sleep = async {
+                match hard_deadline_instant {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => pending().await,
+                }
+            };
+
             select! {
                 _ = self.cancel_token.cancelled() => {
                     info!("Cancelled");
@@ -656,14 +674,17 @@ impl<E: Executor> Reactor<E> {
                             MempoolEvent::Sync(txs) => {
                                 let count = txs.len();
                                 handle.state.pending_transactions.clear();
-                                for tx in txs {
-                                    handle.state.pending_transactions.insert(tx.compute_txid(), tx);
+                                for (raw, parsed) in txs {
+                                    handle.state.pending_transactions.insert(
+                                        raw.compute_txid(),
+                                        (raw, parsed),
+                                    );
                                 }
                                 info!("MempoolSync {}", count);
                             },
-                            MempoolEvent::Insert(tx) => {
+                            MempoolEvent::Insert(tx, parsed) => {
                                 let txid = tx.compute_txid();
-                                handle.state.pending_transactions.insert(txid, tx);
+                                handle.state.pending_transactions.insert(txid, (tx, parsed));
                                 debug!("MempoolInsert {}", txid);
                             },
                             MempoolEvent::Remove(txid) => {
@@ -686,7 +707,18 @@ impl<E: Executor> Reactor<E> {
                             self.last_height,
                             self.last_hash.unwrap_or(BlockHash::all_zeros()),
                         ).await
-                        .context("try_fulfill_pending_proposal failed")?;
+                        .context("try_fulfill_pending_proposal failed (debounce)")?;
+                    }
+                }
+                _ = hard_deadline_sleep => {
+                    if let Some(handle) = self.consensus_handle.as_mut() {
+                        handle.state.try_fulfill_pending_proposal(
+                            &self.executor,
+                            &mut handle.channels,
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        ).await
+                        .context("try_fulfill_pending_proposal failed (hard deadline)")?;
                     }
                 }
                 Some(msg) = consensus_rx => {

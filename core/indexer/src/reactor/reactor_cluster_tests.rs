@@ -317,7 +317,7 @@ impl ReactorCluster {
             )
             .await;
             state.timeouts = LinearTimeouts {
-                propose: Duration::from_millis(500),
+                propose: Duration::from_secs(10),
                 ..Default::default()
             };
             state.observation = Some(ObservationChannels {
@@ -784,7 +784,7 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let all_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::Insert(tx) => Some(tx.compute_txid()),
+            MempoolEvent::Insert(tx, _) => Some(tx.compute_txid()),
             _ => None,
         })
         .collect();
@@ -970,7 +970,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     let batch_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::Insert(tx) => Some(tx.compute_txid()),
+            MempoolEvent::Insert(tx, _) => Some(tx.compute_txid()),
             _ => None,
         })
         .collect();

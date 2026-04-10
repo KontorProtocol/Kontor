@@ -66,7 +66,7 @@ pub struct ConsensusState {
     pub conn: libsql::Connection,
     pub signing_provider: Ed25519Provider,
     pub address: Address,
-    pub pending_transactions: HashMap<Txid, bitcoin::Transaction>,
+    pub pending_transactions: HashMap<Txid, (bitcoin::Transaction, indexer_types::Transaction)>,
     pub current_height: Height,
     pub current_round: Round,
     pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
@@ -275,13 +275,13 @@ impl ConsensusState {
         // Per-tx validation — remove invalid txs from the pool
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
-        for tx in self.pending_transactions.values() {
-            let txid = tx.compute_txid();
+        for (raw_tx, _parsed) in self.pending_transactions.values() {
+            let txid = raw_tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            if executor.validate_transaction(tx).await.is_some() {
-                txs.push(tx.clone());
+            if executor.validate_transaction(raw_tx).await.is_some() {
+                txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(txid);
             }
@@ -590,6 +590,34 @@ impl ConsensusState {
             "Processing decided batch"
         );
 
+        // Empty batch — just record for sync, no execution or finality tracking
+        if batch_txs.is_empty() {
+            insert_batch(
+                &self.conn,
+                consensus_height.as_u64() as i64,
+                anchor_height as i64,
+                &anchor_hash.to_string(),
+                certificate,
+                false,
+            )
+            .await
+            .context("Failed to insert empty batch")?;
+
+            self.emit_state_event(StateEvent::BatchApplied {
+                consensus_height,
+                anchor_height,
+                txid_count: 0,
+                checkpoint: self.get_checkpoint().await,
+            });
+
+            info!(
+                anchor = anchor_height,
+                consensus_height = %consensus_height,
+                "Empty batch recorded"
+            );
+            return Ok(());
+        }
+
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
             .filter_map(|btx| executor.parse_transaction(btx))
@@ -685,21 +713,28 @@ impl ConsensusState {
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Result<bool> {
-        let pending = match &self.pending_proposal {
-            Some(p) => p,
+        let (past_deadline, pending_height, pending_round) = match &self.pending_proposal {
+            Some(p) => {
+                let hard_deadline = p
+                    .timeout
+                    .saturating_sub(std::time::Duration::from_secs(1));
+                (p.created_at.elapsed() >= hard_deadline, p.height, p.round)
+            }
             None => return Ok(false),
         };
 
-        // Don't try to fulfill if we've exceeded the hard deadline — Malachite's
-        // propose timeout is about to fire. StartedRound will clean up the stale reply.
-        let hard_deadline = pending
-            .timeout
-            .saturating_sub(std::time::Duration::from_secs(1));
-        if pending.created_at.elapsed() >= hard_deadline {
-            return Ok(false);
-        }
-
-        let Some(value) = self.make_value(executor, last_height, last_hash).await else {
+        let value = if let Some(value) = self.make_value(executor, last_height, last_hash).await {
+            value
+        } else if past_deadline {
+            // Hard deadline reached with no transactions — propose an empty batch
+            // so Malachite gets a clean reply and the height advances.
+            info!(
+                height = %pending_height,
+                round = %pending_round,
+                "Proposing empty batch at hard deadline"
+            );
+            Value::new_batch_raw(last_height, last_hash, vec![])
+        } else {
             return Ok(false);
         };
 
@@ -738,9 +773,6 @@ async fn validate_batch(
     last_height: u64,
     last_hash: bitcoin::BlockHash,
 ) -> Option<&'static str> {
-    if txids.is_empty() {
-        return Some("batch is empty");
-    }
     if !state.pending_blocks.is_empty() {
         return Some("block is pending");
     }
@@ -816,9 +848,16 @@ async fn validate_and_accept_proposal(
                 return None;
             }
             for tx in transactions {
-                if executor.validate_transaction(tx).await.is_none() {
+                let txid = tx.compute_txid();
+                if let Some(parsed) = executor.validate_transaction(tx).await {
+                    // Add to pending_transactions if not already present
+                    state
+                        .pending_transactions
+                        .entry(txid)
+                        .or_insert_with(|| (tx.clone(), parsed));
+                } else {
                     warn!(
-                        txid = %tx.compute_txid(),
+                        %txid,
                         "Rejecting proposal: transaction failed validation"
                     );
                     return None;
