@@ -157,14 +157,10 @@ impl LiteExecutor {
 impl Executor for LiteExecutor {
     async fn validate_transaction(
         &self,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        Some(indexer_types::Transaction {
-            txid: tx.compute_txid(),
-            index: 0,
-            inputs: Vec::new(),
-            op_return_data: Default::default(),
-        })
+        _raw: &bitcoin::Transaction,
+        _parsed: &indexer_types::Transaction,
+    ) -> bool {
+        true
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {

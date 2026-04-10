@@ -31,13 +31,14 @@ pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 #[allow(async_fn_in_trait)]
 pub trait Executor {
-    /// Validate a transaction and parse its Kontor ops.
-    /// Returns the parsed transaction if valid, None otherwise.
-    /// Implementations may also propagate the tx to the local bitcoind mempool.
+    /// Validate a pre-parsed transaction for batching.
+    /// Checks batchability and may propagate the tx to the local bitcoind mempool.
+    /// Returns true if the transaction is valid for inclusion in a batch.
     async fn validate_transaction(
         &self,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction>;
+        raw: &bitcoin::Transaction,
+        parsed: &indexer_types::Transaction,
+    ) -> bool;
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
@@ -66,9 +67,10 @@ pub struct NoopExecutor;
 impl Executor for NoopExecutor {
     async fn validate_transaction(
         &self,
-        _tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        None
+        _raw: &bitcoin::Transaction,
+        _parsed: &indexer_types::Transaction,
+    ) -> bool {
+        false
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
@@ -120,12 +122,11 @@ impl RuntimeExecutor {
 impl Executor for RuntimeExecutor {
     async fn validate_transaction(
         &self,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        let parsed = self.parse_transaction(tx)?;
-
+        raw: &bitcoin::Transaction,
+        parsed: &indexer_types::Transaction,
+    ) -> bool {
         if !is_batchable(&parsed.inputs) {
-            return None;
+            return false;
         }
 
         // Push to local bitcoind mempool (idempotent, succeeds if already present).
@@ -134,7 +135,7 @@ impl Executor for RuntimeExecutor {
         // -27 (RPC_VERIFY_ALREADY_IN_UTXO_SET): tx already confirmed — treat as success
         // All other errors (network, node loading) are retried via unlimited backoff.
         if let Some(client) = &self.bitcoin_client {
-            let raw_hex = bitcoin::consensus::encode::serialize_hex(tx);
+            let raw_hex = bitcoin::consensus::encode::serialize_hex(raw);
             let result = retry(
                 || async {
                     match client.send_raw_transaction(&raw_hex).await {
@@ -157,17 +158,17 @@ impl Executor for RuntimeExecutor {
             match result {
                 Ok(true) => {}
                 Ok(false) => {
-                    warn!(txid = %tx.compute_txid(), "Transaction rejected by bitcoind");
-                    return None;
+                    warn!(txid = %raw.compute_txid(), "Transaction rejected by bitcoind");
+                    return false;
                 }
                 Err(e) => {
-                    warn!(txid = %tx.compute_txid(), %e, "send_raw_transaction failed");
-                    return None;
+                    warn!(txid = %raw.compute_txid(), %e, "send_raw_transaction failed");
+                    return false;
                 }
             }
         }
 
-        Some(parsed)
+        true
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         // Fall back to Bitcoin RPC (via tx cache)

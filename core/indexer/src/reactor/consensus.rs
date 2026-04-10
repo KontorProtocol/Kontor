@@ -276,12 +276,12 @@ impl ConsensusState {
         // Per-tx validation — remove invalid txs from the pool
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
-        for (raw_tx, _parsed) in self.pending_transactions.values() {
+        for (raw_tx, parsed) in self.pending_transactions.values() {
             let txid = raw_tx.compute_txid();
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            if executor.validate_transaction(raw_tx).await.is_some() {
+            if executor.validate_transaction(raw_tx, parsed).await {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(txid);
@@ -870,19 +870,24 @@ async fn validate_and_accept_proposal(
             }
             for tx in transactions {
                 let txid = tx.compute_txid();
-                if let Some(parsed) = executor.validate_transaction(tx).await {
-                    // Add to pending_transactions if not already present
-                    state
-                        .pending_transactions
-                        .entry(txid)
-                        .or_insert_with(|| (tx.clone(), parsed));
+                // Use cached parse from pending_transactions, or parse fresh
+                let parsed = if let Some((_, cached)) = state.pending_transactions.get(&txid) {
+                    cached.clone()
+                } else if let Some(p) = executor.parse_transaction(tx) {
+                    p
                 } else {
-                    warn!(
-                        %txid,
-                        "Rejecting proposal: transaction failed validation"
-                    );
+                    warn!(%txid, "Rejecting proposal: transaction failed to parse");
+                    return None;
+                };
+                if !executor.validate_transaction(tx, &parsed).await {
+                    warn!(%txid, "Rejecting proposal: transaction failed validation");
                     return None;
                 }
+                // Add to pending_transactions if not already present
+                state
+                    .pending_transactions
+                    .entry(txid)
+                    .or_insert_with(|| (tx.clone(), parsed));
             }
             Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
         }
