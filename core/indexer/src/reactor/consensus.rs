@@ -29,8 +29,8 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     delete_batches_above_anchor, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
-    insert_transaction, insert_unconfirmed_batch_tx, select_batch, select_batches_from_anchor,
-    select_block_at_height, select_block_latest, select_existing_txids,
+    insert_transaction, insert_unconfirmed_batch_tx, select_batches_from_anchor,
+    select_batches_in_range, select_block_at_height, select_block_latest, select_existing_txids,
     select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
 };
 
@@ -470,30 +470,17 @@ impl ConsensusState {
         if txs.is_empty() { None } else { Some(txs) }
     }
 
-    async fn get_decided(
+    fn batch_to_decided(
         &self,
-        height: Height,
+        b: &crate::database::types::BatchQueryResult,
     ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
-        let consensus_height = height.as_u64() as i64;
-        let b = select_batch(&self.conn, consensus_height)
-            .await
-            .ok()
-            .flatten()?;
-
         let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
 
         let value = if b.is_block {
             Value::new_block(b.anchor_height as u64, anchor_hash)
         } else {
             let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
-            let raw_txs = self
-                .load_raw_txs_if_unfinalized(b.anchor_height, consensus_height)
-                .await;
-            let mut v = Value::new_batch(b.anchor_height as u64, anchor_hash, txids);
-            if let Some(raw_txs) = raw_txs {
-                v.set_raw_txs(raw_txs);
-            }
-            v
+            Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
         };
 
         let proto =
@@ -501,6 +488,41 @@ impl ConsensusState {
         let certificate = decode_commit_certificate(proto).ok()?;
 
         Some((value, certificate))
+    }
+
+    async fn get_decided_range(
+        &self,
+        start: Height,
+        end: Height,
+    ) -> Vec<(Value, crate::consensus::CommitCertificate<Ctx>)> {
+        let batches =
+            match select_batches_in_range(&self.conn, start.as_u64() as i64, end.as_u64() as i64)
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(%e, "Failed to query batches for sync range");
+                    return Vec::new();
+                }
+            };
+
+        let mut results = Vec::new();
+        for b in &batches {
+            let Some((mut value, cert)) = self.batch_to_decided(b) else {
+                continue;
+            };
+
+            if !b.is_block
+                && let Some(raw_txs) = self
+                    .load_raw_txs_if_unfinalized(b.anchor_height, b.consensus_height)
+                    .await
+            {
+                value.set_raw_txs(raw_txs);
+            }
+
+            results.push((value, cert));
+        }
+        results
     }
 
     async fn min_decided_height(&self) -> Option<Height> {
@@ -715,9 +737,7 @@ impl ConsensusState {
     ) -> Result<bool> {
         let (past_deadline, pending_height, pending_round) = match &self.pending_proposal {
             Some(p) => {
-                let hard_deadline = p
-                    .timeout
-                    .saturating_sub(std::time::Duration::from_secs(1));
+                let hard_deadline = p.timeout.saturating_sub(std::time::Duration::from_secs(1));
                 (p.created_at.elapsed() >= hard_deadline, p.height, p.round)
             }
             None => return Ok(false),
@@ -1233,21 +1253,19 @@ pub async fn handle_consensus_msg(
         }
 
         AppMsg::GetDecidedValues { range, reply } => {
-            let mut values = Vec::new();
-            let start = *range.start();
-            let end = *range.end();
-            let mut h = start;
-            while h <= end {
-                if let Some((value, cert)) = state.get_decided(h).await
-                    && let Ok(encoded) = ProtobufCodec.encode(&value)
-                {
-                    values.push(RawDecidedValue {
-                        certificate: cert,
-                        value_bytes: encoded,
-                    });
-                }
-                h = h.increment();
-            }
+            let decided = state.get_decided_range(*range.start(), *range.end()).await;
+            let values: Vec<_> = decided
+                .into_iter()
+                .filter_map(|(value, cert)| {
+                    ProtobufCodec
+                        .encode(&value)
+                        .ok()
+                        .map(|encoded| RawDecidedValue {
+                            certificate: cert,
+                            value_bytes: encoded,
+                        })
+                })
+                .collect();
             reply
                 .send(values)
                 .map_err(|_| anyhow::anyhow!("Failed to send GetDecidedValues reply"))?;
