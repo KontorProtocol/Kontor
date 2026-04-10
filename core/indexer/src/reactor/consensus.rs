@@ -1238,6 +1238,7 @@ pub async fn handle_consensus_msg(
 
             state.current_height = certificate.height.increment();
             state.current_round = Round::Nil;
+            state.pending_proposal = None;
 
             let next = Next::Start(state.current_height, state.height_params());
 
