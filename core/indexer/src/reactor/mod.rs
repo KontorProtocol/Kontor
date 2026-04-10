@@ -739,7 +739,19 @@ impl<E: Executor> Reactor<E> {
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
-        self.run_event_loop().await
+        let result = self.run_event_loop().await;
+
+        // Gracefully stop the Malachite consensus engine and wait for cleanup
+        if let Some(handle) = &self.consensus_handle {
+            let _ = handle
+                ._engine_handle
+                .actor
+                .get_cell()
+                .stop_and_wait(Some("Reactor shutting down".to_string()), None)
+                .await;
+        }
+
+        result
     }
 }
 
