@@ -681,20 +681,22 @@ impl<E: Executor> Reactor<E> {
                                     );
                                 }
                                 info!("MempoolSync {}", count);
+                                if handle.state.pending_proposal.is_some() {
+                                    debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                                }
                             },
                             MempoolEvent::Insert(tx, parsed) => {
                                 let txid = tx.compute_txid();
                                 handle.state.pending_transactions.insert(txid, (tx, parsed));
                                 debug!("MempoolInsert {}", txid);
+                                if handle.state.pending_proposal.is_some() {
+                                    debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                                }
                             },
                             MempoolEvent::Remove(txid) => {
                                 handle.state.pending_transactions.remove(&txid);
                                 debug!("MempoolRemove {}", txid);
                             },
-                        }
-                        // Reset debounce timer if we're holding a pending proposal
-                        if handle.state.pending_proposal.is_some() {
-                            debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                         }
                     }
                 }
