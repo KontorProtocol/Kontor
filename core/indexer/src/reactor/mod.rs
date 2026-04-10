@@ -141,14 +141,11 @@ impl<E: Executor> Reactor<E> {
         rollback_to_height(&self.db_conn(), height)
             .await
             .context("rollback_to_height failed")?;
-        if let Err(e) = self
-            .runtime
+        self.runtime
             .file_ledger
             .force_resync_from_db(&self.runtime.storage.conn)
             .await
-        {
-            error!("file_ledger resync after rollback failed: {e}");
-        }
+            .context("file_ledger resync after rollback failed")?;
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height as i64).await {
@@ -697,7 +694,8 @@ impl<E: Executor> Reactor<E> {
                                     &mut self.executor,
                                     rollback_anchor,
                                     excluded,
-                                ).await;
+                                ).await
+                                .context("initiate_rollback failed")?;
 
                                 // Rollback to before the invalid anchor so all state at the
                                 // anchor height (including invalid tx effects) is wiped cleanly.

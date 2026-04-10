@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -394,16 +394,12 @@ impl ConsensusState {
         }
     }
 
-    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Vec<DeferredDecision> {
-        let batches = match select_batches_from_anchor(&self.conn, from_anchor as i64).await {
-            Ok(r) => r,
-            Err(e) => {
-                error!(%e, "Failed to query batches from anchor");
-                return Vec::new();
-            }
-        };
+    async fn get_decided_from_anchor(&self, from_anchor: u64) -> Result<Vec<DeferredDecision>> {
+        let batches = select_batches_from_anchor(&self.conn, from_anchor as i64)
+            .await
+            .context("Failed to query batches from anchor")?;
 
-        batches
+        Ok(batches
             .into_iter()
             .filter_map(|b| {
                 let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
@@ -419,7 +415,7 @@ impl ConsensusState {
                     certificate: b.certificate,
                 })
             })
-            .collect()
+            .collect())
     }
 
     pub async fn block_hash_at_height(&self, height: u64) -> Option<bitcoin::BlockHash> {
@@ -497,8 +493,11 @@ impl ConsensusState {
         executor: &mut impl Executor,
         from_anchor: u64,
         excluded_txids: HashSet<Txid>,
-    ) {
-        let replay_batches = self.get_decided_from_anchor(from_anchor).await;
+    ) -> Result<()> {
+        let replay_batches = self
+            .get_decided_from_anchor(from_anchor)
+            .await
+            .context("Failed to load replay batches for rollback")?;
 
         info!(
             from_anchor,
@@ -519,7 +518,11 @@ impl ConsensusState {
         self.unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
 
-        executor.replay_blocks_from(from_anchor).await;
+        executor
+            .replay_blocks_from(from_anchor)
+            .await
+            .context("Failed to send replay request")?;
+        Ok(())
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
@@ -776,9 +779,9 @@ pub async fn handle_consensus_msg(
             let start_height = state.current_height;
             info!(%start_height, "Consensus is ready");
 
-            if reply.send((start_height, state.height_params())).is_err() {
-                error!("Failed to send ConsensusReady reply");
-            }
+            reply
+                .send((start_height, state.height_params()))
+                .map_err(|_| anyhow::anyhow!("Failed to send ConsensusReady reply"))?;
         }
 
         AppMsg::StartedRound {
@@ -799,9 +802,9 @@ pub async fn handle_consensus_msg(
                 .into_iter()
                 .collect();
 
-            if reply_value.send(proposals).is_err() {
-                error!("Failed to send StartedRound reply");
-            }
+            reply_value
+                .send(proposals)
+                .map_err(|_| anyhow::anyhow!("Failed to send StartedRound reply"))?;
         }
 
         AppMsg::GetValue {
@@ -825,9 +828,9 @@ pub async fn handle_consensus_msg(
                         .await
                         .context("Failed to send proposal part to network")?;
                 }
-                if reply.send(proposal).is_err() {
-                    error!("Failed to send GetValue reply");
-                }
+                reply
+                    .send(proposal)
+                    .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
             } else if let Some(value) = state.make_value(executor, last_height, last_hash).await {
                 let proposed = ProposedValue {
                     height,
@@ -846,9 +849,9 @@ pub async fn handle_consensus_msg(
                         .await
                         .context("Failed to send proposal part to network")?;
                 }
-                if reply.send(proposal).is_err() {
-                    error!("Failed to send GetValue reply");
-                }
+                reply
+                    .send(proposal)
+                    .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
             } else {
                 // Nothing to propose — drop reply so Malachite times out the round
                 info!(%height, %round, "Nothing to propose, skipping round");
@@ -888,21 +891,21 @@ pub async fn handle_consensus_msg(
                 }
             };
 
-            if reply.send(proposed).is_err() {
-                error!("Failed to send ReceivedProposalPart reply");
-            }
+            reply
+                .send(proposed)
+                .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))?;
         }
 
         AppMsg::ExtendVote { reply, .. } => {
-            if reply.send(None).is_err() {
-                error!("Failed to send ExtendVote reply");
-            }
+            reply
+                .send(None)
+                .map_err(|_| anyhow::anyhow!("Failed to send ExtendVote reply"))?;
         }
 
         AppMsg::VerifyVoteExtension { reply, .. } => {
-            if reply.send(Ok(())).is_err() {
-                error!("Failed to send VerifyVoteExtension reply");
-            }
+            reply
+                .send(Ok(()))
+                .map_err(|_| anyhow::anyhow!("Failed to send VerifyVoteExtension reply"))?;
         }
 
         AppMsg::Decided {
@@ -1076,16 +1079,16 @@ pub async fn handle_consensus_msg(
 
             let next = Next::Start(state.current_height, state.height_params());
 
-            if reply.send(next).is_err() {
-                error!("Failed to send Finalized reply");
-            }
+            reply
+                .send(next)
+                .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))?;
         }
 
         AppMsg::GetHistoryMinHeight { reply } => {
             let min = state.min_decided_height().await.unwrap_or(Height::new(1));
-            if reply.send(min).is_err() {
-                error!("Failed to send GetHistoryMinHeight reply");
-            }
+            reply
+                .send(min)
+                .map_err(|_| anyhow::anyhow!("Failed to send GetHistoryMinHeight reply"))?;
         }
 
         AppMsg::GetDecidedValues { range, reply } => {
@@ -1104,9 +1107,9 @@ pub async fn handle_consensus_msg(
                 }
                 h = h.increment();
             }
-            if reply.send(values).is_err() {
-                error!("Failed to send GetDecidedValues reply");
-            }
+            reply
+                .send(values)
+                .map_err(|_| anyhow::anyhow!("Failed to send GetDecidedValues reply"))?;
         }
 
         AppMsg::ProcessSyncedValue {
@@ -1135,9 +1138,9 @@ pub async fn handle_consensus_msg(
                     None
                 };
 
-            if reply.send(result).is_err() {
-                error!("Failed to send ProcessSyncedValue reply");
-            }
+            reply
+                .send(result)
+                .map_err(|_| anyhow::anyhow!("Failed to send ProcessSyncedValue reply"))?;
         }
 
         AppMsg::RestreamProposal {

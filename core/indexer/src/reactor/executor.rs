@@ -1,3 +1,4 @@
+use anyhow::Result;
 use bitcoin::Txid;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -53,7 +54,7 @@ pub trait Executor {
     );
 
     /// Signal the block source to re-deliver blocks starting from `height`.
-    async fn replay_blocks_from(&mut self, height: u64);
+    async fn replay_blocks_from(&mut self, height: u64) -> Result<()>;
 
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
@@ -80,7 +81,9 @@ impl Executor for NoopExecutor {
         _tx: &indexer_types::Transaction,
     ) {
     }
-    async fn replay_blocks_from(&mut self, _height: u64) {}
+    async fn replay_blocks_from(&mut self, _height: u64) -> Result<()> {
+        Ok(())
+    }
     fn parse_transaction(&self, _tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
         None
     }
@@ -202,12 +205,13 @@ impl Executor for RuntimeExecutor {
             .await;
         }
     }
-    async fn replay_blocks_from(&mut self, height: u64) {
-        if let Some(tx) = &self.replay_tx
-            && let Err(e) = tx.send(height).await
-        {
-            tracing::error!(%e, height, "Failed to send replay request to poller");
+    async fn replay_blocks_from(&mut self, height: u64) -> Result<()> {
+        if let Some(tx) = &self.replay_tx {
+            tx.send(height)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send replay request to poller: {e}"))?;
         }
+        Ok(())
     }
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
