@@ -472,6 +472,16 @@ impl ReactorCluster {
                     if !d.value.is_block() && d.value.block_height() == anchor_height && !d.value.batch_txids().is_empty() {
                         txids = d.value.batch_txids().iter().map(|t| t.to_string()).collect();
                         decided = true;
+                        // Recount events that arrived before we knew the txids
+                        event_count = events
+                            .iter()
+                            .filter(|ev| match ev {
+                                Event::BatchProcessed { txids: et } => {
+                                    et.iter().any(|t| txids.contains(t))
+                                }
+                                _ => false,
+                            })
+                            .count();
                     }
                 }
                 Some(se) = self.state_rx.recv() => {
@@ -481,8 +491,10 @@ impl ReactorCluster {
                     state_events.push(se);
                 }
                 Some(ev) = self.event_rx.recv() => {
-                    if matches!(&ev, Event::BatchProcessed { .. }) {
-                        event_count += 1;
+                    if let Event::BatchProcessed { txids: ref ev_txids } = ev {
+                        if !txids.is_empty() && ev_txids.iter().any(|t| txids.contains(t)) {
+                            event_count += 1;
+                        }
                     }
                     events.push(ev);
                 }
