@@ -33,9 +33,12 @@ async fn filestorage_defaults(runtime: &mut Runtime) -> Result<()> {
     assert_eq!(filestorage::get_blocks_per_year(runtime).await?, 52560);
     assert_eq!(filestorage::get_s_chal(runtime).await?, 100);
 
-    // With no generated challenges, this should be empty.
-    let active = filestorage::get_active_challenges(runtime).await?;
-    assert!(active.is_empty());
+    // In local mode, no challenges should exist yet.
+    // In regtest mode, prior tests on the shared cluster may have generated challenges.
+    if runtime.reg_tester().is_none() {
+        let active = filestorage::get_active_challenges(runtime).await?;
+        assert!(active.is_empty());
+    }
 
     // Unknown IDs should be safe.
     assert!(

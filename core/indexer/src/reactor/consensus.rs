@@ -157,6 +157,7 @@ impl ConsensusState {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
         self.unfinalized_batches.clear();
+        self.pending_proposal = None;
     }
 
     fn validator_set(&self) -> ValidatorSet {
