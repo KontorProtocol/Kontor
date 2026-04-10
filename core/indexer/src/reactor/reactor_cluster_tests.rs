@@ -491,10 +491,11 @@ impl ReactorCluster {
                     state_events.push(se);
                 }
                 Some(ev) = self.event_rx.recv() => {
-                    if let Event::BatchProcessed { txids: ref ev_txids } = ev {
-                        if !txids.is_empty() && ev_txids.iter().any(|t| txids.contains(t)) {
-                            event_count += 1;
-                        }
+                    if let Event::BatchProcessed { txids: ref ev_txids } = ev
+                        && !txids.is_empty()
+                        && ev_txids.iter().any(|t| txids.contains(t))
+                    {
+                        event_count += 1;
                     }
                     events.push(ev);
                 }
