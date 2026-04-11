@@ -306,15 +306,15 @@ impl ConsensusState {
         // Batch-level validation (already-processed check will pass since we pre-filtered)
         let candidate_txids: Vec<String> =
             txs.iter().map(|tx| tx.compute_txid().to_string()).collect();
-        if let Some(reason) = validate_batch(
-            self,
-            last_height,
-            last_hash,
-            &candidate_txids,
-            last_height,
-            last_hash,
-        )
-        .await
+        if let Some(reason) = self
+            .validate_batch(
+                last_height,
+                last_hash,
+                &candidate_txids,
+                last_height,
+                last_hash,
+            )
+            .await
         {
             info!("Not proposing batch: {reason}");
             return None;
@@ -789,392 +789,386 @@ impl ConsensusState {
 
         Ok(true)
     }
-}
 
-/// Validate batch-level rules. Returns a rejection reason if any rule fails.
-async fn validate_batch(
-    state: &ConsensusState,
-    anchor_height: u64,
-    anchor_hash: bitcoin::BlockHash,
-    txids: &[String],
-    last_height: u64,
-    last_hash: bitcoin::BlockHash,
-) -> Option<&'static str> {
-    if !state.pending_blocks.is_empty() {
-        return Some("block is pending");
+    /// Validate batch-level rules. Returns a rejection reason if any rule fails.
+    async fn validate_batch(
+        &self,
+        anchor_height: u64,
+        anchor_hash: bitcoin::BlockHash,
+        txids: &[String],
+        last_height: u64,
+        last_hash: bitcoin::BlockHash,
+    ) -> Option<&'static str> {
+        if !self.pending_blocks.is_empty() {
+            return Some("block is pending");
+        }
+        if self.deferred_decisions.iter().any(|d| d.value.is_block()) {
+            return Some("deferred block decision waiting");
+        }
+        if anchor_height != last_height {
+            return Some("anchor height mismatch");
+        }
+        if anchor_hash != last_hash {
+            return Some("anchor hash mismatch");
+        }
+        let existing = select_existing_txids(&self.conn, txids)
+            .await
+            .unwrap_or_default();
+        if !existing.is_empty() {
+            return Some("contains already-processed transactions");
+        }
+        None
     }
-    if state.deferred_decisions.iter().any(|d| d.value.is_block()) {
-        return Some("deferred block decision waiting");
-    }
-    if anchor_height != last_height {
-        return Some("anchor height mismatch");
-    }
-    if anchor_hash != last_hash {
-        return Some("anchor hash mismatch");
-    }
-    let existing = select_existing_txids(&state.conn, txids)
-        .await
-        .unwrap_or_default();
-    if !existing.is_empty() {
-        return Some("contains already-processed transactions");
-    }
-    None
-}
-
-/// Validate a received proposal and accept it. Returns None if validation fails.
-async fn validate_and_accept_proposal(
-    state: &mut ConsensusState,
-    executor: &impl Executor,
-    data: &ProposalData,
-    height: Height,
-    round: Round,
-    last_height: u64,
-    last_hash: bitcoin::BlockHash,
-) -> Option<ProposedValue<Ctx>> {
-    let value = match data {
-        ProposalData::Block { height, hash } => {
-            if let Some(block) = state.pending_blocks.get(height) {
-                if block.hash != *hash {
+    /// Validate a received proposal and accept it. Returns None if validation fails.
+    async fn validate_and_accept_proposal(
+        &mut self,
+        executor: &impl Executor,
+        data: &ProposalData,
+        height: Height,
+        round: Round,
+        last_height: u64,
+        last_hash: bitcoin::BlockHash,
+    ) -> Option<ProposedValue<Ctx>> {
+        let value = match data {
+            ProposalData::Block { height, hash } => {
+                if let Some(block) = self.pending_blocks.get(height) {
+                    if block.hash != *hash {
+                        warn!(
+                            block_height = height,
+                            proposed = %hash,
+                            local = %block.hash,
+                            "Rejecting block proposal: hash mismatch"
+                        );
+                        return None;
+                    }
+                } else {
                     warn!(
                         block_height = height,
-                        proposed = %hash,
-                        local = %block.hash,
-                        "Rejecting block proposal: hash mismatch"
+                        "Rejecting block proposal: block not yet received"
                     );
                     return None;
                 }
-            } else {
-                warn!(
-                    block_height = height,
-                    "Rejecting block proposal: block not yet received"
-                );
-                return None;
+                Value::new_block(*height, *hash)
             }
-            Value::new_block(*height, *hash)
-        }
-        ProposalData::Batch {
-            anchor_height,
-            anchor_hash,
-            transactions,
-        } => {
-            let txid_strs: Vec<String> = transactions
-                .iter()
-                .map(|tx| tx.compute_txid().to_string())
-                .collect();
-            if let Some(reason) = validate_batch(
-                state,
-                *anchor_height,
-                *anchor_hash,
-                &txid_strs,
-                last_height,
-                last_hash,
-            )
-            .await
-            {
-                warn!("Rejecting batch proposal: {reason}");
-                return None;
-            }
-            for tx in transactions {
-                let txid = tx.compute_txid();
-                // Use cached parse from pending_transactions, or parse fresh
-                let parsed = if let Some((_, cached)) = state.pending_transactions.get(&txid) {
-                    cached.clone()
-                } else if let Some(p) = executor.parse_transaction(tx) {
-                    p
-                } else {
-                    warn!(%txid, "Rejecting proposal: transaction failed to parse");
-                    return None;
-                };
-                if !executor.validate_transaction(tx, &parsed).await {
-                    warn!(%txid, "Rejecting proposal: transaction failed validation");
+            ProposalData::Batch {
+                anchor_height,
+                anchor_hash,
+                transactions,
+            } => {
+                let txid_strs: Vec<String> = transactions
+                    .iter()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .collect();
+                if let Some(reason) = self
+                    .validate_batch(
+                        *anchor_height,
+                        *anchor_hash,
+                        &txid_strs,
+                        last_height,
+                        last_hash,
+                    )
+                    .await
+                {
+                    warn!("Rejecting batch proposal: {reason}");
                     return None;
                 }
-                // Add to pending_transactions if not already present
-                state
-                    .pending_transactions
-                    .entry(txid)
-                    .or_insert_with(|| (tx.clone(), parsed));
-            }
-            Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
-        }
-    };
-
-    let proposed = ProposedValue {
-        height,
-        round,
-        valid_round: Round::Nil,
-        proposer: state.address,
-        value,
-        validity: Validity::Valid,
-    };
-    state.undecided.insert((height, round), proposed.clone());
-    Some(proposed)
-}
-
-/// Handle a consensus message. Returns `Some(block)` if a `Value::Block` was
-/// decided and the block should be executed by the reactor via `handle_block`.
-pub async fn handle_consensus_msg(
-    state: &mut ConsensusState,
-    executor: &impl Executor,
-    runtime: &mut crate::runtime::Runtime,
-    channels: &mut Channels<Ctx>,
-    msg: AppMsg<Ctx>,
-    validator_index: Option<usize>,
-    last_height: u64,
-    last_hash: bitcoin::BlockHash,
-) -> Result<ConsensusResult> {
-    let mut result = ConsensusResult::None;
-    match msg {
-        AppMsg::ConsensusReady { reply } => {
-            let start_height = state.current_height;
-            info!(%start_height, "Consensus is ready");
-
-            reply
-                .send((start_height, state.height_params()))
-                .map_err(|_| anyhow::anyhow!("Failed to send ConsensusReady reply"))?;
-        }
-
-        AppMsg::StartedRound {
-            height,
-            round,
-            proposer,
-            role,
-            reply_value,
-        } => {
-            info!(%height, %round, %proposer, ?role, "Started round");
-            state.current_height = height;
-            state.current_round = round;
-
-            // Clear any stale pending proposal from a previous round
-            if let Some(pending) = &state.pending_proposal
-                && (pending.height != height || pending.round != round)
-            {
-                info!(
-                    pending_height = %pending.height,
-                    pending_round = %pending.round,
-                    "Clearing stale pending proposal"
-                );
-                state.pending_proposal = None;
-            }
-
-            let proposals: Vec<_> = state
-                .undecided
-                .get(&(height, round))
-                .cloned()
-                .into_iter()
-                .collect();
-
-            reply_value
-                .send(proposals)
-                .map_err(|_| anyhow::anyhow!("Failed to send StartedRound reply"))?;
-        }
-
-        AppMsg::GetValue {
-            height,
-            round,
-            timeout,
-            reply,
-        } => {
-            info!(%height, %round, "Building value to propose");
-
-            if let Some(existing) = state.undecided.get(&(height, round)) {
-                let proposal = LocallyProposedValue::new(
-                    existing.height,
-                    existing.round,
-                    existing.value.clone(),
-                );
-                for stream_msg in state.stream_proposal(&proposal, Round::Nil) {
-                    channels
-                        .network
-                        .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await
-                        .context("Failed to send proposal part to network")?;
-                }
-                reply
-                    .send(proposal)
-                    .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
-            } else if let Some(value) = state.make_value(executor, last_height, last_hash).await {
-                let proposed = ProposedValue {
-                    height,
-                    round,
-                    valid_round: Round::Nil,
-                    proposer: state.address,
-                    value: value.clone(),
-                    validity: Validity::Valid,
-                };
-                state.undecided.insert((height, round), proposed);
-                let proposal = LocallyProposedValue::new(height, round, value);
-                for stream_msg in state.stream_proposal(&proposal, Round::Nil) {
-                    channels
-                        .network
-                        .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await
-                        .context("Failed to send proposal part to network")?;
-                }
-                reply
-                    .send(proposal)
-                    .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
-            } else {
-                // Nothing to propose yet — hold the reply and wait for transactions
-                info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
-                state.pending_proposal = Some(PendingProposal {
-                    height,
-                    round,
-                    reply,
-                    timeout,
-                    created_at: Instant::now(),
-                });
-            }
-        }
-
-        AppMsg::ReceivedProposalPart {
-            from: _,
-            part,
-            reply,
-        } => {
-            let height = state.current_height;
-            let round = state.current_round;
-
-            let proposed = if round == Round::Nil {
-                None
-            } else {
-                match &part.content {
-                    StreamContent::Data(ProposalPart::Data(data)) => {
-                        if !state.undecided.contains_key(&(height, round)) {
-                            validate_and_accept_proposal(
-                                state,
-                                executor,
-                                data,
-                                height,
-                                round,
-                                last_height,
-                                last_hash,
-                            )
-                            .await
-                        } else {
-                            None
-                        }
+                for tx in transactions {
+                    let txid = tx.compute_txid();
+                    let parsed = if let Some((_, cached)) = self.pending_transactions.get(&txid) {
+                        cached.clone()
+                    } else if let Some(p) = executor.parse_transaction(tx) {
+                        p
+                    } else {
+                        warn!(%txid, "Rejecting proposal: transaction failed to parse");
+                        return None;
+                    };
+                    if !executor.validate_transaction(tx, &parsed).await {
+                        warn!(%txid, "Rejecting proposal: transaction failed validation");
+                        return None;
                     }
-                    _ => None,
+                    self.pending_transactions
+                        .entry(txid)
+                        .or_insert_with(|| (tx.clone(), parsed));
                 }
-            };
+                Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
+            }
+        };
 
-            reply
-                .send(proposed)
-                .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))?;
-        }
+        let proposed = ProposedValue {
+            height,
+            round,
+            valid_round: Round::Nil,
+            proposer: self.address,
+            value,
+            validity: Validity::Valid,
+        };
+        self.undecided.insert((height, round), proposed.clone());
+        Some(proposed)
+    }
 
-        AppMsg::ExtendVote { reply, .. } => {
-            reply
-                .send(None)
-                .map_err(|_| anyhow::anyhow!("Failed to send ExtendVote reply"))?;
-        }
+    /// Handle a consensus message. Returns `Some(block)` if a `Value::Block` was
+    /// decided and the block should be executed by the reactor via `handle_block`.
+    pub async fn handle_consensus_msg(
+        &mut self,
+        executor: &impl Executor,
+        runtime: &mut crate::runtime::Runtime,
+        channels: &mut Channels<Ctx>,
+        msg: AppMsg<Ctx>,
+        validator_index: Option<usize>,
+        last_height: u64,
+        last_hash: bitcoin::BlockHash,
+    ) -> Result<ConsensusResult> {
+        let mut result = ConsensusResult::None;
+        match msg {
+            AppMsg::ConsensusReady { reply } => {
+                let start_height = self.current_height;
+                info!(%start_height, "Consensus is ready");
 
-        AppMsg::VerifyVoteExtension { reply, .. } => {
-            reply
-                .send(Ok(()))
-                .map_err(|_| anyhow::anyhow!("Failed to send VerifyVoteExtension reply"))?;
-        }
+                reply
+                    .send((start_height, self.height_params()))
+                    .map_err(|_| anyhow::anyhow!("Failed to send ConsensusReady reply"))?;
+            }
 
-        AppMsg::Decided {
-            certificate,
-            extensions: _,
-        } => {
-            info!(
-                height = %certificate.height,
-                round = %certificate.round,
-                value = %certificate.value_id,
-                "Decided"
-            );
-        }
+            AppMsg::StartedRound {
+                height,
+                round,
+                proposer,
+                role,
+                reply_value,
+            } => {
+                info!(%height, %round, %proposer, ?role, "Started round");
+                self.current_height = height;
+                self.current_round = round;
 
-        AppMsg::Finalized {
-            certificate,
-            extensions: _,
-            evidence,
-            reply,
-        } => {
-            info!(
-                height = %certificate.height,
-                round = %certificate.round,
-                value = %certificate.value_id,
-                evidence = ?evidence,
-                "Finalized"
-            );
+                // Clear any stale pending proposal from a previous round
+                if let Some(pending) = &self.pending_proposal
+                    && (pending.height != height || pending.round != round)
+                {
+                    info!(
+                        pending_height = %pending.height,
+                        pending_round = %pending.round,
+                        "Clearing stale pending proposal"
+                    );
+                    self.pending_proposal = None;
+                }
 
-            if let Some(proposal) = state
-                .undecided
-                .remove(&(certificate.height, certificate.round))
-            {
-                if let Some(obs) = &state.observation {
-                    let _ = obs.decided_tx.try_send(DecidedBatch {
-                        validator_index,
-                        consensus_height: certificate.height,
-                        value: proposal.value.clone(),
+                let proposals: Vec<_> = self
+                    .undecided
+                    .get(&(height, round))
+                    .cloned()
+                    .into_iter()
+                    .collect();
+
+                reply_value
+                    .send(proposals)
+                    .map_err(|_| anyhow::anyhow!("Failed to send StartedRound reply"))?;
+            }
+
+            AppMsg::GetValue {
+                height,
+                round,
+                timeout,
+                reply,
+            } => {
+                info!(%height, %round, "Building value to propose");
+
+                if let Some(existing) = self.undecided.get(&(height, round)) {
+                    let proposal = LocallyProposedValue::new(
+                        existing.height,
+                        existing.round,
+                        existing.value.clone(),
+                    );
+                    for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
+                        channels
+                            .network
+                            .send(NetworkMsg::PublishProposalPart(stream_msg))
+                            .await
+                            .context("Failed to send proposal part to network")?;
+                    }
+                    reply
+                        .send(proposal)
+                        .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
+                } else if let Some(value) = self.make_value(executor, last_height, last_hash).await
+                {
+                    let proposed = ProposedValue {
+                        height,
+                        round,
+                        valid_round: Round::Nil,
+                        proposer: self.address,
+                        value: value.clone(),
+                        validity: Validity::Valid,
+                    };
+                    self.undecided.insert((height, round), proposed);
+                    let proposal = LocallyProposedValue::new(height, round, value);
+                    for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
+                        channels
+                            .network
+                            .send(NetworkMsg::PublishProposalPart(stream_msg))
+                            .await
+                            .context("Failed to send proposal part to network")?;
+                    }
+                    reply
+                        .send(proposal)
+                        .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
+                } else {
+                    // Nothing to propose yet — hold the reply and wait for transactions
+                    info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
+                    self.pending_proposal = Some(PendingProposal {
+                        height,
+                        round,
+                        reply,
+                        timeout,
+                        created_at: Instant::now(),
                     });
                 }
-                match &proposal.value {
-                    Value::Batch {
-                        anchor_height,
-                        anchor_hash,
-                        txs,
-                    } => {
-                        // Resolve full txs: Raw entries used directly (live path),
-                        // Id entries resolved via executor (sync path for finalized batches).
-                        let mut full_txs = Vec::new();
-                        for entry in txs {
-                            match entry {
-                                BatchTx::Raw(tx) => full_txs.push(tx.clone()),
-                                BatchTx::Id(txid) => {
-                                    if let Some(tx) = executor.resolve_transaction(txid).await {
-                                        full_txs.push(tx);
+            }
+
+            AppMsg::ReceivedProposalPart {
+                from: _,
+                part,
+                reply,
+            } => {
+                let height = self.current_height;
+                let round = self.current_round;
+
+                let proposed = if round == Round::Nil {
+                    None
+                } else {
+                    match &part.content {
+                        StreamContent::Data(ProposalPart::Data(data)) => {
+                            if !self.undecided.contains_key(&(height, round)) {
+                                self.validate_and_accept_proposal(
+                                    executor,
+                                    data,
+                                    height,
+                                    round,
+                                    last_height,
+                                    last_hash,
+                                )
+                                .await
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                };
+
+                reply
+                    .send(proposed)
+                    .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))?;
+            }
+
+            AppMsg::ExtendVote { reply, .. } => {
+                reply
+                    .send(None)
+                    .map_err(|_| anyhow::anyhow!("Failed to send ExtendVote reply"))?;
+            }
+
+            AppMsg::VerifyVoteExtension { reply, .. } => {
+                reply
+                    .send(Ok(()))
+                    .map_err(|_| anyhow::anyhow!("Failed to send VerifyVoteExtension reply"))?;
+            }
+
+            AppMsg::Decided {
+                certificate,
+                extensions: _,
+            } => {
+                info!(
+                    height = %certificate.height,
+                    round = %certificate.round,
+                    value = %certificate.value_id,
+                    "Decided"
+                );
+            }
+
+            AppMsg::Finalized {
+                certificate,
+                extensions: _,
+                evidence,
+                reply,
+            } => {
+                info!(
+                    height = %certificate.height,
+                    round = %certificate.round,
+                    value = %certificate.value_id,
+                    evidence = ?evidence,
+                    "Finalized"
+                );
+
+                if let Some(proposal) = self
+                    .undecided
+                    .remove(&(certificate.height, certificate.round))
+                {
+                    if let Some(obs) = &self.observation {
+                        let _ = obs.decided_tx.try_send(DecidedBatch {
+                            validator_index,
+                            consensus_height: certificate.height,
+                            value: proposal.value.clone(),
+                        });
+                    }
+                    match &proposal.value {
+                        Value::Batch {
+                            anchor_height,
+                            anchor_hash,
+                            txs,
+                        } => {
+                            // Resolve full txs: Raw entries used directly (live path),
+                            // Id entries resolved via executor (sync path for finalized batches).
+                            let mut full_txs = Vec::new();
+                            for entry in txs {
+                                match entry {
+                                    BatchTx::Raw(tx) => full_txs.push(tx.clone()),
+                                    BatchTx::Id(txid) => {
+                                        if let Some(tx) = executor.resolve_transaction(txid).await {
+                                            full_txs.push(tx);
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        // Remove decided txids from pending_transactions
-                        for tx in &full_txs {
-                            state.pending_transactions.remove(&tx.compute_txid());
-                        }
+                            // Remove decided txids from pending_transactions
+                            for tx in &full_txs {
+                                self.pending_transactions.remove(&tx.compute_txid());
+                            }
 
-                        let cert_bytes = encode_commit_certificate(&certificate)
-                            .map(|p| p.encode_to_vec())
-                            .unwrap_or_default();
+                            let cert_bytes = encode_commit_certificate(&certificate)
+                                .map(|p| p.encode_to_vec())
+                                .unwrap_or_default();
 
-                        if *anchor_height < last_height {
-                            warn!(
-                                anchor = anchor_height,
-                                last_height,
-                                consensus_height = %certificate.height,
-                                "Skipping stale batch — anchor below current height"
-                            );
-                            // Still record the batch for sync protocol
-                            insert_batch(
-                                &state.conn,
-                                certificate.height.as_u64() as i64,
-                                *anchor_height as i64,
-                                &anchor_hash.to_string(),
-                                &cert_bytes,
-                                false,
-                            )
-                            .await
-                            .context("Failed to record stale batch for sync")?;
-                        } else if *anchor_height > last_height {
-                            info!(
-                                anchor = anchor_height,
-                                last_height,
-                                consensus_height = %certificate.height,
-                                "Deferring batch — anchor block not yet processed"
-                            );
-                            state.deferred_decisions.push_back(DeferredDecision {
-                                consensus_height: certificate.height,
-                                value: proposal.value.clone(),
-                                certificate: cert_bytes,
-                            });
-                        } else {
-                            state
-                                .process_decided_batch(
+                            if *anchor_height < last_height {
+                                warn!(
+                                    anchor = anchor_height,
+                                    last_height,
+                                    consensus_height = %certificate.height,
+                                    "Skipping stale batch — anchor below current height"
+                                );
+                                // Still record the batch for sync protocol
+                                insert_batch(
+                                    &self.conn,
+                                    certificate.height.as_u64() as i64,
+                                    *anchor_height as i64,
+                                    &anchor_hash.to_string(),
+                                    &cert_bytes,
+                                    false,
+                                )
+                                .await
+                                .context("Failed to record stale batch for sync")?;
+                            } else if *anchor_height > last_height {
+                                info!(
+                                    anchor = anchor_height,
+                                    last_height,
+                                    consensus_height = %certificate.height,
+                                    "Deferring batch — anchor block not yet processed"
+                                );
+                                self.deferred_decisions.push_back(DeferredDecision {
+                                    consensus_height: certificate.height,
+                                    value: proposal.value.clone(),
+                                    certificate: cert_bytes,
+                                });
+                            } else {
+                                self.process_decided_batch(
                                     executor,
                                     runtime,
                                     *anchor_height,
@@ -1185,163 +1179,168 @@ pub async fn handle_consensus_msg(
                                 )
                                 .await
                                 .context("process_decided_batch failed in Finalized handler")?;
-                            result = ConsensusResult::BatchProcessed {
-                                txids: full_txs
-                                    .iter()
-                                    .map(|tx| tx.compute_txid().to_string())
-                                    .collect(),
-                            };
-                        }
-                    }
-                    Value::Block { height, hash } => {
-                        let cert_bytes = encode_commit_certificate(&certificate)
-                            .map(|p| p.encode_to_vec())
-                            .unwrap_or_default();
-
-                        // Remove from pending if present (may not be if we received
-                        // the decision via sync before the block arrived from poller)
-                        if let Some(block) = state.pending_blocks.remove(height) {
-                            info!(
-                                block_height = height,
-                                block_hash = %hash,
-                                consensus_height = %certificate.height,
-                                "Block decided and ready to process"
-                            );
-                            result = ConsensusResult::Block(
-                                block,
-                                DeferredDecision {
-                                    consensus_height: certificate.height,
-                                    value: proposal.value.clone(),
-                                    certificate: cert_bytes.clone(),
-                                },
-                            );
-                        } else {
-                            // Only defer if this block height is relevant (not stale from
-                            // a pre-rollback decision that arrived late)
-                            let is_stale =
-                                match select_block_at_height(&state.conn, *height as i64).await {
-                                    Ok(Some(row)) => row.hash != *hash,
-                                    _ => false,
+                                result = ConsensusResult::BatchProcessed {
+                                    txids: full_txs
+                                        .iter()
+                                        .map(|tx| tx.compute_txid().to_string())
+                                        .collect(),
                                 };
-                            if !is_stale {
+                            }
+                        }
+                        Value::Block { height, hash } => {
+                            let cert_bytes = encode_commit_certificate(&certificate)
+                                .map(|p| p.encode_to_vec())
+                                .unwrap_or_default();
+
+                            // Remove from pending if present (may not be if we received
+                            // the decision via sync before the block arrived from poller)
+                            if let Some(block) = self.pending_blocks.remove(height) {
                                 info!(
                                     block_height = height,
                                     block_hash = %hash,
                                     consensus_height = %certificate.height,
-                                    "Block decided but not yet received — deferring"
+                                    "Block decided and ready to process"
                                 );
-                                state.deferred_decisions.push_back(DeferredDecision {
-                                    consensus_height: certificate.height,
-                                    value: proposal.value.clone(),
-                                    certificate: cert_bytes.clone(),
-                                });
+                                result = ConsensusResult::Block(
+                                    block,
+                                    DeferredDecision {
+                                        consensus_height: certificate.height,
+                                        value: proposal.value.clone(),
+                                        certificate: cert_bytes.clone(),
+                                    },
+                                );
                             } else {
-                                warn!(
-                                    block_height = height,
-                                    block_hash = %hash,
-                                    "Ignoring stale block decision (post-rollback)"
-                                );
+                                // Only defer if this block height is relevant (not stale from
+                                // a pre-rollback decision that arrived late)
+                                let is_stale = match select_block_at_height(
+                                    &self.conn,
+                                    *height as i64,
+                                )
+                                .await
+                                {
+                                    Ok(Some(row)) => row.hash != *hash,
+                                    _ => false,
+                                };
+                                if !is_stale {
+                                    info!(
+                                        block_height = height,
+                                        block_hash = %hash,
+                                        consensus_height = %certificate.height,
+                                        "Block decided but not yet received — deferring"
+                                    );
+                                    self.deferred_decisions.push_back(DeferredDecision {
+                                        consensus_height: certificate.height,
+                                        value: proposal.value.clone(),
+                                        certificate: cert_bytes.clone(),
+                                    });
+                                } else {
+                                    warn!(
+                                        block_height = height,
+                                        block_hash = %hash,
+                                        "Ignoring stale block decision (post-rollback)"
+                                    );
+                                }
                             }
                         }
                     }
                 }
+
+                self.current_height = certificate.height.increment();
+                self.current_round = Round::Nil;
+                self.pending_proposal = None;
+
+                let next = Next::Start(self.current_height, self.height_params());
+
+                reply
+                    .send(next)
+                    .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))?;
             }
 
-            state.current_height = certificate.height.increment();
-            state.current_round = Round::Nil;
-            state.pending_proposal = None;
+            AppMsg::GetHistoryMinHeight { reply } => {
+                let min = self.min_decided_height().await.unwrap_or(Height::new(1));
+                reply
+                    .send(min)
+                    .map_err(|_| anyhow::anyhow!("Failed to send GetHistoryMinHeight reply"))?;
+            }
 
-            let next = Next::Start(state.current_height, state.height_params());
+            AppMsg::GetDecidedValues { range, reply } => {
+                let decided = self.get_decided_range(*range.start(), *range.end()).await;
+                let values: Vec<_> = decided
+                    .into_iter()
+                    .filter_map(|(value, cert)| {
+                        ProtobufCodec
+                            .encode(&value)
+                            .ok()
+                            .map(|encoded| RawDecidedValue {
+                                certificate: cert,
+                                value_bytes: encoded,
+                            })
+                    })
+                    .collect();
+                reply
+                    .send(values)
+                    .map_err(|_| anyhow::anyhow!("Failed to send GetDecidedValues reply"))?;
+            }
 
-            reply
-                .send(next)
-                .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))?;
-        }
-
-        AppMsg::GetHistoryMinHeight { reply } => {
-            let min = state.min_decided_height().await.unwrap_or(Height::new(1));
-            reply
-                .send(min)
-                .map_err(|_| anyhow::anyhow!("Failed to send GetHistoryMinHeight reply"))?;
-        }
-
-        AppMsg::GetDecidedValues { range, reply } => {
-            let decided = state.get_decided_range(*range.start(), *range.end()).await;
-            let values: Vec<_> = decided
-                .into_iter()
-                .filter_map(|(value, cert)| {
-                    ProtobufCodec
-                        .encode(&value)
-                        .ok()
-                        .map(|encoded| RawDecidedValue {
-                            certificate: cert,
-                            value_bytes: encoded,
-                        })
-                })
-                .collect();
-            reply
-                .send(values)
-                .map_err(|_| anyhow::anyhow!("Failed to send GetDecidedValues reply"))?;
-        }
-
-        AppMsg::ProcessSyncedValue {
-            height,
-            round,
-            proposer,
-            value_bytes,
-            reply,
-        } => {
-            // Malachite verifies the ValueId from the certificate matches
-            // the decoded Value's id() — this catches any tampered raw txs
-            // since id() hashes the txids derived from each BatchTx variant.
-            let result: Option<ProposedValue<Ctx>> =
-                if let Ok(value) = ProtobufCodec.decode(value_bytes) {
-                    let proposed = ProposedValue {
-                        height,
-                        round,
-                        valid_round: Round::Nil,
-                        proposer,
-                        value,
-                        validity: Validity::Valid,
+            AppMsg::ProcessSyncedValue {
+                height,
+                round,
+                proposer,
+                value_bytes,
+                reply,
+            } => {
+                // Malachite verifies the ValueId from the certificate matches
+                // the decoded Value's id() — this catches any tampered raw txs
+                // since id() hashes the txids derived from each BatchTx variant.
+                let result: Option<ProposedValue<Ctx>> =
+                    if let Ok(value) = ProtobufCodec.decode(value_bytes) {
+                        let proposed = ProposedValue {
+                            height,
+                            round,
+                            valid_round: Round::Nil,
+                            proposer,
+                            value,
+                            validity: Validity::Valid,
+                        };
+                        self.undecided.insert((height, round), proposed.clone());
+                        Some(proposed)
+                    } else {
+                        None
                     };
-                    state.undecided.insert((height, round), proposed.clone());
-                    Some(proposed)
+
+                reply
+                    .send(result)
+                    .map_err(|_| anyhow::anyhow!("Failed to send ProcessSyncedValue reply"))?;
+            }
+
+            AppMsg::RestreamProposal {
+                height,
+                round,
+                valid_round,
+                address: _,
+                value_id,
+            } => {
+                let lookup_round = if valid_round == Round::Nil {
+                    round
                 } else {
-                    None
+                    valid_round
                 };
-
-            reply
-                .send(result)
-                .map_err(|_| anyhow::anyhow!("Failed to send ProcessSyncedValue reply"))?;
-        }
-
-        AppMsg::RestreamProposal {
-            height,
-            round,
-            valid_round,
-            address: _,
-            value_id,
-        } => {
-            let lookup_round = if valid_round == Round::Nil {
-                round
-            } else {
-                valid_round
-            };
-            if let Some(proposal) = state.undecided.get(&(height, lookup_round))
-                && proposal.value.id() == value_id
-            {
-                let locally_proposed =
-                    LocallyProposedValue::new(height, round, proposal.value.clone());
-                for stream_msg in state.stream_proposal(&locally_proposed, valid_round) {
-                    channels
-                        .network
-                        .send(NetworkMsg::PublishProposalPart(stream_msg))
-                        .await
-                        .context("Failed to send proposal part to network")?;
+                if let Some(proposal) = self.undecided.get(&(height, lookup_round))
+                    && proposal.value.id() == value_id
+                {
+                    let locally_proposed =
+                        LocallyProposedValue::new(height, round, proposal.value.clone());
+                    for stream_msg in self.stream_proposal(&locally_proposed, valid_round) {
+                        channels
+                            .network
+                            .send(NetworkMsg::PublishProposalPart(stream_msg))
+                            .await
+                            .context("Failed to send proposal part to network")?;
+                    }
                 }
             }
         }
-    }
 
-    Ok(result)
+        Ok(result)
+    }
 }

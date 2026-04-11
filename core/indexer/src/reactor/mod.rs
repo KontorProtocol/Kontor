@@ -726,17 +726,19 @@ impl<E: Executor> Reactor<E> {
                     debug!("REACTOR: processing consensus msg");
                     let handle = self.consensus_handle.as_mut().unwrap();
                     let validator_index = handle.validator_index;
-                    let consensus_result = consensus::handle_consensus_msg(
-                        &mut handle.state,
-                        &self.executor,
-                        &mut self.runtime,
-                        &mut handle.channels,
-                        msg,
-                        validator_index,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                    ).await
-                    .context("handle_consensus_msg failed")?;
+                    let consensus_result = handle
+                        .state
+                        .handle_consensus_msg(
+                            &self.executor,
+                            &mut self.runtime,
+                            &mut handle.channels,
+                            msg,
+                            validator_index,
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        )
+                        .await
+                        .context("handle_consensus_msg failed")?;
                     if let consensus::ConsensusResult::BatchProcessed { txids } = &consensus_result
                         && let Some(tx) = &self.event_tx
                         && tx
