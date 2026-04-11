@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bitcoin::Txid;
@@ -57,8 +58,16 @@ pub struct PendingProposal {
     pub height: Height,
     pub round: Round,
     pub reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
-    pub timeout: std::time::Duration,
-    pub created_at: std::time::Instant,
+    pub timeout: Duration,
+    pub created_at: Instant,
+}
+
+impl PendingProposal {
+    /// Deadline at which we must propose (even an empty batch) before
+    /// Malachite's propose timeout fires. Uses 80% of the propose timeout.
+    pub fn hard_deadline(&self) -> Instant {
+        self.created_at + self.timeout * 4 / 5
+    }
 }
 
 /// All consensus-related state for the reactor.
@@ -737,10 +746,7 @@ impl ConsensusState {
         last_hash: bitcoin::BlockHash,
     ) -> Result<bool> {
         let (past_deadline, pending_height, pending_round) = match &self.pending_proposal {
-            Some(p) => {
-                let hard_deadline = p.timeout.saturating_sub(std::time::Duration::from_secs(1));
-                (p.created_at.elapsed() >= hard_deadline, p.height, p.round)
-            }
+            Some(p) => (Instant::now() >= p.hard_deadline(), p.height, p.round),
             None => return Ok(false),
         };
 
@@ -1016,7 +1022,7 @@ pub async fn handle_consensus_msg(
                     round,
                     reply,
                     timeout,
-                    created_at: std::time::Instant::now(),
+                    created_at: Instant::now(),
                 });
             }
         }

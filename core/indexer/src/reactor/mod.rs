@@ -622,8 +622,7 @@ impl<E: Executor> Reactor<E> {
                 .as_ref()
                 .and_then(|h| h.state.pending_proposal.as_ref())
                 .map(|p| {
-                    let deadline =
-                        p.created_at + p.timeout.saturating_sub(std::time::Duration::from_secs(1));
+                    let deadline = p.hard_deadline();
                     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                     tokio::time::Instant::now() + remaining
                 });
