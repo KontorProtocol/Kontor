@@ -70,7 +70,13 @@ impl MockBitcoin {
         for _ in 0..count {
             self.tx_counter += 1;
             let tx = make_tx(self.tx_counter);
-            events.push(MempoolEvent::Insert(tx.clone()));
+            let parsed = indexer_types::Transaction {
+                txid: tx.compute_txid(),
+                index: 0,
+                inputs: vec![],
+                op_return_data: Default::default(),
+            };
+            events.push(MempoolEvent::Insert(tx.clone(), parsed));
             self.mempool.push(tx);
         }
         events

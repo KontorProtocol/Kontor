@@ -572,6 +572,18 @@ pub async fn select_batches_from_anchor(
     query_batches(conn, &format!("WHERE b.anchor_height >= {from_anchor}")).await
 }
 
+pub async fn select_batches_in_range(
+    conn: &Connection,
+    start: i64,
+    end: i64,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    query_batches(
+        conn,
+        &format!("WHERE b.consensus_height >= {start} AND b.consensus_height <= {end}"),
+    )
+    .await
+}
+
 async fn query_batches(
     conn: &Connection,
     where_clause: &str,

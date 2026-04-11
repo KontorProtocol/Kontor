@@ -9,7 +9,7 @@ pub enum BlockEvent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MempoolEvent {
-    Sync(Vec<bitcoin::Transaction>),
-    Insert(bitcoin::Transaction),
+    Sync(Vec<(bitcoin::Transaction, indexer_types::Transaction)>),
+    Insert(bitcoin::Transaction, indexer_types::Transaction),
     Remove(Txid),
 }

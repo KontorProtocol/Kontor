@@ -706,7 +706,13 @@ pub mod reactor_harness {
 
         /// Send a mempool transaction.
         pub async fn send_mempool_tx(&self, tx: bitcoin::Transaction) {
-            let _ = self.mempool_tx.send(MempoolEvent::Insert(tx)).await;
+            let parsed = indexer_types::Transaction {
+                txid: tx.compute_txid(),
+                index: 0,
+                inputs: vec![],
+                op_return_data: Default::default(),
+            };
+            let _ = self.mempool_tx.send(MempoolEvent::Insert(tx, parsed)).await;
         }
 
         /// Wait for state events.

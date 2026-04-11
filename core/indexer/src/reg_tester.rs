@@ -162,7 +162,7 @@ async fn run_kontor(
             .arg("--genesis-file")
             .arg(&c.genesis_file)
             .arg("--consensus-propose-timeout-ms")
-            .arg("500");
+            .arg("10000");
         for peer in &c.peers {
             cmd.arg("--consensus-peers").arg(peer);
         }
