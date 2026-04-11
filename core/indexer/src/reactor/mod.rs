@@ -23,7 +23,6 @@ use tokio_util::sync::CancellationToken;
 
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
-use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::LinearTimeouts;
 use tracing::{debug, error, info, warn};
@@ -31,7 +30,7 @@ use tracing::{debug, error, info, warn};
 use crate::consensus::finality_types::StateEvent;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
-    consensus::{Ctx, Genesis, Validator, ValidatorSet, signing::PublicKey},
+    consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},
     database::{
         self,
         queries::{
@@ -58,14 +57,6 @@ pub type Simulation = (
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
 
-/// Handle to the Malachite engine + consensus state, present only when consensus is configured.
-pub struct ConsensusHandle {
-    pub state: consensus::ConsensusState,
-    pub channels: Channels<Ctx>,
-    pub _engine_handle: malachitebft_app_channel::EngineHandle,
-    pub validator_index: Option<usize>,
-}
-
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
@@ -75,7 +66,7 @@ pub struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    consensus_handle: Option<ConsensusHandle>,
+    consensus: Option<consensus::ConsensusState>,
 
     last_height: u64,
     last_hash: Option<BlockHash>,
@@ -91,13 +82,13 @@ impl<E: Executor> Reactor<E> {
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-        consensus_handle: Option<ConsensusHandle>,
+        consensus: Option<consensus::ConsensusState>,
         last_height: u64,
         last_hash: Option<BlockHash>,
     ) -> Self {
         let mut runtime = runtime;
-        if let Some(handle) = &consensus_handle {
-            runtime.node_label = handle
+        if let Some(cs) = &consensus {
+            runtime.node_label = cs
                 .validator_index
                 .map(|i| format!("node_{i}"))
                 .unwrap_or_else(|| "follower".to_string());
@@ -113,7 +104,7 @@ impl<E: Executor> Reactor<E> {
             last_hash,
             ready_tx,
             event_tx,
-            consensus_handle,
+            consensus,
         }
     }
 
@@ -157,14 +148,11 @@ impl<E: Executor> Reactor<E> {
         }
 
         // Refresh cached validator set — rolled-back state may have different active set
-        if let Some(handle) = &mut self.consensus_handle
+        if let Some(cs) = &mut self.consensus
             && let Ok(vs) = build_validator_set(&mut self.runtime).await
         {
-            handle.validator_index = vs
-                .validators
-                .iter()
-                .position(|v| v.address == handle.state.address);
-            handle.state.current_validator_set = vs;
+            cs.validator_index = vs.validators.iter().position(|v| v.address == cs.address);
+            cs.current_validator_set = vs;
         }
 
         if let Some(tx) = &self.event_tx
@@ -373,19 +361,16 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to commit block transaction")?;
 
-        if let Some(handle) = &mut self.consensus_handle {
+        if let Some(cs) = &mut self.consensus {
             // Update cached validator set after block execution
             // (process_pending_validators may have activated/deactivated validators)
             if let Ok(vs) = build_validator_set(&mut self.runtime).await {
-                handle.validator_index = vs
-                    .validators
-                    .iter()
-                    .position(|v| v.address == handle.state.address);
-                handle.state.current_validator_set = vs;
+                cs.validator_index = vs.validators.iter().position(|v| v.address == cs.address);
+                cs.current_validator_set = vs;
             }
 
-            let checkpoint = handle.state.get_checkpoint().await;
-            handle.state.emit_state_event(StateEvent::BlockProcessed {
+            let checkpoint = cs.get_checkpoint().await;
+            cs.emit_state_event(StateEvent::BlockProcessed {
                 height,
                 unbatched_count,
                 checkpoint,
@@ -421,13 +406,13 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn drain_deferred_decisions(&mut self) -> Result<()> {
-        if self.consensus_handle.is_none() {
+        if self.consensus.is_none() {
             return Ok(());
         }
 
         loop {
-            let handle = self.consensus_handle.as_mut().unwrap();
-            let Some(decision) = handle.state.deferred_decisions.pop_front() else {
+            let cs = self.consensus.as_mut().unwrap();
+            let Some(decision) = cs.deferred_decisions.pop_front() else {
                 break;
             };
 
@@ -435,8 +420,8 @@ impl<E: Executor> Reactor<E> {
                 crate::consensus::Value::Block { height: bh, .. } => {
                     let bh = *bh;
                     let block = {
-                        let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.pending_blocks.remove(&bh)
+                        let cs = self.consensus.as_mut().unwrap();
+                        cs.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
                         info!(
@@ -454,8 +439,8 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %decision.consensus_height,
                             "Deferred block still waiting for data"
                         );
-                        let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.deferred_decisions.push_front(decision);
+                        let cs = self.consensus.as_mut().unwrap();
+                        cs.deferred_decisions.push_front(decision);
                         break;
                     }
                 }
@@ -495,20 +480,18 @@ impl<E: Executor> Reactor<E> {
                                 }
                             }
                         }
-                        let handle = self.consensus_handle.as_mut().unwrap();
-                        handle
-                            .state
-                            .process_decided_batch(
-                                &self.executor,
-                                &mut self.runtime,
-                                anchor_height,
-                                anchor_hash,
-                                decision.consensus_height,
-                                &decision.certificate,
-                                &resolved_txs,
-                            )
-                            .await
-                            .context("process_decided_batch failed in deferred drain")?;
+                        let cs = self.consensus.as_mut().unwrap();
+                        cs.process_decided_batch(
+                            &self.executor,
+                            &mut self.runtime,
+                            anchor_height,
+                            anchor_hash,
+                            decision.consensus_height,
+                            &decision.certificate,
+                            &resolved_txs,
+                        )
+                        .await
+                        .context("process_decided_batch failed in deferred drain")?;
                         if let Some(tx) = &self.event_tx {
                             let txids: Vec<String> = resolved_txs
                                 .iter()
@@ -525,8 +508,8 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %decision.consensus_height,
                             "Deferred batch still waiting for anchor"
                         );
-                        let handle = self.consensus_handle.as_mut().unwrap();
-                        handle.state.deferred_decisions.push_front(decision);
+                        let cs = self.consensus.as_mut().unwrap();
+                        cs.deferred_decisions.push_front(decision);
                         break;
                     }
                 }
@@ -541,25 +524,22 @@ impl<E: Executor> Reactor<E> {
                 target_height,
                 block,
             } => {
-                if let Some(handle) = self.consensus_handle.as_mut() {
+                if let Some(cs) = self.consensus.as_mut() {
                     let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
                     for txid in &txids {
-                        handle.state.pending_transactions.remove(txid);
+                        cs.pending_transactions.remove(txid);
                     }
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
-                if let Some(handle) = self.consensus_handle.as_mut() {
+                if let Some(cs) = self.consensus.as_mut() {
                     info!(
                         block_height = block.height,
                         %block.hash,
-                        pending_count = handle.state.pending_blocks.len() + 1,
+                        pending_count = cs.pending_blocks.len() + 1,
                         "Adding block to pending_blocks"
                     );
-                    handle
-                        .state
-                        .pending_blocks
-                        .insert(block.height, block.clone());
+                    cs.pending_blocks.insert(block.height, block.clone());
                     self.drain_deferred_decisions()
                         .await
                         .context("drain_deferred_decisions failed after block insert")?;
@@ -569,19 +549,16 @@ impl<E: Executor> Reactor<E> {
                         .context("handle_block failed (no consensus)")?;
                 }
                 // A pending block may be what we're waiting to propose
-                if let Some(handle) = self.consensus_handle.as_mut()
-                    && handle.state.pending_proposal.is_some()
+                if let Some(cs) = self.consensus.as_mut()
+                    && cs.pending_proposal.is_some()
                 {
-                    handle
-                        .state
-                        .try_fulfill_pending_proposal(
-                            &self.executor,
-                            &mut handle.channels,
-                            self.last_height,
-                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                        )
-                        .await
-                        .context("try_fulfill_pending_proposal failed after block insert")?;
+                    cs.try_fulfill_pending_proposal(
+                        &self.executor,
+                        self.last_height,
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                    )
+                    .await
+                    .context("try_fulfill_pending_proposal failed after block insert")?;
                 }
             }
             BlockEvent::Rollback { to_height } => {
@@ -589,10 +566,10 @@ impl<E: Executor> Reactor<E> {
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
-                if let Some(handle) = &mut self.consensus_handle {
-                    handle.state.clear_on_rollback();
-                    let checkpoint = handle.state.get_checkpoint().await;
-                    handle.state.emit_state_event(StateEvent::RollbackExecuted {
+                if let Some(cs) = &mut self.consensus {
+                    cs.clear_on_rollback();
+                    let checkpoint = cs.get_checkpoint().await;
+                    cs.emit_state_event(StateEvent::RollbackExecuted {
                         to_anchor: to_height,
                         entries_removed: 0,
                         checkpoint,
@@ -618,9 +595,9 @@ impl<E: Executor> Reactor<E> {
             }
 
             let hard_deadline_instant = self
-                .consensus_handle
+                .consensus
                 .as_ref()
-                .and_then(|h| h.state.pending_proposal.as_ref())
+                .and_then(|cs| cs.pending_proposal.as_ref())
                 .map(|p| {
                     let deadline = p.hard_deadline();
                     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -636,8 +613,8 @@ impl<E: Executor> Reactor<E> {
             };
 
             let consensus_rx = async {
-                if let Some(handle) = self.consensus_handle.as_mut() {
-                    handle.channels.consensus.recv().await
+                if let Some(cs) = self.consensus.as_mut() {
+                    cs.channels.consensus.recv().await
                 } else {
                     pending().await
                 }
@@ -668,32 +645,32 @@ impl<E: Executor> Reactor<E> {
                         .context("process_block_event failed")?;
                 }
                 Some(event) = self.mempool_rx.recv() => {
-                    if let Some(handle) = self.consensus_handle.as_mut() {
+                    if let Some(cs) = self.consensus.as_mut() {
                         match event {
                             MempoolEvent::Sync(txs) => {
                                 let count = txs.len();
-                                handle.state.pending_transactions.clear();
+                                cs.pending_transactions.clear();
                                 for (raw, parsed) in txs {
-                                    handle.state.pending_transactions.insert(
+                                    cs.pending_transactions.insert(
                                         raw.compute_txid(),
                                         (raw, parsed),
                                     );
                                 }
                                 info!("MempoolSync {}", count);
-                                if handle.state.pending_proposal.is_some() {
+                                if cs.pending_proposal.is_some() {
                                     debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                                 }
                             },
                             MempoolEvent::Insert(tx, parsed) => {
                                 let txid = tx.compute_txid();
-                                handle.state.pending_transactions.insert(txid, (tx, parsed));
+                                cs.pending_transactions.insert(txid, (tx, parsed));
                                 debug!("MempoolInsert {}", txid);
-                                if handle.state.pending_proposal.is_some() {
+                                if cs.pending_proposal.is_some() {
                                     debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                                 }
                             },
                             MempoolEvent::Remove(txid) => {
-                                handle.state.pending_transactions.remove(&txid);
+                                cs.pending_transactions.remove(&txid);
                                 debug!("MempoolRemove {}", txid);
                             },
                         }
@@ -701,10 +678,9 @@ impl<E: Executor> Reactor<E> {
                 }
                 _ = debounce_sleep => {
                     debounce_deadline = None;
-                    if let Some(handle) = self.consensus_handle.as_mut() {
-                        handle.state.try_fulfill_pending_proposal(
+                    if let Some(cs) = self.consensus.as_mut() {
+                        cs.try_fulfill_pending_proposal(
                             &self.executor,
-                            &mut handle.channels,
                             self.last_height,
                             self.last_hash.unwrap_or(BlockHash::all_zeros()),
                         ).await
@@ -712,10 +688,9 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
                 _ = hard_deadline_sleep => {
-                    if let Some(handle) = self.consensus_handle.as_mut() {
-                        handle.state.try_fulfill_pending_proposal(
+                    if let Some(cs) = self.consensus.as_mut() {
+                        cs.try_fulfill_pending_proposal(
                             &self.executor,
-                            &mut handle.channels,
                             self.last_height,
                             self.last_hash.unwrap_or(BlockHash::all_zeros()),
                         ).await
@@ -724,16 +699,12 @@ impl<E: Executor> Reactor<E> {
                 }
                 Some(msg) = consensus_rx => {
                     debug!("REACTOR: processing consensus msg");
-                    let handle = self.consensus_handle.as_mut().unwrap();
-                    let validator_index = handle.validator_index;
-                    let consensus_result = handle
-                        .state
+                    let cs = self.consensus.as_mut().unwrap();
+                    let consensus_result = cs
                         .handle_consensus_msg(
                             &self.executor,
                             &mut self.runtime,
-                            &mut handle.channels,
                             msg,
-                            validator_index,
                             self.last_height,
                             self.last_hash.unwrap_or(BlockHash::all_zeros()),
                         )
@@ -758,15 +729,15 @@ impl<E: Executor> Reactor<E> {
                             .await
                             .context("drain_deferred_decisions failed after consensus block")?;
                         // Check finality after block execution — batch txids may now be confirmed
-                        let handle = self.consensus_handle.as_mut().unwrap();
-                        if handle.state
+                        let cs = self.consensus.as_mut().unwrap();
+                        if cs
                             .unfinalized_batches
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
-                            && let Some((rollback_anchor, excluded)) = handle.state.run_finality_checks(self.last_height).await {
+                            && let Some((rollback_anchor, excluded)) = cs.run_finality_checks(self.last_height).await {
                                 // Read replay decisions from DB before deleting state
-                                let handle = self.consensus_handle.as_mut().unwrap();
-                                handle.state.initiate_rollback(
+                                let cs = self.consensus.as_mut().unwrap();
+                                cs.initiate_rollback(
                                     &mut self.executor,
                                     rollback_anchor,
                                     excluded,
@@ -780,9 +751,9 @@ impl<E: Executor> Reactor<E> {
                                     .context("rollback failed during finality rollback")?;
 
                                 // Emit rollback event
-                                let handle = self.consensus_handle.as_mut().unwrap();
-                                let checkpoint = handle.state.get_checkpoint().await;
-                                handle.state.emit_state_event(StateEvent::RollbackExecuted {
+                                let cs = self.consensus.as_mut().unwrap();
+                                let checkpoint = cs.get_checkpoint().await;
+                                cs.emit_state_event(StateEvent::RollbackExecuted {
                                     to_anchor: rollback_anchor,
                                     entries_removed: 0,
                                     checkpoint,
@@ -818,9 +789,9 @@ impl<E: Executor> Reactor<E> {
         let result = self.run_event_loop().await;
 
         // Gracefully stop the Malachite consensus engine and wait for cleanup
-        if let Some(handle) = &self.consensus_handle {
-            let _ = handle
-                ._engine_handle
+        if let Some(cs) = &self.consensus {
+            let _ = cs
+                .engine_handle
                 .actor
                 .get_cell()
                 .stop_and_wait(Some("Reactor shutting down".to_string()), None)
@@ -972,7 +943,7 @@ pub async fn start_consensus(
     observation_channels: Option<consensus::ObservationChannels>,
     timeouts: Option<LinearTimeouts>,
     last_block_height: u64,
-) -> Result<ConsensusHandle> {
+) -> Result<consensus::ConsensusState> {
     let genesis = build_genesis_from_staking(runtime)
         .await
         .context("Failed to build genesis from staking contract")?;
@@ -994,6 +965,9 @@ pub async fn start_consensus(
         genesis,
         engine_output.address,
         last_block_height,
+        engine_output.channels,
+        engine_output._handle,
+        validator_index,
     )
     .await;
     state.observation = observation_channels;
@@ -1001,12 +975,7 @@ pub async fn start_consensus(
         state.timeouts = t;
     }
 
-    Ok(ConsensusHandle {
-        state,
-        channels: engine_output.channels,
-        _engine_handle: engine_output._handle,
-        validator_index,
-    })
+    Ok(state)
 }
 
 pub fn run(
@@ -1043,7 +1012,7 @@ pub fn run(
                     propose: std::time::Duration::from_millis(ms),
                     ..LinearTimeouts::default()
                 });
-                let consensus_handle = if let Some(engine_cfg) = engine_config {
+                let consensus = if let Some(engine_cfg) = engine_config {
                     Some(
                         start_consensus(
                             engine_cfg,
@@ -1068,7 +1037,7 @@ pub fn run(
                     ready_tx,
                     event_tx,
                     simulate_rx,
-                    consensus_handle,
+                    consensus,
                     last_height,
                     last_hash,
                 );

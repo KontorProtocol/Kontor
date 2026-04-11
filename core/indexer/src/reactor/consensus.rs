@@ -104,6 +104,11 @@ pub struct ConsensusState {
 
     // Held GetValue reply — waiting for pending_transactions to arrive.
     pub pending_proposal: Option<PendingProposal>,
+
+    // Malachite engine channels and handle.
+    pub channels: Channels<Ctx>,
+    pub engine_handle: malachitebft_app_channel::EngineHandle,
+    pub validator_index: Option<usize>,
 }
 
 pub struct ObservationChannels {
@@ -119,6 +124,9 @@ impl ConsensusState {
         genesis: Genesis,
         address: Address,
         last_block_height: u64,
+        channels: Channels<Ctx>,
+        engine_handle: malachitebft_app_channel::EngineHandle,
+        validator_index: Option<usize>,
     ) -> Self {
         let current_validator_set = genesis.validator_set;
 
@@ -157,6 +165,9 @@ impl ConsensusState {
             observation: None,
             timeouts: LinearTimeouts::default(),
             pending_proposal: None,
+            channels,
+            engine_handle,
+            validator_index,
         }
     }
 
@@ -741,7 +752,6 @@ impl ConsensusState {
     pub async fn try_fulfill_pending_proposal(
         &mut self,
         executor: &impl Executor,
-        channels: &mut Channels<Ctx>,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Result<bool> {
@@ -778,7 +788,7 @@ impl ConsensusState {
             .insert((pending.height, pending.round), proposed);
         let proposal = LocallyProposedValue::new(pending.height, pending.round, value);
         for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
-            channels
+            self.channels
                 .network
                 .send(NetworkMsg::PublishProposalPart(stream_msg))
                 .await
@@ -912,9 +922,7 @@ impl ConsensusState {
         &mut self,
         executor: &impl Executor,
         runtime: &mut crate::runtime::Runtime,
-        channels: &mut Channels<Ctx>,
         msg: AppMsg<Ctx>,
-        validator_index: Option<usize>,
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Result<ConsensusResult> {
@@ -979,7 +987,7 @@ impl ConsensusState {
                         existing.value.clone(),
                     );
                     for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
-                        channels
+                        self.channels
                             .network
                             .send(NetworkMsg::PublishProposalPart(stream_msg))
                             .await
@@ -1001,7 +1009,7 @@ impl ConsensusState {
                     self.undecided.insert((height, round), proposed);
                     let proposal = LocallyProposedValue::new(height, round, value);
                     for stream_msg in self.stream_proposal(&proposal, Round::Nil) {
-                        channels
+                        self.channels
                             .network
                             .send(NetworkMsg::PublishProposalPart(stream_msg))
                             .await
@@ -1103,7 +1111,7 @@ impl ConsensusState {
                 {
                     if let Some(obs) = &self.observation {
                         let _ = obs.decided_tx.try_send(DecidedBatch {
-                            validator_index,
+                            validator_index: self.validator_index,
                             consensus_height: certificate.height,
                             value: proposal.value.clone(),
                         });
@@ -1331,7 +1339,7 @@ impl ConsensusState {
                     let locally_proposed =
                         LocallyProposedValue::new(height, round, proposal.value.clone());
                     for stream_msg in self.stream_proposal(&locally_proposed, valid_round) {
-                        channels
+                        self.channels
                             .network
                             .send(NetworkMsg::PublishProposalPart(stream_msg))
                             .await

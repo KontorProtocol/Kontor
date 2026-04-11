@@ -15,7 +15,7 @@ use crate::reactor::consensus::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
 use crate::reactor::mock_bitcoin::MockBitcoin;
-use crate::reactor::{ConsensusHandle, Reactor, Simulation};
+use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
 use bitcoin::hashes::Hash;
@@ -314,6 +314,9 @@ impl ReactorCluster {
                 genesis,
                 engine_output.address,
                 0,
+                engine_output.channels,
+                engine_output._handle,
+                validator_index,
             )
             .await;
             state.timeouts = LinearTimeouts {
@@ -326,13 +329,6 @@ impl ReactorCluster {
                 state_tx: stx,
             });
 
-            let consensus_handle = ConsensusHandle {
-                state,
-                channels: engine_output.channels,
-                _engine_handle: engine_output._handle,
-                validator_index,
-            };
-
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
@@ -342,7 +338,7 @@ impl ReactorCluster {
                 None,
                 Some(etx),
                 sim_rx,
-                Some(consensus_handle),
+                Some(state),
                 0,
                 None,
             );
