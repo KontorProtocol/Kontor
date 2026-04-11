@@ -11,7 +11,7 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
-use crate::reactor::consensus::{ConsensusState, ObservationChannels};
+use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
 use crate::reactor::mock_bitcoin::MockBitcoin;

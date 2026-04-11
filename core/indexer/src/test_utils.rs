@@ -600,7 +600,7 @@ pub mod reactor_harness {
     use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
     use crate::consensus::signing::PrivateKey;
     use crate::reactor;
-    use crate::reactor::consensus::ObservationChannels;
+    use crate::reactor::consensus_state::ObservationChannels;
     use crate::reactor::engine::EngineConfig;
     use crate::runtime::GenesisValidator;
 
