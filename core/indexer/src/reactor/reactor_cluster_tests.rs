@@ -110,7 +110,7 @@ impl ReactorCluster {
                 let mut seed = [0u8; 32];
                 seed[0] = i as u8;
                 seed[31] = 42;
-                PrivateKey::from(seed)
+                crate::consensus::signing::private_key_from_seed(seed)
             })
             .collect();
 
@@ -288,6 +288,7 @@ impl ReactorCluster {
                     .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
                     .collect(),
                 data_dir: executor.data_dir(),
+                consensus_enabled: true,
             };
 
             let conn = runtime.get_storage_conn();
@@ -338,7 +339,7 @@ impl ReactorCluster {
                 None,
                 Some(etx),
                 sim_rx,
-                Some(state),
+                state,
                 0,
                 None,
             );

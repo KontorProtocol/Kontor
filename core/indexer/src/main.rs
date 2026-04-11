@@ -84,23 +84,25 @@ async fn main() -> Result<()> {
     .await;
     handles.push(follower_handle);
 
-    // Build consensus engine config if a private key is provided
-    let engine_config = config.consensus_private_key.as_ref().map(|key_hex| {
-        let key_bytes = hex::decode(key_hex).expect("Invalid consensus private key hex");
-        let key_array: [u8; 32] = key_bytes
-            .try_into()
-            .expect("Ed25519 private key must be 32 bytes");
-        let private_key = indexer::consensus::signing::PrivateKey::from(key_array);
-        reactor::engine::EngineConfig {
-            private_key,
-            listen_addr: config
-                .consensus_listen_addr
-                .clone()
-                .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
-            persistent_peers: config.consensus_peers.clone(),
-            data_dir: config.data_dir.clone(),
-        }
-    });
+    let (private_key, consensus_enabled) = if let Some(key_hex) = &config.consensus_private_key {
+        (
+            indexer::consensus::signing::private_key_from_hex(key_hex),
+            true,
+        )
+    } else {
+        info!("No consensus private key provided, running as sync-only follower");
+        (
+            indexer::consensus::signing::generate_random_private_key(),
+            false,
+        )
+    };
+    let engine_config = reactor::engine::EngineConfig {
+        private_key,
+        listen_addr: config.consensus_listen_addr.clone(),
+        persistent_peers: config.consensus_peers.clone(),
+        data_dir: config.data_dir.clone(),
+        consensus_enabled,
+    };
 
     let (ready_tx, ready_rx) = oneshot::channel();
     handles.push(reactor::run(
@@ -134,10 +136,7 @@ async fn main() -> Result<()> {
 }
 
 fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
-    let Some(path) = &config.genesis_file else {
-        return Ok(vec![]);
-    };
-    let genesis = indexer::config::GenesisConfig::load(path)?;
+    let genesis = indexer::config::GenesisConfig::load(&config.genesis_file)?;
     genesis
         .validators
         .into_iter()

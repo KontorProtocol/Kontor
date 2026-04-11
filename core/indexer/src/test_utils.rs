@@ -619,8 +619,7 @@ pub mod reactor_harness {
     impl TestReactor {
         /// Start a single-validator reactor with a fresh temp DB.
         pub async fn start() -> Result<Self> {
-            let seed: [u8; 32] = [42; 32];
-            let private_key = PrivateKey::from(seed);
+            let private_key = crate::consensus::signing::private_key_from_seed([42; 32]);
             Self::start_with_key(private_key).await
         }
 
@@ -643,6 +642,7 @@ pub mod reactor_harness {
                 listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[0]),
                 persistent_peers: vec![],
                 data_dir: db_dir.path().to_path_buf(),
+                consensus_enabled: true,
             };
 
             let (block_tx, block_rx) = mpsc::channel(256);
@@ -669,7 +669,7 @@ pub mod reactor_harness {
                 None,
                 None,
                 None,
-                Some(engine_config),
+                engine_config,
                 None,
                 None,
                 genesis_validators,

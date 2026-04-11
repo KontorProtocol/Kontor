@@ -66,7 +66,7 @@ pub struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    consensus: Option<consensus::ConsensusState>,
+    consensus: consensus::ConsensusState,
 
     last_height: u64,
     last_hash: Option<BlockHash>,
@@ -82,17 +82,15 @@ impl<E: Executor> Reactor<E> {
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
-        consensus: Option<consensus::ConsensusState>,
+        consensus: consensus::ConsensusState,
         last_height: u64,
         last_hash: Option<BlockHash>,
     ) -> Self {
         let mut runtime = runtime;
-        if let Some(cs) = &consensus {
-            runtime.node_label = cs
-                .validator_index
-                .map(|i| format!("node_{i}"))
-                .unwrap_or_else(|| "follower".to_string());
-        }
+        runtime.node_label = consensus
+            .validator_index
+            .map(|i| format!("node_{i}"))
+            .unwrap_or_else(|| "follower".to_string());
         Self {
             executor,
             runtime,
@@ -148,11 +146,12 @@ impl<E: Executor> Reactor<E> {
         }
 
         // Refresh cached validator set — rolled-back state may have different active set
-        if let Some(cs) = &mut self.consensus
-            && let Ok(vs) = build_validator_set(&mut self.runtime).await
-        {
-            cs.validator_index = vs.validators.iter().position(|v| v.address == cs.address);
-            cs.current_validator_set = vs;
+        if let Ok(vs) = build_validator_set(&mut self.runtime).await {
+            self.consensus.validator_index = vs
+                .validators
+                .iter()
+                .position(|v| v.address == self.consensus.address);
+            self.consensus.current_validator_set = vs;
         }
 
         if let Some(tx) = &self.event_tx
@@ -361,21 +360,22 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to commit block transaction")?;
 
-        if let Some(cs) = &mut self.consensus {
-            // Update cached validator set after block execution
-            // (process_pending_validators may have activated/deactivated validators)
-            if let Ok(vs) = build_validator_set(&mut self.runtime).await {
-                cs.validator_index = vs.validators.iter().position(|v| v.address == cs.address);
-                cs.current_validator_set = vs;
-            }
-
-            let checkpoint = cs.get_checkpoint().await;
-            cs.emit_state_event(StateEvent::BlockProcessed {
-                height,
-                unbatched_count,
-                checkpoint,
-            });
+        // Update cached validator set after block execution
+        // (process_pending_validators may have activated/deactivated validators)
+        if let Ok(vs) = build_validator_set(&mut self.runtime).await {
+            self.consensus.validator_index = vs
+                .validators
+                .iter()
+                .position(|v| v.address == self.consensus.address);
+            self.consensus.current_validator_set = vs;
         }
+
+        let checkpoint = self.consensus.get_checkpoint().await;
+        self.consensus.emit_state_event(StateEvent::BlockProcessed {
+            height,
+            unbatched_count,
+            checkpoint,
+        });
 
         if let Some(tx) = &self.event_tx {
             let txids = block
@@ -406,12 +406,8 @@ impl<E: Executor> Reactor<E> {
     }
 
     async fn drain_deferred_decisions(&mut self) -> Result<()> {
-        if self.consensus.is_none() {
-            return Ok(());
-        }
-
         loop {
-            let cs = self.consensus.as_mut().unwrap();
+            let cs = &mut self.consensus;
             let Some(decision) = cs.deferred_decisions.pop_front() else {
                 break;
             };
@@ -420,7 +416,7 @@ impl<E: Executor> Reactor<E> {
                 crate::consensus::Value::Block { height: bh, .. } => {
                     let bh = *bh;
                     let block = {
-                        let cs = self.consensus.as_mut().unwrap();
+                        let cs = &mut self.consensus;
                         cs.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
@@ -439,7 +435,7 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %decision.consensus_height,
                             "Deferred block still waiting for data"
                         );
-                        let cs = self.consensus.as_mut().unwrap();
+                        let cs = &mut self.consensus;
                         cs.deferred_decisions.push_front(decision);
                         break;
                     }
@@ -480,7 +476,7 @@ impl<E: Executor> Reactor<E> {
                                 }
                             }
                         }
-                        let cs = self.consensus.as_mut().unwrap();
+                        let cs = &mut self.consensus;
                         cs.process_decided_batch(
                             &self.executor,
                             &mut self.runtime,
@@ -508,7 +504,7 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %decision.consensus_height,
                             "Deferred batch still waiting for anchor"
                         );
-                        let cs = self.consensus.as_mut().unwrap();
+                        let cs = &mut self.consensus;
                         cs.deferred_decisions.push_front(decision);
                         break;
                     }
@@ -524,41 +520,34 @@ impl<E: Executor> Reactor<E> {
                 target_height,
                 block,
             } => {
-                if let Some(cs) = self.consensus.as_mut() {
-                    let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
-                    for txid in &txids {
-                        cs.pending_transactions.remove(txid);
-                    }
+                let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                for txid in &txids {
+                    self.consensus.pending_transactions.remove(txid);
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
-                if let Some(cs) = self.consensus.as_mut() {
-                    info!(
-                        block_height = block.height,
-                        %block.hash,
-                        pending_count = cs.pending_blocks.len() + 1,
-                        "Adding block to pending_blocks"
-                    );
-                    cs.pending_blocks.insert(block.height, block.clone());
-                    self.drain_deferred_decisions()
-                        .await
-                        .context("drain_deferred_decisions failed after block insert")?;
-                } else {
-                    self.handle_block(block)
-                        .await
-                        .context("handle_block failed (no consensus)")?;
-                }
-                // A pending block may be what we're waiting to propose
-                if let Some(cs) = self.consensus.as_mut()
-                    && cs.pending_proposal.is_some()
-                {
-                    cs.try_fulfill_pending_proposal(
-                        &self.executor,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                    )
+                info!(
+                    block_height = block.height,
+                    %block.hash,
+                    pending_count = self.consensus.pending_blocks.len() + 1,
+                    "Adding block to pending_blocks"
+                );
+                self.consensus
+                    .pending_blocks
+                    .insert(block.height, block.clone());
+                self.drain_deferred_decisions()
                     .await
-                    .context("try_fulfill_pending_proposal failed after block insert")?;
+                    .context("drain_deferred_decisions failed after block insert")?;
+                // A pending block may be what we're waiting to propose
+                if self.consensus.pending_proposal.is_some() {
+                    self.consensus
+                        .try_fulfill_pending_proposal(
+                            &self.executor,
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        )
+                        .await
+                        .context("try_fulfill_pending_proposal failed after block insert")?;
                 }
             }
             BlockEvent::Rollback { to_height } => {
@@ -566,15 +555,14 @@ impl<E: Executor> Reactor<E> {
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
-                if let Some(cs) = &mut self.consensus {
-                    cs.clear_on_rollback();
-                    let checkpoint = cs.get_checkpoint().await;
-                    cs.emit_state_event(StateEvent::RollbackExecuted {
+                self.consensus.clear_on_rollback();
+                let checkpoint = self.consensus.get_checkpoint().await;
+                self.consensus
+                    .emit_state_event(StateEvent::RollbackExecuted {
                         to_anchor: to_height,
                         entries_removed: 0,
                         checkpoint,
                     });
-                }
             }
         }
         Ok(())
@@ -594,15 +582,11 @@ impl<E: Executor> Reactor<E> {
                     .context("process_block_event failed (try_recv drain)")?;
             }
 
-            let hard_deadline_instant = self
-                .consensus
-                .as_ref()
-                .and_then(|cs| cs.pending_proposal.as_ref())
-                .map(|p| {
-                    let deadline = p.hard_deadline();
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    tokio::time::Instant::now() + remaining
-                });
+            let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
+                let deadline = p.hard_deadline();
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                tokio::time::Instant::now() + remaining
+            });
 
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
@@ -612,13 +596,7 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
-            let consensus_rx = async {
-                if let Some(cs) = self.consensus.as_mut() {
-                    cs.channels.consensus.recv().await
-                } else {
-                    pending().await
-                }
-            };
+            let consensus_rx = self.consensus.channels.consensus.recv();
 
             let debounce_sleep = async {
                 match debounce_deadline {
@@ -645,61 +623,55 @@ impl<E: Executor> Reactor<E> {
                         .context("process_block_event failed")?;
                 }
                 Some(event) = self.mempool_rx.recv() => {
-                    if let Some(cs) = self.consensus.as_mut() {
-                        match event {
-                            MempoolEvent::Sync(txs) => {
-                                let count = txs.len();
-                                cs.pending_transactions.clear();
-                                for (raw, parsed) in txs {
-                                    cs.pending_transactions.insert(
-                                        raw.compute_txid(),
-                                        (raw, parsed),
-                                    );
-                                }
-                                info!("MempoolSync {}", count);
-                                if cs.pending_proposal.is_some() {
-                                    debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
-                                }
-                            },
-                            MempoolEvent::Insert(tx, parsed) => {
-                                let txid = tx.compute_txid();
-                                cs.pending_transactions.insert(txid, (tx, parsed));
-                                debug!("MempoolInsert {}", txid);
-                                if cs.pending_proposal.is_some() {
-                                    debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
-                                }
-                            },
-                            MempoolEvent::Remove(txid) => {
-                                cs.pending_transactions.remove(&txid);
-                                debug!("MempoolRemove {}", txid);
-                            },
-                        }
+                    match event {
+                        MempoolEvent::Sync(txs) => {
+                            let count = txs.len();
+                            self.consensus.pending_transactions.clear();
+                            for (raw, parsed) in txs {
+                                self.consensus.pending_transactions.insert(
+                                    raw.compute_txid(),
+                                    (raw, parsed),
+                                );
+                            }
+                            info!("MempoolSync {}", count);
+                            if self.consensus.pending_proposal.is_some() {
+                                debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                            }
+                        },
+                        MempoolEvent::Insert(tx, parsed) => {
+                            let txid = tx.compute_txid();
+                            self.consensus.pending_transactions.insert(txid, (tx, parsed));
+                            debug!("MempoolInsert {}", txid);
+                            if self.consensus.pending_proposal.is_some() {
+                                debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                            }
+                        },
+                        MempoolEvent::Remove(txid) => {
+                            self.consensus.pending_transactions.remove(&txid);
+                            debug!("MempoolRemove {}", txid);
+                        },
                     }
                 }
                 _ = debounce_sleep => {
                     debounce_deadline = None;
-                    if let Some(cs) = self.consensus.as_mut() {
-                        cs.try_fulfill_pending_proposal(
-                            &self.executor,
-                            self.last_height,
-                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                        ).await
-                        .context("try_fulfill_pending_proposal failed (debounce)")?;
-                    }
+                    self.consensus.try_fulfill_pending_proposal(
+                        &self.executor,
+                        self.last_height,
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                    ).await
+                    .context("try_fulfill_pending_proposal failed (debounce)")?;
                 }
                 _ = hard_deadline_sleep => {
-                    if let Some(cs) = self.consensus.as_mut() {
-                        cs.try_fulfill_pending_proposal(
-                            &self.executor,
-                            self.last_height,
-                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                        ).await
-                        .context("try_fulfill_pending_proposal failed (hard deadline)")?;
-                    }
+                    self.consensus.try_fulfill_pending_proposal(
+                        &self.executor,
+                        self.last_height,
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                    ).await
+                    .context("try_fulfill_pending_proposal failed (hard deadline)")?;
                 }
                 Some(msg) = consensus_rx => {
                     debug!("REACTOR: processing consensus msg");
-                    let cs = self.consensus.as_mut().unwrap();
+                    let cs = &mut self.consensus;
                     let consensus_result = cs
                         .handle_consensus_msg(
                             &self.executor,
@@ -729,14 +701,14 @@ impl<E: Executor> Reactor<E> {
                             .await
                             .context("drain_deferred_decisions failed after consensus block")?;
                         // Check finality after block execution — batch txids may now be confirmed
-                        let cs = self.consensus.as_mut().unwrap();
+                        let cs = &mut self.consensus;
                         if cs
                             .unfinalized_batches
                             .iter()
                             .any(|b| b.deadline <= self.last_height)
                             && let Some((rollback_anchor, excluded)) = cs.run_finality_checks(self.last_height).await {
                                 // Read replay decisions from DB before deleting state
-                                let cs = self.consensus.as_mut().unwrap();
+                                let cs = &mut self.consensus;
                                 cs.initiate_rollback(
                                     &mut self.executor,
                                     rollback_anchor,
@@ -751,7 +723,7 @@ impl<E: Executor> Reactor<E> {
                                     .context("rollback failed during finality rollback")?;
 
                                 // Emit rollback event
-                                let cs = self.consensus.as_mut().unwrap();
+                                let cs = &mut self.consensus;
                                 let checkpoint = cs.get_checkpoint().await;
                                 cs.emit_state_event(StateEvent::RollbackExecuted {
                                     to_anchor: rollback_anchor,
@@ -789,14 +761,13 @@ impl<E: Executor> Reactor<E> {
         let result = self.run_event_loop().await;
 
         // Gracefully stop the Malachite consensus engine and wait for cleanup
-        if let Some(cs) = &self.consensus {
-            let _ = cs
-                .engine_handle
-                .actor
-                .get_cell()
-                .stop_and_wait(Some("Reactor shutting down".to_string()), None)
-                .await;
-        }
+        let _ = self
+            .consensus
+            .engine_handle
+            .actor
+            .get_cell()
+            .stop_and_wait(Some("Reactor shutting down".to_string()), None)
+            .await;
 
         result
     }
@@ -987,7 +958,7 @@ pub fn run(
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
-    engine_config: Option<engine::EngineConfig>,
+    engine_config: engine::EngineConfig,
     bitcoin_client: Option<crate::bitcoin_client::Client>,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
@@ -1012,21 +983,15 @@ pub fn run(
                     propose: std::time::Duration::from_millis(ms),
                     ..LinearTimeouts::default()
                 });
-                let consensus = if let Some(engine_cfg) = engine_config {
-                    Some(
-                        start_consensus(
-                            engine_cfg,
-                            &mut runtime,
-                            observation_channels,
-                            timeouts,
-                            last_height,
-                        )
-                        .await
-                        .context("start_consensus failed")?,
-                    )
-                } else {
-                    None
-                };
+                let consensus = start_consensus(
+                    engine_config,
+                    &mut runtime,
+                    observation_channels,
+                    timeouts,
+                    last_height,
+                )
+                .await
+                .context("start_consensus failed")?;
 
                 let mut reactor = Reactor::new(
                     exec,
@@ -1054,708 +1019,4 @@ pub fn run(
             info!("Exited");
         }
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        bitcoin_follower::event::BlockEvent,
-        bls::{
-            KONTOR_BLS_DST, RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
-            taproot_derivation_path,
-        },
-        database::queries,
-        reactor,
-        reg_tester::derive_taproot_keypair_from_seed,
-        test_utils::{gen_random_blocks, new_mock_block_hash, new_random_blockchain, new_test_db},
-    };
-    use anyhow::Result;
-    use bitcoin::hashes::Hash;
-    use bitcoin::{BlockHash, Network, OutPoint, Txid};
-    use indexer_types::{AggregateInfo, Event, Inst, Insts, Signer, Transaction, TransactionInput};
-    use indexmap::IndexMap;
-    use libsql::params;
-    use tokio::sync::mpsc;
-    use tokio::time::{Duration, sleep};
-    use tokio_util::sync::CancellationToken;
-
-    async fn await_block_hash(conn: &libsql::Connection, height: i64, hash: BlockHash) {
-        loop {
-            if let Ok(Some(block)) = queries::select_block_at_height(conn, height).await
-                && block.hash == hash
-            {
-                return;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    }
-
-    async fn send_block_and_wait(
-        tx: &mpsc::Sender<BlockEvent>,
-        conn: &libsql::Connection,
-        block: &indexer_types::Block,
-        target_height: u64,
-    ) {
-        let hash = block.hash;
-        let height = block.height as i64;
-        tx.send(BlockEvent::BlockInsert {
-            target_height,
-            block: block.clone(),
-        })
-        .await
-        .unwrap();
-        await_block_hash(conn, height, hash).await;
-    }
-
-    #[tokio::test]
-    async fn test_reactor_fetching() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let blocks = new_random_blockchain(5);
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        let target = 5;
-        for block in &blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        for (i, expected) in blocks.iter().enumerate() {
-            let block = queries::select_block_at_height(conn, (i + 1) as i64)
-                .await?
-                .unwrap();
-            assert_eq!(block.hash, expected.hash);
-        }
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reactor_rollback_and_reinsert() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let blocks = new_random_blockchain(3);
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        // Insert blocks 1-3
-        let target = 3;
-        for block in &blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        let initial_block_3_hash = blocks[2].hash;
-
-        // Rollback to height 2 (remove block 3), then insert new blocks 3-5
-        event_tx.send(BlockEvent::Rollback { to_height: 2 }).await?;
-
-        let new_blocks = gen_random_blocks(2, 5, Some(blocks[1].hash));
-        let target = 5;
-        for block in &new_blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        // Block 3 should have a different hash now
-        let block = queries::select_block_at_height(conn, 3).await?.unwrap();
-        assert_eq!(block.hash, new_blocks[0].hash);
-        assert_ne!(block.hash, initial_block_3_hash);
-
-        // Blocks 4-5 should exist with new hashes
-        let block = queries::select_block_at_height(conn, 5).await?.unwrap();
-        assert_eq!(block.hash, new_blocks[2].hash);
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reactor_deep_rollback() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let blocks = new_random_blockchain(4);
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        // Insert blocks 1-4
-        let target = 4;
-        for block in &blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        // Roll back to height 1 (remove blocks 2-4)
-        event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
-
-        // Insert new chain from block 1
-        let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
-        let target = 4;
-        for block in &new_blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        // Block 1 should be preserved
-        let block = queries::select_block_at_height(conn, 1).await?.unwrap();
-        assert_eq!(block.hash, blocks[0].hash);
-
-        // Block 2 should have new hash
-        let block = queries::select_block_at_height(conn, 2).await?.unwrap();
-        assert_eq!(block.hash, new_blocks[0].hash);
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reactor_rollback_then_extend() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let blocks = new_random_blockchain(2);
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        // Insert blocks 1-2
-        let target = 2;
-        for block in &blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        // Extend with blocks 3-4
-        let more_blocks = gen_random_blocks(2, 4, Some(blocks[1].hash));
-        let target = 4;
-        for block in &more_blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        let block = queries::select_block_at_height(conn, 4).await?.unwrap();
-        assert_eq!(block.hash, more_blocks[1].hash);
-
-        // Roll back to height 1, insert entirely new chain
-        event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
-
-        let new_blocks = gen_random_blocks(1, 4, Some(blocks[0].hash));
-        let target = 4;
-        for block in &new_blocks {
-            send_block_and_wait(&event_tx, conn, block, target).await;
-        }
-
-        // Verify block 2 has new hash
-        let block = queries::select_block_at_height(conn, 2).await?.unwrap();
-        assert_eq!(block.hash, new_blocks[0].hash);
-
-        // Verify block 4 has new hash
-        let block = queries::select_block_at_height(conn, 4).await?.unwrap();
-        assert_eq!(block.hash, new_blocks[2].hash);
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    /// Sends a block through the reactor's event channel and waits for the
-    /// `Event::Processed` acknowledgement on the output channel. Unlike the
-    /// DB-polling `send_block_and_wait`, this uses the reactor's own event
-    /// stream so we know the block has been fully processed (including all
-    /// WASM contract execution) before continuing.
-    async fn send_block_and_await_event(
-        event_tx: &mpsc::Sender<BlockEvent>,
-        output_rx: &mut mpsc::Receiver<Event>,
-        block: indexer_types::Block,
-        target_height: u64,
-    ) {
-        let expected_height = block.height as i64;
-        event_tx
-            .send(BlockEvent::BlockInsert {
-                target_height,
-                block,
-            })
-            .await
-            .unwrap();
-        match output_rx.recv().await.unwrap() {
-            Event::Processed { block, .. } => assert_eq!(block.height, expected_height),
-            other => panic!("expected Processed at height {expected_height}, got {other:?}"),
-        }
-    }
-
-    /// Proves that rolling back a block containing a BLS key registration
-    /// reverts the registry contract_state created by that registration.
-    ///
-    /// This exercises the full pipeline: reactor → execute_block →
-    /// executor.execute_transaction → WASM runtime (registry contract execution) →
-    /// contract_state write, then rollback → CASCADE delete → state gone.
-    #[tokio::test]
-    async fn test_reactor_rollback_reverts_registration_state() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let (output_tx, mut output_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            Some(output_tx),
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        let seed = [42u8; 64];
-        let keypair =
-            derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
-        let (x_only_public_key, _) = keypair.x_only_public_key();
-        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
-        let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
-
-        let block1_hash = new_mock_block_hash(11);
-        let block1 = indexer_types::Block {
-            height: 1,
-            hash: block1_hash,
-            prev_hash: new_mock_block_hash(0),
-            transactions: vec![Transaction {
-                txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
-                index: 0,
-                inputs: vec![TransactionInput {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    witness_signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
-                    insts: Insts::single(Inst::RegisterBlsKey {
-                        bls_pubkey: proof.bls_pubkey.to_vec(),
-                        schnorr_sig: proof.schnorr_sig.to_vec(),
-                        bls_sig: proof.bls_sig.to_vec(),
-                    }),
-                }],
-                op_return_data: IndexMap::new(),
-            }],
-        };
-        send_block_and_await_event(&event_tx, &mut output_rx, block1, 2).await;
-
-        let state_count: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert!(
-            state_count > 0,
-            "registration must write contract_state at height 1"
-        );
-
-        event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
-        match output_rx.recv().await.unwrap() {
-            Event::Rolledback { height } => assert_eq!(height, 0),
-            other => panic!("expected Rolledback, got {other:?}"),
-        }
-
-        let state_count_after: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert_eq!(
-            state_count_after, 0,
-            "rollback must remove all contract_state from deleted block"
-        );
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    /// End-to-end nonce rollback: register a key (nonce=0 at height 1),
-    /// advance the nonce via BlsBulk (nonce→1 at height 2), roll back
-    /// height 2, and verify the nonce reverts to 0.
-    #[tokio::test]
-    async fn test_reactor_rollback_reverts_nonce_advance() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let (output_tx, mut output_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            Some(output_tx),
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        let seed = [42u8; 64];
-        let keypair =
-            derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
-        let (x_only_public_key, _) = keypair.x_only_public_key();
-        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
-        let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
-
-        // -- Block 1: register the BLS key (creates signer_id=0, next_nonce=0) --
-        let block1_hash = new_mock_block_hash(11);
-        let block1 = indexer_types::Block {
-            height: 1,
-            hash: block1_hash,
-            prev_hash: new_mock_block_hash(0),
-            transactions: vec![Transaction {
-                txid: Txid::from_slice(&[0xAA; 32]).unwrap(),
-                index: 0,
-                inputs: vec![TransactionInput {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    witness_signer: Signer::XOnlyPubKey(x_only_public_key.to_string()),
-                    insts: Insts::single(Inst::RegisterBlsKey {
-                        bls_pubkey: proof.bls_pubkey.to_vec(),
-                        schnorr_sig: proof.schnorr_sig.to_vec(),
-                        bls_sig: proof.bls_sig.to_vec(),
-                    }),
-                }],
-                op_return_data: IndexMap::new(),
-            }],
-        };
-        send_block_and_await_event(&event_tx, &mut output_rx, block1, 3).await;
-
-        let state_at_h1: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert!(state_at_h1 > 0, "registration must write state at height 1");
-
-        // -- Block 2: BlsBulk Call that advances the nonce --
-        let call_op = Inst::Call {
-            gas_limit: 100_000,
-            contract: indexer_types::ContractAddress {
-                name: "registry".to_string(),
-                height: 0,
-                tx_index: 0,
-            },
-            nonce: Some(0),
-            expr: "get-signer-count()".to_string(),
-        };
-        let msg = call_op.aggregate_signing_message(0)?;
-        let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
-        let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
-
-        let block2_hash = new_mock_block_hash(22);
-        let block2 = indexer_types::Block {
-            height: 2,
-            hash: block2_hash,
-            prev_hash: block1_hash,
-            transactions: vec![Transaction {
-                txid: Txid::from_slice(&[0xBB; 32]).unwrap(),
-                index: 0,
-                inputs: vec![TransactionInput {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    witness_signer: Signer::Nobody,
-                    insts: Insts {
-                        ops: vec![call_op],
-                        aggregate: Some(AggregateInfo {
-                            signer_ids: vec![0],
-                            signature: sig.to_bytes().to_vec(),
-                        }),
-                    },
-                }],
-                op_return_data: IndexMap::new(),
-            }],
-        };
-        send_block_and_await_event(&event_tx, &mut output_rx, block2, 3).await;
-
-        let state_at_h2: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 2",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert!(
-            state_at_h2 > 0,
-            "nonce advance must write contract_state at height 2"
-        );
-
-        // -- Rollback to height 1: block 2 is deleted, nonce reverts --
-        event_tx.send(BlockEvent::Rollback { to_height: 1 }).await?;
-        match output_rx.recv().await.unwrap() {
-            Event::Rolledback { height } => assert_eq!(height, 1),
-            other => panic!("expected Rolledback, got {other:?}"),
-        }
-
-        let state_at_h2_after: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 2",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert_eq!(
-            state_at_h2_after, 0,
-            "rollback must remove all contract_state from height 2 (including nonce advance)"
-        );
-
-        let state_at_h1_after: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert!(
-            state_at_h1_after > 0,
-            "registration state at height 1 must survive rollback to height 1"
-        );
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
-
-    /// Rollback of an attempted bundled BLS key registration.
-    ///
-    /// The existing `test_reactor_rollback_reverts_registration_state` covers
-    /// the direct `Inst::RegisterBlsKey` path. In the Insts/AggregateInfo model,
-    /// aggregate registration is rejected before execution, so this path should
-    /// not write any state that rollback would need to remove.
-    #[tokio::test]
-    async fn test_reactor_rollback_reverts_bls_bulk_registration() -> Result<()> {
-        let cancel_token = CancellationToken::new();
-        let (_reader, writer, _temp_dir) = new_test_db().await?;
-        let conn = &writer.connection();
-
-        let (event_tx, block_rx) = mpsc::channel(10);
-        let (_mempool_tx, mempool_rx) = mpsc::channel(10);
-        let (output_tx, mut output_rx) = mpsc::channel(10);
-        let handle = reactor::run(
-            1,
-            cancel_token.clone(),
-            writer,
-            block_rx,
-            mempool_rx,
-            None,
-            Some(output_tx),
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        );
-
-        let seed = [55u8; 64];
-        let keypair =
-            derive_taproot_keypair_from_seed(&seed, &taproot_derivation_path(Network::Regtest))?;
-        let bls_sk = derive_bls_secret_key_eip2333(&seed, &bls_derivation_path(Network::Regtest))?;
-        let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
-
-        let register_op = Inst::RegisterBlsKey {
-            bls_pubkey: proof.bls_pubkey.to_vec(),
-            schnorr_sig: proof.schnorr_sig.to_vec(),
-            bls_sig: proof.bls_sig.to_vec(),
-        };
-        let msg = register_op.aggregate_signing_message(0)?;
-        let sk = blst::min_sig::SecretKey::from_bytes(&bls_sk.to_bytes()).unwrap();
-        let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
-
-        let block1_hash = new_mock_block_hash(33);
-        let block1 = indexer_types::Block {
-            height: 1,
-            hash: block1_hash,
-            prev_hash: new_mock_block_hash(0),
-            transactions: vec![Transaction {
-                txid: Txid::from_slice(&[0xCC; 32]).unwrap(),
-                index: 0,
-                inputs: vec![TransactionInput {
-                    previous_output: OutPoint::null(),
-                    input_index: 0,
-                    witness_signer: Signer::Nobody,
-                    insts: Insts {
-                        ops: vec![register_op.clone()],
-                        aggregate: Some(AggregateInfo {
-                            signer_ids: vec![0],
-                            signature: sig.to_bytes().to_vec(),
-                        }),
-                    },
-                }],
-                op_return_data: IndexMap::new(),
-            }],
-        };
-        send_block_and_await_event(&event_tx, &mut output_rx, block1.clone(), 2).await;
-
-        let state_count: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert_eq!(
-            state_count, 0,
-            "aggregate RegisterBlsKey should be rejected before writing state"
-        );
-
-        // -- Rollback to height 0: block 1 is deleted --
-        event_tx.send(BlockEvent::Rollback { to_height: 0 }).await?;
-        match output_rx.recv().await.unwrap() {
-            Event::Rolledback { height } => assert_eq!(height, 0),
-            other => panic!("expected Rolledback, got {other:?}"),
-        }
-
-        let state_after_rollback: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert_eq!(
-            state_after_rollback, 0,
-            "rollback must remove contract_state from BlsBulk registration"
-        );
-
-        // -- Re-insert the same block: registration must succeed again --
-        send_block_and_await_event(&event_tx, &mut output_rx, block1, 2).await;
-
-        let state_reinserted: u64 = conn
-            .query(
-                "SELECT COUNT(*) FROM contract_state WHERE height = 1",
-                params![],
-            )
-            .await?
-            .next()
-            .await?
-            .unwrap()
-            .get(0)?;
-        assert_eq!(
-            state_reinserted, 0,
-            "re-inserted aggregate RegisterBlsKey must still be rejected"
-        );
-
-        cancel_token.cancel();
-        let _ = handle.await;
-        Ok(())
-    }
 }
