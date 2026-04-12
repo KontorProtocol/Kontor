@@ -797,10 +797,14 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     cluster.mine_and_send(&confirm_txids);
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
-    for i in 0..5 {
+    // Mine blocks up to (but not including) the finality deadline block,
+    // waiting for each to be processed. The last block triggers finality
+    // checks which may cause a rollback, so we don't wait_for_block on it.
+    for i in 0..4 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(3 + i, Duration::from_secs(60)).await;
     }
+    cluster.mine_empty_and_send();
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
@@ -853,10 +857,11 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     }
     cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
-    for i in 0..5 {
+    for i in 0..4 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(2 + i, Duration::from_secs(60)).await;
     }
+    cluster.mine_empty_and_send();
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
@@ -925,10 +930,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster.mine_empty_and_send();
     cluster.wait_for_block(3, Duration::from_secs(60)).await;
 
-    for i in 0..4 {
+    for i in 0..3 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(4 + i, Duration::from_secs(60)).await;
     }
+    cluster.mine_empty_and_send();
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
