@@ -206,6 +206,12 @@ impl Guest for Staking {
         if model.active_count() > 0 {
             return;
         }
+        for v in &validators {
+            assert!(
+                v.ed25519_pubkey.len() == 32,
+                "expected 32-byte ed25519 pubkey in genesis set"
+            );
+        }
         // Reject duplicate ed25519 keys in genesis set
         assert!(
             validators

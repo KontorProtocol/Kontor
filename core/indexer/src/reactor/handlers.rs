@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -67,7 +67,8 @@ impl<E: Executor> Reactor<E> {
             match &part.content {
                 StreamContent::Data(ProposalPart::Data(data)) => {
                     if !self.consensus.undecided.contains_key(&(height, round)) {
-                        self.validate_and_accept_proposal(data, height, round).await
+                        self.validate_and_accept_proposal(data, height, round)
+                            .await?
                     } else {
                         None
                     }
@@ -91,19 +92,19 @@ impl<E: Executor> Reactor<E> {
         let decided = self
             .consensus
             .get_decided_range(&conn, *range.start(), *range.end())
-            .await;
+            .await?;
         let values: Vec<_> = decided
             .into_iter()
-            .filter_map(|(value, cert)| {
-                ProtobufCodec
+            .map(|(value, cert)| {
+                let encoded = ProtobufCodec
                     .encode(&value)
-                    .ok()
-                    .map(|encoded| RawDecidedValue {
-                        certificate: cert,
-                        value_bytes: encoded,
-                    })
+                    .context("Failed to encode value for sync")?;
+                Ok(RawDecidedValue {
+                    certificate: cert,
+                    value_bytes: encoded,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         reply
             .send(values)
             .map_err(|_| anyhow::anyhow!("Failed to send GetDecidedValues reply"))?;
@@ -250,7 +251,7 @@ impl<E: Executor> Reactor<E> {
                 let min = self
                     .consensus
                     .min_decided_height(&self.db_conn())
-                    .await
+                    .await?
                     .unwrap_or(Height::new(1));
                 reply
                     .send(min)

@@ -376,23 +376,30 @@ impl ConsensusState {
             .await
             .context("Failed to query batches from anchor")?;
 
-        Ok(batches
+        batches
             .into_iter()
-            .filter_map(|b| {
-                let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
+            .map(|b| {
+                let anchor_hash = b
+                    .anchor_hash
+                    .parse::<bitcoin::BlockHash>()
+                    .context("Failed to parse anchor hash from DB")?;
                 let value = if b.is_block {
                     Value::new_block(b.anchor_height as u64, anchor_hash)
                 } else {
-                    let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+                    let txids: Vec<Txid> = b
+                        .txids
+                        .iter()
+                        .map(|s| s.parse().context("Failed to parse txid from DB"))
+                        .collect::<Result<Vec<_>>>()?;
                     Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
                 };
-                Some(DeferredDecision {
+                Ok(DeferredDecision {
                     consensus_height: Height::new(b.consensus_height as u64),
                     value,
                     certificate: b.certificate,
                 })
             })
-            .collect())
+            .collect()
     }
 
     pub async fn block_hash_at_height(
@@ -411,39 +418,60 @@ impl ConsensusState {
         conn: &libsql::Connection,
         anchor_height: i64,
         consensus_height: i64,
-    ) -> Option<Vec<bitcoin::Transaction>> {
-        let tip = select_block_latest(conn).await.ok().flatten()?;
+    ) -> Result<Option<Vec<bitcoin::Transaction>>> {
+        let tip = match select_block_latest(conn)
+            .await
+            .context("Failed to query latest block for finality check")?
+        {
+            Some(tip) => tip,
+            None => return Ok(None),
+        };
         if (anchor_height as u64) + FINALITY_WINDOW <= tip.height as u64 {
-            return None;
+            return Ok(None);
         }
         let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
             .await
-            .ok()?;
+            .context("Failed to query unconfirmed batch txs")?;
         let txs: Vec<bitcoin::Transaction> = raw_bytes
             .iter()
-            .filter_map(|raw| bitcoin::consensus::deserialize(raw).ok())
-            .collect();
-        if txs.is_empty() { None } else { Some(txs) }
+            .map(|raw| {
+                bitcoin::consensus::deserialize(raw)
+                    .context("Failed to deserialize batch tx from DB")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if txs.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(txs))
+        }
     }
 
     fn batch_to_decided(
         &self,
         b: &crate::database::types::BatchQueryResult,
-    ) -> Option<(Value, crate::consensus::CommitCertificate<Ctx>)> {
-        let anchor_hash = b.anchor_hash.parse::<bitcoin::BlockHash>().ok()?;
+    ) -> Result<(Value, crate::consensus::CommitCertificate<Ctx>)> {
+        let anchor_hash = b
+            .anchor_hash
+            .parse::<bitcoin::BlockHash>()
+            .context("Failed to parse anchor hash from DB")?;
 
         let value = if b.is_block {
             Value::new_block(b.anchor_height as u64, anchor_hash)
         } else {
-            let txids: Vec<Txid> = b.txids.iter().filter_map(|s| s.parse().ok()).collect();
+            let txids: Vec<Txid> = b
+                .txids
+                .iter()
+                .map(|s| s.parse().context("Failed to parse txid from DB"))
+                .collect::<Result<Vec<_>>>()?;
             Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
         };
 
-        let proto =
-            crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice()).ok()?;
-        let certificate = decode_commit_certificate(proto).ok()?;
+        let proto = crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice())
+            .context("Failed to decode commit certificate protobuf")?;
+        let certificate =
+            decode_commit_certificate(proto).context("Failed to decode commit certificate")?;
 
-        Some((value, certificate))
+        Ok((value, certificate))
     }
 
     pub(super) async fn get_decided_range(
@@ -451,41 +479,36 @@ impl ConsensusState {
         conn: &libsql::Connection,
         start: Height,
         end: Height,
-    ) -> Vec<(Value, crate::consensus::CommitCertificate<Ctx>)> {
-        let batches =
-            match select_batches_in_range(conn, start.as_u64() as i64, end.as_u64() as i64).await {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!(%e, "Failed to query batches for sync range");
-                    return Vec::new();
-                }
-            };
+    ) -> Result<Vec<(Value, crate::consensus::CommitCertificate<Ctx>)>> {
+        let batches = select_batches_in_range(conn, start.as_u64() as i64, end.as_u64() as i64)
+            .await
+            .context("Failed to query batches for sync range")?;
 
         let mut results = Vec::new();
         for b in &batches {
-            let Some((mut value, cert)) = self.batch_to_decided(b) else {
-                continue;
-            };
+            let (mut value, cert) = self.batch_to_decided(b)?;
 
             if !b.is_block
                 && let Some(raw_txs) = self
                     .load_raw_txs_if_unfinalized(conn, b.anchor_height, b.consensus_height)
-                    .await
+                    .await?
             {
                 value.set_raw_txs(raw_txs);
             }
 
             results.push((value, cert));
         }
-        results
+        Ok(results)
     }
 
-    pub(super) async fn min_decided_height(&self, conn: &libsql::Connection) -> Option<Height> {
-        select_min_batch_height(conn)
+    pub(super) async fn min_decided_height(
+        &self,
+        conn: &libsql::Connection,
+    ) -> Result<Option<Height>> {
+        Ok(select_min_batch_height(conn)
             .await
-            .ok()
-            .flatten()
-            .map(|h| Height::new(h as u64))
+            .context("Failed to query min batch height")?
+            .map(|h| Height::new(h as u64)))
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
@@ -521,23 +544,25 @@ impl ConsensusState {
         txids: &[String],
         last_height: u64,
         last_hash: bitcoin::BlockHash,
-    ) -> Option<&'static str> {
+    ) -> Result<Option<&'static str>> {
         if !self.pending_blocks.is_empty() {
-            return Some("block is pending");
+            return Ok(Some("block is pending"));
         }
         if self.deferred_decisions.iter().any(|d| d.value.is_block()) {
-            return Some("deferred block decision waiting");
+            return Ok(Some("deferred block decision waiting"));
         }
         if anchor_height != last_height {
-            return Some("anchor height mismatch");
+            return Ok(Some("anchor height mismatch"));
         }
         if anchor_hash != last_hash {
-            return Some("anchor hash mismatch");
+            return Ok(Some("anchor hash mismatch"));
         }
-        let existing = select_existing_txids(conn, txids).await.unwrap_or_default();
+        let existing = select_existing_txids(conn, txids)
+            .await
+            .context("Failed to query existing txids")?;
         if !existing.is_empty() {
-            return Some("contains already-processed transactions");
+            return Ok(Some("contains already-processed transactions"));
         }
-        None
+        Ok(None)
     }
 }
