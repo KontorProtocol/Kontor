@@ -795,9 +795,11 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
     let missing_txid = all_txids[2];
 
     cluster.mine_and_send(&confirm_txids);
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
-    for _ in 0..5 {
+    for i in 0..5 {
         cluster.mine_empty_and_send();
+        cluster.wait_for_block(3 + i, Duration::from_secs(60)).await;
     }
 
     let finality_events = cluster
@@ -851,8 +853,9 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     }
     cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
-    for _ in 0..5 {
+    for i in 0..5 {
         cluster.mine_empty_and_send();
+        cluster.wait_for_block(2 + i, Duration::from_secs(60)).await;
     }
 
     let finality_events = cluster
@@ -920,9 +923,11 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster.wait_for_batch(2, Duration::from_secs(60)).await;
 
     cluster.mine_empty_and_send();
+    cluster.wait_for_block(3, Duration::from_secs(60)).await;
 
-    for _ in 0..4 {
+    for i in 0..4 {
         cluster.mine_empty_and_send();
+        cluster.wait_for_block(4 + i, Duration::from_secs(60)).await;
     }
 
     let finality_events = cluster
