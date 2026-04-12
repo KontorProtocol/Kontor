@@ -75,8 +75,15 @@ impl<E: Executor> Reactor<E> {
 
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
-            .filter_map(|btx| self.executor.parse_transaction(btx))
-            .collect();
+            .map(|btx| {
+                self.executor.parse_transaction(btx).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to parse decided batch transaction {}",
+                        btx.compute_txid()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Track for finality — must happen once per batch execution
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
@@ -159,14 +166,14 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    pub(super) async fn make_value(&mut self) -> Option<Value> {
+    pub(super) async fn make_value(&mut self) -> Result<Option<Value>> {
         let conn = self.db_conn();
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
         // If blocks are pending, always propose the next one first
         if let Some((&height, block)) = self.consensus.pending_blocks.first_key_value() {
-            return Some(Value::new_block(height, block.hash));
+            return Ok(Some(Value::new_block(height, block.hash)));
         }
 
         // Pre-filter already-processed txids to avoid unnecessary validation
@@ -179,7 +186,7 @@ impl<E: Executor> Reactor<E> {
         let txid_strs: Vec<String> = pending_txids.iter().map(|t| t.to_string()).collect();
         let existing = select_existing_txids(&conn, &txid_strs)
             .await
-            .unwrap_or_default();
+            .context("Failed to query existing txids")?;
         let unbatched_set: HashSet<Txid> = pending_txids
             .into_iter()
             .filter(|t| !existing.contains(&t.to_string()))
@@ -210,7 +217,7 @@ impl<E: Executor> Reactor<E> {
             self.consensus.pending_transactions.remove(txid);
         }
         if txs.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         // Batch-level validation (already-processed check will pass since we pre-filtered)
@@ -226,14 +233,14 @@ impl<E: Executor> Reactor<E> {
                 last_height,
                 last_hash,
             )
-            .await
+            .await?
         {
             info!("Not proposing batch: {reason}");
-            return None;
+            return Ok(None);
         }
 
         let value = Value::new_batch_raw(last_height, last_hash, txs);
-        Some(value)
+        Ok(Some(value))
     }
 
     pub(super) async fn validate_and_accept_proposal(
@@ -241,7 +248,7 @@ impl<E: Executor> Reactor<E> {
         data: &ProposalData,
         height: Height,
         round: Round,
-    ) -> Option<ProposedValue<Ctx>> {
+    ) -> Result<Option<ProposedValue<Ctx>>> {
         let conn = self.db_conn();
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
@@ -256,14 +263,14 @@ impl<E: Executor> Reactor<E> {
                             local = %block.hash,
                             "Rejecting block proposal: hash mismatch"
                         );
-                        return None;
+                        return Ok(None);
                     }
                 } else {
                     warn!(
                         block_height = bh,
                         "Rejecting block proposal: block not yet received"
                     );
-                    return None;
+                    return Ok(None);
                 }
                 Value::new_block(*bh, *hash)
             }
@@ -286,10 +293,10 @@ impl<E: Executor> Reactor<E> {
                         last_height,
                         last_hash,
                     )
-                    .await
+                    .await?
                 {
                     warn!("Rejecting batch proposal: {reason}");
-                    return None;
+                    return Ok(None);
                 }
                 for tx in transactions {
                     let txid = tx.compute_txid();
@@ -300,11 +307,11 @@ impl<E: Executor> Reactor<E> {
                             p
                         } else {
                             warn!(%txid, "Rejecting proposal: transaction failed to parse");
-                            return None;
+                            return Ok(None);
                         };
                     if !self.executor.validate_transaction(tx, &parsed).await {
                         warn!(%txid, "Rejecting proposal: transaction failed validation");
-                        return None;
+                        return Ok(None);
                     }
                     self.consensus
                         .pending_transactions
@@ -326,7 +333,7 @@ impl<E: Executor> Reactor<E> {
         self.consensus
             .undecided
             .insert((height, round), proposed.clone());
-        Some(proposed)
+        Ok(Some(proposed))
     }
 
     pub(super) async fn try_fulfill_pending_proposal(&mut self) -> Result<bool> {
@@ -339,7 +346,7 @@ impl<E: Executor> Reactor<E> {
             None => return Ok(false),
         };
 
-        let value = if let Some(value) = self.make_value().await {
+        let value = if let Some(value) = self.make_value().await? {
             value
         } else if past_deadline {
             info!(
@@ -512,7 +519,7 @@ impl<E: Executor> Reactor<E> {
             reply
                 .send(proposal)
                 .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
-        } else if let Some(value) = self.make_value().await {
+        } else if let Some(value) = self.make_value().await? {
             let proposed = ProposedValue {
                 height,
                 round,
@@ -576,8 +583,8 @@ impl<E: Executor> Reactor<E> {
                     }
 
                     let cert_bytes = encode_commit_certificate(&certificate)
-                        .map(|p| p.encode_to_vec())
-                        .unwrap_or_default();
+                        .context("Failed to encode commit certificate")?
+                        .encode_to_vec();
 
                     if *anchor_height < last_height {
                         warn!(
@@ -630,8 +637,8 @@ impl<E: Executor> Reactor<E> {
                 }
                 Value::Block { height, hash } => {
                     let cert_bytes = encode_commit_certificate(&certificate)
-                        .map(|p| p.encode_to_vec())
-                        .unwrap_or_default();
+                        .context("Failed to encode commit certificate")?
+                        .encode_to_vec();
 
                     if let Some(block) = self.consensus.pending_blocks.remove(height) {
                         info!(

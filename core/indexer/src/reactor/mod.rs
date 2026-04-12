@@ -418,30 +418,21 @@ async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
 
     let validators: Vec<Validator> = active_set
         .into_iter()
-        .filter_map(|v| {
-            if v.ed25519_pubkey.len() != 32 {
-                warn!(
-                    xonly = v.x_only_pubkey,
-                    "Skipping validator with invalid ed25519 pubkey length"
-                );
-                return None;
-            }
+        .map(|v| {
+            anyhow::ensure!(
+                v.ed25519_pubkey.len() == 32,
+                "Validator {} has invalid ed25519 pubkey length {}",
+                v.x_only_pubkey,
+                v.ed25519_pubkey.len()
+            );
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(&v.ed25519_pubkey);
             let public_key = PublicKey::from_bytes(key_bytes);
-            let voting_power = match stake_to_voting_power(v.stake) {
-                Ok(vp) => vp,
-                Err(e) => {
-                    warn!(
-                        xonly = v.x_only_pubkey,
-                        "Skipping validator with invalid stake: {e}"
-                    );
-                    return None;
-                }
-            };
-            Some(Validator::new(public_key, voting_power))
+            let voting_power = stake_to_voting_power(v.stake)
+                .with_context(|| format!("Invalid stake for validator {}", v.x_only_pubkey))?;
+            Ok(Validator::new(public_key, voting_power))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(ValidatorSet::new(validators))
 }
