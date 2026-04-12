@@ -19,6 +19,7 @@ pub struct EngineConfig {
     pub listen_addr: String,
     pub persistent_peers: Vec<String>,
     pub data_dir: PathBuf,
+    pub consensus_enabled: bool,
 }
 
 /// NodeConfig implementation for Malachite engine.
@@ -75,7 +76,7 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     let node_config = MalachiteNodeConfig {
         moniker: format!("kontor-{}", &address.to_string()[..8]),
         consensus: ConsensusConfig {
-            enabled: true,
+            enabled: config.consensus_enabled,
             value_payload: ValuePayload::ProposalAndParts,
             p2p: P2pConfig {
                 listen_addr,

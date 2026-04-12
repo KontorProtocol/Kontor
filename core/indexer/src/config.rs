@@ -78,7 +78,7 @@ pub struct Config {
     )]
     pub network: bitcoin::Network,
 
-    // --- Consensus (optional — omit to run as follower) ---
+    // --- Consensus ---
     #[clap(
         long,
         env = "CONSENSUS_PRIVATE_KEY",
@@ -89,9 +89,10 @@ pub struct Config {
     #[clap(
         long,
         env = "CONSENSUS_LISTEN_ADDR",
+        default_value = "/ip4/127.0.0.1/tcp/26656",
         help = "Multiaddr for consensus P2P (e.g. /ip4/127.0.0.1/tcp/26656)"
     )]
-    pub consensus_listen_addr: Option<String>,
+    pub consensus_listen_addr: String,
 
     #[clap(
         long,
@@ -106,7 +107,7 @@ pub struct Config {
         env = "GENESIS_FILE",
         help = "Path to genesis JSON file containing the initial validator set"
     )]
-    pub genesis_file: Option<PathBuf>,
+    pub genesis_file: PathBuf,
 
     #[clap(
         long,
@@ -130,9 +131,9 @@ impl Config {
             data_dir: "will be set".into(),
             starting_block_height: 1,
             consensus_private_key: None,
-            consensus_listen_addr: None,
+            consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
             consensus_peers: Vec::new(),
-            genesis_file: None,
+            genesis_file: PathBuf::new(),
             consensus_propose_timeout_ms: None,
         }
     }

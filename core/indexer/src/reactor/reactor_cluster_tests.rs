@@ -11,11 +11,11 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
-use crate::reactor::consensus::{ConsensusState, ObservationChannels};
+use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
 use crate::reactor::mock_bitcoin::MockBitcoin;
-use crate::reactor::{ConsensusHandle, Reactor, Simulation};
+use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
 use bitcoin::hashes::Hash;
@@ -110,7 +110,7 @@ impl ReactorCluster {
                 let mut seed = [0u8; 32];
                 seed[0] = i as u8;
                 seed[31] = 42;
-                PrivateKey::from(seed)
+                crate::consensus::signing::private_key_from_seed(seed)
             })
             .collect();
 
@@ -288,6 +288,7 @@ impl ReactorCluster {
                     .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
                     .collect(),
                 data_dir: executor.data_dir(),
+                consensus_enabled: true,
             };
 
             let conn = runtime.get_storage_conn();
@@ -314,6 +315,9 @@ impl ReactorCluster {
                 genesis,
                 engine_output.address,
                 0,
+                engine_output.channels,
+                engine_output._handle,
+                validator_index,
             )
             .await;
             state.timeouts = LinearTimeouts {
@@ -326,13 +330,6 @@ impl ReactorCluster {
                 state_tx: stx,
             });
 
-            let consensus_handle = ConsensusHandle {
-                state,
-                channels: engine_output.channels,
-                _engine_handle: engine_output._handle,
-                validator_index,
-            };
-
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
@@ -342,7 +339,7 @@ impl ReactorCluster {
                 None,
                 Some(etx),
                 sim_rx,
-                Some(consensus_handle),
+                state,
                 0,
                 None,
             );
