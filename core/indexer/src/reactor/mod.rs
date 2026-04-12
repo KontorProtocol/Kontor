@@ -127,14 +127,16 @@ impl<E: Executor> Reactor<E> {
         None
     }
 
-    async fn refresh_validator_set(&mut self) {
-        if let Ok(vs) = build_validator_set(&mut self.runtime).await {
-            self.consensus.validator_index = vs
-                .validators
-                .iter()
-                .position(|v| v.address == self.consensus.address);
-            self.consensus.current_validator_set = vs;
-        }
+    async fn refresh_validator_set(&mut self) -> Result<()> {
+        let vs = build_validator_set(&mut self.runtime)
+            .await
+            .context("Failed to refresh validator set")?;
+        self.consensus.validator_index = vs
+            .validators
+            .iter()
+            .position(|v| v.address == self.consensus.address);
+        self.consensus.current_validator_set = vs;
+        Ok(())
     }
 
     async fn send_proposal_parts(
