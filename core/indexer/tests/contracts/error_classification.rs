@@ -1,6 +1,9 @@
 use testlib::*;
 
-interface!(name = "error_test", path = "../../test-contracts/error-test/wit");
+interface!(
+    name = "error_test",
+    path = "../../test-contracts/error-test/wit"
+);
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_error_case_succeed() -> Result<()> {

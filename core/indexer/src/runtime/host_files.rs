@@ -242,7 +242,9 @@ impl built_in::error::Host for Runtime {}
 impl built_in::testing::Host for Runtime {}
 
 impl built_in::testing::HostWithStore for Runtime {
-    async fn host_error<T>(_accessor: &wasmtime::component::Accessor<T, Self>) -> anyhow::Result<String> {
+    async fn host_error<T>(
+        _accessor: &wasmtime::component::Accessor<T, Self>,
+    ) -> anyhow::Result<String> {
         anyhow::bail!("deliberate host error for testing")
     }
 }

@@ -547,7 +547,10 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             gas_limit: 10_000,
             contract: staking_addr.clone(),
             nonce: None,
-            expr: staking::wave::register_validator_call_expr(ed25519_pubkey, 5.into()),
+            expr: staking::wave::register_validator_call_expr(
+                ed25519_pubkey,
+                5u64.try_into().unwrap(),
+            ),
         },
     )
     .await?;

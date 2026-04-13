@@ -140,7 +140,8 @@ impl<E: Executor> Reactor<E> {
 
             self.executor
                 .execute_transaction(&mut self.runtime, anchor_height as i64, tx_id, t)
-                .await;
+                .await
+                .context("execute_transaction failed")?;
         }
 
         self.runtime

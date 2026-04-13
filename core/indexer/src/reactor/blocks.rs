@@ -99,7 +99,8 @@ impl<E: Executor> Reactor<E> {
 
             self.executor
                 .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
-                .await;
+                .await
+                .context("execute_transaction failed")?;
         }
 
         Ok(unbatched_count)

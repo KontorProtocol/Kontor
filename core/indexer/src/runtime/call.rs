@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
+
+use super::ExecutionError;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
@@ -181,8 +183,13 @@ impl Runtime {
             && let Some(signer) = signer
             && !signer.is_core()
         {
-            let hold_amount = Decimal::from(fuel_limit)
-                .div(Decimal::from(self.gas_to_fuel_multiplier))
+            let hold_amount = Decimal::try_from(fuel_limit)
+                .expect("u64 to decimal")
+                .div(
+                    self.gas_to_fuel_multiplier
+                        .try_into()
+                        .expect("u64 to decimal"),
+                )
                 .expect("Failed to convert fuel limit into gas limit")
                 .mul(self.gas_to_token_multiplier)
                 .expect("Failed to convert gas limit into token limit");
@@ -240,13 +247,11 @@ impl Runtime {
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
-    ) -> Result<(Result<String>, Store<Runtime>)> {
+    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
         let (result, results, store) = tokio::spawn(async move {
-            match std::panic::AssertUnwindSafe(
-                func.call_async(&mut store, &params, &mut results),
-            )
-            .catch_unwind()
-            .await
+            match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
+                .catch_unwind()
+                .await
             {
                 Ok(call_result) => (Ok(call_result), results, store),
                 Err(panic_payload) => {
@@ -264,22 +269,42 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let wasm_result = match result {
-            Ok(call_result) => call_result.map_err(Into::into),
-            Err(panic_msg) => Err(anyhow::anyhow!("host panic: {panic_msg}")),
-        };
-        let call_result = self.handle_call(is_fallback, wasm_result, results).await;
+        let call_result = self.handle_call(is_fallback, result, results).await;
 
         Ok((call_result, store))
     }
 
+    /// Process the result of a WASM call: extract return value, rollback/commit,
+    /// and classify errors as Contract (deterministic) or Infrastructure.
+    ///
+    /// The `result` parameter is either:
+    /// - `Ok(wasmtime_result)` — normal return from func.call_async
+    /// - `Err(panic_msg)` — host function panicked, caught by catch_unwind
+    ///
+    /// Error classification:
+    /// - WASM traps (downcast to wasmtime::Trap) → Contract
+    /// - Host Err returns (no Trap) or host panics → Infrastructure
+    /// - Rollback/commit failures → Infrastructure
     pub(crate) async fn handle_call(
         &self,
         is_fallback: bool,
-        result: Result<()>,
+        result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         mut results: Vec<Val>,
-    ) -> Result<String> {
+    ) -> Result<String, ExecutionError> {
         self.stack.pop().await;
+
+        // Classify before converting: Ok(Ok) is success, Ok(Err) with Trap is
+        // deterministic, Ok(Err) without Trap is infrastructure, Err is host panic
+        let is_deterministic = match &result {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => e.downcast_ref::<wasmtime::Trap>().is_some(),
+            Err(_) => false,
+        };
+
+        let result: Result<()> = match result {
+            Ok(call_result) => call_result.map_err(Into::into),
+            Err(panic_msg) => Err(anyhow!("host panic: {panic_msg}")),
+        };
 
         let result = if let Err(e) = result {
             Err(e)
@@ -306,19 +331,27 @@ impl Runtime {
             self.storage
                 .rollback()
                 .await
-                .context("Failed to rollback storage after call failure")?;
+                .map_err(|e| ExecutionError::Infrastructure(e.context("rollback failed")))?;
             self.file_ledger
                 .resync_from_db(&self.storage.conn)
                 .await
-                .context("Failed to resync file ledger after rollback")?;
+                .map_err(|e| {
+                    ExecutionError::Infrastructure(e.context("file ledger resync failed"))
+                })?;
         } else {
             self.storage
                 .commit()
                 .await
-                .context("Failed to commit storage after successful call")?;
+                .map_err(|e| ExecutionError::Infrastructure(e.context("commit failed")))?;
         }
 
-        result
+        result.map_err(|e| {
+            if is_deterministic {
+                ExecutionError::Contract(e)
+            } else {
+                ExecutionError::Infrastructure(e)
+            }
+        })
     }
 
     pub async fn handle_procedure(
@@ -330,14 +363,14 @@ impl Runtime {
         is_op_result: bool,
         starting_fuel: u64,
         store: &mut Store<Runtime>,
-        mut result: Result<String>,
-    ) -> Result<String> {
+        mut result: Result<String, ExecutionError>,
+    ) -> Result<String, ExecutionError> {
         if let Ok(value) = &result
             && let Err(e) = Fuel::Result(value.len() as u64)
                 .consume_with_store(self.gauge.as_ref(), store)
                 .await
         {
-            result = Err(e);
+            result = Err(ExecutionError::Contract(e));
         }
         let gas = self
             .gas_consumed(
@@ -347,7 +380,8 @@ impl Runtime {
             .max(1);
 
         if is_op_result && !signer.is_core() {
-            let burn_amount = Decimal::from(gas)
+            let burn_amount = Decimal::try_from(gas)
+                .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
                 .expect("Failed to convert gas consumed to token amount");
             tracing::info!(
@@ -375,8 +409,8 @@ impl Runtime {
                 }
             })
             .await
-            .expect("Failed to run burn and release gas")
-            .expect("Failed to burn and release gas");
+            .map_err(ExecutionError::Infrastructure)?
+            .map_err(|e| ExecutionError::Infrastructure(anyhow::anyhow!("{e:?}")))?;
         }
         if should_skip_result(contract_address, func_name) {
             return result;
@@ -392,7 +426,7 @@ impl Runtime {
                 value,
             )
             .await
-            .expect("Failed to insert contract result");
+            .map_err(ExecutionError::Infrastructure)?;
         self.result_id_counter.increment().await;
         result
     }
@@ -412,18 +446,8 @@ impl Runtime {
                 .transpose()
                 .expect("Failed to lock table and get signer");
 
-        let (
-            store,
-            contract_id,
-            func_name,
-            is_fallback,
-            params,
-            results,
-            func,
-            is_proc,
-            _fuel,
-        ) = self
-            .prepare_call(
+        let (store, contract_id, func_name, is_fallback, params, results, func, is_proc, _fuel) =
+            self.prepare_call(
                 contract_address,
                 signer.as_ref(),
                 expr,
@@ -452,6 +476,6 @@ impl Runtime {
                 )
                 .await;
         }
-        result
+        result.map_err(Into::into)
     }
 }

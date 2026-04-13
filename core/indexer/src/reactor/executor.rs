@@ -46,13 +46,14 @@ pub trait Executor {
 
     /// Execute a single transaction's operations at the given height.
     /// Called by the reactor after DB row insertion. Sets context and runs ops.
+    /// Returns Err only for non-deterministic infrastructure failures.
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    );
+    ) -> Result<()>;
 
     /// Signal the block source to re-deliver blocks starting from `height`.
     async fn replay_blocks_from(&mut self, height: u64) -> Result<()>;
@@ -81,7 +82,8 @@ impl Executor for NoopExecutor {
         _height: i64,
         _tx_id: i64,
         _tx: &indexer_types::Transaction,
-    ) {
+    ) -> Result<()> {
+        Ok(())
     }
     async fn replay_blocks_from(&mut self, _height: u64) -> Result<()> {
         Ok(())
@@ -187,7 +189,7 @@ impl Executor for RuntimeExecutor {
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    ) {
+    ) -> Result<()> {
         for input in &tx.inputs {
             let op_return_data = tx.op_return_data.get(&(input.input_index as u64)).cloned();
             process_input(
@@ -199,8 +201,9 @@ impl Executor for RuntimeExecutor {
                 tx.txid,
                 op_return_data,
             )
-            .await;
+            .await?;
         }
+        Ok(())
     }
     async fn replay_blocks_from(&mut self, height: u64) -> Result<()> {
         if let Some(tx) = &self.replay_tx {
@@ -224,7 +227,7 @@ pub async fn process_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) {
+) -> Result<()> {
     if input.insts.is_aggregate() {
         process_aggregate_input(
             runtime,
@@ -235,7 +238,7 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await;
+        .await?;
     } else {
         process_direct_input(
             runtime,
@@ -246,8 +249,9 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await;
+        .await?;
     }
+    Ok(())
 }
 
 async fn process_direct_input(
@@ -258,7 +262,7 @@ async fn process_direct_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) {
+) -> Result<()> {
     use crate::block::op_from_inst;
     use indexer_types::OpMetadata;
 
@@ -286,8 +290,9 @@ async fn process_direct_input(
             )
             .await;
 
-        execute_op(runtime, &op).await;
+        execute_op(runtime, &op).await?;
     }
+    Ok(())
 }
 
 async fn process_aggregate_input(
@@ -298,7 +303,7 @@ async fn process_aggregate_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) {
+) -> Result<()> {
     use crate::block::op_from_inst;
     use crate::runtime::{registry, wit::Signer};
     use indexer_types::{Inst, OpMetadata};
@@ -307,7 +312,7 @@ async fn process_aggregate_input(
         Ok(map) => map,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
-            return;
+            return Ok(());
         }
     };
 
@@ -382,18 +387,20 @@ async fn process_aggregate_input(
             signer: signer.clone(),
         };
         let op = op_from_inst(inst.clone(), metadata);
-        execute_op(runtime, &op).await;
+        execute_op(runtime, &op).await?;
     }
+    Ok(())
 }
 
-async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) {
+async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
+    use crate::runtime::ExecutionError;
     use crate::runtime::wit::Signer;
 
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
         && let Err(e) = runtime.ensure_signer(x_only).await
     {
         warn!("Failed to ensure signer for {x_only}: {e}");
-        return;
+        return Ok(());
     }
 
     match op {
@@ -404,9 +411,14 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) {
             bytes,
         } => {
             runtime.set_gas_limit(*gas_limit);
-            let result = runtime.publish(&metadata.signer, name, bytes).await;
-            if result.is_err() {
-                warn!("Publish operation failed: {:?}", result);
+            match runtime.publish(&metadata.signer, name, bytes).await {
+                Ok(_) => {}
+                Err(ExecutionError::Contract(e)) => {
+                    warn!("Publish operation failed: {e:#}");
+                }
+                Err(ExecutionError::Infrastructure(e)) => {
+                    return Err(e.context("Publish operation infrastructure failure"));
+                }
             }
         }
         indexer_types::Op::Call {
@@ -417,17 +429,22 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) {
             ..
         } => {
             runtime.set_gas_limit(*gas_limit);
-            let result = runtime
+            match runtime
                 .execute(Some(&metadata.signer), &(contract.into()), expr)
-                .await;
-            if result.is_err() {
-                warn!("Call operation failed: {:?}", result);
+                .await
+            {
+                Ok(_) => {}
+                Err(ExecutionError::Contract(e)) => {
+                    warn!("Call operation failed: {e:#}");
+                }
+                Err(ExecutionError::Infrastructure(e)) => {
+                    return Err(e.context("Call operation infrastructure failure"));
+                }
             }
         }
         indexer_types::Op::Issuance { metadata, .. } => {
-            let result = runtime.issuance(&metadata.signer).await;
-            if result.is_err() {
-                warn!("Issuance operation failed: {:?}", result);
+            if let Err(e) = runtime.issuance(&metadata.signer).await {
+                warn!("Issuance operation failed: {e:#}");
             }
         }
         indexer_types::Op::RegisterBlsKey {
@@ -449,4 +466,5 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) {
             }
         }
     }
+    Ok(())
 }

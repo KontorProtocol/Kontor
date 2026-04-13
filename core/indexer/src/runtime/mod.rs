@@ -40,6 +40,36 @@ pub use wit::Root;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
+/// Distinguishes deterministic contract failures from non-deterministic
+/// infrastructure failures in the contract execution path.
+#[derive(Debug)]
+pub enum ExecutionError {
+    /// Deterministic failure — all nodes see the same result.
+    /// WASM traps (out of fuel, unreachable, div by zero) and contract errors.
+    /// Caller should rollback and continue processing.
+    Contract(anyhow::Error),
+    /// Non-deterministic infrastructure failure — DB/IO error in a host function,
+    /// or tokio task failure. Caller should propagate to reactor and shut down.
+    Infrastructure(anyhow::Error),
+}
+
+impl std::fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutionError::Contract(e) => write!(f, "contract error: {e:#}"),
+            ExecutionError::Infrastructure(e) => write!(f, "infrastructure error: {e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ExecutionError::Contract(e) | ExecutionError::Infrastructure(e) => e.source(),
+        }
+    }
+}
+
 pub use wit::kontor;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
@@ -275,7 +305,12 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
+    pub async fn publish(
+        &mut self,
+        signer: &Signer,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, ExecutionError> {
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height as u64,
@@ -288,7 +323,7 @@ impl Runtime {
             .storage
             .contract_id(&address)
             .await
-            .expect("Failed to perform contract existence check")
+            .map_err(ExecutionError::Infrastructure)?
             .is_some()
         {
             return Ok("".to_string());
@@ -297,26 +332,36 @@ impl Runtime {
         self.storage
             .savepoint()
             .await
-            .expect("Failed to create savepoint");
+            .map_err(ExecutionError::Infrastructure)?;
         self.storage
             .insert_contract(name, bytes)
             .await
-            .expect("Failed to insert contract");
+            .map_err(ExecutionError::Infrastructure)?;
         let result = self.execute(Some(signer), &address, "init()").await;
         if result.is_err() {
-            self.storage.rollback().await.expect("Failed to rollback");
+            self.storage
+                .rollback()
+                .await
+                .map_err(ExecutionError::Infrastructure)?;
             result
         } else {
-            self.storage.commit().await.expect("Failed to commit");
+            self.storage
+                .commit()
+                .await
+                .map_err(ExecutionError::Infrastructure)?;
             Ok(to_wave_expr(address.clone()))
         }
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        token::api::issuance(self, &Signer::Core(Box::new(signer.clone())), 10.into())
-            .await
-            .expect("Failed to run issuance")
-            .expect("Failed to issue tokens");
+        token::api::issuance(
+            self,
+            &Signer::Core(Box::new(signer.clone())),
+            10u64.try_into().expect("u64 to decimal"),
+        )
+        .await
+        .expect("Failed to run issuance")
+        .expect("Failed to issue tokens");
         Ok(())
     }
 
@@ -390,7 +435,7 @@ impl Runtime {
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
-    ) -> Result<String> {
+    ) -> Result<String, ExecutionError> {
         tracing::info!(
             "Executing contract {} with expr {} with tx context {:?}",
             contract_address,
@@ -409,7 +454,8 @@ impl Runtime {
             starting_fuel,
         ) = self
             .prepare_call(contract_address, signer, expr, true, self.fuel_limit())
-            .await?;
+            .await
+            .map_err(ExecutionError::Infrastructure)?;
         OptionFuture::from(
             self.gauge
                 .as_ref()
@@ -418,7 +464,8 @@ impl Runtime {
         .await;
         let (mut result, mut store) = self
             .call_and_handle(store, func, params, results, is_fallback)
-            .await?;
+            .await
+            .map_err(ExecutionError::Infrastructure)?;
         OptionFuture::from(
             self.gauge
                 .as_ref()

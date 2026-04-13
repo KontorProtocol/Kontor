@@ -37,7 +37,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         gas_limit: 50_000,
         contract: runtime::token::address().into(),
         nonce: None,
-        expr: token::wave::attach_call_expr(0, Decimal::from(2)),
+        expr: token::wave::attach_call_expr(0, 2u64.try_into().unwrap()),
     };
 
     let detach_inst = Inst::Call {
@@ -195,11 +195,11 @@ async fn test_native_token_attach_contract() -> Result<()> {
     assert_eq!(transfer.dst, utxo_id);
 
     let balance = token::balance(runtime, &utxo_id).await?;
-    assert_eq!(balance, Some(Decimal::from(2)));
+    assert_eq!(balance, Some(2u64.try_into().unwrap()));
 
     let buyer_balance_before = token::balance(runtime, &buyer_x_only.to_string())
         .await?
-        .unwrap_or(Decimal::from(0));
+        .unwrap_or(0u64.try_into().unwrap());
 
     let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
@@ -227,7 +227,10 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let buyer_balance_after = token::balance(runtime, &buyer_x_only.to_string())
         .await?
         .unwrap();
-    assert_eq!(buyer_balance_after - buyer_balance_before, Decimal::from(2));
+    assert_eq!(
+        buyer_balance_after - buyer_balance_before,
+        2u64.try_into().unwrap()
+    );
 
     Ok(())
 }

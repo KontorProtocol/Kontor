@@ -19,20 +19,25 @@ async fn test_register_validator() -> Result<()> {
     let validator = runtime.identity().await?;
     let ed25519_key = vec![1u8; 32];
 
-    let result =
-        staking::register_validator(runtime, &validator, ed25519_key.clone(), 5.into()).await??;
+    let result = staking::register_validator(
+        runtime,
+        &validator,
+        ed25519_key.clone(),
+        5u64.try_into().unwrap(),
+    )
+    .await??;
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
-    assert_eq!(result.stake, Decimal::from(5));
+    assert_eq!(result.stake, 5u64.try_into().unwrap());
     assert_eq!(result.ed25519_pubkey, ed25519_key);
     assert_eq!(result.x_only_pubkey, validator.to_string());
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::PendingJoin);
-    assert_eq!(info.stake, Decimal::from(5));
+    assert_eq!(info.stake, 5u64.try_into().unwrap());
 
     let epoch = staking::get_staking_info(runtime).await?;
     assert_eq!(epoch.active_count, 0);
-    assert_eq!(epoch.total_stake, Decimal::from(0));
+    assert_eq!(epoch.total_stake, 0u64.try_into().unwrap());
 
     assert_eq!(staking::get_active_set(runtime).await?.len(), 0);
     assert_eq!(staking::get_active_count(runtime).await?, 0);
@@ -45,16 +50,22 @@ async fn test_register_validator_errors() -> Result<()> {
     let validator = runtime.identity().await?;
 
     // Stake exceeds maximum
-    let result =
-        staking::register_validator(runtime, &validator, vec![1u8; 32], 1_000_000_001u64.into())
-            .await?;
+    let result = staking::register_validator(
+        runtime,
+        &validator,
+        vec![1u8; 32],
+        1_000_000_001u64.try_into().unwrap(),
+    )
+    .await?;
     assert_eq!(
         result,
         Err(Error::Message("stake exceeds maximum".to_string()))
     );
 
     // Bad ed25519 key length
-    let result = staking::register_validator(runtime, &validator, vec![1u8; 16], 5.into()).await?;
+    let result =
+        staking::register_validator(runtime, &validator, vec![1u8; 16], 5u64.try_into().unwrap())
+            .await?;
     assert_eq!(
         result,
         Err(Error::Message(
@@ -63,10 +74,13 @@ async fn test_register_validator_errors() -> Result<()> {
     );
 
     // Register once successfully
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+        .await??;
 
     // Double registration
-    let result = staking::register_validator(runtime, &validator, vec![2u8; 32], 3.into()).await?;
+    let result =
+        staking::register_validator(runtime, &validator, vec![2u8; 32], 3u64.try_into().unwrap())
+            .await?;
     assert_eq!(
         result,
         Err(Error::Message("already registered".to_string()))
@@ -75,9 +89,10 @@ async fn test_register_validator_errors() -> Result<()> {
     // Go inactive from PENDING_JOIN — tokens returned automatically, can re-register directly
     staking::begin_unstake(runtime, &validator).await??;
     let result =
-        staking::register_validator(runtime, &validator, vec![3u8; 32], 2.into()).await??;
+        staking::register_validator(runtime, &validator, vec![3u8; 32], 2u64.try_into().unwrap())
+            .await??;
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
-    assert_eq!(result.stake, Decimal::from(2));
+    assert_eq!(result.stake, 2u64.try_into().unwrap());
 
     Ok(())
 }
@@ -86,29 +101,31 @@ async fn test_register_validator_errors() -> Result<()> {
 async fn test_add_stake() -> Result<()> {
     let validator = runtime.identity().await?;
 
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 3.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 3u64.try_into().unwrap())
+        .await??;
 
-    let result = staking::add_stake(runtime, &validator, 2.into()).await??;
-    assert_eq!(result.stake, Decimal::from(5));
+    let result = staking::add_stake(runtime, &validator, 2u64.try_into().unwrap()).await??;
+    assert_eq!(result.stake, 5u64.try_into().unwrap());
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.stake, Decimal::from(5));
+    assert_eq!(info.stake, 5u64.try_into().unwrap());
 
     // Negative and zero amounts rejected
-    let result = staking::add_stake(runtime, &validator, Decimal::from(-1)).await?;
+    let result = staking::add_stake(runtime, &validator, Decimal::try_from(-1i64).unwrap()).await?;
     assert_eq!(
         result,
         Err(Error::Message("amount must be positive".to_string()))
     );
-    let result = staking::add_stake(runtime, &validator, Decimal::from(0)).await?;
+    let result = staking::add_stake(runtime, &validator, 0u64.try_into().unwrap()).await?;
     assert_eq!(
         result,
         Err(Error::Message("amount must be positive".to_string()))
     );
 
     // add_stake that would exceed max
-    let result = staking::add_stake(runtime, &validator, 1_000_000_000u64.into()).await?;
+    let result =
+        staking::add_stake(runtime, &validator, 1_000_000_000u64.try_into().unwrap()).await?;
     assert_eq!(
         result,
         Err(Error::Message(
@@ -123,10 +140,11 @@ async fn test_add_stake() -> Result<()> {
 async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     let validator = runtime.identity().await?;
 
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 3.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 3u64.try_into().unwrap())
+        .await??;
 
     // add_stake while pending_join is fine
-    staking::add_stake(runtime, &validator, 1.into()).await??;
+    staking::add_stake(runtime, &validator, 1u64.try_into().unwrap()).await??;
 
     // (local mode cannot trigger activation)
     // (use begin_unstake from pending_join which goes straight to inactive,
@@ -135,7 +153,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     // In local mode we can't reach PENDING_EXIT without epoch transitions,
     // so test that add_stake is rejected for inactive validators instead
     staking::begin_unstake(runtime, &validator).await??;
-    let result = staking::add_stake(runtime, &validator, 1.into()).await?;
+    let result = staking::add_stake(runtime, &validator, 1u64.try_into().unwrap()).await?;
     assert_eq!(
         result,
         Err(Error::Message(
@@ -151,18 +169,19 @@ async fn test_begin_unstake_from_pending() -> Result<()> {
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+        .await??;
 
     let result = staking::begin_unstake(runtime, &validator).await??;
     assert_eq!(result.status, staking::ValidatorStatus::Inactive);
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.status, staking::ValidatorStatus::Inactive);
-    assert_eq!(info.stake, Decimal::from(0));
+    assert_eq!(info.stake, 0u64.try_into().unwrap());
 
     // Tokens returned automatically when unstaking from PENDING_JOIN
     let balance_after_unstake = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance_before - balance_after_unstake < Decimal::from(1)); // only gas cost
+    assert!(balance_before - balance_after_unstake < 1u64.try_into().unwrap()); // only gas cost
 
     Ok(())
 }
@@ -172,19 +191,20 @@ async fn test_unstake_returns_tokens() -> Result<()> {
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+        .await??;
 
     // Unstake from PENDING_JOIN — tokens returned automatically
     staking::begin_unstake(runtime, &validator).await??;
 
     // Token balance should have mostly recovered (minus gas)
     let balance = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance_before - balance < Decimal::from(1));
+    assert!(balance_before - balance < 1u64.try_into().unwrap());
 
     // Validator entry still exists with ed25519_pubkey retained
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.ed25519_pubkey, vec![1u8; 32]);
-    assert_eq!(info.stake, Decimal::from(0));
+    assert_eq!(info.stake, 0u64.try_into().unwrap());
     assert_eq!(info.status, staking::ValidatorStatus::Inactive);
 
     Ok(())
@@ -195,14 +215,14 @@ async fn test_multiple_validators() -> Result<()> {
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
 
-    staking::register_validator(runtime, &v1, vec![1u8; 32], 5.into()).await??;
-    staking::register_validator(runtime, &v2, vec![2u8; 32], 3.into()).await??;
+    staking::register_validator(runtime, &v1, vec![1u8; 32], 5u64.try_into().unwrap()).await??;
+    staking::register_validator(runtime, &v2, vec![2u8; 32], 3u64.try_into().unwrap()).await??;
 
     let info1 = staking::get_validator(runtime, &v1).await?.unwrap();
-    assert_eq!(info1.stake, Decimal::from(5));
+    assert_eq!(info1.stake, 5u64.try_into().unwrap());
 
     let info2 = staking::get_validator(runtime, &v2).await?.unwrap();
-    assert_eq!(info2.stake, Decimal::from(3));
+    assert_eq!(info2.stake, 3u64.try_into().unwrap());
 
     Ok(())
 }
@@ -213,9 +233,10 @@ async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
     let v2 = runtime.identity().await?;
     let same_key = vec![1u8; 32];
 
-    staking::register_validator(runtime, &v1, same_key.clone(), 5.into()).await??;
+    staking::register_validator(runtime, &v1, same_key.clone(), 5u64.try_into().unwrap()).await??;
 
-    let result = staking::register_validator(runtime, &v2, same_key, 3.into()).await?;
+    let result =
+        staking::register_validator(runtime, &v2, same_key, 3u64.try_into().unwrap()).await?;
     assert_eq!(
         result,
         Err(Error::Message(
@@ -233,11 +254,12 @@ async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     let same_key = vec![1u8; 32];
 
     // v1 registers and then goes inactive (tokens returned automatically from PENDING_JOIN)
-    staking::register_validator(runtime, &v1, same_key.clone(), 5.into()).await??;
+    staking::register_validator(runtime, &v1, same_key.clone(), 5u64.try_into().unwrap()).await??;
     staking::begin_unstake(runtime, &v1).await??;
 
     // v2 can now use the same key since v1 is inactive
-    let result = staking::register_validator(runtime, &v2, same_key, 3.into()).await??;
+    let result =
+        staking::register_validator(runtime, &v2, same_key, 3u64.try_into().unwrap()).await??;
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
 
     Ok(())
@@ -248,13 +270,14 @@ async fn test_register_validator_token_balance() -> Result<()> {
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5.into()).await??;
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+        .await??;
     let balance_after = token::balance(runtime, &validator).await?.unwrap();
 
     // Difference should be at least 5 (staked amount) plus a small gas cost
     let diff = balance_before - balance_after;
-    assert!(diff >= Decimal::from(5));
-    assert!(diff < Decimal::from(6));
+    assert!(diff >= 5u64.try_into().unwrap());
+    assert!(diff < 6u64.try_into().unwrap());
 
     Ok(())
 }
