@@ -53,7 +53,7 @@ impl Vote {
             extension: None,
             ..self.clone()
         };
-        Protobuf::to_bytes(&vote).unwrap()
+        Protobuf::to_bytes(&vote).expect("vote serialization should not fail")
     }
 
     pub fn from_sign_bytes(bytes: &[u8]) -> Result<Self, ProtoError> {
@@ -124,10 +124,14 @@ impl Protobuf for Vote {
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
+        let round = self
+            .round
+            .as_u32()
+            .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
         Ok(Self::Proto {
             vote_type: encode_votetype(self.typ).into(),
             height: self.height.to_proto()?,
-            round: self.round.as_u32().expect("round should not be nil"),
+            round,
             value: match &self.value {
                 NilOrVal::Nil => None,
                 NilOrVal::Val(v) => Some(v.to_proto()?),

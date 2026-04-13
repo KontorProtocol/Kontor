@@ -118,9 +118,13 @@ impl Codec<SignedConsensusMsg<Ctx>> for ProtobufCodec {
 pub fn encode_round_certificate(
     certificate: &RoundCertificate<Ctx>,
 ) -> Result<proto::RoundCertificate, ProtoError> {
+    let round = certificate
+        .round
+        .as_u32()
+        .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
     Ok(proto::RoundCertificate {
         height: certificate.height.as_u64(),
-        round: certificate.round.as_u32().expect("round should not be nil"),
+        round,
         cert_type: match certificate.cert_type {
             RoundCertificateType::Precommit => proto::RoundCertificateType::Precommit.into(),
             RoundCertificateType::Skip => proto::RoundCertificateType::Skip.into(),
@@ -304,9 +308,13 @@ impl Codec<ProposedValue<Ctx>> for ProtobufCodec {
     }
 
     fn encode(&self, msg: &ProposedValue<Ctx>) -> Result<Bytes, Self::Error> {
+        let round = msg
+            .round
+            .as_u32()
+            .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
         let proto = proto::ProposedValue {
             height: msg.height.as_u64(),
-            round: msg.round.as_u32().unwrap(),
+            round,
             valid_round: msg.valid_round.as_u32(),
             proposer: Some(msg.proposer.to_proto()?),
             value: Some(msg.value.to_proto()?),
@@ -328,7 +336,8 @@ impl Codec<sync::Status<Ctx>> for ProtobufCodec {
             .ok_or_else(|| ProtoError::missing_field::<proto::Status>("peer_id"))?;
 
         Ok(sync::Status {
-            peer_id: PeerId::from_bytes(proto_peer_id.id.as_ref()).unwrap(),
+            peer_id: PeerId::from_bytes(proto_peer_id.id.as_ref())
+                .map_err(|e| ProtoError::Other(format!("invalid peer_id: {e}")))?,
             tip_height: Height::new(proto.height),
             history_min_height: Height::new(proto.earliest_height),
         })
@@ -475,12 +484,13 @@ pub fn decode_synced_value(
 pub(crate) fn encode_polka_certificate(
     polka_certificate: &PolkaCertificate<Ctx>,
 ) -> Result<proto::PolkaCertificate, ProtoError> {
+    let round = polka_certificate
+        .round
+        .as_u32()
+        .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
     Ok(proto::PolkaCertificate {
         height: polka_certificate.height.as_u64(),
-        round: polka_certificate
-            .round
-            .as_u32()
-            .expect("round should not be nil"),
+        round,
         value_id: Some(polka_certificate.value_id.to_proto()?),
         signatures: polka_certificate
             .polka_signatures
@@ -563,9 +573,13 @@ pub fn decode_commit_certificate(
 pub fn encode_commit_certificate(
     certificate: &CommitCertificate<Ctx>,
 ) -> Result<proto::CommitCertificate, ProtoError> {
+    let round = certificate
+        .round
+        .as_u32()
+        .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
     Ok(proto::CommitCertificate {
         height: certificate.height.as_u64(),
-        round: certificate.round.as_u32().expect("round should not be nil"),
+        round,
         value_id: Some(certificate.value_id.to_proto()?),
         signatures: certificate
             .commit_signatures

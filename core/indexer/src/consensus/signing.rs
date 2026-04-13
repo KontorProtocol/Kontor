@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
 
@@ -20,12 +21,12 @@ pub fn generate_random_private_key() -> PrivateKey {
 }
 
 /// Parse a hex-encoded Ed25519 private key.
-pub fn private_key_from_hex(hex_str: &str) -> PrivateKey {
-    let key_bytes = hex::decode(hex_str).expect("Invalid consensus private key hex");
-    let key_array: [u8; 32] = key_bytes
-        .try_into()
-        .expect("Ed25519 private key must be 32 bytes");
-    PrivateKey::from(key_array)
+pub fn private_key_from_hex(hex_str: &str) -> anyhow::Result<PrivateKey> {
+    let key_bytes = hex::decode(hex_str).context("Invalid consensus private key hex")?;
+    let key_array: [u8; 32] = key_bytes.try_into().map_err(|v: Vec<u8>| {
+        anyhow::anyhow!("Ed25519 private key must be 32 bytes, got {}", v.len())
+    })?;
+    Ok(PrivateKey::from(key_array))
 }
 
 pub trait Hashable {
