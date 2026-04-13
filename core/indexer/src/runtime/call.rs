@@ -1,4 +1,5 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
+use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
     AsContext, AsContextMut, Store,
@@ -230,6 +231,48 @@ impl Runtime {
         ))
     }
 
+    /// Spawn the WASM call, catch panics, and handle the result.
+    /// Returns (call_result, store) — the store is always returned for gas accounting.
+    pub(crate) async fn call_and_handle(
+        &self,
+        mut store: Store<Runtime>,
+        func: Func,
+        params: Vec<Val>,
+        mut results: Vec<Val>,
+        is_fallback: bool,
+    ) -> Result<(Result<String>, Store<Runtime>)> {
+        let (result, results, store) = tokio::spawn(async move {
+            match std::panic::AssertUnwindSafe(
+                func.call_async(&mut store, &params, &mut results),
+            )
+            .catch_unwind()
+            .await
+            {
+                Ok(call_result) => (Ok(call_result), results, store),
+                Err(panic_payload) => {
+                    let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    (Err(msg), results, store)
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
+
+        let wasm_result = match result {
+            Ok(call_result) => call_result.map_err(Into::into),
+            Err(panic_msg) => Err(anyhow::anyhow!("host panic: {panic_msg}")),
+        };
+        let call_result = self.handle_call(is_fallback, wasm_result, results).await;
+
+        Ok((call_result, store))
+    }
+
     pub(crate) async fn handle_call(
         &self,
         is_fallback: bool,
@@ -239,7 +282,7 @@ impl Runtime {
         self.stack.pop().await;
 
         let result = if let Err(e) = result {
-            Err(anyhow!(format!("{}", e.root_cause())))
+            Err(e)
         } else if results.is_empty() {
             Ok("".to_string())
         } else if results.len() != 1 {
@@ -263,16 +306,16 @@ impl Runtime {
             self.storage
                 .rollback()
                 .await
-                .expect("Failed to rollback storage after failure to extract expression");
+                .context("Failed to rollback storage after call failure")?;
             self.file_ledger
                 .resync_from_db(&self.storage.conn)
                 .await
-                .expect("Failed to resync file ledger after rollback");
+                .context("Failed to resync file ledger after rollback")?;
         } else {
             self.storage
                 .commit()
                 .await
-                .expect("Failed to commit storage after successful call");
+                .context("Failed to commit storage after successful call")?;
         }
 
         result
@@ -370,12 +413,12 @@ impl Runtime {
                 .expect("Failed to lock table and get signer");
 
         let (
-            mut store,
+            store,
             contract_id,
             func_name,
             is_fallback,
             params,
-            mut results,
+            results,
             func,
             is_proc,
             _fuel,
@@ -388,18 +431,9 @@ impl Runtime {
                 Some(starting_fuel),
             )
             .await?;
-        let (result, results, mut store) = tokio::spawn(async move {
-            (
-                func.call_async(&mut store, &params, &mut results).await,
-                results,
-                store,
-            )
-        })
-        .await
-        .expect("Failed to join call");
-        let mut result = self
-            .handle_call(is_fallback, result.map_err(Into::into), results)
-            .await;
+        let (mut result, mut store) = self
+            .call_and_handle(store, func, params, results, is_fallback)
+            .await?;
         let fuel = store.get_fuel().unwrap();
         accessor
             .with(|mut access| access.as_context_mut().set_fuel(fuel))

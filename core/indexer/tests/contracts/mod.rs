@@ -6,6 +6,7 @@ mod bls_replay_protection;
 mod bls_user_registry;
 mod compose;
 mod counter_contract;
+mod error_classification;
 mod crypto_contract;
 mod fib_contract;
 mod file_storage;

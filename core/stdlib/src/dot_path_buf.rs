@@ -61,17 +61,23 @@ impl AsRef<str> for DotPathBuf {
     }
 }
 
-impl FromStr for DotPathBuf {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl From<&str> for DotPathBuf {
+    fn from(s: &str) -> Self {
         let segments = s
             .split('.')
             .filter(|s| !s.is_empty())
             .map(String::from)
             .collect::<Vec<String>>();
         let joined = segments.join(".");
-        Ok(DotPathBuf { segments, joined })
+        DotPathBuf { segments, joined }
+    }
+}
+
+impl FromStr for DotPathBuf {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(DotPathBuf::from(s))
     }
 }
 

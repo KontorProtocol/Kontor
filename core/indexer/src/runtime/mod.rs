@@ -348,7 +348,10 @@ impl Runtime {
             .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
+        let existing = registry::api::get_entry(self, &x_only_pk.to_string())
+            .await
+            .map_err(|e| anyhow!("Failed to check registry for existing BLS key: {e}"))?;
+        if let Some(entry) = existing
             && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
         {
             return Ok(());
@@ -395,12 +398,12 @@ impl Runtime {
             self.tx_context()
         );
         let (
-            mut store,
+            store,
             contract_id,
             func_name,
             is_fallback,
             params,
-            mut results,
+            results,
             func,
             is_proc,
             starting_fuel,
@@ -413,18 +416,9 @@ impl Runtime {
                 .map(|g| g.set_starting_fuel(starting_fuel)),
         )
         .await;
-        let (result, results, mut store) = tokio::spawn(async move {
-            (
-                func.call_async(&mut store, &params, &mut results).await,
-                results,
-                store,
-            )
-        })
-        .await
-        .expect("Failed to join execution");
-        let mut result = self
-            .handle_call(is_fallback, result.map_err(Into::into), results)
-            .await;
+        let (mut result, mut store) = self
+            .call_and_handle(store, func, params, results, is_fallback)
+            .await?;
         OptionFuture::from(
             self.gauge
                 .as_ref()

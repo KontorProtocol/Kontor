@@ -229,6 +229,11 @@ interface file-registry {
     }
 }
 
+interface testing {
+    /// Always returns an error. Used to test host function error propagation.
+    host-error: async func() -> string;
+}
+
 world built-in {
     import context;
     import foreign;
@@ -236,4 +241,5 @@ world built-in {
     import error;
     import numbers;
     import file-registry;
+    import testing;
 }

@@ -239,6 +239,14 @@ impl Runtime {
 
 impl built_in::error::Host for Runtime {}
 
+impl built_in::testing::Host for Runtime {}
+
+impl built_in::testing::HostWithStore for Runtime {
+    async fn host_error<T>(_accessor: &wasmtime::component::Accessor<T, Self>) -> anyhow::Result<String> {
+        anyhow::bail!("deliberate host error for testing")
+    }
+}
+
 impl built_in::file_registry::Host for Runtime {}
 
 impl built_in::file_registry::HostFileDescriptor for Runtime {}
