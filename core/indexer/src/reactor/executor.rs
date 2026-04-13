@@ -396,11 +396,17 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
     use crate::runtime::ExecutionError;
     use crate::runtime::wit::Signer;
 
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer
-        && let Err(e) = runtime.ensure_signer(x_only).await
-    {
-        warn!("Failed to ensure signer for {x_only}: {e}");
-        return Ok(());
+    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
+        match runtime.ensure_signer(x_only).await {
+            Ok(_) => {}
+            Err(ExecutionError::Deterministic(e)) => {
+                warn!("Failed to ensure signer for {x_only}: {e}");
+                return Ok(());
+            }
+            Err(ExecutionError::NonDeterministic(e)) => {
+                return Err(e.context("ensure_signer infrastructure failure"));
+            }
+        }
     }
 
     match op {
@@ -443,8 +449,14 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             }
         }
         indexer_types::Op::Issuance { metadata, .. } => {
-            if let Err(e) = runtime.issuance(&metadata.signer).await {
-                warn!("Issuance operation failed: {e:#}");
+            match runtime.issuance(&metadata.signer).await {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("Issuance operation failed: {e:#}");
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("Issuance infrastructure failure"));
+                }
             }
         }
         indexer_types::Op::RegisterBlsKey {
@@ -453,7 +465,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             schnorr_sig,
             bls_sig,
         } => {
-            if let Err(e) = runtime
+            match runtime
                 .register_bls_key(
                     &metadata.signer,
                     bls_pubkey.as_slice(),
@@ -462,7 +474,13 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 )
                 .await
             {
-                warn!("RegisterBlsKey failed: {e}");
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("RegisterBlsKey failed: {e:#}");
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("RegisterBlsKey infrastructure failure"));
+                }
             }
         }
     }

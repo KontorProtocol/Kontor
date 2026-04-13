@@ -383,7 +383,7 @@ impl RuntimeImpl for RuntimeLocal {
     }
 
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        self.runtime.issuance(signer).await
+        self.runtime.issuance(signer).await.map_err(Into::into)
     }
 
     async fn checkpoint(&mut self) -> Result<Option<String>> {

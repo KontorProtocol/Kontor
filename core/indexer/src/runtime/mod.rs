@@ -71,11 +71,16 @@ impl std::error::Error for ExecutionError {
     }
 }
 
-/// Default conversion: bare `?` in ExecutionError-returning functions
-/// treats unknown errors as non-deterministic (infrastructure).
+/// Convert an anyhow::Error to ExecutionError, preserving the classification
+/// if the error already contains an ExecutionError (e.g. from a cross-contract
+/// call through the WIT foreign::call boundary). Falls back to NonDeterministic
+/// for errors without an ExecutionError inside.
 impl From<anyhow::Error> for ExecutionError {
     fn from(e: anyhow::Error) -> Self {
-        ExecutionError::NonDeterministic(e)
+        match e.downcast::<ExecutionError>() {
+            Ok(ee) => ee,
+            Err(e) => ExecutionError::NonDeterministic(e),
+        }
     }
 }
 
@@ -362,19 +367,18 @@ impl Runtime {
         }
     }
 
-    pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
+    pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
         token::api::issuance(
             self,
             &Signer::Core(Box::new(signer.clone())),
             10u64.try_into().expect("u64 to decimal"),
         )
-        .await
-        .expect("Failed to run issuance")
-        .expect("Failed to issue tokens");
+        .await?
+        .map_err(|e| ExecutionError::NonDeterministic(anyhow!("Failed to issue tokens: {e:?}")))?;
         Ok(())
     }
 
-    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64> {
+    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64, ExecutionError> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
         let entry = registry::api::ensure_signer(
             self,
@@ -382,7 +386,9 @@ impl Runtime {
             x_only_pubkey,
         )
         .await?
-        .map_err(|e| anyhow!("registry ensure-signer failed: {e:?}"))?;
+        .map_err(|e| {
+            ExecutionError::NonDeterministic(anyhow!("registry ensure-signer failed: {e:?}"))
+        })?;
         Ok(entry.signer_id)
     }
 
@@ -392,34 +398,39 @@ impl Runtime {
         bls_pubkey: &[u8],
         schnorr_sig: &[u8],
         bls_sig: &[u8],
-    ) -> Result<()> {
+    ) -> Result<(), ExecutionError> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
 
         let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
-            return Err(anyhow!("RegisterBlsKey requires an XOnlyPubKey signer"));
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey requires an XOnlyPubKey signer"
+            )));
         };
         let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
-            .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
+            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        let existing = registry::api::get_entry(self, &x_only_pk.to_string())
-            .await
-            .map_err(|e| anyhow!("Failed to check registry for existing BLS key: {e}"))?;
+        // Check if key already registered — DB query failure is non-deterministic
+        let existing = registry::api::get_entry(self, &x_only_pk.to_string()).await?;
         if let Some(entry) = existing
             && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
         {
             return Ok(());
         }
 
-        let bls_pubkey: [u8; 96] = bls_pubkey
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;
-        let schnorr_sig: [u8; 64] = schnorr_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 64 bytes for schnorr_sig"))?;
-        let bls_sig: [u8; 48] = bls_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
+        let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey expected 96 bytes for bls_pubkey"
+            ))
+        })?;
+        let schnorr_sig: [u8; 64] = schnorr_sig.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey expected 64 bytes for schnorr_sig"
+            ))
+        })?;
+        let bls_sig: [u8; 48] = bls_sig.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))
+        })?;
 
         let proof = RegistrationProof {
             x_only_pubkey: x_only_pk.serialize(),
@@ -427,7 +438,7 @@ impl Runtime {
             schnorr_sig,
             bls_sig,
         };
-        proof.verify()?;
+        proof.verify().map_err(ExecutionError::Deterministic)?;
 
         registry::api::register_bls_key(
             self,
@@ -436,7 +447,9 @@ impl Runtime {
         )
         .await?
         .map(|_entry| ())
-        .map_err(|e| anyhow!("registry register-bls-key failed: {e:?}"))
+        .map_err(|e| {
+            ExecutionError::NonDeterministic(anyhow!("registry register-bls-key failed: {e:?}"))
+        })
     }
 
     pub async fn execute(
