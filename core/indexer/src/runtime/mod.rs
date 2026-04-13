@@ -374,7 +374,7 @@ impl Runtime {
             10u64.try_into().expect("u64 to decimal"),
         )
         .await?
-        .map_err(|e| ExecutionError::NonDeterministic(anyhow!("Failed to issue tokens: {e:?}")))?;
+        .expect("issuance(10) should never fail");
         Ok(())
     }
 
@@ -385,10 +385,7 @@ impl Runtime {
             &Signer::Core(Box::new(Signer::Nobody)),
             x_only_pubkey,
         )
-        .await?
-        .map_err(|e| {
-            ExecutionError::NonDeterministic(anyhow!("registry ensure-signer failed: {e:?}"))
-        })?;
+        .await?;
         Ok(entry.signer_id)
     }
 
@@ -410,12 +407,16 @@ impl Runtime {
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        // Check if key already registered — DB query failure is non-deterministic
         let existing = registry::api::get_entry(self, &x_only_pk.to_string()).await?;
-        if let Some(entry) = existing
-            && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
-        {
-            return Ok(());
+        if let Some(entry) = existing {
+            if entry.bls_pubkey.as_deref() == Some(bls_pubkey) {
+                return Ok(());
+            }
+            if entry.bls_pubkey.is_some() {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "BLS pubkey already registered for signer"
+                )));
+            }
         }
 
         let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {
@@ -445,11 +446,8 @@ impl Runtime {
             &Signer::Core(Box::new(canonical_signer)),
             proof.bls_pubkey.to_vec(),
         )
-        .await?
-        .map(|_entry| ())
-        .map_err(|e| {
-            ExecutionError::NonDeterministic(anyhow!("registry register-bls-key failed: {e:?}"))
-        })
+        .await?;
+        Ok(())
     }
 
     pub async fn execute(
