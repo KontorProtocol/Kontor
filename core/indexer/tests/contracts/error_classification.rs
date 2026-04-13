@@ -95,6 +95,7 @@ async fn test_error_case_trap_out_of_fuel() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "testing")]
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_error_case_host_error() -> Result<()> {
     let signer = runtime.identity().await?;
@@ -105,6 +106,7 @@ async fn test_error_case_host_error() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "testing")]
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_error_case_host_panic() -> Result<()> {
     let signer = runtime.identity().await?;
@@ -137,6 +139,7 @@ async fn test_cross_contract_trap_out_of_fuel() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "testing")]
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_cross_contract_host_error() -> Result<()> {
     let (proxy_addr, _) = setup_proxy(runtime).await?;
@@ -147,6 +150,7 @@ async fn test_cross_contract_host_error() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "testing")]
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_cross_contract_host_panic() -> Result<()> {
     let (proxy_addr, _) = setup_proxy(runtime).await?;
