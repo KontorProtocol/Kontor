@@ -194,11 +194,11 @@ impl Executor for LiteExecutor {
             .await
         {
             Ok(_) => Ok(()),
-            Err(crate::runtime::ExecutionError::Contract(e)) => {
+            Err(crate::runtime::ExecutionError::Deterministic(e)) => {
                 tracing::error!("counter increment error: {e}");
                 Ok(())
             }
-            Err(crate::runtime::ExecutionError::Infrastructure(e)) => Err(e),
+            Err(crate::runtime::ExecutionError::NonDeterministic(e)) => Err(e),
         }
     }
 

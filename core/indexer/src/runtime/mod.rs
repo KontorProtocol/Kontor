@@ -40,24 +40,25 @@ pub use wit::Root;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
-/// Distinguishes deterministic contract failures from non-deterministic
-/// infrastructure failures in the contract execution path.
+/// Distinguishes deterministic failures from non-deterministic failures
+/// in the contract execution path.
 #[derive(Debug)]
 pub enum ExecutionError {
-    /// Deterministic failure — all nodes see the same result.
-    /// WASM traps (out of fuel, unreachable, div by zero) and contract errors.
+    /// Deterministic failure — all nodes see the same result for the same inputs.
+    /// WASM traps, contract not found, bad arguments, etc.
     /// Caller should rollback and continue processing.
-    Contract(anyhow::Error),
-    /// Non-deterministic infrastructure failure — DB/IO error in a host function,
-    /// or tokio task failure. Caller should propagate to reactor and shut down.
-    Infrastructure(anyhow::Error),
+    Deterministic(anyhow::Error),
+    /// Non-deterministic failure — DB/IO error, host panic, tokio task failure.
+    /// Different nodes may see different results.
+    /// Caller should propagate to reactor and shut down.
+    NonDeterministic(anyhow::Error),
 }
 
 impl std::fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExecutionError::Contract(e) => write!(f, "contract error: {e:#}"),
-            ExecutionError::Infrastructure(e) => write!(f, "infrastructure error: {e:#}"),
+            ExecutionError::Deterministic(e) => write!(f, "deterministic error: {e:#}"),
+            ExecutionError::NonDeterministic(e) => write!(f, "non-deterministic error: {e:#}"),
         }
     }
 }
@@ -65,8 +66,16 @@ impl std::fmt::Display for ExecutionError {
 impl std::error::Error for ExecutionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ExecutionError::Contract(e) | ExecutionError::Infrastructure(e) => e.source(),
+            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => e.source(),
         }
+    }
+}
+
+/// Default conversion: bare `?` in ExecutionError-returning functions
+/// treats unknown errors as non-deterministic (infrastructure).
+impl From<anyhow::Error> for ExecutionError {
+    fn from(e: anyhow::Error) -> Self {
+        ExecutionError::NonDeterministic(e)
     }
 }
 
@@ -323,7 +332,7 @@ impl Runtime {
             .storage
             .contract_id(&address)
             .await
-            .map_err(ExecutionError::Infrastructure)?
+            .map_err(ExecutionError::NonDeterministic)?
             .is_some()
         {
             return Ok("".to_string());
@@ -332,23 +341,23 @@ impl Runtime {
         self.storage
             .savepoint()
             .await
-            .map_err(ExecutionError::Infrastructure)?;
+            .map_err(ExecutionError::NonDeterministic)?;
         self.storage
             .insert_contract(name, bytes)
             .await
-            .map_err(ExecutionError::Infrastructure)?;
+            .map_err(ExecutionError::NonDeterministic)?;
         let result = self.execute(Some(signer), &address, "init()").await;
         if result.is_err() {
             self.storage
                 .rollback()
                 .await
-                .map_err(ExecutionError::Infrastructure)?;
+                .map_err(ExecutionError::NonDeterministic)?;
             result
         } else {
             self.storage
                 .commit()
                 .await
-                .map_err(ExecutionError::Infrastructure)?;
+                .map_err(ExecutionError::NonDeterministic)?;
             Ok(to_wave_expr(address.clone()))
         }
     }
@@ -454,8 +463,7 @@ impl Runtime {
             starting_fuel,
         ) = self
             .prepare_call(contract_address, signer, expr, true, self.fuel_limit())
-            .await
-            .map_err(ExecutionError::Infrastructure)?;
+            .await?;
         OptionFuture::from(
             self.gauge
                 .as_ref()
@@ -464,8 +472,7 @@ impl Runtime {
         .await;
         let (mut result, mut store) = self
             .call_and_handle(store, func, params, results, is_fallback)
-            .await
-            .map_err(ExecutionError::Infrastructure)?;
+            .await?;
         OptionFuture::from(
             self.gauge
                 .as_ref()

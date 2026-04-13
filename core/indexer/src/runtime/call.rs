@@ -33,62 +33,91 @@ impl Runtime {
         expr: &str,
         is_top_level: bool,
         fuel: Option<u64>,
-    ) -> Result<(
-        Store<Runtime>,
-        i64,
-        String,
-        bool,
-        Vec<Val>,
-        Vec<Val>,
-        Func,
-        bool,
-        u64,
-    )> {
+    ) -> Result<
+        (
+            Store<Runtime>,
+            i64,
+            String,
+            bool,
+            Vec<Val>,
+            Vec<Val>,
+            Func,
+            bool,
+            u64,
+        ),
+        ExecutionError,
+    > {
         let contract_id = self
             .storage
             .contract_id(contract_address)
-            .await?
-            .ok_or(anyhow!("Contract not found: {}", contract_address))?;
-        let component = self.load_component(contract_id).await?;
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
+            })?;
+        let component = self
+            .load_component(contract_id)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         let mut fuel_limit = fuel.unwrap_or(self.fuel_limit_for_non_procs());
-        let mut store = self.make_store(fuel_limit)?;
+        let mut store = self
+            .make_store(fuel_limit)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         let instance = self
             .linker
             .instantiate_async(&mut store, &component)
-            .await?;
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         let fallback_name = "fallback";
         let fallback_expr = format!(
             "{}({})",
             fallback_name,
-            to_wave_string(&WaveValue::from(expr))?
+            to_wave_string(&WaveValue::from(expr))
+                .map_err(|e| ExecutionError::Deterministic(e.into()))?
         );
 
-        let call = WaveParser::new(expr).parse_raw_func_call()?;
+        let call = WaveParser::new(expr)
+            .parse_raw_func_call()
+            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
-            (WaveParser::new(&fallback_expr).parse_raw_func_call()?, func)
+            (
+                WaveParser::new(&fallback_expr)
+                    .parse_raw_func_call()
+                    .map_err(|e| ExecutionError::Deterministic(e.into()))?,
+                func,
+            )
         } else {
-            return Err(anyhow!("Expression does not refer to any known function"));
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "Expression does not refer to any known function"
+            )));
         };
 
         let func_name = call.name();
         let component_func = func.ty(&store);
         let func_params = component_func.params();
         let func_param_types = func_params.map(|(_, t)| t).collect::<Vec<_>>();
-        let (func_ctx_param_type, func_param_types) = func_param_types
-            .split_first()
-            .ok_or(anyhow!("Context/signer parameter not found"))?;
-        let mut params = call.to_wasm_params(func_param_types)?;
+        let (func_ctx_param_type, func_param_types) =
+            func_param_types.split_first().ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("Context/signer parameter not found"))
+            })?;
+        let mut params = call
+            .to_wasm_params(func_param_types)
+            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let resource_type = match func_ctx_param_type {
             wasmtime::component::Type::Borrow(t) => Ok(*t),
-            _ => Err(anyhow!("Unsupported context type")),
+            _ => Err(ExecutionError::Deterministic(anyhow!(
+                "Unsupported context type"
+            ))),
         }?;
 
         if let Some(Signer::ContractId { id, .. }) = signer
             && self.stack.peek().await != Some(*id)
         {
-            return Err(anyhow!("Invalid contract id signer"));
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "Invalid contract id signer"
+            )));
         }
 
         let mut is_proc = false;
@@ -114,8 +143,10 @@ impl Runtime {
                                 .push(CoreContext {
                                     signer: *signer.clone(),
                                     contract_id,
-                                })?
-                                .try_into_resource_any(&mut store)?,
+                                })
+                                .map_err(anyhow::Error::from)?
+                                .try_into_resource_any(&mut store)
+                                .map_err(anyhow::Error::from)?,
                         ),
                     )
                 }
@@ -124,8 +155,10 @@ impl Runtime {
                         0,
                         wasmtime::component::Val::Resource(
                             table
-                                .push(ViewContext { contract_id })?
-                                .try_into_resource_any(&mut store)?,
+                                .push(ViewContext { contract_id })
+                                .map_err(anyhow::Error::from)?
+                                .try_into_resource_any(&mut store)
+                                .map_err(anyhow::Error::from)?,
                         ),
                     ),
                 (t, Some(signer))
@@ -139,8 +172,10 @@ impl Runtime {
                                 .push(ProcContext {
                                     signer: signer.clone(),
                                     contract_id,
-                                })?
-                                .try_into_resource_any(&mut store)?,
+                                })
+                                .map_err(anyhow::Error::from)?
+                                .try_into_resource_any(&mut store)
+                                .map_err(anyhow::Error::from)?,
                         ),
                     )
                 }
@@ -154,23 +189,27 @@ impl Runtime {
                                 .push(FallContext {
                                     signer: signer.cloned(),
                                     contract_id,
-                                })?
-                                .try_into_resource_any(&mut store)?,
+                                })
+                                .map_err(anyhow::Error::from)?
+                                .try_into_resource_any(&mut store)
+                                .map_err(anyhow::Error::from)?,
                         ),
                     )
                 }
                 (t, signer) => {
-                    return Err(anyhow!(
+                    return Err(ExecutionError::Deterministic(anyhow!(
                         "Unsupported context/signer type: {:?} {:?}",
                         t,
                         signer
-                    ));
+                    )));
                 }
             }
         }
 
         if is_proc && fuel.is_none() {
-            return Err(anyhow!("Missing fuel for procedure"));
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "Missing fuel for procedure"
+            )));
         }
 
         let results = component_func
@@ -211,18 +250,24 @@ impl Runtime {
                 }
             })
             .await
-            .expect("Failed to escrow gas")
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
             .map_err(|e| {
-                anyhow!(
+                ExecutionError::Deterministic(anyhow!(
                     "Signer {:?} does not have enough token to cover gas limit: {}",
                     signer,
                     e
-                )
+                ))
             })?;
         }
 
-        self.stack.push(contract_id).await?;
-        self.storage.savepoint().await?;
+        self.stack
+            .push(contract_id)
+            .await
+            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
+        self.storage
+            .savepoint()
+            .await
+            .map_err(anyhow::Error::from)?;
         self.file_ledger.clear_dirty().await;
 
         Ok((
@@ -293,12 +338,20 @@ impl Runtime {
     ) -> Result<String, ExecutionError> {
         self.stack.pop().await;
 
-        // Classify before converting: Ok(Ok) is success, Ok(Err) with Trap anywhere
-        // in the error chain is deterministic (covers both direct traps and cross-contract
-        // traps where the Trap is the root cause), Err is host panic (infrastructure)
+        // Classify before converting. An error is deterministic if:
+        // - It's a WASM trap (wasmtime::Trap in the error chain)
+        // - It originated from a deterministic ExecutionError in a cross-contract call
+        // Host panics (caught by catch_unwind) are non-deterministic.
+        //
+        // wasmtime::Error is anyhow::Error, so downcast_ref looks through
+        // context layers and finds types that dyn Error chain walking cannot.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => e.chain().any(|cause| cause.is::<wasmtime::Trap>()),
+            Ok(Err(e)) => {
+                e.downcast_ref::<wasmtime::Trap>().is_some()
+                    || e.downcast_ref::<ExecutionError>()
+                        .is_some_and(|ee| matches!(ee, ExecutionError::Deterministic(_)))
+            }
             Err(_) => false,
         };
 
@@ -332,25 +385,25 @@ impl Runtime {
             self.storage
                 .rollback()
                 .await
-                .map_err(|e| ExecutionError::Infrastructure(e.context("rollback failed")))?;
+                .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
             self.file_ledger
                 .resync_from_db(&self.storage.conn)
                 .await
                 .map_err(|e| {
-                    ExecutionError::Infrastructure(e.context("file ledger resync failed"))
+                    ExecutionError::NonDeterministic(e.context("file ledger resync failed"))
                 })?;
         } else {
             self.storage
                 .commit()
                 .await
-                .map_err(|e| ExecutionError::Infrastructure(e.context("commit failed")))?;
+                .map_err(|e| ExecutionError::NonDeterministic(e.context("commit failed")))?;
         }
 
         result.map_err(|e| {
             if is_deterministic {
-                ExecutionError::Contract(e)
+                ExecutionError::Deterministic(e)
             } else {
-                ExecutionError::Infrastructure(e)
+                ExecutionError::NonDeterministic(e)
             }
         })
     }
@@ -371,7 +424,7 @@ impl Runtime {
                 .consume_with_store(self.gauge.as_ref(), store)
                 .await
         {
-            result = Err(ExecutionError::Contract(e));
+            result = Err(ExecutionError::Deterministic(e));
         }
         let gas = self
             .gas_consumed(
@@ -410,8 +463,8 @@ impl Runtime {
                 }
             })
             .await
-            .map_err(ExecutionError::Infrastructure)?
-            .map_err(|e| ExecutionError::Infrastructure(anyhow::anyhow!("{e:?}")))?;
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+            .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
         }
         if should_skip_result(contract_address, func_name) {
             return result;
@@ -427,7 +480,7 @@ impl Runtime {
                 value,
             )
             .await
-            .map_err(ExecutionError::Infrastructure)?;
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         self.result_id_counter.increment().await;
         result
     }

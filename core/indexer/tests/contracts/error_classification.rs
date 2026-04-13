@@ -20,21 +20,21 @@ async fn setup_proxy(runtime: &mut testlib::Runtime) -> Result<(ContractAddress,
     Ok((proxy_addr, error_test))
 }
 
-fn assert_contract_error<T: std::fmt::Debug>(result: &Result<T>) {
+fn assert_deterministic_error<T: std::fmt::Debug>(result: &Result<T>) {
     let err = result.as_ref().unwrap_err();
     assert!(
         err.downcast_ref::<ExecutionError>()
-            .is_some_and(|e| matches!(e, ExecutionError::Contract(_))),
-        "Expected ExecutionError::Contract, got: {err:#}"
+            .is_some_and(|e| matches!(e, ExecutionError::Deterministic(_))),
+        "Expected ExecutionError::Deterministic, got: {err:#}"
     );
 }
 
-fn assert_infrastructure_error<T: std::fmt::Debug>(result: &Result<T>) {
+fn assert_non_deterministic_error<T: std::fmt::Debug>(result: &Result<T>) {
     let err = result.as_ref().unwrap_err();
     assert!(
         err.downcast_ref::<ExecutionError>()
-            .is_some_and(|e| matches!(e, ExecutionError::Infrastructure(_))),
-        "Expected ExecutionError::Infrastructure, got: {err:#}"
+            .is_some_and(|e| matches!(e, ExecutionError::NonDeterministic(_))),
+        "Expected ExecutionError::NonDeterministic, got: {err:#}"
     );
 }
 
@@ -71,7 +71,7 @@ async fn test_error_case_trap_div_zero() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_div_zero(runtime, &contract, &signer).await;
-    assert_contract_error(&result);
+    assert_deterministic_error(&result);
     Ok(())
 }
 
@@ -81,7 +81,7 @@ async fn test_error_case_trap_panic() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_panic(runtime, &contract, &signer).await;
-    assert_contract_error(&result);
+    assert_deterministic_error(&result);
     Ok(())
 }
 
@@ -91,7 +91,7 @@ async fn test_error_case_trap_out_of_fuel() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_out_of_fuel(runtime, &contract, &signer).await;
-    assert_contract_error(&result);
+    assert_deterministic_error(&result);
     Ok(())
 }
 
@@ -101,7 +101,7 @@ async fn test_error_case_host_error() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::host_error(runtime, &contract, &signer).await;
-    assert_infrastructure_error(&result);
+    assert_non_deterministic_error(&result);
     Ok(())
 }
 
@@ -111,7 +111,7 @@ async fn test_error_case_host_panic() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::host_panic(runtime, &contract, &signer).await;
-    assert_infrastructure_error(&result);
+    assert_non_deterministic_error(&result);
     Ok(())
 }
 
@@ -123,7 +123,7 @@ async fn test_cross_contract_trap_div_zero() -> Result<()> {
     let signer = runtime.identity().await?;
 
     let result = error_test::trap_div_zero(runtime, &proxy_addr, &signer).await;
-    assert_contract_error(&result);
+    assert_deterministic_error(&result);
     Ok(())
 }
 
@@ -133,7 +133,7 @@ async fn test_cross_contract_trap_out_of_fuel() -> Result<()> {
     let signer = runtime.identity().await?;
 
     let result = error_test::trap_out_of_fuel(runtime, &proxy_addr, &signer).await;
-    assert_contract_error(&result);
+    assert_deterministic_error(&result);
     Ok(())
 }
 
@@ -143,7 +143,7 @@ async fn test_cross_contract_host_error() -> Result<()> {
     let signer = runtime.identity().await?;
 
     let result = error_test::host_error(runtime, &proxy_addr, &signer).await;
-    assert_infrastructure_error(&result);
+    assert_non_deterministic_error(&result);
     Ok(())
 }
 
@@ -153,6 +153,6 @@ async fn test_cross_contract_host_panic() -> Result<()> {
     let signer = runtime.identity().await?;
 
     let result = error_test::host_panic(runtime, &proxy_addr, &signer).await;
-    assert_infrastructure_error(&result);
+    assert_non_deterministic_error(&result);
     Ok(())
 }

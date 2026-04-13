@@ -413,10 +413,10 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             runtime.set_gas_limit(*gas_limit);
             match runtime.publish(&metadata.signer, name, bytes).await {
                 Ok(_) => {}
-                Err(ExecutionError::Contract(e)) => {
+                Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
                 }
-                Err(ExecutionError::Infrastructure(e)) => {
+                Err(ExecutionError::NonDeterministic(e)) => {
                     return Err(e.context("Publish operation infrastructure failure"));
                 }
             }
@@ -434,10 +434,10 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 .await
             {
                 Ok(_) => {}
-                Err(ExecutionError::Contract(e)) => {
+                Err(ExecutionError::Deterministic(e)) => {
                     warn!("Call operation failed: {e:#}");
                 }
-                Err(ExecutionError::Infrastructure(e)) => {
+                Err(ExecutionError::NonDeterministic(e)) => {
                     return Err(e.context("Call operation infrastructure failure"));
                 }
             }
