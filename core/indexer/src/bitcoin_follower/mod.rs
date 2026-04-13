@@ -70,14 +70,18 @@ pub async fn run<C: BitcoinRpc>(
 
         select! {
             r = poller_handle => {
-                if let Ok(Err(e)) = r {
-                    error!("Poller error: {:#}", e);
+                match r {
+                    Ok(Err(e)) => error!("Poller error: {:#}", e),
+                    Err(e) => error!("Poller task panicked: {}", e),
+                    _ => {}
                 }
                 cancel_token.cancel();
             }
             r = listener_handle => {
-                if let Ok(Err(e)) = r {
-                    error!("Listener error: {:#}", e);
+                match r {
+                    Ok(Err(e)) => error!("Listener error: {:#}", e),
+                    Err(e) => error!("Listener task panicked: {}", e),
+                    _ => {}
                 }
                 cancel_token.cancel();
             }
