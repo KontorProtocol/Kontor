@@ -51,18 +51,18 @@ impl Runtime {
             .storage
             .contract_id(contract_address)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+            .map_err(ExecutionError::NonDeterministic)?
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
         let component = self
             .load_component(contract_id)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
         let mut fuel_limit = fuel.unwrap_or(self.fuel_limit_for_non_procs());
         let mut store = self
             .make_store(fuel_limit)
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
         let instance = self
             .linker
             .instantiate_async(&mut store, &component)
@@ -250,7 +250,7 @@ impl Runtime {
                 }
             })
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+            .map_err(ExecutionError::NonDeterministic)?
             .map_err(|e| {
                 ExecutionError::Deterministic(anyhow!(
                     "Signer {:?} does not have enough token to cover gas limit: {}",
@@ -264,10 +264,7 @@ impl Runtime {
             .push(contract_id)
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
-        self.storage
-            .savepoint()
-            .await
-            .map_err(anyhow::Error::from)?;
+        self.storage.savepoint().await?;
         self.file_ledger.clear_dirty().await;
 
         Ok((
@@ -463,7 +460,7 @@ impl Runtime {
                 }
             })
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+            .map_err(ExecutionError::NonDeterministic)?
             .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
         }
         if should_skip_result(contract_address, func_name) {
@@ -480,7 +477,7 @@ impl Runtime {
                 value,
             )
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
         self.result_id_counter.increment().await;
         result
     }

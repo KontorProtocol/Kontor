@@ -245,13 +245,19 @@ impl built_in::testing::HostWithStore for Runtime {
     async fn host_error<T>(
         _accessor: &wasmtime::component::Accessor<T, Self>,
     ) -> anyhow::Result<String> {
-        anyhow::bail!("deliberate host error for testing")
+        #[cfg(debug_assertions)]
+        anyhow::bail!("deliberate host error for testing");
+        #[cfg(not(debug_assertions))]
+        Ok(String::new())
     }
 
     async fn host_panic<T>(
         _accessor: &wasmtime::component::Accessor<T, Self>,
     ) -> anyhow::Result<String> {
-        panic!("deliberate host panic for testing")
+        #[cfg(debug_assertions)]
+        panic!("deliberate host panic for testing");
+        #[cfg(not(debug_assertions))]
+        Ok(String::new())
     }
 }
 
