@@ -25,6 +25,6 @@ world root {
 	// Case 3: Host function returns Err (simulates infrastructure failure)
 	export host-error: async func(ctx: borrow<proc-context>);
 
-	// Case 4: Host function panic via NaN → decimal conversion
-	export host-panic-nan: async func(ctx: borrow<proc-context>);
+	// Case 4: Host function panic (non-deterministic)
+	export host-panic: async func(ctx: borrow<proc-context>);
 }

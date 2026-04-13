@@ -1,3 +1,4 @@
+use indexer::runtime::ExecutionError;
 use testlib::*;
 
 interface!(
@@ -5,13 +6,46 @@ interface!(
     path = "../../test-contracts/error-test/wit"
 );
 
+interface!(name = "proxy", path = "../../test-contracts/proxy/wit");
+
+/// Set up proxy pointing at error-test contract
+async fn setup_proxy(runtime: &mut testlib::Runtime) -> Result<(ContractAddress, ContractAddress)> {
+    let signer = runtime.identity().await?;
+    let addrs = runtime
+        .publish_many(&signer, &["error-test", "proxy"])
+        .await?;
+    let error_test = addrs[0].clone();
+    let proxy_addr = addrs[1].clone();
+    proxy::set_contract_address(runtime, &proxy_addr, &signer, error_test.clone()).await?;
+    Ok((proxy_addr, error_test))
+}
+
+fn assert_contract_error<T: std::fmt::Debug>(result: &Result<T>) {
+    let err = result.as_ref().unwrap_err();
+    assert!(
+        err.downcast_ref::<ExecutionError>()
+            .is_some_and(|e| matches!(e, ExecutionError::Contract(_))),
+        "Expected ExecutionError::Contract, got: {err:#}"
+    );
+}
+
+fn assert_infrastructure_error<T: std::fmt::Debug>(result: &Result<T>) {
+    let err = result.as_ref().unwrap_err();
+    assert!(
+        err.downcast_ref::<ExecutionError>()
+            .is_some_and(|e| matches!(e, ExecutionError::Infrastructure(_))),
+        "Expected ExecutionError::Infrastructure, got: {err:#}"
+    );
+}
+
+// --- Direct call tests ---
+
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
 async fn test_error_case_succeed() -> Result<()> {
     let signer = runtime.identity().await?;
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::succeed(runtime, &contract).await;
-    eprintln!("=== SUCCEED: {:?}", result);
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 42);
     Ok(())
@@ -23,31 +57,12 @@ async fn test_error_case_contract_error() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::contract_error(runtime, &contract).await;
-    eprintln!("=== CONTRACT_ERROR: {:?}", result);
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        Err(Error::Message("deliberate error".to_string()))
+    );
     Ok(())
-}
-
-fn inspect_error(label: &str, e: &anyhow::Error) {
-    eprintln!("=== {label}: Err");
-    eprintln!("  display: {}", e);
-    eprintln!("  downcast Trap: {:?}", e.downcast_ref::<wasmtime::Trap>());
-
-    // Walk the full error chain with type info
-    for (i, cause) in e.chain().enumerate() {
-        eprintln!(
-            "  chain[{}]: '{}' (is_Trap={}, type={})",
-            i,
-            cause,
-            cause.is::<wasmtime::Trap>(),
-            std::any::type_name_of_val(cause)
-        );
-    }
-
-    // Check root_cause
-    let rc = e.root_cause();
-    eprintln!("  root_cause: '{rc}'");
-    eprintln!("  root_cause is Trap: {}", rc.is::<wasmtime::Trap>());
-    eprintln!("  chain len: {}", e.chain().count());
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
@@ -56,10 +71,7 @@ async fn test_error_case_trap_div_zero() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_div_zero(runtime, &contract, &signer).await;
-    match &result {
-        Ok(v) => eprintln!("=== TRAP_DIV_ZERO: Ok({:?})", v),
-        Err(e) => inspect_error("TRAP_DIV_ZERO", e),
-    }
+    assert_contract_error(&result);
     Ok(())
 }
 
@@ -69,10 +81,7 @@ async fn test_error_case_trap_panic() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_panic(runtime, &contract, &signer).await;
-    match &result {
-        Ok(v) => eprintln!("=== TRAP_PANIC: Ok({:?})", v),
-        Err(e) => inspect_error("TRAP_PANIC", e),
-    }
+    assert_contract_error(&result);
     Ok(())
 }
 
@@ -82,10 +91,7 @@ async fn test_error_case_trap_out_of_fuel() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::trap_out_of_fuel(runtime, &contract, &signer).await;
-    match &result {
-        Ok(v) => eprintln!("=== TRAP_OUT_OF_FUEL: Ok({:?})", v),
-        Err(e) => inspect_error("TRAP_OUT_OF_FUEL", e),
-    }
+    assert_contract_error(&result);
     Ok(())
 }
 
@@ -95,22 +101,58 @@ async fn test_error_case_host_error() -> Result<()> {
     let contract = runtime.publish(&signer, "error-test").await?;
 
     let result = error_test::host_error(runtime, &contract, &signer).await;
-    match &result {
-        Ok(v) => eprintln!("=== HOST_ERROR: Ok({:?})", v),
-        Err(e) => inspect_error("HOST_ERROR", e),
-    }
+    assert_infrastructure_error(&result);
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
-async fn test_error_case_host_panic_nan() -> Result<()> {
+async fn test_error_case_host_panic() -> Result<()> {
     let signer = runtime.identity().await?;
     let contract = runtime.publish(&signer, "error-test").await?;
 
-    let result = error_test::host_panic_nan(runtime, &contract, &signer).await;
-    match &result {
-        Ok(v) => eprintln!("=== HOST_PANIC_NAN: Ok({:?})", v),
-        Err(e) => inspect_error("HOST_PANIC_NAN", e),
-    }
+    let result = error_test::host_panic(runtime, &contract, &signer).await;
+    assert_infrastructure_error(&result);
+    Ok(())
+}
+
+// --- Cross-contract call tests (via proxy) ---
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_cross_contract_trap_div_zero() -> Result<()> {
+    let (proxy_addr, _) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+
+    let result = error_test::trap_div_zero(runtime, &proxy_addr, &signer).await;
+    assert_contract_error(&result);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_cross_contract_trap_out_of_fuel() -> Result<()> {
+    let (proxy_addr, _) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+
+    let result = error_test::trap_out_of_fuel(runtime, &proxy_addr, &signer).await;
+    assert_contract_error(&result);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_cross_contract_host_error() -> Result<()> {
+    let (proxy_addr, _) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+
+    let result = error_test::host_error(runtime, &proxy_addr, &signer).await;
+    assert_infrastructure_error(&result);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_cross_contract_host_panic() -> Result<()> {
+    let (proxy_addr, _) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+
+    let result = error_test::host_panic(runtime, &proxy_addr, &signer).await;
+    assert_infrastructure_error(&result);
     Ok(())
 }

@@ -36,12 +36,10 @@ impl Guest for ErrorTest {
     }
 
     fn host_error(_ctx: &ProcContext) {
-        // Calls a host function that always returns Err (simulates infrastructure failure)
         let _result = testing::host_error();
     }
 
-    fn host_panic_nan(_ctx: &ProcContext) {
-        // f64::NAN converted to Decimal triggers panic in host numerics code
-        let _decimal = numbers::f64_to_decimal(f64::NAN);
+    fn host_panic(_ctx: &ProcContext) {
+        let _result = testing::host_panic();
     }
 }

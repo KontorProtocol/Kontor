@@ -247,6 +247,12 @@ impl built_in::testing::HostWithStore for Runtime {
     ) -> anyhow::Result<String> {
         anyhow::bail!("deliberate host error for testing")
     }
+
+    async fn host_panic<T>(
+        _accessor: &wasmtime::component::Accessor<T, Self>,
+    ) -> anyhow::Result<String> {
+        panic!("deliberate host panic for testing")
+    }
 }
 
 impl built_in::file_registry::Host for Runtime {}

@@ -293,11 +293,12 @@ impl Runtime {
     ) -> Result<String, ExecutionError> {
         self.stack.pop().await;
 
-        // Classify before converting: Ok(Ok) is success, Ok(Err) with Trap is
-        // deterministic, Ok(Err) without Trap is infrastructure, Err is host panic
+        // Classify before converting: Ok(Ok) is success, Ok(Err) with Trap anywhere
+        // in the error chain is deterministic (covers both direct traps and cross-contract
+        // traps where the Trap is the root cause), Err is host panic (infrastructure)
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => e.downcast_ref::<wasmtime::Trap>().is_some(),
+            Ok(Err(e)) => e.chain().any(|cause| cause.is::<wasmtime::Trap>()),
             Err(_) => false,
         };
 

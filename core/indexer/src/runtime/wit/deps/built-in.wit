@@ -232,6 +232,8 @@ interface file-registry {
 interface testing {
     /// Always returns an error. Used to test host function error propagation.
     host-error: async func() -> string;
+    /// Always panics. Used to test host function panic propagation.
+    host-panic: async func() -> string;
 }
 
 world built-in {
