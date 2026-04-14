@@ -340,7 +340,12 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        let id = self
+            .runtime
+            .ensure_signer(&x_only_pubkey)
+            .await
+            .map_err(|e| anyhow!("failed to ensure signer: {e}"))?;
+        let signer = Signer::new_signer_id(id);
         self.issuance(&signer).await?;
         Ok(signer)
     }

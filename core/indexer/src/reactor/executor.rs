@@ -264,12 +264,28 @@ async fn process_direct_input(
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
     use crate::block::op_from_inst;
-    use indexer_types::OpMetadata;
+    use crate::runtime::ExecutionError;
+    use indexer_types::{OpMetadata, Signer};
+
+    let signer = if let Signer::XOnlyPubKey(ref x_only) = input.witness_signer {
+        match runtime.ensure_signer(x_only).await {
+            Ok(id) => Signer::new_signer_id(id),
+            Err(ExecutionError::Deterministic(e)) => {
+                warn!("Failed to ensure signer for {x_only}: {e}");
+                return Ok(());
+            }
+            Err(ExecutionError::NonDeterministic(e)) => {
+                return Err(e.context("ensure_signer infrastructure failure"));
+            }
+        }
+    } else {
+        input.witness_signer.clone()
+    };
 
     let metadata = OpMetadata {
         previous_output: input.previous_output,
         input_index: input.input_index,
-        signer: input.witness_signer.clone(),
+        signer,
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
@@ -308,8 +324,8 @@ async fn process_aggregate_input(
     use crate::runtime::{registry, wit::Signer};
     use indexer_types::{Inst, OpMetadata};
 
-    let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
-        Ok(map) => map,
+    let verified_signers = match crate::bls::verify_aggregate(runtime, &input.insts).await {
+        Ok(set) => set,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
             return Ok(());
@@ -329,13 +345,10 @@ async fn process_aggregate_input(
         .zip(agg.signer_ids.iter())
         .enumerate()
     {
-        let x_only = match signer_map.get(&signer_id) {
-            Some(x) => x.clone(),
-            None => {
-                warn!("signer_id {signer_id} not in signer_map after verification");
-                continue;
-            }
-        };
+        if !verified_signers.contains(&signer_id) {
+            warn!("signer_id {signer_id} not in verified signers after verification");
+            continue;
+        }
 
         runtime
             .set_context(
@@ -380,11 +393,10 @@ async fn process_aggregate_input(
             }
         }
 
-        let signer = Signer::XOnlyPubKey(x_only);
         let metadata = OpMetadata {
             previous_output: input.previous_output,
             input_index: input.input_index,
-            signer: signer.clone(),
+            signer: indexer_types::Signer::new_signer_id(signer_id),
         };
         let op = op_from_inst(inst.clone(), metadata);
         execute_op(runtime, &op).await?;
@@ -394,20 +406,6 @@ async fn process_aggregate_input(
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
     use crate::runtime::ExecutionError;
-    use crate::runtime::wit::Signer;
-
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
-        match runtime.ensure_signer(x_only).await {
-            Ok(_) => {}
-            Err(ExecutionError::Deterministic(e)) => {
-                warn!("Failed to ensure signer for {x_only}: {e}");
-                return Ok(());
-            }
-            Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("ensure_signer infrastructure failure"));
-            }
-        }
-    }
 
     match op {
         indexer_types::Op::Publish {

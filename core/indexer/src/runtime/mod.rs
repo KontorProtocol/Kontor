@@ -111,13 +111,20 @@ pub struct GenesisValidator {
     pub ed25519_pubkey: Vec<u8>,
 }
 
-impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
-    fn from(v: GenesisValidator) -> Self {
-        Self {
-            x_only_pubkey: v.x_only_pubkey,
-            stake: v.stake,
-            ed25519_pubkey: v.ed25519_pubkey,
-        }
+impl GenesisValidator {
+    pub async fn into_active_validator_info(
+        self,
+        runtime: &mut Runtime,
+    ) -> Result<staking::api::ActiveValidatorInfo> {
+        let signer_id = runtime
+            .ensure_signer(&self.x_only_pubkey)
+            .await
+            .map_err(|e| anyhow!("failed to ensure signer for genesis validator: {e}"))?;
+        Ok(staking::api::ActiveValidatorInfo {
+            signer_id,
+            stake: self.stake,
+            ed25519_pubkey: self.ed25519_pubkey,
+        })
     }
 }
 
@@ -308,7 +315,10 @@ impl Runtime {
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
         if !genesis_validators.is_empty() {
-            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+            let mut validators = Vec::with_capacity(genesis_validators.len());
+            for gv in genesis_validators {
+                validators.push(gv.clone().into_active_validator_info(self).await?);
+            }
             staking::api::set_genesis_set(
                 self,
                 &Signer::Core(Box::new(Signer::Nobody)),
@@ -398,12 +408,25 @@ impl Runtime {
     ) -> Result<(), ExecutionError> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
 
-        let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
-            return Err(ExecutionError::Deterministic(anyhow!(
-                "RegisterBlsKey requires an XOnlyPubKey signer"
-            )));
+        let x_only_pubkey = match signer {
+            Signer::XOnlyPubKey(x) => x.clone(),
+            Signer::SignerId { id, .. } => {
+                let entry = registry::api::get_entry_by_id(self, *id)
+                    .await?
+                    .ok_or_else(|| {
+                        ExecutionError::Deterministic(anyhow!(
+                            "RegisterBlsKey: unknown signer_id {id}"
+                        ))
+                    })?;
+                entry.x_only_pubkey
+            }
+            _ => {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "RegisterBlsKey requires an XOnlyPubKey or SignerId signer"
+                )));
+            }
         };
-        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
+        let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 

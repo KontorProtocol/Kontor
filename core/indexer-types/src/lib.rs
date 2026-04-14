@@ -229,6 +229,11 @@ pub struct Block {
 pub enum Signer {
     Core(Box<Signer>),
     XOnlyPubKey(String),
+    SignerId {
+        #[ts(type = "number")]
+        id: u64,
+        id_str: String,
+    },
     ContractId {
         #[ts(type = "number")]
         id: i64,
@@ -238,10 +243,24 @@ pub enum Signer {
 }
 
 impl Signer {
+    pub fn new_signer_id(id: u64) -> Self {
+        Self::SignerId {
+            id,
+            id_str: id.to_string(),
+        }
+    }
+
     pub fn new_contract_id(id: i64) -> Self {
         Self::ContractId {
             id,
             id_str: format!("__cid__{}", id),
+        }
+    }
+
+    pub fn id(&self) -> Option<u64> {
+        match self {
+            Self::SignerId { id, .. } => Some(*id),
+            _ => None,
         }
     }
 
@@ -257,6 +276,7 @@ impl core::ops::Deref for Signer {
             Self::Nobody => "nobody",
             Self::Core(_) => "core",
             Self::XOnlyPubKey(s) => s,
+            Self::SignerId { id_str, .. } => id_str,
             Self::ContractId { id_str, .. } => id_str,
         }
     }

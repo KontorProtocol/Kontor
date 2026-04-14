@@ -35,6 +35,13 @@ fn mint(model: &TokenStorageWriteModel, dst: String, amt: Decimal) -> Result<Min
     Ok(Mint { dst, amt: new_amt })
 }
 
+fn signer_account(signer: &context::Signer) -> String {
+    signer
+        .signer_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| signer.to_string())
+}
+
 fn transfer(ctx: &ProcContext, src: String, dst: String, amt: Decimal) -> Result<Transfer, Error> {
     assert_gt_zero(amt)?;
     let ledger = ctx.model().ledger();
@@ -57,11 +64,8 @@ impl Guest for Token {
     }
 
     fn issuance(ctx: &CoreContext, amt: Decimal) -> Result<Mint, Error> {
-        mint(
-            &ctx.proc_context().model(),
-            ctx.signer_proc_context().signer().to_string(),
-            amt,
-        )
+        let signer = ctx.signer_proc_context().signer();
+        mint(&ctx.proc_context().model(), signer_account(&signer), amt)
     }
 
     fn issue_to(ctx: &CoreContext, dst: String, amt: Decimal) -> Result<Mint, Error> {
@@ -69,9 +73,10 @@ impl Guest for Token {
     }
 
     fn hold(ctx: &CoreContext, amt: Decimal) -> Result<Transfer, Error> {
+        let core_signer = ctx.proc_context().signer();
         Self::transfer(
             &ctx.signer_proc_context(),
-            ctx.proc_context().signer().to_string(),
+            signer_account(&core_signer),
             amt,
         )
     }
@@ -79,22 +84,26 @@ impl Guest for Token {
     fn release(ctx: &CoreContext, burn_amt: Decimal) -> Result<Burn, Error> {
         let core = ctx.proc_context();
         let burn = Self::burn(&core, burn_amt)?;
+        let core_signer = core.signer();
         let amt = core
             .model()
             .ledger()
-            .get(core.signer().to_string())
+            .get(signer_account(&core_signer))
             .unwrap_or_default();
         if amt > 0u64.try_into().unwrap() {
-            Self::transfer(&core, ctx.signer_proc_context().signer().to_string(), amt)?;
+            let signer = ctx.signer_proc_context().signer();
+            Self::transfer(&core, signer_account(&signer), amt)?;
         }
+        let signer = ctx.signer_proc_context().signer();
         Ok(Burn {
-            src: ctx.signer_proc_context().signer().to_string(),
+            src: signer_account(&signer),
             ..burn
         })
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
-        mint(&ctx.model(), ctx.signer().to_string(), amt)
+        let signer = ctx.signer();
+        mint(&ctx.model(), signer_account(&signer), amt)
     }
 
     fn burn(ctx: &ProcContext, amt: Decimal) -> Result<Burn, Error> {
@@ -107,7 +116,8 @@ impl Guest for Token {
     }
 
     fn transfer(ctx: &ProcContext, dst: String, amt: Decimal) -> Result<Transfer, Error> {
-        let src = ctx.signer().to_string();
+        let signer = ctx.signer();
+        let src = signer_account(&signer);
         transfer(ctx, src, dst, amt)
     }
 
@@ -128,7 +138,8 @@ impl Guest for Token {
             if let Some(context::OpReturnData::PubKey(dst)) = ctx.transaction().op_return_data() {
                 dst
             } else {
-                ctx.signer().to_string()
+                let signer = ctx.signer();
+                signer_account(&signer)
             };
         transfer(ctx, src, dst, amt)
     }
