@@ -40,6 +40,50 @@ pub use wit::Root;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
+/// Distinguishes deterministic failures from non-deterministic failures
+/// in the contract execution path.
+#[derive(Debug)]
+pub enum ExecutionError {
+    /// Deterministic failure — all nodes see the same result for the same inputs.
+    /// WASM traps, contract not found, bad arguments, etc.
+    /// Caller should rollback and continue processing.
+    Deterministic(anyhow::Error),
+    /// Non-deterministic failure — DB/IO error, host panic, tokio task failure.
+    /// Different nodes may see different results.
+    /// Caller should propagate to reactor and shut down.
+    NonDeterministic(anyhow::Error),
+}
+
+impl std::fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutionError::Deterministic(e) => write!(f, "deterministic error: {e:#}"),
+            ExecutionError::NonDeterministic(e) => write!(f, "non-deterministic error: {e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => e.source(),
+        }
+    }
+}
+
+/// Convert an anyhow::Error to ExecutionError, preserving the classification
+/// if the error already contains an ExecutionError (e.g. from a cross-contract
+/// call through the WIT foreign::call boundary). Falls back to NonDeterministic
+/// for errors without an ExecutionError inside.
+impl From<anyhow::Error> for ExecutionError {
+    fn from(e: anyhow::Error) -> Self {
+        match e.downcast::<ExecutionError>() {
+            Ok(ee) => ee,
+            Err(e) => ExecutionError::NonDeterministic(e),
+        }
+    }
+}
+
 pub use wit::kontor;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
@@ -275,7 +319,12 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn publish(&mut self, signer: &Signer, name: &str, bytes: &[u8]) -> Result<String> {
+    pub async fn publish(
+        &mut self,
+        signer: &Signer,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, ExecutionError> {
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height as u64,
@@ -288,7 +337,7 @@ impl Runtime {
             .storage
             .contract_id(&address)
             .await
-            .expect("Failed to perform contract existence check")
+            .map_err(ExecutionError::NonDeterministic)?
             .is_some()
         {
             return Ok("".to_string());
@@ -297,38 +346,46 @@ impl Runtime {
         self.storage
             .savepoint()
             .await
-            .expect("Failed to create savepoint");
+            .map_err(ExecutionError::NonDeterministic)?;
         self.storage
             .insert_contract(name, bytes)
             .await
-            .expect("Failed to insert contract");
+            .map_err(ExecutionError::NonDeterministic)?;
         let result = self.execute(Some(signer), &address, "init()").await;
         if result.is_err() {
-            self.storage.rollback().await.expect("Failed to rollback");
+            self.storage
+                .rollback()
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
             result
         } else {
-            self.storage.commit().await.expect("Failed to commit");
+            self.storage
+                .commit()
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
             Ok(to_wave_expr(address.clone()))
         }
     }
 
-    pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        token::api::issuance(self, &Signer::Core(Box::new(signer.clone())), 10.into())
-            .await
-            .expect("Failed to run issuance")
-            .expect("Failed to issue tokens");
+    pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
+        token::api::issuance(
+            self,
+            &Signer::Core(Box::new(signer.clone())),
+            10u64.try_into().expect("u64 to decimal"),
+        )
+        .await?
+        .expect("issuance(10) should never fail");
         Ok(())
     }
 
-    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64> {
+    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64, ExecutionError> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
         let entry = registry::api::ensure_signer(
             self,
             &Signer::Core(Box::new(Signer::Nobody)),
             x_only_pubkey,
         )
-        .await?
-        .map_err(|e| anyhow!("registry ensure-signer failed: {e:?}"))?;
+        .await?;
         Ok(entry.signer_id)
     }
 
@@ -338,31 +395,43 @@ impl Runtime {
         bls_pubkey: &[u8],
         schnorr_sig: &[u8],
         bls_sig: &[u8],
-    ) -> Result<()> {
+    ) -> Result<(), ExecutionError> {
         self.set_gas_limit(self.gas_limit_for_non_procs);
 
         let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
-            return Err(anyhow!("RegisterBlsKey requires an XOnlyPubKey signer"));
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey requires an XOnlyPubKey signer"
+            )));
         };
         let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
-            .map_err(|e| anyhow!("invalid x-only pubkey: {e}"))?;
+            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
         let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        if let Ok(Some(entry)) = registry::api::get_entry(self, &x_only_pk.to_string()).await
-            && entry.bls_pubkey.as_deref() == Some(bls_pubkey)
-        {
-            return Ok(());
+        let existing = registry::api::get_entry(self, &x_only_pk.to_string()).await?;
+        if let Some(entry) = existing {
+            if entry.bls_pubkey.as_deref() == Some(bls_pubkey) {
+                return Ok(());
+            }
+            if entry.bls_pubkey.is_some() {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "BLS pubkey already registered for signer"
+                )));
+            }
         }
 
-        let bls_pubkey: [u8; 96] = bls_pubkey
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 96 bytes for bls_pubkey"))?;
-        let schnorr_sig: [u8; 64] = schnorr_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 64 bytes for schnorr_sig"))?;
-        let bls_sig: [u8; 48] = bls_sig
-            .try_into()
-            .map_err(|_| anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))?;
+        let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey expected 96 bytes for bls_pubkey"
+            ))
+        })?;
+        let schnorr_sig: [u8; 64] = schnorr_sig.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!(
+                "RegisterBlsKey expected 64 bytes for schnorr_sig"
+            ))
+        })?;
+        let bls_sig: [u8; 48] = bls_sig.try_into().map_err(|_| {
+            ExecutionError::Deterministic(anyhow!("RegisterBlsKey expected 48 bytes for bls_sig"))
+        })?;
 
         let proof = RegistrationProof {
             x_only_pubkey: x_only_pk.serialize(),
@@ -370,16 +439,15 @@ impl Runtime {
             schnorr_sig,
             bls_sig,
         };
-        proof.verify()?;
+        proof.verify().map_err(ExecutionError::Deterministic)?;
 
         registry::api::register_bls_key(
             self,
             &Signer::Core(Box::new(canonical_signer)),
             proof.bls_pubkey.to_vec(),
         )
-        .await?
-        .map(|_entry| ())
-        .map_err(|e| anyhow!("registry register-bls-key failed: {e:?}"))
+        .await?;
+        Ok(())
     }
 
     pub async fn execute(
@@ -387,7 +455,7 @@ impl Runtime {
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
         expr: &str,
-    ) -> Result<String> {
+    ) -> Result<String, ExecutionError> {
         tracing::info!(
             "Executing contract {} with expr {} with tx context {:?}",
             contract_address,
@@ -395,12 +463,12 @@ impl Runtime {
             self.tx_context()
         );
         let (
-            mut store,
+            store,
             contract_id,
             func_name,
             is_fallback,
             params,
-            mut results,
+            results,
             func,
             is_proc,
             starting_fuel,
@@ -413,18 +481,9 @@ impl Runtime {
                 .map(|g| g.set_starting_fuel(starting_fuel)),
         )
         .await;
-        let (result, results, mut store) = tokio::spawn(async move {
-            (
-                func.call_async(&mut store, &params, &mut results).await,
-                results,
-                store,
-            )
-        })
-        .await
-        .expect("Failed to join execution");
-        let mut result = self
-            .handle_call(is_fallback, result.map_err(Into::into), results)
-            .await;
+        let (mut result, mut store) = self
+            .call_and_handle(store, func, params, results, is_fallback)
+            .await?;
         OptionFuture::from(
             self.gauge
                 .as_ref()

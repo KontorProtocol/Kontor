@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
 
     let (private_key, consensus_enabled) = if let Some(key_hex) = &config.consensus_private_key {
         (
-            indexer::consensus::signing::private_key_from_hex(key_hex),
+            indexer::consensus::signing::private_key_from_hex(key_hex)?,
             true,
         )
     } else {

@@ -4,6 +4,9 @@ version = "0.2.0"
 edition = "2024"
 default-run = "kontor"
 
+[features]
+testing = []
+
 [[bin]]
 name = "kontor"
 path = "src/main.rs"

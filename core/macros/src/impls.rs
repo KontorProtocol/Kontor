@@ -325,7 +325,7 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl PartialEq for kontor::built_in::numbers::Decimal {
             fn eq(&self, other: &Self) -> bool {
-                #numerics_mod_name::eq_decimal(*self, *other)
+                #numerics_mod_name::eq_decimal(*self, *other).expect("eq_decimal failed")
             }
         }
 
@@ -333,45 +333,52 @@ pub fn generate(config: Config) -> TokenStream {
         impl Eq for kontor::built_in::numbers::Decimal {}
 
         #[automatically_derived]
-        impl From<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
-            fn from(i: kontor::built_in::numbers::Integer) -> kontor::built_in::numbers::Decimal {
+        impl TryFrom<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: kontor::built_in::numbers::Integer) -> Result<kontor::built_in::numbers::Decimal, Self::Error> {
                 #numerics_mod_name::integer_to_decimal(i)
             }
         }
 
-        impl From<u64> for kontor::built_in::numbers::Decimal {
-            fn from(i: u64) -> Self {
+        impl TryFrom<u64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: u64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::u64_to_decimal(i)
             }
         }
 
-        impl From<u32> for kontor::built_in::numbers::Decimal {
-            fn from(i: u32) -> Self {
-                (i as u64).into()
+        impl TryFrom<u32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: u32) -> Result<Self, Self::Error> {
+                (i as u64).try_into()
             }
         }
 
-        impl From<i64> for kontor::built_in::numbers::Decimal {
-            fn from(i: i64) -> Self {
+        impl TryFrom<i64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: i64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::s64_to_decimal(i)
             }
         }
 
-        impl From<i32> for kontor::built_in::numbers::Decimal {
-            fn from(i: i32) -> Self {
-                (i as i64).into()
+        impl TryFrom<i32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: i32) -> Result<Self, Self::Error> {
+                (i as i64).try_into()
             }
         }
 
-        impl From<f64> for kontor::built_in::numbers::Decimal {
-            fn from(f: f64) -> Self {
+        impl TryFrom<f64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(f: f64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::f64_to_decimal(f)
             }
         }
 
-        impl From<f32> for kontor::built_in::numbers::Decimal {
-            fn from(f: f32) -> Self {
-                (f as f64).into()
+        impl TryFrom<f32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(f: f32) -> Result<Self, Self::Error> {
+                (f as f64).try_into()
             }
         }
 

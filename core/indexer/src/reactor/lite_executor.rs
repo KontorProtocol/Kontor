@@ -173,7 +173,7 @@ impl Executor for LiteExecutor {
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    ) {
+    ) -> anyhow::Result<()> {
         runtime
             .set_context(
                 height,
@@ -189,11 +189,16 @@ impl Executor for LiteExecutor {
             )
             .await;
 
-        if let Err(e) = runtime
+        match runtime
             .execute(Some(&self.signer), &self.counter_address, "increment()")
             .await
         {
-            tracing::error!("counter increment error: {e}");
+            Ok(_) => Ok(()),
+            Err(crate::runtime::ExecutionError::Deterministic(e)) => {
+                tracing::error!("counter increment error: {e}");
+                Ok(())
+            }
+            Err(crate::runtime::ExecutionError::NonDeterministic(e)) => Err(e),
         }
     }
 

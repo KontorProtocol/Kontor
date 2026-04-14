@@ -146,7 +146,9 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     let signer_id_before = registry::get_signer_id(runtime, &xonly).await?;
     let pk_before = registry::get_bls_pubkey(runtime, &xonly).await?;
 
-    let _res = rt
+    // Registration with a different key is rejected by the runtime before
+    // reaching the contract, so no op result is recorded. Ignore the error.
+    let _ = rt
         .instruction(
             &mut user,
             Inst::RegisterBlsKey {
@@ -155,7 +157,7 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
                 bls_sig: alt_proof.bls_sig.to_vec(),
             },
         )
-        .await?;
+        .await;
 
     let signer_id_after = registry::get_signer_id(runtime, &xonly).await?;
     let pk_after = registry::get_bls_pubkey(runtime, &xonly).await?;

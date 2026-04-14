@@ -287,7 +287,8 @@ impl RuntimeLocal {
                         },
                         "init()",
                     )
-                    .await?;
+                    .await
+                    .map_err(anyhow::Error::from)?;
             }
         }
         Ok(())
@@ -378,11 +379,11 @@ impl RuntimeImpl for RuntimeLocal {
         if let Some(c) = self.runtime.tx_context_mut() {
             c.op_index += 1;
         }
-        result
+        result.map_err(Into::into)
     }
 
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        self.runtime.issuance(signer).await
+        self.runtime.issuance(signer).await.map_err(Into::into)
     }
 
     async fn checkpoint(&mut self) -> Result<Option<String>> {
@@ -794,7 +795,11 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        self.runtime.execute(signer, contract_address, expr).await
+        #[allow(clippy::useless_conversion)]
+        self.runtime
+            .execute(signer, contract_address, expr)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {

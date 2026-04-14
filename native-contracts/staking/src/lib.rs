@@ -61,7 +61,7 @@ impl Guest for Staking {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
-        model.set_min_stake(1.into());
+        model.set_min_stake(1u64.try_into().unwrap());
     }
 
     fn register_validator(
@@ -87,7 +87,7 @@ impl Guest for Staking {
         if stake_amount < model.min_stake() {
             return Err(Error::Message("stake below minimum".to_string()));
         }
-        if stake_amount > MAX_STAKE.into() {
+        if stake_amount > MAX_STAKE.try_into().unwrap() {
             return Err(Error::Message("stake exceeds maximum".to_string()));
         }
 
@@ -144,7 +144,7 @@ impl Guest for Staking {
             .get(&x_only_pubkey)
             .ok_or(Error::Message("not registered".to_string()))?;
 
-        if amount <= 0.into() {
+        if amount <= 0u64.try_into().unwrap() {
             return Err(Error::Message("amount must be positive".to_string()));
         }
 
@@ -156,7 +156,7 @@ impl Guest for Staking {
         }
 
         let new_stake = entry.stake().add(amount)?;
-        if new_stake > MAX_STAKE.into() {
+        if new_stake > MAX_STAKE.try_into().unwrap() {
             return Err(Error::Message(
                 "total stake would exceed maximum".to_string(),
             ));
@@ -191,7 +191,7 @@ impl Guest for Staking {
             // Not yet activated — go straight to inactive and return tokens
             STATUS_PENDING_JOIN => {
                 let stake = entry.stake();
-                entry.set_stake(0.into());
+                entry.set_stake(0u64.try_into().unwrap());
                 entry.set_status(STATUS_INACTIVE);
                 token::transfer(ctx.contract_signer(), &x_only_pubkey, stake)?;
             }
@@ -264,7 +264,7 @@ impl Guest for Staking {
                     }
                     STATUS_PENDING_EXIT if block_height >= entry.deactivation_height() => {
                         let stake = entry.stake();
-                        entry.set_stake(0.into());
+                        entry.set_stake(0u64.try_into().unwrap());
                         entry.set_status(STATUS_INACTIVE);
                         model.try_update_total_active_stake(|s| s.sub(stake))?;
                         model.update_active_count(|c| c - 1);

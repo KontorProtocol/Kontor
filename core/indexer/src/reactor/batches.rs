@@ -140,7 +140,8 @@ impl<E: Executor> Reactor<E> {
 
             self.executor
                 .execute_transaction(&mut self.runtime, anchor_height as i64, tx_id, t)
-                .await;
+                .await
+                .context("execute_transaction failed")?;
         }
 
         self.runtime
@@ -467,7 +468,7 @@ impl<E: Executor> Reactor<E> {
                         );
                         let anchor_height = *anchor_height;
                         let anchor_hash = *anchor_hash;
-                        let resolved_txs = self.resolve_batch_txs(txs).await;
+                        let resolved_txs = self.resolve_batch_txs(txs).await?;
                         self.process_decided_batch(
                             anchor_height,
                             anchor_hash,
@@ -574,7 +575,7 @@ impl<E: Executor> Reactor<E> {
                     anchor_hash,
                     txs,
                 } => {
-                    let full_txs = self.resolve_batch_txs(txs).await;
+                    let full_txs = self.resolve_batch_txs(txs).await?;
 
                     for tx in &full_txs {
                         self.consensus

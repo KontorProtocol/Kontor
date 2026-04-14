@@ -7,6 +7,7 @@ mod bls_user_registry;
 mod compose;
 mod counter_contract;
 mod crypto_contract;
+mod error_classification;
 mod fib_contract;
 mod file_storage;
 mod native_token_attach_contract;

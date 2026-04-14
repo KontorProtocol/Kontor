@@ -239,6 +239,28 @@ impl Runtime {
 
 impl built_in::error::Host for Runtime {}
 
+impl built_in::testing::Host for Runtime {}
+
+impl built_in::testing::HostWithStore for Runtime {
+    async fn host_error<T>(
+        _accessor: &wasmtime::component::Accessor<T, Self>,
+    ) -> anyhow::Result<String> {
+        #[cfg(feature = "testing")]
+        anyhow::bail!("deliberate host error for testing");
+        #[cfg(not(feature = "testing"))]
+        Ok(String::new())
+    }
+
+    async fn host_panic<T>(
+        _accessor: &wasmtime::component::Accessor<T, Self>,
+    ) -> anyhow::Result<String> {
+        #[cfg(feature = "testing")]
+        panic!("deliberate host panic for testing");
+        #[cfg(not(feature = "testing"))]
+        Ok(String::new())
+    }
+}
+
 impl built_in::file_registry::Host for Runtime {}
 
 impl built_in::file_registry::HostFileDescriptor for Runtime {}

@@ -16,7 +16,7 @@ fn make_utxo_id(txid: String, vout: u64) -> String {
 }
 
 fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
-    if n <= 0.into() {
+    if n <= 0u64.try_into().unwrap() {
         return Err(Error::Message("Amount must be positive".to_string()));
     }
 
@@ -25,7 +25,7 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
 
 fn mint(model: &TokenStorageWriteModel, dst: String, amt: Decimal) -> Result<Mint, Error> {
     assert_gt_zero(amt)?;
-    if amt > 1000.into() {
+    if amt > 1000u64.try_into().unwrap() {
         return Err(Error::Message("Amount exceeds limit".to_string()));
     }
     let ledger = model.ledger();
@@ -84,7 +84,7 @@ impl Guest for Token {
             .ledger()
             .get(core.signer().to_string())
             .unwrap_or_default();
-        if amt > 0.into() {
+        if amt > 0u64.try_into().unwrap() {
             Self::transfer(&core, ctx.signer_proc_context().signer().to_string(), amt)?;
         }
         Ok(Burn {

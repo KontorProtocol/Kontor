@@ -155,7 +155,7 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    async fn resolve_batch_txs(&mut self, txs: &[BatchTx]) -> Vec<bitcoin::Transaction> {
+    async fn resolve_batch_txs(&mut self, txs: &[BatchTx]) -> Result<Vec<bitcoin::Transaction>> {
         let conn = self.db_conn();
         let mut resolved = Vec::with_capacity(txs.len());
         for entry in txs {
@@ -169,12 +169,12 @@ impl<E: Executor> Reactor<E> {
                     } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
                         resolved.push(tx);
                     } else {
-                        warn!(%txid, "Could not resolve batch transaction — skipping");
+                        anyhow::bail!("Could not resolve decided batch transaction {txid}");
                     }
                 }
             }
         }
-        resolved
+        Ok(resolved)
     }
 
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {

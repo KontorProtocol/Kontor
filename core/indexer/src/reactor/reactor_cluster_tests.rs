@@ -124,7 +124,7 @@ impl ReactorCluster {
             .enumerate()
             .map(|(i, pk)| GenesisValidator {
                 x_only_pubkey: format!("{:064x}", i + 1),
-                stake: crate::runtime::Decimal::from(100u64),
+                stake: crate::runtime::Decimal::try_from(100u64).unwrap(),
                 ed25519_pubkey: pk.public_key().as_bytes().to_vec(),
             })
             .collect();

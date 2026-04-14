@@ -31,7 +31,7 @@ impl Proposal {
     }
 
     pub fn to_sign_bytes(&self) -> Bytes {
-        Protobuf::to_bytes(self).unwrap()
+        Protobuf::to_bytes(self).expect("proposal serialization should not fail")
     }
 
     pub fn from_sign_bytes(bytes: &[u8]) -> Result<Self, ProtoError> {
@@ -69,9 +69,13 @@ impl Protobuf for Proposal {
     type Proto = crate::consensus::proto::Proposal;
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
+        let round = self
+            .round
+            .as_u32()
+            .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
         Ok(Self::Proto {
             height: self.height.to_proto()?,
-            round: self.round.as_u32().expect("round should not be nil"),
+            round,
             value: Some(self.value.to_proto()?),
             pol_round: self.pol_round.as_u32(),
             validator_address: Some(self.validator_address.to_proto()?),
