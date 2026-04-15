@@ -7,6 +7,7 @@ use crate::bitcoin_client::Client;
 use crate::block::filter_map;
 use crate::retry::{new_backoff_unlimited, retry};
 use crate::runtime::Runtime;
+use crate::runtime::kontor::built_in::context;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
@@ -254,6 +255,16 @@ pub async fn process_input(
     Ok(())
 }
 
+async fn resolve_op_return_data(
+    runtime: &mut Runtime,
+    op_return_data: Option<indexer_types::OpReturnData>,
+) -> Option<context::OpReturnData> {
+    let _ = runtime;
+    op_return_data.map(|indexer_types::OpReturnData::PubKey(x_only)| {
+        context::OpReturnData::PubKey(x_only.to_string())
+    })
+}
+
 async fn process_direct_input(
     runtime: &mut Runtime,
     input: &indexer_types::TransactionInput,
@@ -287,6 +298,7 @@ async fn process_direct_input(
         input_index: input.input_index,
         signer,
     };
+    let op_return_data = resolve_op_return_data(runtime, op_return_data).await;
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
         let op = op_from_inst(inst.clone(), metadata.clone());
@@ -302,7 +314,7 @@ async fn process_direct_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.clone(),
             )
             .await;
 
@@ -337,6 +349,7 @@ async fn process_aggregate_input(
         .aggregate
         .as_ref()
         .expect("aggregate must be present after successful verification");
+    let op_return_data = resolve_op_return_data(runtime, op_return_data).await;
 
     for (op_index, (inst, &signer_id)) in input
         .insts
@@ -361,7 +374,7 @@ async fn process_aggregate_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.clone(),
             )
             .await;
 
