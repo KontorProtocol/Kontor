@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "pool");
 
+use context::Holder;
 use stdlib::*;
 
 interface!(name = "token_dyn", path = "../test-token/wit");
@@ -12,7 +13,7 @@ struct PoolStorage {
     pub fee_bps: Integer,
 
     pub lp_total_supply: Integer,
-    pub lp_ledger: Map<String, Integer>,
+    pub lp_ledger: Map<Holder, Integer>,
 
     pub custodian: String,
 }
@@ -31,12 +32,13 @@ impl PoolStorage {
 
         let lp_shares = (amount_a * amount_b).sqrt()?;
         let custodian = ctx.contract_signer().to_string();
+        let signer_holder: Holder = (&ctx.signer()).into();
         let pool = PoolStorage {
             token_a: token_a.clone(),
             token_b: token_b.clone(),
             fee_bps,
             lp_total_supply: lp_shares,
-            lp_ledger: Map::new(&[(ctx.signer().to_string(), lp_shares)]),
+            lp_ledger: Map::new(&[(signer_holder, lp_shares)]),
             custodian: custodian.clone(),
         };
 
@@ -136,7 +138,8 @@ impl Guest for Pool {
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
-        let from = ctx.signer().to_string();
+        let from: Holder = (&ctx.signer()).into();
+        let to: Holder = to.parse().expect("invalid holder");
         let ledger = ctx.model().lp_ledger();
 
         let from_balance = ledger.get(&from).unwrap_or_default();
@@ -197,7 +200,7 @@ impl Guest for Pool {
         let ledger = model.lp_ledger();
         let custodian = model.custodian();
 
-        let user = ctx.signer().to_string();
+        let user: Holder = (&ctx.signer()).into();
         let bal = ledger.get(&user).unwrap_or_default();
         ledger.set(user, bal + res.lp_shares);
         model.update_lp_total_supply(|t| t + res.lp_shares);
@@ -231,7 +234,7 @@ impl Guest for Pool {
 
         let model = ctx.model();
         let ledger = model.lp_ledger();
-        let user = ctx.signer().to_string();
+        let user: Holder = (&ctx.signer()).into();
 
         let total = model.lp_total_supply();
         let bal = ledger.get(&user).unwrap_or_default();
@@ -246,8 +249,9 @@ impl Guest for Pool {
         ledger.set(user.clone(), bal - shares);
         model.set_lp_total_supply(total - shares);
 
-        token_dyn::transfer(&model.token_a(), ctx.contract_signer(), &user, res.amount_a)?;
-        token_dyn::transfer(&model.token_b(), ctx.contract_signer(), &user, res.amount_b)?;
+        let user_str = user.to_string();
+        token_dyn::transfer(&model.token_a(), ctx.contract_signer(), &user_str, res.amount_a)?;
+        token_dyn::transfer(&model.token_b(), ctx.contract_signer(), &user_str, res.amount_b)?;
 
         Ok(res)
     }
@@ -289,7 +293,7 @@ impl Guest for Pool {
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),
-            &ctx.signer().to_string(),
+            &ctx.signer().key(),
             amount_out,
         )?;
 

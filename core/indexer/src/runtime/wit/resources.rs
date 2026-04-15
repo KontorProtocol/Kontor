@@ -80,6 +80,10 @@ impl HasContractId for CoreContext {
     }
 }
 
+pub struct Holder {
+    pub holder_ref: super::kontor::built_in::context::HolderRef,
+}
+
 pub struct Transaction {}
 
 pub struct FileDescriptor {

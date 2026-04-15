@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "registry");
 
+use context::Holder;
 use stdlib::*;
 
 #[derive(Clone, Default, Storage)]
@@ -13,7 +14,7 @@ struct Entry {
 #[derive(Clone, Default, StorageRoot)]
 struct RegistryStorage {
     pub next_signer_id: u64,
-    pub entries: Map<String, Entry>,
+    pub entries: Map<Holder, Entry>,
     pub by_id: Map<u64, String>,
 }
 
@@ -24,8 +25,9 @@ impl Guest for Registry {
 
     fn ensure_signer(ctx: &CoreContext, x_only_pubkey: String) -> RegistryEntry {
         let model = ctx.proc_context().model();
+        let holder: Holder = x_only_pubkey.parse().expect("invalid holder");
 
-        if let Some(entry) = model.entries().get(&x_only_pubkey) {
+        if let Some(entry) = model.entries().get(&holder) {
             return RegistryEntry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
@@ -45,7 +47,7 @@ impl Guest for Registry {
         model.update_next_signer_id(|n| n + 1);
 
         model.entries().set(
-            x_only_pubkey.clone(),
+            holder,
             Entry {
                 signer_id,
                 bls_pubkey: Vec::new(),
@@ -64,11 +66,12 @@ impl Guest for Registry {
 
     fn register_bls_key(ctx: &CoreContext, bls_pubkey: Vec<u8>) -> RegistryEntry {
         let x_only_pubkey = ctx.signer_proc_context().signer().to_string();
+        let holder: Holder = x_only_pubkey.parse().expect("invalid holder");
         let model = ctx.proc_context().model();
 
-        if let Some(entry) = model.entries().get(&x_only_pubkey) {
+        if let Some(entry) = model.entries().get(&holder) {
             model.entries().set(
-                x_only_pubkey.clone(),
+                holder,
                 Entry {
                     signer_id: entry.signer_id(),
                     bls_pubkey: bls_pubkey.clone(),
@@ -87,7 +90,7 @@ impl Guest for Registry {
         model.update_next_signer_id(|n| n + 1);
 
         model.entries().set(
-            x_only_pubkey.clone(),
+            holder,
             Entry {
                 signer_id,
                 bls_pubkey: bls_pubkey.clone(),
@@ -110,9 +113,10 @@ impl Guest for Registry {
             .by_id()
             .get(signer_id)
             .ok_or_else(|| Error::Message("unknown signer id".to_string()))?;
+        let holder: Holder = x_only_pubkey.parse().expect("invalid holder");
         let entry = model
             .entries()
-            .get(&x_only_pubkey)
+            .get(&holder)
             .ok_or_else(|| Error::Message("registry entry missing for signer id".to_string()))?;
 
         let stored_nonce = entry.next_nonce();
@@ -128,7 +132,7 @@ impl Guest for Registry {
             .ok_or_else(|| Error::Message("nonce overflow".to_string()))?;
 
         model.entries().set(
-            x_only_pubkey,
+            holder,
             Entry {
                 signer_id: entry.signer_id(),
                 bls_pubkey: entry.bls_pubkey(),
@@ -171,10 +175,7 @@ impl Guest for Registry {
     }
 
     fn get_signer_id(ctx: &ViewContext, x_only_pubkey: String) -> Option<u64> {
-        ctx.model()
-            .entries()
-            .get(&x_only_pubkey)
-            .map(|e| e.signer_id())
+        ctx.model().entries().get(&x_only_pubkey).map(|e| e.signer_id())
     }
 
     fn get_bls_pubkey(ctx: &ViewContext, x_only_pubkey: String) -> Option<Vec<u8>> {

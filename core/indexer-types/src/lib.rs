@@ -252,12 +252,24 @@ impl Signer {
 
 impl core::ops::Deref for Signer {
     type Target = str;
-    fn deref(&self) -> &Self::Target {
+
+    fn deref(&self) -> &str {
         match self {
             Self::Nobody => "nobody",
             Self::Core(_) => "core",
             Self::XOnlyPubKey(s) => s,
             Self::ContractId { id_str, .. } => id_str,
+        }
+    }
+}
+
+impl core::fmt::Display for Signer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Nobody => write!(f, "nobody"),
+            Self::Core(_) => write!(f, "core"),
+            Self::XOnlyPubKey(s) => write!(f, "{s}"),
+            Self::ContractId { id_str, .. } => write!(f, "{id_str}"),
         }
     }
 }

@@ -9,11 +9,12 @@ use super::{
     hash_bytes,
     wit::kontor::built_in::{
         self,
-        context::{OpReturnData, OutPoint},
+        context::{HolderRef, OpReturnData, OutPoint},
+        error::Error as WitError,
     },
     wit::{
-        CoreContext, FallContext, Keys, ProcContext, ProcStorage, Signer, Transaction, ViewContext,
-        ViewStorage,
+        CoreContext, FallContext, Holder, Keys, ProcContext, ProcStorage, Signer, Transaction,
+        ViewContext, ViewStorage,
     },
 };
 
@@ -266,6 +267,72 @@ impl Runtime {
         })?)
     }
 
+    fn _holder_ref_to_key(holder_ref: &HolderRef) -> String {
+        match holder_ref {
+            HolderRef::XOnlyPubkey(s) => s.clone(),
+            HolderRef::ContractId(s) => s.clone(),
+            HolderRef::Core => "core".to_string(),
+            HolderRef::Burner => "burn".to_string(),
+            HolderRef::Utxo(s) => s.clone(),
+        }
+    }
+
+    fn _validate_holder_ref(holder_ref: &HolderRef) -> Result<(), WitError> {
+        match holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(WitError::Validation(
+                        "x-only-pubkey must be 64 hex characters".to_string(),
+                    ));
+                }
+            }
+            HolderRef::ContractId(s) => {
+                if !s.starts_with("__cid__") {
+                    return Err(WitError::Validation(
+                        "contract-id must start with __cid__".to_string(),
+                    ));
+                }
+                if s[7..].parse::<i64>().is_err() {
+                    return Err(WitError::Validation(
+                        "contract-id must end with a valid integer".to_string(),
+                    ));
+                }
+            }
+            HolderRef::Utxo(s) => {
+                if !s.contains(':') {
+                    return Err(WitError::Validation(
+                        "utxo must be in txid:vout format".to_string(),
+                    ));
+                }
+            }
+            HolderRef::Core | HolderRef::Burner => {}
+        }
+        Ok(())
+    }
+
+    fn _signer_to_holder_ref(signer: &Signer) -> HolderRef {
+        match signer {
+            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
+            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => HolderRef::Core,
+        }
+    }
+
+    async fn _signer_as_holder<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<Resource<Holder>> {
+        Fuel::SignerAsHolder
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let signer = table.get(&self_)?;
+        let holder_ref = Self::_signer_to_holder_ref(signer);
+        Ok(table.push(Holder { holder_ref })?)
+    }
+
     pub(crate) async fn _get_contract_address<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -410,6 +477,55 @@ impl built_in::context::HostViewContextWithStore for Runtime {
     }
 }
 
+impl built_in::context::HostHolder for Runtime {}
+
+impl built_in::context::HostHolderWithStore for Runtime {
+    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Holder>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._drop(rep)
+            .await
+    }
+
+    async fn key<T>(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<String> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::HolderKey
+            .consume(accessor, runtime.gauge.as_ref())
+            .await?;
+        let table = runtime.table.lock().await;
+        let holder = table.get(&self_)?;
+        Ok(Self::_holder_ref_to_key(&holder.holder_ref))
+    }
+
+    async fn from_ref<T>(
+        accessor: &Accessor<T, Self>,
+        ref_: HolderRef,
+    ) -> Result<Result<Resource<Holder>, WitError>> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::HolderFromRef
+            .consume(accessor, runtime.gauge.as_ref())
+            .await?;
+        if let Err(e) = Self::_validate_holder_ref(&ref_) {
+            return Ok(Err(e));
+        }
+        let mut table = runtime.table.lock().await;
+        Ok(Ok(table.push(Holder { holder_ref: ref_ })?))
+    }
+
+    async fn as_ref<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Holder>,
+    ) -> Result<HolderRef> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::HolderAsRef
+            .consume(accessor, runtime.gauge.as_ref())
+            .await?;
+        let table = runtime.table.lock().await;
+        let holder = table.get(&self_)?;
+        Ok(holder.holder_ref.clone())
+    }
+}
+
 impl built_in::context::HostSigner for Runtime {}
 
 impl built_in::context::HostSignerWithStore for Runtime {
@@ -420,10 +536,20 @@ impl built_in::context::HostSignerWithStore for Runtime {
             .await
     }
 
-    async fn to_string<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
+    async fn key<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
         accessor
             .with(|mut access| access.get().clone())
             ._signer_to_string(accessor, self_)
+            .await
+    }
+
+    async fn as_holder<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<Resource<Holder>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._signer_as_holder(accessor, self_)
             .await
     }
 }

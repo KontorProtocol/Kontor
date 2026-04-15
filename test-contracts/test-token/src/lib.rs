@@ -1,13 +1,16 @@
 #![no_std]
 contract!(name = "test-token");
 
+use context::{Holder, HolderRef};
 use stdlib::*;
 
-const BURNER: &str = "burn";
+fn burner() -> Holder {
+    Holder::from_ref(&HolderRef::Burner).unwrap()
+}
 
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
-    pub ledger: Map<String, Integer>,
+    pub ledger: Map<Holder, Integer>,
     pub total_supply: Integer,
 }
 
@@ -19,7 +22,7 @@ fn assert_gt_zero(n: Integer) -> Result<(), Error> {
     Ok(())
 }
 
-fn mint(model: &TokenStorageWriteModel, to: String, n: Integer) -> Result<(), Error> {
+fn mint(model: &TokenStorageWriteModel, to: Holder, n: Integer) -> Result<(), Error> {
     assert_gt_zero(n)?;
     let ledger = model.ledger();
     let balance = ledger.get(&to).unwrap_or_default();
@@ -34,18 +37,20 @@ impl Guest for TestToken {
     }
 
     fn mint(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
-        mint(&ctx.model(), ctx.signer().to_string(), n)
+        let to: Holder = (&ctx.signer()).into();
+        mint(&ctx.model(), to, n)
     }
 
     fn burn(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
-        Self::transfer(ctx, BURNER.to_string(), n)?;
+        Self::transfer(ctx, burner().to_string(), n)?;
         ctx.model().try_update_total_supply(|t| t.sub(n))?;
         Ok(())
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
         assert_gt_zero(n)?;
-        let from = ctx.signer().to_string();
+        let from: Holder = (&ctx.signer()).into();
+        let to: Holder = to.parse().expect("invalid holder");
         let ledger = ctx.model().ledger();
 
         let from_balance = ledger.get(&from).unwrap_or_default();
@@ -65,11 +70,12 @@ impl Guest for TestToken {
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
+        let burner_key = burner().to_string();
         ctx.model()
             .ledger()
-            .keys()
+            .keys::<String>()
             .filter_map(|k| {
-                if [BURNER.to_string()].contains(&k) {
+                if k == burner_key {
                     None
                 } else {
                     Some(Balance {

@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "amm");
 
+use context::Holder;
 use stdlib::*;
 
 interface!(name = "token_dyn", path = "../test-token/wit");
@@ -14,7 +15,7 @@ struct Pool {
     pub fee_bps: Integer,
 
     pub lp_total_supply: Integer,
-    pub lp_ledger: Map<String, Integer>,
+    pub lp_ledger: Map<Holder, Integer>,
 }
 
 #[derive(Clone, StorageRoot)]
@@ -123,7 +124,7 @@ impl Guest for Amm {
 
         let lp_shares = (amount_a * amount_b).sqrt()?;
 
-        let admin = ctx.signer().to_string();
+        let admin: Holder = (&ctx.signer()).into();
         pools.set(
             pair_id(&pair),
             Pool {
@@ -226,7 +227,7 @@ impl Guest for Amm {
         pool.update_balance_a(|b| b + res.deposit_a);
         pool.update_balance_b(|b| b + res.deposit_b);
 
-        let user = ctx.signer().to_string();
+        let user: Holder = (&ctx.signer()).into();
         let bal = ledger.get(&user).unwrap_or_default();
         ledger.set(user, bal + res.lp_shares);
         pool.update_lp_total_supply(|t| t + res.lp_shares);
@@ -268,7 +269,7 @@ impl Guest for Amm {
             .get(pair_id(&pair))
             .ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
-        let user = ctx.signer().to_string();
+        let user: Holder = (&ctx.signer()).into();
 
         let total = pool.lp_total_supply();
         let bal = ledger.get(&user).unwrap_or_default();
@@ -285,8 +286,9 @@ impl Guest for Amm {
         pool.update_balance_a(|b| b - res.amount_a);
         pool.update_balance_b(|b| b - res.amount_b);
 
-        token_dyn::transfer(&pair.a, ctx.contract_signer(), &user, res.amount_a)?;
-        token_dyn::transfer(&pair.b, ctx.contract_signer(), &user, res.amount_b)?;
+        let user_str = user.to_string();
+        token_dyn::transfer(&pair.a, ctx.contract_signer(), &user_str, res.amount_a)?;
+        token_dyn::transfer(&pair.b, ctx.contract_signer(), &user_str, res.amount_b)?;
 
         Ok(res)
     }
@@ -346,7 +348,7 @@ impl Guest for Amm {
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),
-            &ctx.signer().to_string(),
+            &ctx.signer().key(),
             amount_out,
         )?;
 
