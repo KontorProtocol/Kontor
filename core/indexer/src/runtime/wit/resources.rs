@@ -96,6 +96,11 @@ impl FileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        if bytes_to_field_element(&root).is_none() {
+            return Err(Error::Validation(
+                "root bytes are not a valid field element".to_string(),
+            ));
+        }
         Ok(Self {
             file_metadata_row: FileMetadataRow::builder()
                 .file_id(raw.file_id)
