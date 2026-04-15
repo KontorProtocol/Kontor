@@ -24,7 +24,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::{
     PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, Signature as BlsSignature,
 };
-use indexer_types::BlsBulkOp;
+use indexer_types::{Inst, Insts};
 use std::collections::HashMap;
 
 use crate::runtime::Runtime;
@@ -72,10 +72,10 @@ pub const KONTOR_BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"
 /// Compressed BLS12-381 MinSig signature length in bytes.
 pub const BLS_SIGNATURE_BYTES: usize = 48;
 
-/// Hard cap on number of operations per `Inst::BlsBulk`.
+/// Hard cap on number of operations per aggregate bundle.
 pub const MAX_BLS_BULK_OPS: usize = 10_000;
 
-/// Hard cap on total signed message bytes per `Inst::BlsBulk`.
+/// Hard cap on total signed message bytes per aggregate bundle.
 pub const MAX_BLS_BULK_TOTAL_MESSAGE_BYTES: usize = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -143,21 +143,15 @@ fn bls_binding_message(xonly_pubkey: &[u8; 32]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// SignerResolver — deduplicated BLS pubkey resolution for bundle verification
+// Aggregate verification — BLS pubkey resolution and signature checking
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum SignerKey {
-    RegistryId(u64),
-    RawPubkey(Vec<u8>),
-}
-
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_bls_bulk`]
-/// so the reactor can look up signers without redundant registry calls.
+/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
+/// so the block handler can look up signers without redundant registry calls.
 pub type SignerMap = HashMap<u64, String>;
 
 struct SignerResolver {
-    pk_cache: HashMap<SignerKey, BlsPublicKey>,
+    pk_cache: HashMap<u64, BlsPublicKey>,
     signer_map: SignerMap,
 }
 
@@ -169,95 +163,112 @@ impl SignerResolver {
         }
     }
 
-    async fn resolve(&mut self, runtime: &mut Runtime, op: &BlsBulkOp) -> Result<BlsPublicKey> {
-        let key = match op {
-            BlsBulkOp::Call { signer_id, .. } => SignerKey::RegistryId(*signer_id),
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => {
-                SignerKey::RawPubkey(bls_pubkey.clone())
-            }
-        };
-
-        if let Some(pk) = self.pk_cache.get(&key) {
+    async fn resolve(&mut self, runtime: &mut Runtime, signer_id: u64) -> Result<BlsPublicKey> {
+        if let Some(pk) = self.pk_cache.get(&signer_id) {
             return Ok(*pk);
         }
 
-        let raw_bytes = match op {
-            BlsBulkOp::Call { signer_id, .. } => {
-                let entry = get_entry_by_id(runtime, *signer_id).await?;
-                let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-                self.signer_map
-                    .insert(*signer_id, entry.x_only_pubkey.clone());
-                entry
-                    .bls_pubkey
-                    .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?
-            }
-            BlsBulkOp::RegisterBlsKey { bls_pubkey, .. } => bls_pubkey.clone(),
-        };
+        let entry = get_entry_by_id(runtime, signer_id).await?;
+        let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+        self.signer_map
+            .insert(signer_id, entry.x_only_pubkey.clone());
+        let raw_bytes = entry
+            .bls_pubkey
+            .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?;
 
         let pk = BlsPublicKey::key_validate(&raw_bytes)
             .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
-        self.pk_cache.insert(key, pk);
+        self.pk_cache.insert(signer_id, pk);
         Ok(pk)
     }
 }
 
-pub async fn verify_bls_bulk(
-    runtime: &mut Runtime,
-    ops: &[BlsBulkOp],
-    signature: &[u8],
-) -> Result<SignerMap> {
-    // 1) Basic sanity: empty bundles are not meaningful and should be rejected.
-    if ops.is_empty() {
-        return Err(anyhow!("BlsBulk must contain at least one operation"));
+/// Validate the stateless shape of an aggregate `Insts` envelope.
+pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::AggregateInfo> {
+    let agg = insts
+        .aggregate
+        .as_ref()
+        .ok_or_else(|| anyhow!("validate_aggregate_shape called on non-aggregate Insts"))?;
+
+    if insts.ops.is_empty() {
+        return Err(anyhow!("aggregate must contain at least one operation"));
     }
-    // 2) DoS hardening: cap per-bundle work (pubkey lookups + hashing + pairing checks).
-    if ops.len() > MAX_BLS_BULK_OPS {
+    if insts.ops.len() > MAX_BLS_BULK_OPS {
         return Err(anyhow!(
-            "BlsBulk contains {} operations (max {})",
-            ops.len(),
+            "aggregate contains {} operations (max {})",
+            insts.ops.len(),
             MAX_BLS_BULK_OPS
         ));
     }
-    // 3) Quick reject: Kontor expects a single compressed MinSig signature (48 bytes).
-    if signature.len() != BLS_SIGNATURE_BYTES {
+    if agg.signer_ids.len() != insts.ops.len() {
+        return Err(anyhow!(
+            "signer_ids length ({}) != ops length ({})",
+            agg.signer_ids.len(),
+            insts.ops.len()
+        ));
+    }
+    for inst in &insts.ops {
+        match inst {
+            Inst::Call { nonce: Some(_), .. } => {}
+            Inst::Call { nonce: None, .. } => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (missing nonce)"
+                ));
+            }
+            Inst::RegisterBlsKey { .. } => {
+                return Err(anyhow!(
+                    "RegisterBlsKey is not allowed in aggregate path (use direct)"
+                ));
+            }
+            Inst::Publish { .. } => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (got Publish)"
+                ));
+            }
+            Inst::Issuance => {
+                return Err(anyhow!(
+                    "aggregate path only supports Call with nonce (got Issuance)"
+                ));
+            }
+        }
+    }
+    Ok(agg)
+}
+
+/// Verify the BLS aggregate signature on an `Insts` envelope.
+///
+/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
+/// signers for execution without redundant registry lookups.
+pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+    let agg = validate_aggregate_shape(insts)?;
+    if agg.signature.len() != BLS_SIGNATURE_BYTES {
         return Err(anyhow!(
             "invalid aggregate signature length: expected {BLS_SIGNATURE_BYTES}, got {}",
-            signature.len()
+            agg.signature.len()
         ));
     }
 
-    // 4) Parse + validate signature (includes subgroup check) before spending effort
-    // building messages and resolving pubkeys.
-    let aggregate_sig = BlsSignature::sig_validate(signature, true)
+    let aggregate_sig = BlsSignature::sig_validate(&agg.signature, true)
         .map_err(|e| anyhow!("invalid aggregate signature bytes: {e:?}"))?;
 
-    // 5) Build the two parallel vecs that aggregate_verify needs: one message and one
-    // pubkey per op. The resolver deduplicates registry lookups and subgroup checks
-    // across ops that share a signer.
     let mut resolver = SignerResolver::new();
-    let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(ops.len());
-    let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(ops.len());
+    let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
+    let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(insts.ops.len());
     let mut total_message_bytes: usize = 0;
 
-    for op in ops {
-        // Reconstruct the exact bytes each signer authorized. If the bundler
-        // mutates any op field after signing, this message changes and verification fails.
-        let msg = op.signing_message()?;
+    for (inst, &signer_id) in insts.ops.iter().zip(agg.signer_ids.iter()) {
+        let msg = inst.aggregate_signing_message(signer_id)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
-                "BlsBulk signed message bytes exceed max {}",
+                "aggregate signed message bytes exceed max {}",
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
-        // Resolve the BLS pubkey for this op (registry lookup for Calls, inline for
-        // RegisterBlsKey). Cached per unique signer to avoid redundant subgroup checks.
-        pks.push(resolver.resolve(runtime, op).await?);
+        pks.push(resolver.resolve(runtime, signer_id).await?);
         msgs.push(msg);
     }
 
-    // 6) Aggregate verify: proves every op's message was signed by the corresponding
-    // signer, while only storing a single 48-byte signature on-chain.
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
     let pk_refs: Vec<&BlsPublicKey> = pks.iter().collect();
     let verify_result =
@@ -365,7 +376,7 @@ mod tests {
     use crate::runtime::{ComponentCache, Storage};
     use bitcoin::key::rand;
     use bitcoin::key::rand::RngCore;
-    use indexer_types::{ContractAddress, Signer};
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts};
     use tempfile::TempDir;
 
     async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -432,30 +443,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_bls_bulk_rejects_empty_bundle() {
+    async fn verify_aggregate_rejects_empty_bundle() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let err = verify_bls_bulk(&mut runtime, &[], &[])
+        let insts = Insts {
+            ops: vec![],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![],
+                signature: vec![],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
             .await
             .expect_err("empty bundle must be rejected");
         assert!(err.to_string().contains("at least one operation"));
     }
 
     #[tokio::test]
-    async fn verify_bls_bulk_rejects_wrong_signature_length() {
+    async fn verify_aggregate_rejects_wrong_signature_length() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr: String::new(),
-        }];
-        let short_sig = vec![0u8; BLS_SIGNATURE_BYTES - 1];
-        let err = verify_bls_bulk(&mut runtime, &ops, &short_sig)
+        let insts = Insts {
+            ops: vec![Inst::Call {
+                gas_limit: 0,
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
+            }],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: vec![0u8; BLS_SIGNATURE_BYTES - 1],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
             .await
             .expect_err("wrong signature length must be rejected");
         assert!(
@@ -465,25 +487,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_bls_bulk_rejects_invalid_signature_bytes() {
+    async fn verify_aggregate_rejects_invalid_signature_bytes() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr: String::new(),
-        }];
         let bad_sig = [0u8; BLS_SIGNATURE_BYTES];
         assert!(
             BlsSignature::sig_validate(&bad_sig, true).is_err(),
             "expected test signature bytes to be invalid"
         );
-        let err = verify_bls_bulk(&mut runtime, &ops, &bad_sig)
+        let insts = Insts {
+            ops: vec![Inst::Call {
+                gas_limit: 0,
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
+            }],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: bad_sig.to_vec(),
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
             .await
             .expect_err("invalid signature bytes must be rejected");
         assert!(
@@ -493,51 +520,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_bls_bulk_enforces_op_count_cap() {
+    async fn verify_aggregate_enforces_op_count_cap() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let mut ops: Vec<BlsBulkOp> = Vec::with_capacity(MAX_BLS_BULK_OPS + 1);
-        for _ in 0..=MAX_BLS_BULK_OPS {
-            ops.push(BlsBulkOp::Call {
-                signer_id: 0,
-                nonce: 0,
+        let ops: Vec<Inst> = (0..=MAX_BLS_BULK_OPS)
+            .map(|_| Inst::Call {
                 gas_limit: 0,
                 contract: ContractAddress {
                     name: String::new(),
                     height: 0,
                     tx_index: 0,
                 },
+                nonce: Some(0),
                 expr: String::new(),
-            });
-        }
-        let err = verify_bls_bulk(&mut runtime, &ops, &[])
+            })
+            .collect();
+        let insts = Insts {
+            ops,
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0; MAX_BLS_BULK_OPS + 1],
+                signature: vec![],
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
             .await
             .expect_err("bundle op cap must be enforced");
         assert!(err.to_string().contains("max"));
     }
 
     #[tokio::test]
-    async fn verify_bls_bulk_enforces_total_message_bytes_cap() {
+    async fn verify_aggregate_enforces_total_message_bytes_cap() {
         let (mut runtime, _tmp) = new_test_runtime().await;
         let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
-        let ops = vec![BlsBulkOp::Call {
-            signer_id: 0,
-            nonce: 0,
-            gas_limit: 0,
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
-            },
-            expr,
-        }];
-
-        let sk = BlsSecretKey::key_gen(&[7u8; 32], &[]).expect("BLS key_gen");
-        let sig = sk.sign(b"cap-test", KONTOR_BLS_DST, &[]).to_bytes();
-        let err = verify_bls_bulk(&mut runtime, &ops, &sig)
+        let insts = Insts {
+            ops: vec![Inst::Call {
+                gas_limit: 0,
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr,
+            }],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: BlsSecretKey::key_gen(&[7u8; 32], &[])
+                    .expect("BLS key_gen")
+                    .sign(b"cap-test", KONTOR_BLS_DST, &[])
+                    .to_bytes()
+                    .to_vec(),
+            }),
+        };
+        let err = verify_aggregate(&mut runtime, &insts)
             .await
             .expect_err("message bytes cap must be enforced");
         assert!(err.to_string().contains("signed message bytes exceed max"));
     }
+
+    /*
+    RegisterBlsKey-specific aggregate/resolver tests are temporarily disabled.
+    We expect to revisit this area when inline registration is introduced.
 
     #[tokio::test]
     async fn verify_bls_bulk_rejects_invalid_register_pubkey_bytes() {
@@ -592,15 +634,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // SignerResolver unit tests
     // -----------------------------------------------------------------------
-
-    fn make_register_op(bls_pubkey: Vec<u8>) -> BlsBulkOp {
-        BlsBulkOp::RegisterBlsKey {
-            signer: Signer::XOnlyPubKey("aa".repeat(32)),
-            bls_pubkey,
-            schnorr_sig: vec![0u8; 64],
-            bls_sig: vec![0u8; 48],
-        }
-    }
 
     fn make_call_op(signer_id: u64) -> BlsBulkOp {
         BlsBulkOp::Call {
@@ -675,17 +708,520 @@ mod tests {
         assert!(err.to_string().contains("invalid BLS pubkey"));
         assert!(resolver.pk_cache.is_empty());
     }
+    */
 
     #[tokio::test]
     async fn resolver_errors_on_unresolvable_call_and_does_not_cache() {
         let (mut runtime, _tmp) = new_test_runtime().await;
-        let op = make_call_op(999_999);
-
         let mut resolver = SignerResolver::new();
         resolver
-            .resolve(&mut runtime, &op)
+            .resolve(&mut runtime, 999_999)
             .await
             .expect_err("unresolvable signer_id must be rejected");
         assert!(resolver.pk_cache.is_empty());
+    }
+
+    #[test]
+    fn rogue_key_forgery_succeeds_with_same_message() {
+        use crate::test_utils::bls_test::{construct_rogue_g2_pubkey, derive_test_key};
+        use blst::BLST_ERROR;
+
+        let victim_sk = derive_test_key(10);
+        let victim_pk = victim_sk.sk_to_pk();
+        let beta_sk = derive_test_key(11);
+        let beta_pk = beta_sk.sk_to_pk();
+        let rogue_pk_bytes = construct_rogue_g2_pubkey(&beta_pk.to_bytes(), &victim_pk.to_bytes());
+        let rogue_pk = blst::min_sig::PublicKey::key_validate(&rogue_pk_bytes)
+            .expect("rogue key must be valid");
+        let msg = b"identical-message";
+        let forged_sig = beta_sk.sign(msg, KONTOR_BLS_DST, &[]);
+        let result = forged_sig.aggregate_verify(
+            true,
+            &[msg.as_slice(), msg.as_slice()],
+            KONTOR_BLS_DST,
+            &[&rogue_pk, &victim_pk],
+            true,
+        );
+        assert_eq!(result, BLST_ERROR::BLST_SUCCESS);
+    }
+
+    #[test]
+    fn rogue_key_forgery_fails_with_distinct_messages() {
+        use crate::test_utils::bls_test::{construct_rogue_g2_pubkey, derive_test_key};
+        use blst::BLST_ERROR;
+        use blst::min_sig::AggregateSignature;
+
+        let victim_sk = derive_test_key(10);
+        let victim_pk = victim_sk.sk_to_pk();
+        let beta_sk = derive_test_key(11);
+        let beta_pk = beta_sk.sk_to_pk();
+        let rogue_pk_bytes = construct_rogue_g2_pubkey(&beta_pk.to_bytes(), &victim_pk.to_bytes());
+        let rogue_pk = blst::min_sig::PublicKey::key_validate(&rogue_pk_bytes)
+            .expect("rogue key must be valid");
+        let msg_attacker = b"attacker-op-data";
+        let msg_victim = b"victim-op-data";
+        let victim_sig = victim_sk.sign(msg_victim, KONTOR_BLS_DST, &[]);
+        let attacker_sig = beta_sk.sign(msg_attacker, KONTOR_BLS_DST, &[]);
+        let agg =
+            AggregateSignature::aggregate(&[&attacker_sig, &victim_sig], true).expect("aggregate");
+        let agg_sig = agg.to_signature();
+        let result = agg_sig.aggregate_verify(
+            true,
+            &[msg_attacker.as_slice(), msg_victim.as_slice()],
+            KONTOR_BLS_DST,
+            &[&rogue_pk, &victim_pk],
+            true,
+        );
+        assert_ne!(result, BLST_ERROR::BLST_SUCCESS);
+    }
+
+    #[test]
+    fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::key::{Keypair, Secp256k1, rand};
+        use bitcoin::secp256k1::Message;
+
+        let secp = Secp256k1::new();
+        let _alice_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        let eve_keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        let alice_xonly = _alice_keypair.x_only_public_key().0;
+        let eve_bls_sk = derive_test_key(42);
+        let eve_bls_pk = eve_bls_sk.sk_to_pk();
+        let schnorr_msg = {
+            let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
+            preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
+            preimage.extend_from_slice(&eve_bls_pk.to_bytes());
+            let digest = sha256::Hash::hash(&preimage).to_byte_array();
+            Message::from_digest_slice(&digest).expect("32-byte digest")
+        };
+        let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve_keypair).serialize();
+        let bls_binding_msg = {
+            let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
+            msg.extend_from_slice(BLS_BINDING_PREFIX);
+            msg.extend_from_slice(&alice_xonly.serialize());
+            msg
+        };
+        let eve_bls_binding_sig = eve_bls_sk
+            .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
+            .to_bytes();
+        let op = Inst::RegisterBlsKey {
+            bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+            schnorr_sig: eve_schnorr_sig.to_vec(),
+            bls_sig: eve_bls_binding_sig.to_vec(),
+        };
+        let insts = Insts {
+            ops: vec![op],
+            aggregate: Some(AggregateInfo {
+                signer_ids: vec![0],
+                signature: vec![0u8; 48],
+            }),
+        };
+        let err = validate_aggregate_shape(&insts)
+            .expect_err("aggregate RegisterBlsKey must be rejected");
+        assert!(
+            err.to_string()
+                .contains("RegisterBlsKey is not allowed in aggregate")
+        );
+    }
+
+    fn call_op(
+        nonce: u64,
+        gas_limit: u64,
+        contract: ContractAddress,
+        expr: impl Into<String>,
+    ) -> Inst {
+        Inst::Call {
+            gas_limit,
+            contract,
+            nonce: Some(nonce),
+            expr: expr.into(),
+        }
+    }
+
+    #[test]
+    fn bls_bulk_aggregate_signature_roundtrip() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use blst::BLST_ERROR;
+        let sk1 = derive_test_key(1);
+        let sk2 = derive_test_key(2);
+        let pk1 = sk1.sk_to_pk();
+        let pk2 = sk2.sk_to_pk();
+        let contract = ContractAddress {
+            name: "arith".into(),
+            height: 123,
+            tx_index: 4,
+        };
+        let op1 = call_op(0, 50_000, contract.clone(), "eval(10, id)");
+        let op2 = call_op(0, 50_000, contract, "eval(10, sum({y: 8}))");
+        let msg1 = op1.aggregate_signing_message(1).unwrap();
+        let msg2 = op2.aggregate_signing_message(2).unwrap();
+        let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
+        let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
+        let agg = blst::min_sig::AggregateSignature::aggregate(&[&sig1, &sig2], true).unwrap();
+        let msgs = [msg1, msg2];
+        let refs: Vec<&[u8]> = msgs.iter().map(Vec::as_slice).collect();
+        assert_eq!(
+            agg.to_signature()
+                .aggregate_verify(true, &refs, KONTOR_BLS_DST, &[&pk1, &pk2], true),
+            BLST_ERROR::BLST_SUCCESS
+        );
+    }
+
+    #[test]
+    fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use blst::BLST_ERROR;
+        let sk1 = derive_test_key(7);
+        let sk2 = derive_test_key(9);
+        let pk1 = sk1.sk_to_pk();
+        let pk2 = sk2.sk_to_pk();
+        let contract = ContractAddress {
+            name: "arith".into(),
+            height: 123,
+            tx_index: 4,
+        };
+        let msg1 = call_op(0, 50_000, contract.clone(), "eval(10, id)")
+            .aggregate_signing_message(1)
+            .unwrap();
+        let msg2 = call_op(0, 50_000, contract, "eval(10, sum({y: 8}))")
+            .aggregate_signing_message(2)
+            .unwrap();
+        let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
+        let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
+        let agg = blst::min_sig::AggregateSignature::aggregate(&[&sig1, &sig2], true).unwrap();
+        let msg1_mutated = call_op(
+            0,
+            60_000,
+            ContractAddress {
+                name: "arith".into(),
+                height: 123,
+                tx_index: 4,
+            },
+            "eval(10, id)",
+        )
+        .aggregate_signing_message(1)
+        .unwrap();
+        let msgs = [msg1_mutated, msg2];
+        let refs: Vec<&[u8]> = msgs.iter().map(Vec::as_slice).collect();
+        assert_ne!(
+            agg.to_signature()
+                .aggregate_verify(true, &refs, KONTOR_BLS_DST, &[&pk1, &pk2], true),
+            BLST_ERROR::BLST_SUCCESS
+        );
+    }
+
+    #[test]
+    fn bls_bulk_call_roundtrip_serialization_preserves_signer_id() {
+        let op = call_op(
+            7,
+            50_000,
+            ContractAddress {
+                name: "arith".into(),
+                height: 7,
+                tx_index: 3,
+            },
+            "eval(10, id)",
+        );
+        let bytes = indexer_types::serialize(&(42u64, op.clone())).unwrap();
+        let decoded: (u64, Inst) = indexer_types::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, (42, op));
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_signer_id_changes() {
+        let c = ContractAddress {
+            name: "arith".into(),
+            height: 123,
+            tx_index: 4,
+        };
+        assert_ne!(
+            call_op(0, 50_000, c.clone(), "eval(10, id)")
+                .aggregate_signing_message(1)
+                .unwrap(),
+            call_op(0, 50_000, c, "eval(10, id)")
+                .aggregate_signing_message(2)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_nonce_changes() {
+        let c = ContractAddress {
+            name: "arith".into(),
+            height: 123,
+            tx_index: 4,
+        };
+        assert_ne!(
+            call_op(0, 50_000, c.clone(), "eval(10, id)")
+                .aggregate_signing_message(1)
+                .unwrap(),
+            call_op(1, 50_000, c, "eval(10, id)")
+                .aggregate_signing_message(1)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_gas_limit_changes() {
+        let c = ContractAddress {
+            name: "arith".into(),
+            height: 123,
+            tx_index: 4,
+        };
+        assert_ne!(
+            call_op(0, 50_000, c.clone(), "eval(10, id)")
+                .aggregate_signing_message(1)
+                .unwrap(),
+            call_op(0, 60_000, c, "eval(10, id)")
+                .aggregate_signing_message(1)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_contract_name_changes() {
+        assert_ne!(
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "token".into(),
+                    height: 1,
+                    tx_index: 0
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap(),
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "pool".into(),
+                    height: 1,
+                    tx_index: 0
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_contract_height_changes() {
+        assert_ne!(
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "token".into(),
+                    height: 1,
+                    tx_index: 0
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap(),
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "token".into(),
+                    height: 2,
+                    tx_index: 0
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_contract_tx_index_changes() {
+        assert_ne!(
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "token".into(),
+                    height: 1,
+                    tx_index: 0
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap(),
+            call_op(
+                0,
+                50_000,
+                ContractAddress {
+                    name: "token".into(),
+                    height: 1,
+                    tx_index: 1
+                },
+                "transfer(\"x\", 10)"
+            )
+            .aggregate_signing_message(1)
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_message_changes_when_expr_changes() {
+        let c = ContractAddress {
+            name: "token".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        assert_ne!(
+            call_op(0, 50_000, c.clone(), "transfer(\"alice\", 10)")
+                .aggregate_signing_message(1)
+                .unwrap(),
+            call_op(0, 50_000, c, "transfer(\"bob\", 10)")
+                .aggregate_signing_message(1)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn bls_bulk_wrong_signer_key_fails_single_op() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use blst::BLST_ERROR;
+        let sk_a = derive_test_key(20);
+        let sk_b = derive_test_key(21);
+        let pk_a = sk_a.sk_to_pk();
+        let msg = call_op(
+            0,
+            50_000,
+            ContractAddress {
+                name: "token".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            "transfer(\"dest\", 100)",
+        )
+        .aggregate_signing_message(1)
+        .unwrap();
+        let sig_by_b = sk_b.sign(&msg, KONTOR_BLS_DST, &[]);
+        assert_ne!(
+            sig_by_b.aggregate_verify(true, &[msg.as_slice()], KONTOR_BLS_DST, &[&pk_a], true),
+            BLST_ERROR::BLST_SUCCESS
+        );
+    }
+
+    #[test]
+    fn bls_bulk_wrong_signer_key_fails_multi_op_key_swap() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use blst::BLST_ERROR;
+        let sk_a = derive_test_key(30);
+        let sk_b = derive_test_key(31);
+        let pk_a = sk_a.sk_to_pk();
+        let pk_b = sk_b.sk_to_pk();
+        let c = ContractAddress {
+            name: "token".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let msg_a = call_op(0, 50_000, c.clone(), "transfer(\"x\", 10)")
+            .aggregate_signing_message(1)
+            .unwrap();
+        let msg_b = call_op(0, 50_000, c, "transfer(\"y\", 20)")
+            .aggregate_signing_message(2)
+            .unwrap();
+        let agg = blst::min_sig::AggregateSignature::aggregate(
+            &[
+                &sk_b.sign(&msg_a, KONTOR_BLS_DST, &[]),
+                &sk_a.sign(&msg_b, KONTOR_BLS_DST, &[]),
+            ],
+            true,
+        )
+        .unwrap();
+        assert_ne!(
+            agg.to_signature().aggregate_verify(
+                true,
+                &[msg_a.as_slice(), msg_b.as_slice()],
+                KONTOR_BLS_DST,
+                &[&pk_a, &pk_b],
+                true
+            ),
+            BLST_ERROR::BLST_SUCCESS
+        );
+    }
+
+    #[test]
+    fn bls_bulk_one_correct_one_wrong_key_fails_entire_aggregate() {
+        use crate::test_utils::bls_test::derive_test_key;
+        use blst::BLST_ERROR;
+        let sk_a = derive_test_key(40);
+        let sk_b = derive_test_key(41);
+        let sk_c = derive_test_key(42);
+        let pk_a = sk_a.sk_to_pk();
+        let pk_b = sk_b.sk_to_pk();
+        let c = ContractAddress {
+            name: "token".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let msg_a = call_op(0, 50_000, c.clone(), "transfer(\"x\", 10)")
+            .aggregate_signing_message(1)
+            .unwrap();
+        let msg_b = call_op(0, 50_000, c, "transfer(\"y\", 20)")
+            .aggregate_signing_message(2)
+            .unwrap();
+        let agg = blst::min_sig::AggregateSignature::aggregate(
+            &[
+                &sk_a.sign(&msg_a, KONTOR_BLS_DST, &[]),
+                &sk_c.sign(&msg_b, KONTOR_BLS_DST, &[]),
+            ],
+            true,
+        )
+        .unwrap();
+        assert_ne!(
+            agg.to_signature().aggregate_verify(
+                true,
+                &[msg_a.as_slice(), msg_b.as_slice()],
+                KONTOR_BLS_DST,
+                &[&pk_a, &pk_b],
+                true
+            ),
+            BLST_ERROR::BLST_SUCCESS
+        );
+    }
+
+    mod proptest_bulk {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn signing_message_no_panic_on_arbitrary_call(
+                signer_id in any::<u64>(),
+                nonce in any::<u64>(),
+                gas_limit in any::<u64>(),
+                name in any::<String>(),
+                height in any::<u64>(),
+                tx_index in any::<u64>(),
+                expr in any::<String>(),
+            ) {
+                let op = call_op(nonce, gas_limit, ContractAddress { name, height, tx_index }, expr);
+                let msg = op.aggregate_signing_message(signer_id).expect("must not fail");
+                prop_assert!(!msg.is_empty());
+            }
+
+            #[test]
+            fn signing_message_no_panic_on_arbitrary_register(
+                signer_id in any::<u64>(),
+                bls_pubkey in proptest::collection::vec(any::<u8>(), 0..256),
+                schnorr_sig in proptest::collection::vec(any::<u8>(), 0..256),
+                bls_sig in proptest::collection::vec(any::<u8>(), 0..256),
+            ) {
+                let op = Inst::RegisterBlsKey { bls_pubkey, schnorr_sig, bls_sig };
+                let msg = op.aggregate_signing_message(signer_id).expect("must not fail");
+                prop_assert!(!msg.is_empty());
+            }
+        }
     }
 }

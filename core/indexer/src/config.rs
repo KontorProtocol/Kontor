@@ -77,6 +77,44 @@ pub struct Config {
         default_value = "bitcoin"
     )]
     pub network: bitcoin::Network,
+
+    // --- Consensus ---
+    #[clap(
+        long,
+        env = "CONSENSUS_PRIVATE_KEY",
+        help = "Hex-encoded Ed25519 private key for consensus participation"
+    )]
+    pub consensus_private_key: Option<String>,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_LISTEN_ADDR",
+        default_value = "/ip4/127.0.0.1/tcp/26656",
+        help = "Multiaddr for consensus P2P (e.g. /ip4/127.0.0.1/tcp/26656)"
+    )]
+    pub consensus_listen_addr: String,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_PEERS",
+        help = "Comma-separated multiaddrs of persistent consensus peers",
+        value_delimiter = ','
+    )]
+    pub consensus_peers: Vec<String>,
+
+    #[clap(
+        long,
+        env = "GENESIS_FILE",
+        help = "Path to genesis JSON file containing the initial validator set"
+    )]
+    pub genesis_file: PathBuf,
+
+    #[clap(
+        long,
+        env = "CONSENSUS_PROPOSE_TIMEOUT_MS",
+        help = "Consensus propose timeout in milliseconds (default: 3000)"
+    )]
+    pub consensus_propose_timeout_ms: Option<u64>,
 }
 
 impl Config {
@@ -92,7 +130,31 @@ impl Config {
             api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
+            consensus_private_key: None,
+            consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
+            consensus_peers: Vec::new(),
+            genesis_file: PathBuf::new(),
+            consensus_propose_timeout_ms: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisValidatorConfig {
+    pub x_only_pubkey: String,
+    pub stake: String,
+    pub ed25519_pubkey: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisConfig {
+    pub validators: Vec<GenesisValidatorConfig>,
+}
+
+impl GenesisConfig {
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&contents)?)
     }
 }
 

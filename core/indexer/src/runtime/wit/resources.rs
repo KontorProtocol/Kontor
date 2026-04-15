@@ -191,3 +191,100 @@ impl Proof {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{create_fake_file_metadata, valid_seed_field};
+
+    #[test]
+    fn test_build_challenge_success() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let result = descriptor.build_challenge(800000, 100, &seed.bytes, "prover1".to_string());
+        assert!(result.is_ok());
+        let challenge = result.unwrap();
+        assert_eq!(challenge.block_height, 800000);
+        assert_eq!(challenge.num_challenges, 100);
+        assert_eq!(challenge.prover_id, "prover1");
+    }
+
+    #[test]
+    fn test_build_challenge_invalid_seed_length() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let result = descriptor.build_challenge(800000, 100, &[0u8; 16], "prover1".to_string());
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Validation(_)));
+    }
+
+    #[test]
+    fn test_build_challenge_empty_seed() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        assert!(
+            descriptor
+                .build_challenge(800000, 100, &[], "prover1".to_string())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_compute_challenge_id_success() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let id = descriptor
+            .compute_challenge_id(800000, 100, &seed.bytes, "prover1".to_string())
+            .unwrap();
+        assert_eq!(id.len(), 64);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_build_challenge_uses_correct_file_metadata() {
+        let metadata = create_fake_file_metadata("my_file_id", "metadata_test.txt", 800000);
+        let expected_file_id = metadata.file_id.clone();
+        let expected_padded_len = metadata.padded_len;
+        let expected_original_size = metadata.original_size;
+        let expected_filename = metadata.filename.clone();
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let c = descriptor
+            .build_challenge(800000, 100, &seed.bytes, "prover1".to_string())
+            .unwrap();
+        assert_eq!(c.file_metadata.file_id, expected_file_id);
+        assert_eq!(c.file_metadata.padded_len, expected_padded_len as usize);
+        assert_eq!(
+            c.file_metadata.original_size,
+            expected_original_size as usize
+        );
+        assert_eq!(c.file_metadata.filename, expected_filename);
+    }
+
+    #[test]
+    fn test_proof_from_bytes_invalid_bytes_fails() {
+        assert!(matches!(
+            Proof::from_bytes(&[0u8; 100]),
+            Err(Error::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn test_proof_from_bytes_empty_bytes_fails() {
+        assert!(Proof::from_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn test_proof_from_bytes_truncated_header_fails() {
+        assert!(Proof::from_bytes(&[0u8; 5]).is_err());
+    }
+
+    #[test]
+    fn test_proof_from_bytes_wrong_magic_fails() {
+        let mut bytes = vec![0u8; 20];
+        bytes[0..4].copy_from_slice(b"XXXX");
+        assert!(Proof::from_bytes(&bytes).is_err());
+    }
+}

@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package consensus.v1;
+
+message Address {
+    bytes value = 1;
+}
+
+message Value {
+    oneof kind {
+        BatchValue batch = 1;
+        BlockValue block = 2;
+    }
+}
+
+message BatchValue {
+    uint64 anchor_height = 1;
+    bytes anchor_hash = 2;
+    repeated BatchTx txs = 3;
+}
+
+message BatchTx {
+    oneof tx {
+        bytes txid = 1;
+        bytes raw_tx = 2;
+    }
+}
+
+message BlockValue {
+    uint64 height = 1;
+    bytes hash = 2;
+}
+
+message ValueId {
+    optional bytes value = 1;
+}
+
+enum VoteType {
+   VOTE_TYPE_UNSPECIFIED = 0;
+   VOTE_TYPE_PREVOTE = 1;
+   VOTE_TYPE_PRECOMMIT = 2;
+}
+
+message Vote {
+    VoteType vote_type = 1;
+    uint64 height = 2;
+    uint32 round = 3;
+    ValueId value = 4;
+    Address validator_address = 5;
+}
+
+message SignedMessage {
+    oneof message {
+        Proposal proposal = 1;
+        Vote vote = 2;
+    }
+    Signature signature = 3;
+}
+
+message Proposal {
+    uint64 height = 1;
+    uint32 round = 2;
+    Value value = 3;
+    optional uint32 pol_round = 4;
+    Address validator_address = 5;
+}
+
+message Signature {
+    bytes bytes = 1;
+}
+
+message ProposalPart {
+    oneof part {
+        ProposalInit init = 1;
+        ProposalData data = 2;
+        ProposalFin fin = 3;
+    }
+}
+
+message ProposalInit {
+    uint64 height = 1;
+    uint32 round = 2;
+    Address proposer = 4;
+    optional uint32 pol_round = 5;
+}
+
+message ProposalData {
+    uint64 anchor_height = 1;
+    repeated bytes transactions = 2;
+    bytes anchor_hash = 3;
+    bool is_block = 4;
+}
+
+message ProposalFin {
+    Signature signature = 1;
+}
+
+message Extension {
+    bytes data = 1;
+    Signature signature = 2;
+}
+
+message StreamMessage {
+    bytes stream_id = 1;
+    uint64 sequence = 2;
+    oneof content {
+        bytes data = 3;
+        bool fin = 4;
+    }
+}
+
+message ValidatorProof {
+    bytes consensus_pub_key = 1;
+    bytes peer_id = 2;
+    Signature signature = 3;
+}

@@ -53,7 +53,7 @@ impl Vote {
             extension: None,
             ..self.clone()
         };
-        Protobuf::to_bytes(&vote).unwrap()
+        Protobuf::to_bytes(&vote).expect("vote serialization should not fail")
     }
 
     pub fn from_sign_bytes(bytes: &[u8]) -> Result<Self, ProtoError> {
@@ -107,7 +107,7 @@ impl Protobuf for Vote {
 
     fn from_proto(proto: Self::Proto) -> Result<Self, ProtoError> {
         Ok(Self {
-            typ: decode_votetype(proto.vote_type()),
+            typ: decode_votetype(proto.vote_type())?,
             height: Height::from_proto(proto.height)?,
             round: Round::new(proto.round),
             value: match proto.value {
@@ -124,10 +124,14 @@ impl Protobuf for Vote {
     }
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
+        let round = self
+            .round
+            .as_u32()
+            .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
         Ok(Self::Proto {
             vote_type: encode_votetype(self.typ).into(),
             height: self.height.to_proto()?,
-            round: self.round.as_u32().expect("round should not be nil"),
+            round,
             value: match &self.value {
                 NilOrVal::Nil => None,
                 NilOrVal::Val(v) => Some(v.to_proto()?),
@@ -144,9 +148,10 @@ pub fn encode_votetype(vote_type: VoteType) -> proto::VoteType {
     }
 }
 
-pub fn decode_votetype(vote_type: proto::VoteType) -> VoteType {
+pub fn decode_votetype(vote_type: proto::VoteType) -> Result<VoteType, ProtoError> {
     match vote_type {
-        proto::VoteType::Prevote => VoteType::Prevote,
-        proto::VoteType::Precommit => VoteType::Precommit,
+        proto::VoteType::Prevote => Ok(VoteType::Prevote),
+        proto::VoteType::Precommit => Ok(VoteType::Precommit),
+        proto::VoteType::Unspecified => Err(ProtoError::Other("Unspecified VoteType".into())),
     }
 }

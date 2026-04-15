@@ -7,7 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-indexer = { path = "../indexer" }
+indexer = { path = "../indexer", features = ["testing"] }
 indexer-types = { path = "../indexer-types" }
 anyhow = { workspace = true }
 bon = { workspace = true }
@@ -17,3 +17,4 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+blst = "=0.3.16"

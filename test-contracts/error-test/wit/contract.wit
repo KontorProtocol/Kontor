@@ -1,0 +1,30 @@
+package root:component;
+
+world root {
+	include kontor:built-in/built-in;
+	use kontor:built-in/context.{view-context, proc-context};
+	use kontor:built-in/error.{error};
+
+	export init: async func(ctx: borrow<proc-context>);
+
+	// Case 1: Normal success
+	export succeed: async func(ctx: borrow<view-context>) -> u64;
+
+	// Case 1b: Contract returns an error
+	export contract-error: async func(ctx: borrow<view-context>) -> result<u64, error>;
+
+	// Case 2: WASM trap (division by zero)
+	export trap-div-zero: async func(ctx: borrow<proc-context>);
+
+	// Case 2b: Contract panic (becomes unreachable trap in WASM)
+	export trap-panic: async func(ctx: borrow<proc-context>);
+
+	// Case 3: Infinite loop — runs out of fuel (real wasmtime Trap::OutOfFuel)
+	export trap-out-of-fuel: async func(ctx: borrow<proc-context>);
+
+	// Case 3: Host function returns Err (simulates infrastructure failure)
+	export host-error: async func(ctx: borrow<proc-context>);
+
+	// Case 4: Host function panic (non-deterministic)
+	export host-panic: async func(ctx: borrow<proc-context>);
+}

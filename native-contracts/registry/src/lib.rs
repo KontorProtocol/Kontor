@@ -17,23 +17,16 @@ struct RegistryStorage {
     pub by_id: Map<u64, String>,
 }
 
-fn assert_bls_pubkey_len(bls_pubkey: &[u8]) -> Result<(), Error> {
-    if bls_pubkey.len() != 96 {
-        return Err(Error::Message("expected 96-byte BLS pubkey".to_string()));
-    }
-    Ok(())
-}
-
 impl Guest for Registry {
     fn init(ctx: &ProcContext) {
         RegistryStorage::default().init(ctx);
     }
 
-    fn ensure_signer(ctx: &CoreContext, x_only_pubkey: String) -> Result<RegistryEntry, Error> {
+    fn ensure_signer(ctx: &CoreContext, x_only_pubkey: String) -> RegistryEntry {
         let model = ctx.proc_context().model();
 
         if let Some(entry) = model.entries().get(&x_only_pubkey) {
-            return Ok(RegistryEntry {
+            return RegistryEntry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
                 bls_pubkey: {
@@ -45,7 +38,7 @@ impl Guest for Registry {
                     }
                 },
                 next_nonce: entry.next_nonce(),
-            });
+            };
         }
 
         let signer_id = model.next_signer_id();
@@ -61,49 +54,33 @@ impl Guest for Registry {
         );
         model.by_id().set(signer_id, x_only_pubkey.clone());
 
-        Ok(RegistryEntry {
+        RegistryEntry {
             signer_id,
             x_only_pubkey,
             bls_pubkey: None,
             next_nonce: 0,
-        })
+        }
     }
 
-    fn register_bls_key(ctx: &CoreContext, bls_pubkey: Vec<u8>) -> Result<RegistryEntry, Error> {
-        assert_bls_pubkey_len(&bls_pubkey)?;
-
+    fn register_bls_key(ctx: &CoreContext, bls_pubkey: Vec<u8>) -> RegistryEntry {
         let x_only_pubkey = ctx.signer_proc_context().signer().to_string();
         let model = ctx.proc_context().model();
 
         if let Some(entry) = model.entries().get(&x_only_pubkey) {
-            let existing_bls = entry.bls_pubkey();
-            if existing_bls.is_empty() {
-                model.entries().set(
-                    x_only_pubkey.clone(),
-                    Entry {
-                        signer_id: entry.signer_id(),
-                        bls_pubkey: bls_pubkey.clone(),
-                        next_nonce: entry.next_nonce(),
-                    },
-                );
-                return Ok(RegistryEntry {
+            model.entries().set(
+                x_only_pubkey.clone(),
+                Entry {
                     signer_id: entry.signer_id(),
-                    x_only_pubkey,
-                    bls_pubkey: Some(bls_pubkey),
+                    bls_pubkey: bls_pubkey.clone(),
                     next_nonce: entry.next_nonce(),
-                });
-            }
-            if existing_bls != bls_pubkey {
-                return Err(Error::Message(
-                    "BLS pubkey already registered for signer".to_string(),
-                ));
-            }
-            return Ok(RegistryEntry {
+                },
+            );
+            return RegistryEntry {
                 signer_id: entry.signer_id(),
                 x_only_pubkey,
                 bls_pubkey: Some(bls_pubkey),
                 next_nonce: entry.next_nonce(),
-            });
+            };
         }
 
         let signer_id = model.next_signer_id();
@@ -119,12 +96,12 @@ impl Guest for Registry {
         );
         model.by_id().set(signer_id, x_only_pubkey.clone());
 
-        Ok(RegistryEntry {
+        RegistryEntry {
             signer_id,
             x_only_pubkey,
             bls_pubkey: Some(bls_pubkey),
             next_nonce: 0,
-        })
+        }
     }
 
     fn advance_nonce(ctx: &CoreContext, signer_id: u64, caller_nonce: u64) -> Result<u64, Error> {
@@ -208,5 +185,9 @@ impl Guest for Registry {
         } else {
             Some(bls_pubkey)
         }
+    }
+
+    fn get_next_signer_id(ctx: &ViewContext) -> u64 {
+        ctx.model().next_signer_id()
     }
 }

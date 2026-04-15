@@ -11,7 +11,10 @@ use indexer_types::Block;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
-    sync::{Notify, mpsc::Sender},
+    sync::{
+        Notify,
+        mpsc::{Receiver, Sender},
+    },
     task::JoinSet,
     time::sleep,
 };
@@ -24,7 +27,7 @@ use crate::{
     retry::{new_backoff_unlimited, retry},
 };
 
-use super::event::BitcoinEvent;
+use super::event::BlockEvent;
 
 const HASH_CACHE_SIZE: usize = 50;
 
@@ -141,7 +144,7 @@ enum DeliveryResult {
     /// All blocks in the batch were delivered successfully.
     Ok {
         /// Events to send to the consumer.
-        events: Vec<BitcoinEvent>,
+        events: Vec<BlockEvent>,
         /// The next height to fetch.
         next_height: u64,
     },
@@ -180,7 +183,7 @@ fn deliver_blocks(
         }
 
         cache.insert(height, block.hash);
-        events.push(BitcoinEvent::BlockInsert {
+        events.push(BlockEvent::BlockInsert {
             target_height: tip,
             block,
         });
@@ -198,28 +201,36 @@ async fn apply_rollback(
     cache: &mut BlockHashCache,
     next_height: &mut u64,
     fork_height: u64,
-    event_tx: &Sender<BitcoinEvent>,
+    event_tx: &Sender<BlockEvent>,
 ) -> bool {
     cache.truncate_above(fork_height);
     *next_height = fork_height + 1;
     event_tx
-        .send(BitcoinEvent::Rollback {
+        .send(BlockEvent::Rollback {
             to_height: fork_height,
         })
         .await
         .is_ok()
 }
 
-/// Wait for the next poll trigger: timer, ZMQ wake, or cancellation.
+enum PollResult {
+    Continue,
+    Replay(u64),
+    Cancelled,
+}
+
+/// Wait for the next poll trigger: timer, ZMQ wake, replay request, or cancellation.
 async fn wait_for_poll(
     poll_interval: Duration,
     poll_notify: &Notify,
+    replay_rx: &mut Receiver<u64>,
     cancel_token: &CancellationToken,
-) -> bool {
+) -> PollResult {
     select! {
-        _ = sleep(poll_interval) => true,
-        _ = poll_notify.notified() => true,
-        _ = cancel_token.cancelled() => false,
+        _ = sleep(poll_interval) => PollResult::Continue,
+        _ = poll_notify.notified() => PollResult::Continue,
+        Some(height) = replay_rx.recv() => PollResult::Replay(height),
+        _ = cancel_token.cancelled() => PollResult::Cancelled,
     }
 }
 
@@ -228,12 +239,13 @@ async fn wait_for_poll(
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
-    event_tx: Sender<BitcoinEvent>,
+    event_tx: Sender<BlockEvent>,
     cancel_token: CancellationToken,
     start_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
     poll_notify: Arc<Notify>,
     config: PollerConfig,
+    mut replay_rx: Receiver<u64>,
 ) -> Result<()> {
     let mut cache = BlockHashCache::new(HASH_CACHE_SIZE);
     let mut next_height = start_height;
@@ -302,10 +314,24 @@ pub async fn run<C: BitcoinRpc>(
             continue;
         }
 
-        if tip < next_height
-            && !wait_for_poll(config.poll_interval, &poll_notify, &cancel_token).await
-        {
-            return Ok(());
+        if tip < next_height {
+            match wait_for_poll(
+                config.poll_interval,
+                &poll_notify,
+                &mut replay_rx,
+                &cancel_token,
+            )
+            .await
+            {
+                PollResult::Continue => continue,
+                PollResult::Replay(height) => {
+                    info!(height, "Replay request received — resetting poller");
+                    cache.truncate_above(height);
+                    next_height = height + 1;
+                    continue;
+                }
+                PollResult::Cancelled => return Ok(()),
+            }
         }
 
         // 2. Spawn parallel fetches for blocks we're behind on
@@ -602,10 +628,10 @@ mod tests {
                 assert_eq!(next_height, 3);
                 assert_eq!(events.len(), 2);
                 assert!(
-                    matches!(&events[0], BitcoinEvent::BlockInsert { block, .. } if block.height == 1)
+                    matches!(&events[0], BlockEvent::BlockInsert { block, .. } if block.height == 1)
                 );
                 assert!(
-                    matches!(&events[1], BitcoinEvent::BlockInsert { block, .. } if block.height == 2)
+                    matches!(&events[1], BlockEvent::BlockInsert { block, .. } if block.height == 2)
                 );
             }
             DeliveryResult::Reorg { .. } => panic!("unexpected reorg"),
@@ -720,6 +746,7 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -727,7 +754,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -758,6 +785,7 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -765,7 +793,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -779,7 +807,7 @@ mod tests {
         for expected in &more {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -810,6 +838,7 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -817,7 +846,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                 }
                 other => panic!("expected BlockInsert, got {:?}", other),
@@ -838,7 +867,7 @@ mod tests {
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -847,7 +876,7 @@ mod tests {
         for expected in &forked[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -878,20 +907,21 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
 
         for _ in 0..5 {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
-            assert!(matches!(event, BitcoinEvent::BlockInsert { .. }));
+            assert!(matches!(event, BlockEvent::BlockInsert { .. }));
         }
 
         rpc.replace_blocks(blocks[..3].to_vec());
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -936,13 +966,14 @@ mod tests {
                 known,
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
 
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 3);
             }
             other => panic!("expected Rollback, got {:?}", other),
@@ -951,7 +982,7 @@ mod tests {
         for expected in &alt_chain[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -985,6 +1016,7 @@ mod tests {
                 known,
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -992,7 +1024,7 @@ mod tests {
         for expected in &blocks[3..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -1038,6 +1070,7 @@ mod tests {
             known,
             Arc::new(Notify::new()),
             fast_config(),
+            mpsc::channel(1).1,
         )
         .await;
         assert!(result.is_err());
@@ -1064,6 +1097,7 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -1071,7 +1105,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -1105,6 +1139,7 @@ mod tests {
                 vec![],
                 Arc::new(Notify::new()),
                 fast_config(),
+                mpsc::channel(1).1,
             )
             .await
         });
@@ -1112,7 +1147,7 @@ mod tests {
         for expected in &blocks {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                 }
                 other => panic!(
@@ -1137,7 +1172,7 @@ mod tests {
         // Single rollback to the real fork point
         let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
         match event {
-            BitcoinEvent::Rollback { to_height } => {
+            BlockEvent::Rollback { to_height } => {
                 assert_eq!(to_height, 5);
             }
             other => panic!("expected Rollback to 5, got {:?}", other),
@@ -1146,7 +1181,7 @@ mod tests {
         for expected in &forked[5..] {
             let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
             match event {
-                BitcoinEvent::BlockInsert { block, .. } => {
+                BlockEvent::BlockInsert { block, .. } => {
                     assert_eq!(block.height, expected.height);
                     assert_eq!(block.hash, expected.hash);
                 }
@@ -1176,8 +1211,62 @@ mod tests {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
+            mpsc::channel(1).1,
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_replay_redelivers_blocks() {
+        let blocks = new_numbered_blockchain(5);
+        let rpc = MockBitcoinRpc::new(blocks.clone());
+        let cancel = CancellationToken::new();
+        let (tx, mut rx) = mpsc::channel(32);
+        let (replay_tx, replay_rx) = mpsc::channel(4);
+
+        let cancel2 = cancel.clone();
+        let handle = tokio::spawn(async move {
+            run(
+                rpc,
+                noop_filter,
+                tx,
+                cancel2,
+                1,
+                vec![],
+                Arc::new(Notify::new()),
+                fast_config(),
+                replay_rx,
+            )
+            .await
+        });
+
+        // Receive all 5 blocks initially
+        for expected in &blocks {
+            let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+            match event {
+                BlockEvent::BlockInsert { block, .. } => {
+                    assert_eq!(block.height, expected.height);
+                }
+                other => panic!("expected BlockInsert, got {:?}", other),
+            }
+        }
+
+        // Send replay request from height 3
+        replay_tx.send(3).await.unwrap();
+
+        // Should re-deliver blocks 4 and 5
+        for expected_height in [4, 5] {
+            let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+            match event {
+                BlockEvent::BlockInsert { block, .. } => {
+                    assert_eq!(block.height, expected_height);
+                }
+                other => panic!("expected BlockInsert at {expected_height}, got {:?}", other),
+            }
+        }
+
+        cancel.cancel();
+        handle.await.unwrap().unwrap();
     }
 }

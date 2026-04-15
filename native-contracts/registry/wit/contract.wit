@@ -19,7 +19,7 @@ world root {
   export ensure-signer: async func(
     ctx: borrow<core-context>,
     x-only-pubkey: string
-  ) -> result<registry-entry, error>;
+  ) -> registry-entry;
 
   // Core-only mutation: indexers register BLS keys after verifying proofs.
   // If the entry already exists with no bls-pubkey (from ensure-signer),
@@ -27,7 +27,7 @@ world root {
   export register-bls-key: async func(
     ctx: borrow<core-context>,
     bls-pubkey: list<u8>
-  ) -> result<registry-entry, error>;
+  ) -> registry-entry;
 
   export advance-nonce: async func(
     ctx: borrow<core-context>,
@@ -54,5 +54,9 @@ world root {
     ctx: borrow<view-context>,
     x-only-pubkey: string
   ) -> option<list<u8>>;
+
+  export get-next-signer-id: async func(
+    ctx: borrow<view-context>
+  ) -> u64;
 }
 

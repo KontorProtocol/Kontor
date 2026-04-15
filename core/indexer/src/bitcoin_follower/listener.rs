@@ -17,7 +17,7 @@ use crate::bitcoin_client::client::BitcoinRpc;
 use crate::block::TransactionFilterMap;
 use crate::retry::{new_backoff_limited, retry};
 
-use super::event::BitcoinEvent;
+use super::event::MempoolEvent;
 use super::messages::{DataMessage, MonitorMessage};
 
 pub struct ListenerConfig {
@@ -38,7 +38,7 @@ impl ListenerConfig {
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
-    event_tx: Sender<BitcoinEvent>,
+    event_tx: Sender<MempoolEvent>,
     cancel_token: CancellationToken,
     poll_notify: Arc<Notify>,
     config: ListenerConfig,
@@ -77,7 +77,7 @@ pub async fn run<C: BitcoinRpc>(
 async fn run_session<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
-    event_tx: &Sender<BitcoinEvent>,
+    event_tx: &Sender<MempoolEvent>,
     cancel_token: CancellationToken,
     zmq_address: &str,
     poll_notify: Arc<Notify>,
@@ -141,7 +141,7 @@ async fn run_session<C: BitcoinRpc>(
 async fn run_event_loop<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
-    event_tx: &Sender<BitcoinEvent>,
+    event_tx: &Sender<MempoolEvent>,
     cancel_token: CancellationToken,
     mut socket_rx: mpsc::UnboundedReceiver<Result<(u32, DataMessage)>>,
     mut monitor_rx: mpsc::UnboundedReceiver<Result<MonitorMessage>>,
@@ -171,7 +171,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             // Fetch snapshot with mempool sequence number
                             let (txs, snapshot_seq) =
                                 fetch_mempool(bitcoin, f, &cancel_token).await?;
-                            if event_tx.send(BitcoinEvent::MempoolSync(txs)).await.is_err() {
+                            if event_tx.send(MempoolEvent::Sync(txs)).await.is_err() {
                                 return Ok(());
                             }
 
@@ -297,7 +297,7 @@ async fn fetch_mempool<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
     cancel_token: &CancellationToken,
-) -> Result<(Vec<indexer_types::Transaction>, u64)> {
+) -> Result<(Vec<(bitcoin::Transaction, indexer_types::Transaction)>, u64)> {
     let snapshot = retry(
         || bitcoin.get_raw_mempool_sequence(),
         "get raw mempool",
@@ -337,9 +337,15 @@ async fn fetch_mempool<C: BitcoinRpc>(
         );
     }
 
-    let filtered =
-        task::spawn_blocking(move || txs.into_par_iter().enumerate().filter_map(f).collect())
-            .await?;
+    // Filter and parse transactions in parallel, keeping both raw and parsed forms.
+    let filtered: Vec<(bitcoin::Transaction, indexer_types::Transaction)> =
+        task::spawn_blocking(move || {
+            txs.into_par_iter()
+                .enumerate()
+                .filter_map(|(i, tx)| f((i, tx.clone())).map(|parsed| (tx, parsed)))
+                .collect()
+        })
+        .await?;
 
     Ok((filtered, mempool_sequence))
 }
@@ -350,7 +356,7 @@ async fn process_delta<C: BitcoinRpc>(
     data_message: DataMessage,
     bitcoin: &C,
     f: TransactionFilterMap,
-    event_tx: &Sender<BitcoinEvent>,
+    event_tx: &Sender<MempoolEvent>,
     cancel_token: &CancellationToken,
     poll_notify: &Notify,
 ) -> Result<bool> {
@@ -367,9 +373,9 @@ async fn process_delta<C: BitcoinRpc>(
             .await
             {
                 Ok(tx) => {
-                    if let Some(filtered) = f((0, tx))
+                    if let Some(parsed) = f((0, tx.clone()))
                         && event_tx
-                            .send(BitcoinEvent::MempoolInsert(filtered))
+                            .send(MempoolEvent::Insert(tx, parsed))
                             .await
                             .is_err()
                     {
@@ -384,11 +390,7 @@ async fn process_delta<C: BitcoinRpc>(
             }
         }
         DataMessage::TransactionRemoved { txid, .. } => {
-            if event_tx
-                .send(BitcoinEvent::MempoolRemove(txid))
-                .await
-                .is_err()
-            {
+            if event_tx.send(MempoolEvent::Remove(txid)).await.is_err() {
                 return Ok(false);
             }
         }
@@ -515,7 +517,7 @@ mod tests {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: index as i64,
-            ops: vec![],
+            inputs: vec![],
             op_return_data: Default::default(),
         })
     }
@@ -566,7 +568,7 @@ mod tests {
                 Some(indexer_types::Transaction {
                     txid: tx.compute_txid(),
                     index: index as i64,
-                    ops: vec![],
+                    inputs: vec![],
                     op_return_data: Default::default(),
                 })
             } else {
@@ -576,7 +578,7 @@ mod tests {
 
         let (result, _) = fetch_mempool(&mock, f, &cancel).await.unwrap();
         assert_eq!(result.len(), 2);
-        let txids: Vec<_> = result.iter().map(|t| t.txid).collect();
+        let txids: Vec<_> = result.iter().map(|(t, _)| t.compute_txid()).collect();
         assert!(txids.contains(&txid1));
         assert!(txids.contains(&txid3));
     }
@@ -593,7 +595,7 @@ mod tests {
 
         assert_eq!(result.len(), 5);
         for txid in &expected_txids {
-            assert!(result.iter().any(|t| t.txid == *txid));
+            assert!(result.iter().any(|(t, _)| t.compute_txid() == *txid));
         }
     }
 
@@ -670,7 +672,7 @@ mod tests {
         assert!(open);
 
         match event_rx.try_recv().unwrap() {
-            BitcoinEvent::MempoolInsert(t) => assert_eq!(t.txid, txid),
+            MempoolEvent::Insert(t, _) => assert_eq!(t.compute_txid(), txid),
             other => panic!("Expected MempoolInsert, got {:?}", other),
         }
     }
@@ -695,7 +697,7 @@ mod tests {
         assert!(open);
 
         match event_rx.try_recv().unwrap() {
-            BitcoinEvent::MempoolRemove(id) => assert_eq!(id, txid),
+            MempoolEvent::Remove(id) => assert_eq!(id, txid),
             other => panic!("Expected MempoolRemove, got {:?}", other),
         }
     }
@@ -852,7 +854,7 @@ mod tests {
     // --- run_event_loop tests ---
 
     /// Collect all events from the receiver until it's empty.
-    fn collect_events(rx: &mut mpsc::Receiver<BitcoinEvent>) -> Vec<BitcoinEvent> {
+    fn collect_events(rx: &mut mpsc::Receiver<MempoolEvent>) -> Vec<MempoolEvent> {
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
             events.push(event);
@@ -908,8 +910,8 @@ mod tests {
         .await;
 
         let events = collect_events(&mut event_rx);
-        assert!(matches!(&events[0], BitcoinEvent::MempoolSync(txs) if txs.len() == 3));
-        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.txid == txid3));
+        assert!(matches!(&events[0], MempoolEvent::Sync(txs) if txs.len() == 3));
+        assert!(matches!(&events[1], MempoolEvent::Insert(t, _) if t.compute_txid() == txid3));
         assert_eq!(events.len(), 2);
     }
 
@@ -981,10 +983,10 @@ mod tests {
         .await;
 
         let events = collect_events(&mut event_rx);
-        assert!(matches!(&events[0], BitcoinEvent::MempoolSync(_)));
+        assert!(matches!(&events[0], MempoolEvent::Sync(_)));
         // Only tx3 replayed (stale ones skipped)
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[1], BitcoinEvent::MempoolInsert(t) if t.txid == txid3));
+        assert!(matches!(&events[1], MempoolEvent::Insert(t, _) if t.compute_txid() == txid3));
     }
 
     #[tokio::test]
@@ -1033,7 +1035,7 @@ mod tests {
         let events = collect_events(&mut event_rx);
         // Only MempoolSync, no spurious delta
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], BitcoinEvent::MempoolSync(_)));
+        assert!(matches!(&events[0], MempoolEvent::Sync(_)));
     }
 
     #[tokio::test]
@@ -1106,8 +1108,8 @@ mod tests {
 
         let events = collect_events(&mut event_rx);
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], BitcoinEvent::MempoolSync(txs) if txs.is_empty()));
-        assert!(matches!(&events[1], BitcoinEvent::MempoolRemove(txid) if *txid == removed_txid));
+        assert!(matches!(&events[0], MempoolEvent::Sync(txs) if txs.is_empty()));
+        assert!(matches!(&events[1], MempoolEvent::Remove(txid) if *txid == removed_txid));
     }
 
     #[tokio::test]

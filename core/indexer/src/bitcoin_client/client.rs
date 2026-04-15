@@ -1,6 +1,7 @@
 use base64::prelude::*;
 use bitcoin::Amount;
 use bitcoin::{Block, BlockHash, Transaction, Txid, consensus::encode};
+use moka::future::Cache;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use reqwest::{Client as HttpClient, ClientBuilder, header::HeaderMap};
 use serde::Deserialize;
@@ -18,10 +19,21 @@ use super::{
     types::{GetBlockchainInfoResult, Request, Response},
 };
 
+/// Shared transaction cache. Moka's Cache is internally Arc-ed, so Clone
+/// gives a handle to the same underlying cache.
+pub type TxCache = Cache<Txid, Transaction>;
+
+const TX_CACHE_CAPACITY: u64 = 10_000;
+
+pub fn new_tx_cache() -> TxCache {
+    Cache::builder().max_capacity(TX_CACHE_CAPACITY).build()
+}
+
 #[derive(Clone, Debug)]
 pub struct Client {
     client: HttpClient,
     url: String,
+    tx_cache: TxCache,
 }
 
 const JSONRPC: &str = "2.0";
@@ -69,7 +81,11 @@ impl Client {
             })
             .build()?;
 
-        Ok(Client { client, url })
+        Ok(Client {
+            client,
+            url,
+            tx_cache: new_tx_cache(),
+        })
     }
 
     pub fn new_from_config<C: BitcoinRpcConfig>(config: &C) -> Result<Self, Error> {
@@ -78,6 +94,10 @@ impl Client {
             config.bitcoin_rpc_user().to_owned(),
             config.bitcoin_rpc_password().to_owned(),
         )
+    }
+
+    pub fn tx_cache(&self) -> &TxCache {
+        &self.tx_cache
     }
 
     fn handle_response<T>(response: Response) -> Result<T, Error>
@@ -167,7 +187,11 @@ impl Client {
         let hex: String = self
             .call("getblock", vec![serde_json::to_value(hash)?, 0.into()])
             .await?;
-        Ok(encode::deserialize_hex(&hex)?)
+        let block: Block = encode::deserialize_hex(&hex)?;
+        for tx in &block.txdata {
+            self.tx_cache.insert(tx.compute_txid(), tx.clone()).await;
+        }
+        Ok(block)
     }
 
     pub async fn get_raw_mempool(&self) -> Result<Vec<Txid>, Error> {
@@ -188,31 +212,66 @@ impl Client {
     }
 
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, Error> {
+        if let Some(tx) = self.tx_cache.get(txid).await {
+            return Ok(tx);
+        }
         let hex: String = self
             .call(
                 "getrawtransaction",
                 vec![serde_json::to_value(txid)?, serde_json::to_value(false)?],
             )
             .await?;
-        Ok(encode::deserialize_hex(&hex)?)
+        let tx: Transaction = encode::deserialize_hex(&hex)?;
+        self.tx_cache.insert(*txid, tx.clone()).await;
+        Ok(tx)
     }
 
     pub async fn get_raw_transactions(
         &self,
         txids: &[Txid],
     ) -> Result<Vec<Result<Transaction, Error>>, Error> {
-        let mut calls = vec![];
-        for txid in txids {
-            calls.push((
-                "getrawtransaction".to_owned(),
-                vec![serde_json::to_value(txid)?, serde_json::to_value(false)?],
-            ))
+        // Check cache first, collect misses
+        let mut results: Vec<Option<Result<Transaction, Error>>> = Vec::with_capacity(txids.len());
+        let mut miss_indices = Vec::new();
+        for (i, txid) in txids.iter().enumerate() {
+            if let Some(tx) = self.tx_cache.get(txid).await {
+                results.push(Some(Ok(tx)));
+            } else {
+                results.push(None);
+                miss_indices.push(i);
+            }
         }
-        let results: Vec<Result<String, Error>> = self.batch_call(calls).await?;
-        Ok(results
-            .into_par_iter()
-            .map(|result| result.and_then(|hex| Ok(encode::deserialize_hex::<Transaction>(&hex)?)))
-            .collect())
+
+        if !miss_indices.is_empty() {
+            let mut calls = Vec::with_capacity(miss_indices.len());
+            for &i in &miss_indices {
+                calls.push((
+                    "getrawtransaction".to_owned(),
+                    vec![
+                        serde_json::to_value(txids[i])?,
+                        serde_json::to_value(false)?,
+                    ],
+                ));
+            }
+            let rpc_results: Vec<Result<String, Error>> = self.batch_call(calls).await?;
+            let parsed: Vec<Result<Transaction, Error>> = rpc_results
+                .into_par_iter()
+                .map(|r| r.and_then(|hex| Ok(encode::deserialize_hex::<Transaction>(&hex)?)))
+                .collect();
+
+            for (parsed_result, &orig_idx) in parsed.into_iter().zip(miss_indices.iter()) {
+                if let Ok(ref tx) = parsed_result {
+                    self.tx_cache.insert(txids[orig_idx], tx.clone()).await;
+                }
+                results[orig_idx] = Some(parsed_result);
+            }
+        }
+
+        Ok(results.into_iter().map(|r| r.unwrap()).collect())
+    }
+
+    pub async fn send_raw_transaction(&self, raw_tx: &str) -> Result<String, Error> {
+        self.call("sendrawtransaction", vec![raw_tx.into()]).await
     }
 
     pub async fn test_mempool_accept(
