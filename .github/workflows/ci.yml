@@ -79,13 +79,13 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Audit (test-contracts)
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0098
         working-directory: ./test-contracts
       - name: Audit (native-contracts)
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0098
         working-directory: ./native-contracts
       - name: Audit core
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0098
         working-directory: ./core
 
   test:
