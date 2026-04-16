@@ -47,7 +47,7 @@ pub fn generate_struct(
 
                     let setter = if write {
                         quote! {
-                            pub fn set(&self, key: impl ToString, value: #v_ty) {
+                            pub fn set(&self, key: &#k_ty, value: #v_ty) {
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
                             }
                         }
@@ -63,7 +63,7 @@ pub fn generate_struct(
                         }
 
                         impl #field_model_name {
-                            pub fn get(&self, key: impl ToString) -> #get_return {
+                            pub fn get(&self, key: &#k_ty) -> #get_return {
                                 let base_path = self.base_path.push(key.to_string());
                                 #get_body
                             }

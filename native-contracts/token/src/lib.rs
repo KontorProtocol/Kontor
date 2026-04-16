@@ -88,7 +88,7 @@ impl Guest for Token {
         let amt = proc_context
             .model()
             .ledger()
-            .get(CORE())
+            .get(&CORE())
             .unwrap_or_default();
         if amt > 0u64.try_into()? {
             transfer(
@@ -147,20 +147,22 @@ impl Guest for Token {
     }
 
     fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
-        ctx.model().ledger().get(acc)
+        let holder: Holder = acc.try_into().ok()?;
+        ctx.model().ledger().get(&holder)
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
         ctx.model()
             .ledger()
-            .keys()
+            .keys::<Holder>()
             .filter_map(|acc| {
-                if acc == HolderRef::Burner || acc == HolderRef::Core {
+                let acc_ref: HolderRef = (&acc).into();
+                if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
                     None
                 } else {
                     Some(Balance {
                         amt: ctx.model().ledger().get(&acc).unwrap_or_default(),
-                        acc,
+                        acc: acc_ref,
                     })
                 }
             })

@@ -93,10 +93,10 @@ impl Guest for Staking {
 
         // Reject duplicate ed25519 keys — two validators with the same
         // consensus key would cause conflicts in Malachite.
-        let keys: Vec<String> = model.validators().keys().collect();
+        let keys: Vec<Holder> = model.validators().keys().collect();
         for key in keys {
             if let Some(entry) = model.validators().get(&key)
-                && key != holder.to_string()
+                && key != holder
                 && entry.ed25519_pubkey() == ed25519_pubkey
                 && entry.status() != STATUS_INACTIVE
             {
@@ -109,7 +109,7 @@ impl Guest for Staking {
         // Effects before interactions (CEI pattern)
         let activation_height = ctx.block_height() + ACTIVATION_DELAY;
         model.validators().set(
-            holder.clone(),
+            &holder,
             ValidatorEntry {
                 stake: stake_amount,
                 status: STATUS_PENDING_JOIN,
@@ -228,7 +228,7 @@ impl Guest for Staking {
                 .expect("Failed to mint genesis stake");
             let holder: Holder = v.x_only_pubkey.parse().expect("invalid holder in genesis set");
             model.validators().set(
-                holder,
+                &holder,
                 ValidatorEntry {
                     stake: v.stake,
                     status: STATUS_ACTIVE,
@@ -253,7 +253,7 @@ impl Guest for Staking {
         let mut activated = 0u64;
         let mut deactivated = 0u64;
 
-        let keys: Vec<String> = model.validators().keys().collect();
+        let keys: Vec<Holder> = model.validators().keys().collect();
         for key in keys {
             if let Some(entry) = model.validators().get(&key) {
                 match entry.status() {
@@ -269,10 +269,9 @@ impl Guest for Staking {
                         entry.set_status(STATUS_INACTIVE);
                         model.try_update_total_active_stake(|s| s.sub(stake))?;
                         model.update_active_count(|c| c - 1);
-                        let holder_ref: context::HolderRef = key.parse().expect("invalid holder");
                         token::transfer(
                             ctx.proc_context().contract_signer(),
-                            holder_ref,
+                            key,
                             stake,
                         )?;
                         deactivated += 1;
@@ -291,12 +290,12 @@ impl Guest for Staking {
     fn get_active_set(ctx: &ViewContext) -> Vec<ActiveValidatorInfo> {
         ctx.model()
             .validators()
-            .keys::<String>()
+            .keys::<Holder>()
             .filter_map(|key| {
                 let entry = ctx.model().validators().get(&key)?;
                 if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {
                     Some(ActiveValidatorInfo {
-                        x_only_pubkey: key,
+                        x_only_pubkey: key.to_string(),
                         stake: entry.stake(),
                         ed25519_pubkey: entry.ed25519_pubkey(),
                     })
@@ -308,8 +307,8 @@ impl Guest for Staking {
     }
 
     fn get_validator(ctx: &ViewContext, x_only_pubkey: String) -> Option<ValidatorInfo> {
-        let entry = ctx.model().validators().get(&x_only_pubkey)?;
-        let holder: Holder = x_only_pubkey.parse().expect("invalid holder");
+        let holder: Holder = x_only_pubkey.parse().ok()?;
+        let entry = ctx.model().validators().get(&holder)?;
         Some(make_validator_info(&holder, &entry))
     }
 

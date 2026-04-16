@@ -103,10 +103,10 @@ impl Guest for Filestorage {
         };
 
         // Store the agreement and initialize node tracking
-        model.agreements().set(agreement_id.clone(), agreement);
+        model.agreements().set(&agreement_id, agreement);
         model
             .agreement_nodes()
-            .set(agreement_id.clone(), AgreementNodes::default());
+            .set(&agreement_id, AgreementNodes::default());
 
         // Increment count
         model.update_agreement_count(|c| c + 1);
@@ -172,7 +172,7 @@ impl Guest for Filestorage {
         }
 
         // Add node to agreement (or reactivate if previously left)
-        nodes_state.nodes().set(node_id.clone(), true);
+        nodes_state.nodes().set(&node_id, true);
 
         // Increment node count
         nodes_state.update_node_count(|c| c + 1);
@@ -229,7 +229,7 @@ impl Guest for Filestorage {
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
         // Mark node as inactive (don't delete, just set to false)
-        nodes_state.nodes().set(node_id.clone(), false);
+        nodes_state.nodes().set(&node_id, false);
 
         // Decrement node count
         nodes_state.update_node_count(|c| c.saturating_sub(1));
@@ -462,7 +462,7 @@ impl Guest for Filestorage {
             };
             model
                 .challenges()
-                .set(challenge.challenge_id.clone(), challenge.clone());
+                .set(&challenge.challenge_id, challenge.clone());
 
             new_challenges.push(challenge);
         }
@@ -556,7 +556,7 @@ impl Guest for Filestorage {
 
         model
             .challenges()
-            .set(challenge.challenge_id.clone(), challenge.clone());
+            .set(&challenge.challenge_id, challenge.clone());
 
         Ok(challenge)
     }
@@ -610,7 +610,7 @@ impl Guest for Filestorage {
             let agreement =
                 model
                     .agreements()
-                    .get(challenge.agreement_id())
+                    .get(&challenge.agreement_id())
                     .ok_or(Error::Message(format!(
                         "Agreement not found: {}",
                         challenge.agreement_id()
