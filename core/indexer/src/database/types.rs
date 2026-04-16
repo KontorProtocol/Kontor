@@ -77,6 +77,21 @@ pub struct CheckpointRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct SignerRow {
+    pub signer_id: i64,
+    pub x_only_pubkey: String,
+    pub height: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignerEntry {
+    pub signer_id: i64,
+    pub x_only_pubkey: String,
+    pub bls_pubkey: Option<Vec<u8>>,
+    pub next_nonce: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct BatchQueryResult {
     pub consensus_height: i64,
     pub anchor_height: i64,
