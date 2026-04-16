@@ -11,7 +11,8 @@ use crate::database;
 use crate::retry::{new_backoff_unlimited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
-use crate::runtime::wit::Signer;
+use crate::runtime::kontor::built_in::context::HolderRef;
+use crate::runtime::wit::{Holder, Signer};
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
@@ -268,10 +269,20 @@ async fn process_direct_input(
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
+    let conn = runtime.get_storage_conn();
+    let height = runtime.storage.height;
+    let holder_ref = HolderRef::XOnlyPubkey(input.x_only_pubkey.to_string());
+    let holder = Holder::from_holder_ref(holder_ref, &conn, height)
+        .await
+        .map_err(|e| anyhow::anyhow!("holder resolution failed: {e:?}"))?;
+    let identity = holder
+        .identity
+        .ok_or_else(|| anyhow::anyhow!("expected identity for x_only_pubkey signer"))?;
+
     let metadata = OpMetadata {
         previous_output: input.previous_output,
         input_index: input.input_index,
-        signer: Signer::XOnlyPubKey(input.x_only_pubkey.to_string()),
+        signer_id: identity.signer_id as u64,
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
@@ -377,11 +388,10 @@ async fn process_aggregate_input(
             }
         }
 
-        let signer = Signer::XOnlyPubKey(x_only);
         let metadata = OpMetadata {
             previous_output: input.previous_output,
             input_index: input.input_index,
-            signer: signer.clone(),
+            signer_id,
         };
         let op = op_from_inst(inst.clone(), metadata);
         execute_op(runtime, &op).await?;
@@ -390,18 +400,12 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
-        match runtime.get_or_create_identity(x_only).await {
-            Ok(_) => {}
-            Err(ExecutionError::Deterministic(e)) => {
-                warn!("Failed to register signer for {x_only}: {e}");
-                return Ok(());
-            }
-            Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("get_or_create_identity infrastructure failure"));
-            }
-        }
-    }
+    let identity = database::types::Identity {
+        signer_id: op.metadata().signer_id as i64,
+    };
+    let conn = runtime.get_storage_conn();
+    let x_only_pubkey = identity.x_only_pubkey(&conn).await?;
+    let signer = Signer::XOnlyPubKey(x_only_pubkey);
 
     match op {
         indexer_types::Op::Publish {
@@ -411,7 +415,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             bytes,
         } => {
             runtime.set_gas_limit(*gas_limit);
-            match runtime.publish(&metadata.signer, name, bytes).await {
+            match runtime.publish(&signer, name, bytes).await {
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
@@ -430,7 +434,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
         } => {
             runtime.set_gas_limit(*gas_limit);
             match runtime
-                .execute(Some(&metadata.signer), &(contract.into()), expr)
+                .execute(Some(&signer), &(contract.into()), expr)
                 .await
             {
                 Ok(_) => {}
@@ -443,7 +447,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             }
         }
         indexer_types::Op::Issuance { metadata, .. } => {
-            match runtime.issuance(&metadata.signer).await {
+            match runtime.issuance(&signer).await {
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Issuance operation failed: {e:#}");
@@ -461,7 +465,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
         } => {
             match runtime
                 .register_bls_key(
-                    &metadata.signer,
+                    &signer,
                     bls_pubkey.as_slice(),
                     schnorr_sig.as_slice(),
                     bls_sig.as_slice(),

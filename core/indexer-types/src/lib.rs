@@ -357,7 +357,8 @@ pub struct OpMetadata {
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub signer: Signer,
+    #[ts(type = "number")]
+    pub signer_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
