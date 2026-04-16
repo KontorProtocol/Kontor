@@ -272,34 +272,6 @@ impl Runtime {
         })?)
     }
 
-    fn _holder_ref_to_key(holder_ref: &HolderRef) -> Option<String> {
-        match holder_ref {
-            HolderRef::XOnlyPubkey(s) => Some(s.clone()),
-            HolderRef::ContractId(s) => Some(s.clone()),
-            HolderRef::SignerId(_) => None,
-            HolderRef::Core => Some("core".to_string()),
-            HolderRef::Burner => Some("burn".to_string()),
-            HolderRef::Utxo(out_point) => {
-                Some(format!("{}:{}", out_point.txid, out_point.vout))
-            }
-        }
-    }
-
-    async fn _resolve_holder_key(&self, holder_ref: &HolderRef) -> Result<String> {
-        match holder_ref {
-            HolderRef::SignerId(id) => {
-                let conn = self.get_storage_conn();
-                let entry = database::queries::get_signer_entry_by_id(&conn, *id as i64)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("signer lookup failed: {e}"))?
-                    .ok_or_else(|| anyhow::anyhow!("unknown signer_id {id}"))?;
-                Ok(entry.x_only_pubkey)
-            }
-            other => Ok(Self::_holder_ref_to_key(other)
-                .expect("non-SignerId variants always have a key")),
-        }
-    }
-
     fn _validate_holder_ref(holder_ref: &HolderRef) -> Result<(), WitError> {
         match holder_ref {
             HolderRef::XOnlyPubkey(s) => {
@@ -523,11 +495,9 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Fuel::HolderKey
             .consume(accessor, runtime.gauge.as_ref())
             .await?;
-        let holder_ref = {
-            let table = runtime.table.lock().await;
-            table.get(&self_)?.holder_ref.clone()
-        };
-        runtime._resolve_holder_key(&holder_ref).await
+        let table = runtime.table.lock().await;
+        let holder = table.get(&self_)?;
+        Ok(holder.holder_ref.to_string())
     }
 
     async fn from_ref<T>(
