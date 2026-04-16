@@ -27,8 +27,8 @@ use blst::min_sig::{
 use indexer_types::{Inst, Insts};
 use std::collections::HashMap;
 
+use crate::database::queries::get_signer_entry_by_id;
 use crate::runtime::Runtime;
-use crate::runtime::registry::api::get_entry_by_id;
 
 // ---------------------------------------------------------------------------
 // Protocol constants
@@ -168,8 +168,10 @@ impl SignerResolver {
             return Ok(*pk);
         }
 
-        let entry = get_entry_by_id(runtime, signer_id).await?;
-        let entry = entry.ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+        let conn = runtime.get_storage_conn();
+        let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+            .await?
+            .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
         self.signer_map
             .insert(signer_id, entry.x_only_pubkey.clone());
         let raw_bytes = entry

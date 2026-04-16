@@ -1291,13 +1291,13 @@ pub async fn advance_nonce(
         .ok_or_else(|| Error::InvalidData(format!("no nonce for signer_id {signer_id}")))?
         .get(0)?;
 
-    if stored_nonce != caller_nonce {
+    if caller_nonce < stored_nonce {
         return Err(Error::InvalidData(format!(
-            "nonce mismatch for signer_id {signer_id}: got {caller_nonce}, expected {stored_nonce}"
+            "nonce too low for signer_id {signer_id}: got {caller_nonce}, expected >= {stored_nonce}"
         )));
     }
 
-    let next_nonce = stored_nonce + 1;
+    let next_nonce = caller_nonce + 1;
     conn.execute(
         "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
         params![signer_id, next_nonce, height],
@@ -3619,7 +3619,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_advance_nonce_mismatch() -> Result<()> {
+    async fn test_advance_nonce_gap() -> Result<()> {
         let (_, writer, _temp_dir) = new_test_db().await?;
         let conn = writer.connection();
         setup_block(&conn, 1).await?;
@@ -3627,7 +3627,24 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let row = ensure_signer(&conn, pubkey, 1).await?;
 
-        let result = advance_nonce(&conn, row.signer_id, 5, 1).await;
+        let next = advance_nonce(&conn, row.signer_id, 5, 1).await?;
+        assert_eq!(next, 6);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advance_nonce_replay_rejected() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = ensure_signer(&conn, pubkey, 1).await?;
+
+        advance_nonce(&conn, row.signer_id, 0, 1).await?;
+        let result = advance_nonce(&conn, row.signer_id, 0, 2).await;
         assert!(result.is_err());
 
         Ok(())

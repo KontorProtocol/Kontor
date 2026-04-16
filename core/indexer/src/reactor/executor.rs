@@ -305,7 +305,8 @@ async fn process_aggregate_input(
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
     use crate::block::op_from_inst;
-    use crate::runtime::{registry, wit::Signer};
+    use crate::database;
+    use crate::runtime::wit::Signer;
     use indexer_types::{Inst, OpMetadata};
 
     let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
@@ -360,22 +361,23 @@ async fn process_aggregate_input(
                     continue;
                 }
             };
-            let nonce_result = registry::api::advance_nonce(
-                runtime,
-                &Signer::Core(Box::new(Signer::Nobody)),
-                signer_id,
-                nonce_val,
+            let conn = runtime.get_storage_conn();
+            let height = runtime.storage.height;
+            match database::queries::advance_nonce(
+                &conn,
+                signer_id as i64,
+                nonce_val as i64,
+                height,
             )
-            .await;
-            match nonce_result {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    warn!("aggregate nonce check failed for signer {signer_id}: {e:?}");
+            .await
+            {
+                Ok(_) => {}
+                Err(database::queries::Error::InvalidData(msg)) => {
+                    warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
                     continue;
                 }
                 Err(e) => {
-                    warn!("aggregate nonce advance error for signer {signer_id}: {e}");
-                    continue;
+                    anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
                 }
             }
         }

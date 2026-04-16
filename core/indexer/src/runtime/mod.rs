@@ -100,6 +100,7 @@ use wasmtime::{
 };
 
 use crate::bls::RegistrationProof;
+use crate::database;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
@@ -379,14 +380,12 @@ impl Runtime {
     }
 
     pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64, ExecutionError> {
-        self.set_gas_limit(self.gas_limit_for_non_procs);
-        let entry = registry::api::ensure_signer(
-            self,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            x_only_pubkey,
-        )
-        .await?;
-        Ok(entry.signer_id)
+        let conn = self.get_storage_conn();
+        let height = self.storage.height;
+        let row = database::queries::ensure_signer(&conn, x_only_pubkey, height)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        Ok(row.signer_id as u64)
     }
 
     pub async fn register_bls_key(
@@ -396,8 +395,6 @@ impl Runtime {
         schnorr_sig: &[u8],
         bls_sig: &[u8],
     ) -> Result<(), ExecutionError> {
-        self.set_gas_limit(self.gas_limit_for_non_procs);
-
         let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
             return Err(ExecutionError::Deterministic(anyhow!(
                 "RegisterBlsKey requires an XOnlyPubKey signer"
@@ -405,9 +402,11 @@ impl Runtime {
         };
         let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
-        let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        let existing = registry::api::get_entry(self, &x_only_pk.to_string()).await?;
+        let conn = self.get_storage_conn();
+        let existing = database::queries::get_signer_entry(&conn, &x_only_pk.to_string())
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         if let Some(entry) = existing {
             if entry.bls_pubkey.as_deref() == Some(bls_pubkey) {
                 return Ok(());
@@ -441,12 +440,23 @@ impl Runtime {
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
 
-        registry::api::register_bls_key(
-            self,
-            &Signer::Core(Box::new(canonical_signer)),
-            proof.bls_pubkey.to_vec(),
+        let signer_row = database::queries::ensure_signer(
+            &conn,
+            &x_only_pk.to_string(),
+            self.storage.height,
         )
-        .await?;
+        .await
+        .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+
+        database::queries::register_bls_key(
+            &conn,
+            signer_row.signer_id,
+            &proof.bls_pubkey,
+            self.storage.height,
+        )
+        .await
+        .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+
         Ok(())
     }
 

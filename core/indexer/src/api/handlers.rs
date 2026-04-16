@@ -23,10 +23,8 @@ use crate::{
         },
         types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
-    runtime::{
-        ContractAddress,
-        registry::api::{get_entry, get_entry_by_id},
-    },
+    database::queries::{get_signer_entry, get_signer_entry_by_id},
+    runtime::ContractAddress,
 };
 
 use super::{
@@ -335,22 +333,23 @@ pub async fn get_registry_entry(
     }
     let mut runtime = env.runtime_pool.get().await?;
 
+    let conn = runtime.get_storage_conn();
     let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
-        get_entry_by_id(&mut runtime, signer_id)
+        get_signer_entry_by_id(&conn, signer_id as i64)
             .await
             .map_err(|e| HttpError::BadRequest(e.to_string()))?
     } else {
-        get_entry(&mut runtime, &identifier)
+        get_signer_entry(&conn, &identifier)
             .await
             .map_err(|e| HttpError::BadRequest(e.to_string()))?
     };
 
     match entry {
         Some(e) => Ok(RegistryEntryResponse {
-            signer_id: e.signer_id,
+            signer_id: e.signer_id as u64,
             x_only_pubkey: e.x_only_pubkey,
             bls_pubkey: e.bls_pubkey,
-            next_nonce: e.next_nonce,
+            next_nonce: e.next_nonce as u64,
         }
         .into()),
         None => {
