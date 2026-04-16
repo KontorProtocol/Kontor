@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
 
 CREATE TABLE IF NOT EXISTS signers (
-  signer_id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY,
   x_only_pubkey TEXT NOT NULL UNIQUE,
   height INTEGER NOT NULL,
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
@@ -107,20 +107,18 @@ CREATE TABLE IF NOT EXISTS bls_keys (
   bls_pubkey BLOB NOT NULL,
   height INTEGER NOT NULL,
   PRIMARY KEY (signer_id, height),
-  FOREIGN KEY (signer_id) REFERENCES signers (signer_id),
+  FOREIGN KEY (signer_id) REFERENCES signers (id),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS nonces (
-  id INTEGER PRIMARY KEY,
   signer_id INTEGER NOT NULL,
   next_nonce INTEGER NOT NULL,
   height INTEGER NOT NULL,
-  FOREIGN KEY (signer_id) REFERENCES signers (signer_id),
+  PRIMARY KEY (signer_id, height),
+  FOREIGN KEY (signer_id) REFERENCES signers (id),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS idx_nonces_signer_latest ON nonces (signer_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
   txid TEXT NOT NULL PRIMARY KEY,

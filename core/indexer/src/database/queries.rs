@@ -1239,7 +1239,7 @@ pub async fn ensure_signer(
 ) -> Result<SignerRow, Error> {
     let mut rows = conn
         .query(
-            "SELECT signer_id, x_only_pubkey, height FROM signers WHERE x_only_pubkey = ?",
+            "SELECT id, x_only_pubkey, height FROM signers WHERE x_only_pubkey = ?",
             params![x_only_pubkey],
         )
         .await?;
@@ -1280,7 +1280,7 @@ pub async fn advance_nonce(
 ) -> Result<i64, Error> {
     let mut rows = conn
         .query(
-            "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
             params![signer_id],
         )
         .await?;
@@ -1299,7 +1299,7 @@ pub async fn advance_nonce(
 
     let next_nonce = caller_nonce + 1;
     conn.execute(
-        "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
+        "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
         params![signer_id, next_nonce, height],
     )
     .await?;
@@ -1328,7 +1328,7 @@ pub async fn get_signer_entry(
     let mut rows = conn
         .query(
             r#"SELECT
-                s.signer_id,
+                s.id,
                 s.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
@@ -1336,15 +1336,15 @@ pub async fn get_signer_entry(
             LEFT JOIN (
                 SELECT signer_id, bls_pubkey
                 FROM bls_keys
-                WHERE signer_id = (SELECT signer_id FROM signers WHERE x_only_pubkey = ?)
+                WHERE signer_id = (SELECT id FROM signers WHERE x_only_pubkey = ?)
                 ORDER BY height DESC LIMIT 1
-            ) b ON b.signer_id = s.signer_id
+            ) b ON b.signer_id = s.id
             LEFT JOIN (
                 SELECT signer_id, next_nonce
                 FROM nonces
-                WHERE signer_id = (SELECT signer_id FROM signers WHERE x_only_pubkey = ?)
-                ORDER BY id DESC LIMIT 1
-            ) n ON n.signer_id = s.signer_id
+                WHERE signer_id = (SELECT id FROM signers WHERE x_only_pubkey = ?)
+                ORDER BY height DESC LIMIT 1
+            ) n ON n.signer_id = s.id
             WHERE s.x_only_pubkey = ?"#,
             params![x_only_pubkey, x_only_pubkey, x_only_pubkey],
         )
@@ -1371,7 +1371,7 @@ pub async fn get_signer_entry_by_id(
     let mut rows = conn
         .query(
             r#"SELECT
-                s.signer_id,
+                s.id,
                 s.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
@@ -1380,13 +1380,13 @@ pub async fn get_signer_entry_by_id(
                 SELECT signer_id, bls_pubkey
                 FROM bls_keys WHERE signer_id = ?
                 ORDER BY height DESC LIMIT 1
-            ) b ON b.signer_id = s.signer_id
+            ) b ON b.signer_id = s.id
             LEFT JOIN (
                 SELECT signer_id, next_nonce
                 FROM nonces WHERE signer_id = ?
-                ORDER BY id DESC LIMIT 1
-            ) n ON n.signer_id = s.signer_id
-            WHERE s.signer_id = ?"#,
+                ORDER BY height DESC LIMIT 1
+            ) n ON n.signer_id = s.id
+            WHERE s.id = ?"#,
             params![signer_id, signer_id, signer_id],
         )
         .await?;
