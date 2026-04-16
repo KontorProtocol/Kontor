@@ -3,7 +3,61 @@ use std::str::FromStr;
 
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
-pub use indexer_types::Signer;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Signer {
+    Core(Box<Signer>),
+    XOnlyPubKey(String),
+    ContractId { id: i64, id_str: String },
+    Nobody,
+}
+
+impl Signer {
+    pub fn new_contract_id(id: i64) -> Self {
+        Self::ContractId {
+            id,
+            id_str: format!("__cid__{}", id),
+        }
+    }
+
+    pub fn is_core(&self) -> bool {
+        matches!(self, Signer::Core(_))
+    }
+}
+
+impl core::ops::Deref for Signer {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match self {
+            Self::Nobody => "nobody",
+            Self::Core(_) => "core",
+            Self::XOnlyPubKey(s) => s,
+            Self::ContractId { id_str, .. } => id_str,
+        }
+    }
+}
+
+impl core::fmt::Display for Signer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Nobody => write!(f, "nobody"),
+            Self::Core(_) => write!(f, "core"),
+            Self::XOnlyPubKey(s) => write!(f, "{s}"),
+            Self::ContractId { id_str, .. } => write!(f, "{id_str}"),
+        }
+    }
+}
+
+impl From<&Signer> for HolderRef {
+    fn from(signer: &Signer) -> Self {
+        match signer {
+            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
+            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => HolderRef::Core,
+        }
+    }
+}
 
 use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
 use crate::runtime::kontor::built_in::context::HolderRef;
