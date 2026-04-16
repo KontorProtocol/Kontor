@@ -1,7 +1,4 @@
-use std::str::FromStr;
-
 use anyhow::Result;
-use bitcoin::{Txid, XOnlyPublicKey};
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
@@ -272,36 +269,6 @@ impl Runtime {
         })?)
     }
 
-    fn _validate_holder_ref(holder_ref: &HolderRef) -> Result<(), WitError> {
-        match holder_ref {
-            HolderRef::XOnlyPubkey(s) => {
-                XOnlyPublicKey::from_str(s).map_err(|e| {
-                    WitError::Validation(format!("invalid x-only-pubkey: {e}"))
-                })?;
-            }
-            HolderRef::ContractId(s) => {
-                if !s.starts_with("__cid__") {
-                    return Err(WitError::Validation(
-                        "contract-id must start with __cid__".to_string(),
-                    ));
-                }
-                if s[7..].parse::<i64>().is_err() {
-                    return Err(WitError::Validation(
-                        "contract-id must end with a valid integer".to_string(),
-                    ));
-                }
-            }
-            HolderRef::SignerId(_) => {}
-            HolderRef::Utxo(out_point) => {
-                Txid::from_str(&out_point.txid).map_err(|e| {
-                    WitError::Validation(format!("invalid txid: {e}"))
-                })?;
-            }
-            HolderRef::Core | HolderRef::Burner => {}
-        }
-        Ok(())
-    }
-
     fn _signer_to_holder_ref(signer: &Signer) -> HolderRef {
         match signer {
             Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
@@ -323,20 +290,14 @@ impl Runtime {
             let table = self.table.lock().await;
             table.get(&self_)?.clone()
         };
-        let (holder_ref, identity) = match &signer {
-            Signer::XOnlyPubKey(s) => {
-                let conn = self.get_storage_conn();
-                let height = self.storage.height;
-                let id = database::queries::get_or_create_identity(&conn, s, height).await?;
-                (HolderRef::SignerId(id.signer_id as u64), Some(id))
-            }
-            other => (Self::_signer_to_holder_ref(other), None),
-        };
+        let holder_ref = Self::_signer_to_holder_ref(&signer);
+        let conn = self.get_storage_conn();
+        let height = self.storage.height;
+        let holder = Holder::from_holder_ref(holder_ref, &conn, height)
+            .await
+            .map_err(|e| anyhow::anyhow!("holder resolution failed: {e:?}"))?;
         let mut table = self.table.lock().await;
-        Ok(table.push(Holder {
-            holder_ref,
-            identity,
-        })?)
+        Ok(table.push(holder)?)
     }
 
     pub(crate) async fn _get_contract_address<T>(
@@ -511,31 +472,14 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Fuel::HolderFromRef
             .consume(accessor, runtime.gauge.as_ref())
             .await?;
-        if let Err(e) = Self::_validate_holder_ref(&ref_) {
-            return Ok(Err(e));
-        }
-        let (resolved, identity) = match &ref_ {
-            HolderRef::XOnlyPubkey(s) => {
-                let conn = runtime.get_storage_conn();
-                let height = runtime.storage.height;
-                let id = database::queries::get_or_create_identity(&conn, s, height)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("get_or_create_identity failed: {e}"))?;
-                (HolderRef::SignerId(id.signer_id as u64), Some(id))
-            }
-            HolderRef::SignerId(id) => {
-                let id = database::types::Identity {
-                    signer_id: *id as i64,
-                };
-                (ref_.clone(), Some(id))
-            }
-            other => (other.clone(), None),
+        let conn = runtime.get_storage_conn();
+        let height = runtime.storage.height;
+        let holder = match Holder::from_holder_ref(ref_, &conn, height).await {
+            Ok(h) => h,
+            Err(e) => return Ok(Err(e)),
         };
         let mut table = runtime.table.lock().await;
-        Ok(Ok(table.push(Holder {
-            holder_ref: resolved,
-            identity,
-        })?))
+        Ok(Ok(table.push(holder)?))
     }
 
     async fn as_ref<T>(

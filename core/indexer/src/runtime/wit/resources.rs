@@ -1,9 +1,11 @@
 use std::pin::Pin;
+use std::str::FromStr;
 
+use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 pub use indexer_types::Signer;
 
-use crate::database::types::{FileMetadataRow, bytes_to_field_element};
+use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
@@ -84,6 +86,65 @@ impl HasContractId for CoreContext {
 pub struct Holder {
     pub holder_ref: super::kontor::built_in::context::HolderRef,
     pub identity: Option<crate::database::types::Identity>,
+}
+
+impl Holder {
+    pub async fn from_holder_ref(
+        holder_ref: HolderRef,
+        conn: &libsql::Connection,
+        height: i64,
+    ) -> Result<Self, Error> {
+        match &holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                XOnlyPublicKey::from_str(s).map_err(|e| {
+                    Error::Validation(format!("invalid x-only-pubkey: {e}"))
+                })?;
+            }
+            HolderRef::ContractId(s) => {
+                if !s.starts_with("__cid__") {
+                    return Err(Error::Validation(
+                        "contract-id must start with __cid__".to_string(),
+                    ));
+                }
+                if s[7..].parse::<i64>().is_err() {
+                    return Err(Error::Validation(
+                        "contract-id must end with a valid integer".to_string(),
+                    ));
+                }
+            }
+            HolderRef::SignerId(_) => {}
+            HolderRef::Utxo(out_point) => {
+                Txid::from_str(&out_point.txid).map_err(|e| {
+                    Error::Validation(format!("invalid txid: {e}"))
+                })?;
+            }
+            HolderRef::Core | HolderRef::Burner => {}
+        }
+
+        let (resolved, identity) = match &holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                let identity =
+                    crate::database::queries::get_or_create_identity(conn, s, height)
+                        .await
+                        .map_err(|e| {
+                            Error::Validation(format!("identity resolution failed: {e}"))
+                        })?;
+                (HolderRef::SignerId(identity.signer_id as u64), Some(identity))
+            }
+            HolderRef::SignerId(id) => {
+                let identity = Identity {
+                    signer_id: *id as i64,
+                };
+                (holder_ref, Some(identity))
+            }
+            _ => (holder_ref, None),
+        };
+
+        Ok(Self {
+            holder_ref: resolved,
+            identity,
+        })
+    }
 }
 
 impl From<&Signer> for HolderRef {
