@@ -1,4 +1,7 @@
+use std::str::FromStr;
+
 use anyhow::Result;
+use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
@@ -273,7 +276,7 @@ impl Runtime {
             HolderRef::ContractId(s) => s.clone(),
             HolderRef::Core => "core".to_string(),
             HolderRef::Burner => "burn".to_string(),
-            HolderRef::Utxo(s) => s.clone(),
+            HolderRef::Utxo(out_point) => format!("{}:{}", out_point.txid, out_point.vout),
         }
     }
 
@@ -298,12 +301,10 @@ impl Runtime {
                     ));
                 }
             }
-            HolderRef::Utxo(s) => {
-                if !s.contains(':') {
-                    return Err(WitError::Validation(
-                        "utxo must be in txid:vout format".to_string(),
-                    ));
-                }
+            HolderRef::Utxo(out_point) => {
+                Txid::from_str(&out_point.txid).map_err(|e| {
+                    WitError::Validation(format!("invalid txid: {e}"))
+                })?;
             }
             HolderRef::Core | HolderRef::Burner => {}
         }
@@ -551,6 +552,19 @@ impl built_in::context::HostSignerWithStore for Runtime {
             .with(|mut access| access.get().clone())
             ._signer_as_holder(accessor, self_)
             .await
+    }
+
+    async fn as_ref<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<HolderRef> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::HolderAsRef
+            .consume(accessor, runtime.gauge.as_ref())
+            .await?;
+        let table = runtime.table.lock().await;
+        let signer = table.get(&self_)?;
+        Ok(Self::_signer_to_holder_ref(signer))
     }
 }
 

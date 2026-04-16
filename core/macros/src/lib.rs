@@ -7,6 +7,7 @@ use syn::{Data, DeriveInput, Error, ItemFn, parse_macro_input, spanned::Spanned}
 
 mod contract;
 mod contract_address;
+mod holder_ref;
 mod impls;
 mod import;
 mod interface;
@@ -285,4 +286,9 @@ pub fn regtest_tests(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn contract_address(input: TokenStream) -> TokenStream {
     contract_address::generate(input)
+}
+
+#[proc_macro]
+pub fn holder_ref(input: TokenStream) -> TokenStream {
+    holder_ref::generate(input)
 }

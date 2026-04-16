@@ -1,7 +1,6 @@
 #![no_std]
 contract!(name = "staking");
 
-use context::Holder;
 use stdlib::*;
 
 import!(
@@ -122,7 +121,7 @@ impl Guest for Staking {
 
         token::transfer(
             ctx.signer(),
-            &ctx.contract_signer().to_string(),
+            ctx.contract_signer().as_holder().as_ref(),
             stake_amount,
         )?;
 
@@ -169,7 +168,7 @@ impl Guest for Staking {
             model.try_update_total_active_stake(|s| s.add(amount))?;
         }
 
-        token::transfer(ctx.signer(), &ctx.contract_signer().to_string(), amount)?;
+        token::transfer(ctx.signer(), ctx.contract_signer().as_holder().as_ref(), amount)?;
 
         Ok(make_validator_info(&holder, &entry))
     }
@@ -194,7 +193,7 @@ impl Guest for Staking {
                 let stake = entry.stake();
                 entry.set_stake(0u64.try_into().unwrap());
                 entry.set_status(STATUS_INACTIVE);
-                token::transfer(ctx.contract_signer(), &holder.to_string(), stake)?;
+                token::transfer(ctx.contract_signer(), holder.as_ref(), stake)?;
             }
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
         }
@@ -223,9 +222,9 @@ impl Guest for Staking {
                 == validators.len(),
             "duplicate ed25519 pubkey in genesis set"
         );
-        let staking_address = ctx.proc_context().contract_signer().to_string();
+        let staking_ref = ctx.proc_context().contract_signer().as_holder().as_ref();
         for v in &validators {
-            token::issue_to(ctx.core_signer(), &staking_address, v.stake)
+            token::issue_to(ctx.core_signer(), staking_ref.clone(), v.stake)
                 .expect("Failed to mint genesis stake");
             let holder: Holder = v.x_only_pubkey.parse().expect("invalid holder in genesis set");
             model.validators().set(
@@ -270,9 +269,10 @@ impl Guest for Staking {
                         entry.set_status(STATUS_INACTIVE);
                         model.try_update_total_active_stake(|s| s.sub(stake))?;
                         model.update_active_count(|c| c - 1);
+                        let holder_ref: context::HolderRef = key.parse().expect("invalid holder");
                         token::transfer(
                             ctx.proc_context().contract_signer(),
-                            &key,
+                            holder_ref,
                             stake,
                         )?;
                         deactivated += 1;

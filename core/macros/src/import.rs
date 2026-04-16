@@ -144,6 +144,7 @@ pub fn import(
     let supers = if test {
         quote! {
             use super::ContractAddress;
+            use super::HolderRef;
             use super::RawFileDescriptor;
             use super::Error;
             use super::AnyhowError;
@@ -155,6 +156,7 @@ pub fn import(
     } else {
         quote! {
             use super::context;
+            use super::context::HolderRef;
             use super::foreign;
             use super::foreign::ContractAddress;
             use super::file_registry::RawFileDescriptor;
@@ -243,6 +245,16 @@ fn make_call_expr(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
                         }
                     }
                 }
+                Type::Id(id)
+                    if resolve.types[*id]
+                        .name
+                        .as_deref()
+                        .is_some_and(|n| n == "holder-ref") =>
+                {
+                    quote! {
+                        stdlib::to_wave_expr(Into::<HolderRef>::into(#param_name))
+                    }
+                }
                 _ => quote! {
                     stdlib::to_wave_expr(#param_name)
                 },
@@ -291,6 +303,15 @@ fn make_fn_name_parse_return_expr(export: &Function) -> Ident {
 pub fn generate_wave_functions(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
     let mut params = make_params(resolve, export)?;
     params.remove(0); // remove context parameter
+    for (i, param) in export.params.iter().skip(1).enumerate() {
+        if let Type::Id(id) = &param.ty {
+            let ty_def = &resolve.types[*id];
+            if ty_def.name.as_deref() == Some("holder-ref") {
+                let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+                params[i] = quote! { #param_name: impl Into<HolderRef> };
+            }
+        }
+    }
     let fn_name_call_expr = make_fn_name_call_expr(export);
     let call_expr_body = make_call_expr(resolve, export)?;
     let fn_name_parse_return_expr = make_fn_name_parse_return_expr(export);
@@ -316,6 +337,20 @@ pub fn generate_functions(
 ) -> Result<TokenStream> {
     let fn_name = make_fn_ident(export);
     let mut params = make_params(resolve, export)?;
+
+    if !public {
+        for (i, param) in export.params.iter().enumerate() {
+            if let Type::Id(id) = &param.ty {
+                let ty_def = &resolve.types[*id];
+                if ty_def.name.as_deref() == Some("holder-ref") {
+                    let param_name =
+                        Ident::new(&param.name.to_snake_case(), Span::call_site());
+                    params[i] = quote! { #param_name: impl Into<HolderRef> };
+                }
+            }
+        }
+    }
+
     let call_expr_param_names = export
         .params
         .iter()
@@ -415,6 +450,14 @@ pub fn generate_functions(
             let mut params = Vec::new();
             for param in export.params.iter().skip(1) {
                 let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+                if let Type::Id(id) = &param.ty {
+                    let ty_def = &resolve.types[*id];
+                    if ty_def.name.as_deref() == Some("holder-ref")
+                    {
+                        params.push(quote! { #param_name: impl Into<HolderRef> });
+                        continue;
+                    }
+                }
                 let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
                 params.push(quote! { #param_name: #param_ty });
             }
@@ -430,6 +473,14 @@ pub fn generate_functions(
             let mut params = vec![quote! { contract_address_: &ContractAddress }];
             for param in export.params.iter().skip(1) {
                 let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
+                if let Type::Id(id) = &param.ty {
+                    let ty_def = &resolve.types[*id];
+                    if ty_def.name.as_deref() == Some("holder-ref")
+                    {
+                        params.push(quote! { #param_name: impl Into<HolderRef> });
+                        continue;
+                    }
+                }
                 let param_ty = utils::wit_type_to_rust_type(resolve, &param.ty, true)?;
                 params.push(quote! { #param_name: #param_ty });
             }

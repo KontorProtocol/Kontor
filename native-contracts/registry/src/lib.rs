@@ -1,7 +1,6 @@
 #![no_std]
 contract!(name = "registry");
 
-use context::Holder;
 use stdlib::*;
 
 #[derive(Clone, Default, Storage)]

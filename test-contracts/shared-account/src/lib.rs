@@ -1,7 +1,6 @@
 #![no_std]
 contract!(name = "shared-account");
 
-use context::Holder;
 use stdlib::*;
 
 interface!(name = "token", path = "../test-token/wit");

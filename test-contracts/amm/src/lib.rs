@@ -1,7 +1,6 @@
 #![no_std]
 contract!(name = "amm");
 
-use context::Holder;
 use stdlib::*;
 
 interface!(name = "token_dyn", path = "../test-token/wit");

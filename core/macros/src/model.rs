@@ -47,8 +47,7 @@ pub fn generate_struct(
 
                     let setter = if write {
                         quote! {
-                            pub fn set(&self, key: impl Into<#k_ty>, value: #v_ty) {
-                                let key: #k_ty = key.into();
+                            pub fn set(&self, key: impl ToString, value: #v_ty) {
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
                             }
                         }

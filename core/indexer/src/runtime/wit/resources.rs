@@ -4,6 +4,7 @@ use futures_util::Stream;
 pub use indexer_types::Signer;
 
 use crate::database::types::{FileMetadataRow, bytes_to_field_element};
+use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
@@ -82,6 +83,17 @@ impl HasContractId for CoreContext {
 
 pub struct Holder {
     pub holder_ref: super::kontor::built_in::context::HolderRef,
+}
+
+impl From<&Signer> for HolderRef {
+    fn from(signer: &Signer) -> Self {
+        match signer {
+            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
+            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => HolderRef::Core,
+        }
+    }
 }
 
 pub struct Transaction {}

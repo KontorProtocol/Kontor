@@ -63,8 +63,13 @@ pub fn generate(config: Config) -> TokenStream {
                         HolderRef::Burner
                     } else if s.starts_with("__cid__") {
                         HolderRef::ContractId(s.to_string())
-                    } else if s.contains(':') {
-                        HolderRef::Utxo(s.to_string())
+                    } else if let Some((txid, vout)) = s.rsplit_once(':') {
+                        let vout = vout.parse::<u64>()
+                            .map_err(|e| alloc::format!("invalid vout: {e}"))?;
+                        HolderRef::Utxo(kontor::built_in::context::OutPoint {
+                            txid: txid.to_string(),
+                            vout,
+                        })
                     } else {
                         HolderRef::XOnlyPubkey(s.to_string())
                     };
@@ -74,9 +79,88 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             #[automatically_derived]
+            impl core::str::FromStr for kontor::built_in::context::HolderRef {
+                type Err = alloc::string::String;
+
+                fn from_str(s: &str) -> Result<Self, Self::Err> {
+                    use kontor::built_in::context::HolderRef;
+
+                    Ok(if s == "core" {
+                        HolderRef::Core
+                    } else if s == "burn" {
+                        HolderRef::Burner
+                    } else if s.starts_with("__cid__") {
+                        HolderRef::ContractId(s.to_string())
+                    } else if let Some((txid, vout)) = s.rsplit_once(':') {
+                        let vout = vout.parse::<u64>()
+                            .map_err(|e| alloc::format!("invalid vout: {e}"))?;
+                        HolderRef::Utxo(kontor::built_in::context::OutPoint {
+                            txid: txid.to_string(),
+                            vout,
+                        })
+                    } else {
+                        HolderRef::XOnlyPubkey(s.to_string())
+                    })
+                }
+            }
+
+            #[automatically_derived]
+            impl TryFrom<kontor::built_in::context::HolderRef> for kontor::built_in::context::Holder {
+                type Error = error::Error;
+
+                fn try_from(holder_ref: kontor::built_in::context::HolderRef) -> Result<Self, Self::Error> {
+                    kontor::built_in::context::Holder::from_ref(&holder_ref)
+                }
+            }
+
+            #[automatically_derived]
+            impl TryFrom<&kontor::built_in::context::HolderRef> for kontor::built_in::context::Holder {
+                type Error = error::Error;
+
+                fn try_from(holder_ref: &kontor::built_in::context::HolderRef) -> Result<Self, Self::Error> {
+                    kontor::built_in::context::Holder::from_ref(holder_ref)
+                }
+            }
+
+            #[automatically_derived]
             impl From<&kontor::built_in::context::Signer> for kontor::built_in::context::Holder {
                 fn from(signer: &kontor::built_in::context::Signer) -> Self {
                     signer.as_holder()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Signer> for kontor::built_in::context::Holder {
+                fn from(signer: kontor::built_in::context::Signer) -> Self {
+                    signer.as_holder()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<&kontor::built_in::context::Signer> for kontor::built_in::context::HolderRef {
+                fn from(signer: &kontor::built_in::context::Signer) -> Self {
+                    signer.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Signer> for kontor::built_in::context::HolderRef {
+                fn from(signer: kontor::built_in::context::Signer) -> Self {
+                    signer.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<&kontor::built_in::context::Holder> for kontor::built_in::context::HolderRef {
+                fn from(holder: &kontor::built_in::context::Holder) -> Self {
+                    holder.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Holder> for kontor::built_in::context::HolderRef {
+                fn from(holder: kontor::built_in::context::Holder) -> Self {
+                    holder.as_ref()
                 }
             }
         }
@@ -84,6 +168,7 @@ pub fn generate(config: Config) -> TokenStream {
 
     quote! {
         contract_address!(kontor::built_in::foreign::ContractAddress);
+        holder_ref!(kontor::built_in::context::HolderRef);
 
         #signer_and_holder_impls
 

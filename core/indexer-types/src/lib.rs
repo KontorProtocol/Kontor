@@ -6,7 +6,7 @@ use bitcoin::{
 };
 use bon::Builder;
 use indexmap::IndexMap;
-use macros::contract_address;
+use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
@@ -270,6 +270,66 @@ impl core::fmt::Display for Signer {
             Self::Core(_) => write!(f, "core"),
             Self::XOnlyPubKey(s) => write!(f, "{s}"),
             Self::ContractId { id_str, .. } => write!(f, "{id_str}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct UtxoRef {
+    pub txid: String,
+    pub vout: u64,
+}
+
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum HolderRef {
+    XOnlyPubkey(String),
+    ContractId(String),
+    Core,
+    Burner,
+    Utxo(UtxoRef),
+}
+
+holder_ref!(HolderRef);
+
+impl core::fmt::Display for UtxoRef {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}", self.txid, self.vout)
+    }
+}
+
+impl core::str::FromStr for HolderRef {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(if s == "core" {
+            Self::Core
+        } else if s == "burn" {
+            Self::Burner
+        } else if s.starts_with("__cid__") {
+            Self::ContractId(s.to_string())
+        } else if let Some((txid, vout)) = s.rsplit_once(':') {
+            let vout = vout
+                .parse::<u64>()
+                .map_err(|e| alloc::format!("invalid vout: {e}"))?;
+            Self::Utxo(UtxoRef {
+                txid: txid.to_string(),
+                vout,
+            })
+        } else {
+            Self::XOnlyPubkey(s.to_string())
+        })
+    }
+}
+
+impl From<&Signer> for HolderRef {
+    fn from(signer: &Signer) -> Self {
+        match signer {
+            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
+            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => HolderRef::Core,
         }
     }
 }

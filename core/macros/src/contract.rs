@@ -62,10 +62,19 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
+        use kontor::built_in::context::Holder;
         use kontor::built_in::foreign::{ContractAddressModel, ContractAddressWriteModel, get_contract_address};
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
+
+        fn BURNER() -> Holder {
+            Holder::from_ref(&context::HolderRef::Burner).unwrap()
+        }
+
+        fn CORE() -> Holder {
+            Holder::from_ref(&context::HolderRef::Core).unwrap()
+        }
 
         impl stdlib::HasNext for context::Keys {
             fn next(&self) -> Option<String> {
@@ -201,6 +210,20 @@ pub fn generate(config: Config) -> TokenStream {
         impl Retrieve<crate::context::ProcStorage> for foreign::ContractAddress {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| foreign::ContractAddressWriteModel::new(ctx.clone(), path).load())
+            }
+        }
+
+        impl Retrieve<crate::context::ViewStorage> for context::HolderRef {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
+                s.parse().ok()
+            }
+        }
+
+        impl Retrieve<crate::context::ProcStorage> for context::HolderRef {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
+                s.parse().ok()
             }
         }
 

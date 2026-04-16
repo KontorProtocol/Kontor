@@ -31,7 +31,7 @@ pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
 };
-use stdlib::{contract_address, impls};
+use stdlib::{contract_address, holder_ref, impls};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;

@@ -16,8 +16,8 @@ use indexer::bls::{BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNOR
 use indexer::test_utils::bls_test::construct_rogue_g2_pubkey;
 use indexer_types::{Inst, Signer};
 use testlib::{
-    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, Runtime, TypedCall,
-    import,
+    AnyhowError, ContractAddress, Decimal, Error, HolderRef, Integer, RawFileDescriptor, Runtime,
+    TypedCall, import,
 };
 
 import!(

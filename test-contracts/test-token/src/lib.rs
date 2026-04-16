@@ -1,12 +1,7 @@
 #![no_std]
 contract!(name = "test-token");
 
-use context::{Holder, HolderRef};
 use stdlib::*;
-
-fn burner() -> Holder {
-    Holder::from_ref(&HolderRef::Burner).unwrap()
-}
 
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
@@ -42,7 +37,7 @@ impl Guest for TestToken {
     }
 
     fn burn(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
-        Self::transfer(ctx, burner().to_string(), n)?;
+        Self::transfer(ctx, BURNER().to_string(), n)?;
         ctx.model().try_update_total_supply(|t| t.sub(n))?;
         Ok(())
     }
@@ -70,7 +65,7 @@ impl Guest for TestToken {
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
-        let burner_key = burner().to_string();
+        let burner_key = BURNER().to_string();
         ctx.model()
             .ledger()
             .keys::<String>()
