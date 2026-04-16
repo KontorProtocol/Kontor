@@ -133,7 +133,8 @@ impl Guest for Pool {
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
-        ctx.model().lp_ledger().get(acc)
+        let holder: Holder = acc.parse().ok()?;
+        ctx.model().lp_ledger().get(&holder)
     }
 
     fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
@@ -147,8 +148,8 @@ impl Guest for Pool {
             return Err(Error::Message("insufficient funds".to_string()));
         }
 
-        ledger.set(from, from_balance - n);
-        ledger.set(to, to_balance + n);
+        ledger.set(&from, from_balance - n);
+        ledger.set(&to, to_balance + n);
         Ok(())
     }
 
@@ -201,7 +202,7 @@ impl Guest for Pool {
 
         let user: Holder = (&ctx.signer()).into();
         let bal = ledger.get(&user).unwrap_or_default();
-        ledger.set(user, bal + res.lp_shares);
+        ledger.set(&user, bal + res.lp_shares);
         model.update_lp_total_supply(|t| t + res.lp_shares);
 
         token_dyn::transfer(&model.token_a(), ctx.signer(), &custodian, res.deposit_a)?;
@@ -245,7 +246,7 @@ impl Guest for Pool {
             return Err(Error::Message("insufficient share balance".to_string()));
         }
 
-        ledger.set(user.clone(), bal - shares);
+        ledger.set(&user, bal - shares);
         model.set_lp_total_supply(total - shares);
 
         let user_str = user.to_string();

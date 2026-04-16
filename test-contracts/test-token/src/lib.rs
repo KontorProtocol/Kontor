@@ -21,7 +21,7 @@ fn mint(model: &TokenStorageWriteModel, to: Holder, n: Integer) -> Result<(), Er
     assert_gt_zero(n)?;
     let ledger = model.ledger();
     let balance = ledger.get(&to).unwrap_or_default();
-    ledger.set(to, balance.add(n)?);
+    ledger.set(&to, balance.add(n)?);
     model.try_update_total_supply(|t| t.add(n))?;
     Ok(())
 }
@@ -55,27 +55,27 @@ impl Guest for TestToken {
             return Err(Error::Message("insufficient funds".to_string()));
         }
 
-        ledger.set(from, from_balance.sub(n)?);
-        ledger.set(to, to_balance.add(n)?);
+        ledger.set(&from, from_balance.sub(n)?);
+        ledger.set(&to, to_balance.add(n)?);
         Ok(())
     }
 
     fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
-        ctx.model().ledger().get(acc)
+        let holder: Holder = acc.parse().ok()?;
+        ctx.model().ledger().get(&holder)
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
-        let burner_key = BURNER().to_string();
         ctx.model()
             .ledger()
-            .keys::<String>()
+            .keys()
             .filter_map(|k| {
-                if k == burner_key {
+                if k == BURNER() {
                     None
                 } else {
                     Some(Balance {
                         value: ctx.model().ledger().get(&k).unwrap_or_default(),
-                        key: k,
+                        key: k.to_string(),
                     })
                 }
             })

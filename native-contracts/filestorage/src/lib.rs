@@ -129,7 +129,7 @@ impl Guest for Filestorage {
         let model = ctx.model();
         model
             .agreements()
-            .keys::<String>()
+            .keys()
             .filter_map(|agreement_id: String| {
                 let agreement = model.agreements().get(&agreement_id)?;
                 if !agreement.active() {
@@ -300,7 +300,7 @@ impl Guest for Filestorage {
         let mut expired = 0u64;
 
         // Iterate through all challenges and expire those past deadline
-        for challenge_id in model.challenges().keys::<String>() {
+        for challenge_id in model.challenges().keys() {
             if let Some(challenge) = model.challenges().get(&challenge_id)
                 && challenge.status().load() == ChallengeStatus::Active
                 && challenge.deadline_height() <= current_height
@@ -342,7 +342,7 @@ impl Guest for Filestorage {
         // Get eligible agreements: active and agreement not already challenged
         let eligible_agreement_ids: Vec<String> = model
             .agreements()
-            .keys::<String>()
+            .keys()
             .filter(|aid: &String| {
                 model
                     .agreements()
@@ -414,7 +414,7 @@ impl Guest for Filestorage {
             };
             let active_nodes: Vec<String> = nodes_state
                 .nodes()
-                .keys::<String>()
+                .keys()
                 .filter(|nid: &String| nodes_state.nodes().get(nid).unwrap_or(false))
                 .collect();
 

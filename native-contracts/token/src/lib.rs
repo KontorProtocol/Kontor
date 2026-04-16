@@ -154,9 +154,9 @@ impl Guest for Token {
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
         ctx.model()
             .ledger()
-            .keys::<Holder>()
+            .keys()
             .filter_map(|acc| {
-                let acc_ref: HolderRef = (&acc).into();
+                let acc_ref = acc.as_ref();
                 if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
                     None
                 } else {

@@ -74,12 +74,9 @@ pub fn generate_struct(
                                 Map::new(&[])
                             }
 
-                            pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
+                            pub fn keys<'a>(
                                 &'a self,
-                            ) -> impl Iterator<Item = T> + 'a
-                            where                                       // <--- Add this section
-                                <T as FromStr>::Err: Debug,
-                            {
+                            ) -> impl Iterator<Item = #k_ty> + 'a {
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
                         }

@@ -114,7 +114,7 @@ impl Guest for Amm {
 
         let pools = ctx.model().pools();
 
-        match pools.get(pair_id(&pair)).ok_or(pool_not_found()) {
+        match pools.get(&pair_id(&pair)).ok_or(pool_not_found()) {
             Ok(_) => Err(Error::Message(
                 "pool for this pair already exists".to_string(),
             )),
@@ -125,7 +125,7 @@ impl Guest for Amm {
 
         let admin: Holder = (&ctx.signer()).into();
         pools.set(
-            pair_id(&pair),
+            &pair_id(&pair),
             Pool {
                 token_a: pair.a.clone(),
                 balance_a: amount_a,
@@ -148,7 +148,7 @@ impl Guest for Amm {
         Ok(ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?
             .fee_bps())
     }
@@ -156,10 +156,13 @@ impl Guest for Amm {
     fn balance(ctx: &ViewContext, pair: TokenPair, acc: String) -> Option<Integer> {
         ctx.model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())
             .ok()
-            .and_then(|p| p.lp_ledger().get(acc))
+            .and_then(|p| {
+                let holder: Holder = acc.parse().ok()?;
+                p.lp_ledger().get(&holder)
+            })
     }
 
     fn token_balance(
@@ -171,7 +174,7 @@ impl Guest for Amm {
         let pool = ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?;
         if token == pair.a {
             Ok(pool.balance_a())
@@ -192,7 +195,7 @@ impl Guest for Amm {
         let pool = ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?;
 
         let lp_supply = pool.lp_total_supply();
@@ -220,7 +223,7 @@ impl Guest for Amm {
     ) -> Result<DepositResult, Error> {
         let res = Self::quote_deposit(&ctx.view_context(), pair.clone(), amount_a, amount_b)?;
         let model = ctx.model();
-        let pool = model.pools().get(pair_id(&pair)).ok_or(pool_not_found())?;
+        let pool = model.pools().get(&pair_id(&pair)).ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
         let addr = model.custodian();
         pool.update_balance_a(|b| b + res.deposit_a);
@@ -228,7 +231,7 @@ impl Guest for Amm {
 
         let user: Holder = (&ctx.signer()).into();
         let bal = ledger.get(&user).unwrap_or_default();
-        ledger.set(user, bal + res.lp_shares);
+        ledger.set(&user, bal + res.lp_shares);
         pool.update_lp_total_supply(|t| t + res.lp_shares);
 
         token_dyn::transfer(&pair.a, ctx.signer(), &addr, res.deposit_a)?;
@@ -246,7 +249,7 @@ impl Guest for Amm {
         let pool = ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?;
 
         let lp_total_supply = pool.lp_total_supply();
@@ -265,7 +268,7 @@ impl Guest for Amm {
         let pool = ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
         let user: Holder = (&ctx.signer()).into();
@@ -280,7 +283,7 @@ impl Guest for Amm {
             return Err(Error::Message("insufficient share balance".to_string()));
         }
 
-        ledger.set(user.clone(), bal - shares);
+        ledger.set(&user, bal - shares);
         pool.set_lp_total_supply(total - shares);
         pool.update_balance_a(|b| b - res.amount_a);
         pool.update_balance_b(|b| b - res.amount_b);
@@ -301,7 +304,7 @@ impl Guest for Amm {
         let pool = ctx
             .model()
             .pools()
-            .get(pair_id(&pair))
+            .get(&pair_id(&pair))
             .ok_or(pool_not_found())?;
         let (bal_in, bal_out) = if token_in == pair.a {
             (pool.balance_a(), pool.balance_b())
@@ -334,7 +337,7 @@ impl Guest for Amm {
         }
 
         let model = ctx.model();
-        let pool = model.pools().get(pair_id(&pair)).ok_or(pool_not_found())?;
+        let pool = model.pools().get(&pair_id(&pair)).ok_or(pool_not_found())?;
         if token_in == pair.a {
             pool.update_balance_a(|b| b + amount_in);
             pool.update_balance_b(|b| b - amount_out);

@@ -290,7 +290,7 @@ impl Guest for Staking {
     fn get_active_set(ctx: &ViewContext) -> Vec<ActiveValidatorInfo> {
         ctx.model()
             .validators()
-            .keys::<Holder>()
+            .keys()
             .filter_map(|key| {
                 let entry = ctx.model().validators().get(&key)?;
                 if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {

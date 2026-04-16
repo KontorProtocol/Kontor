@@ -18,10 +18,11 @@ struct SharedAccountStorage {
 }
 
 fn authorized(signer: &Signer, account: &AccountModel) -> bool {
+    let holder: Holder = signer.as_holder();
     account.owner() == signer.key()
         || account
             .other_tenants()
-            .get(signer.key())
+            .get(&holder)
             .is_some_and(|b| b)
 }
 
@@ -60,7 +61,7 @@ impl Guest for SharedAccount {
             .map(|t| (t.parse::<Holder>().expect("invalid holder"), true))
             .collect();
         ctx.model().accounts().set(
-            account_id.clone(),
+            &account_id,
             Account {
                 balance: n,
                 owner: ctx.signer().key(),
@@ -86,7 +87,7 @@ impl Guest for SharedAccount {
         let account = ctx
             .model()
             .accounts()
-            .get(account_id)
+            .get(&account_id)
             .ok_or(unknown_error())?;
         if !authorized(&signer, &account) {
             return Err(unauthorized_error());
@@ -105,7 +106,7 @@ impl Guest for SharedAccount {
         let account = ctx
             .model()
             .accounts()
-            .get(account_id)
+            .get(&account_id)
             .ok_or(unknown_error())?;
         if !authorized(&signer, &account) {
             return Err(unauthorized_error());
@@ -119,7 +120,7 @@ impl Guest for SharedAccount {
     }
 
     fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
-        ctx.model().accounts().get(account_id).map(|a| a.balance())
+        ctx.model().accounts().get(&account_id).map(|a| a.balance())
     }
 
     fn token_balance(
@@ -131,10 +132,10 @@ impl Guest for SharedAccount {
     }
 
     fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {
-        ctx.model().accounts().get(account_id).map(|a| {
+        ctx.model().accounts().get(&account_id).map(|a| {
             [a.owner()]
                 .into_iter()
-                .chain(a.other_tenants().keys())
+                .chain(a.other_tenants().keys().map(|h| h.to_string()))
                 .collect()
         })
     }
