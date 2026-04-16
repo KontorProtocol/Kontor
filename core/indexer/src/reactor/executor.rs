@@ -3,16 +3,21 @@ use bitcoin::Txid;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use indexer_types::{Inst, OpMetadata};
+
 use crate::bitcoin_client::Client;
-use crate::block::filter_map;
+use crate::block::{filter_map, op_from_inst};
+use crate::database;
 use crate::retry::{new_backoff_unlimited, retry};
+use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
+use crate::runtime::wit::Signer;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
 /// depends on block height/tx_index). All other ops are batchable.
 /// Aggregate inputs are always batchable.
-pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
+pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
     inputs.iter().all(|input| {
         if input.insts.is_aggregate() {
             return true;
@@ -221,7 +226,7 @@ impl Executor for RuntimeExecutor {
 
 pub async fn process_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
@@ -256,20 +261,17 @@ pub async fn process_input(
 
 async fn process_direct_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    use crate::block::op_from_inst;
-    use indexer_types::OpMetadata;
-
     let metadata = OpMetadata {
         previous_output: input.previous_output,
         input_index: input.input_index,
-        signer: input.witness_signer.clone(),
+        signer: Signer::XOnlyPubKey(input.x_only_pubkey.to_string()),
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
@@ -297,17 +299,13 @@ async fn process_direct_input(
 
 async fn process_aggregate_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    use crate::block::op_from_inst;
-    use crate::database;
-    use crate::runtime::wit::Signer;
-    use indexer_types::{Inst, OpMetadata};
 
     let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
         Ok(map) => map,
@@ -395,9 +393,6 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
-    use crate::runtime::ExecutionError;
-    use crate::runtime::wit::Signer;
-
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
         match runtime.ensure_signer(x_only).await {
             Ok(_) => {}

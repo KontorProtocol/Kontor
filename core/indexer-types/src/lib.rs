@@ -190,12 +190,13 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct TransactionInput {
+pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub witness_signer: Signer,
+    #[ts(as = "String")]
+    pub x_only_pubkey: XOnlyPublicKey,
     pub insts: Insts,
 }
 
@@ -206,7 +207,7 @@ pub struct Transaction {
     pub txid: Txid,
     #[ts(type = "number")]
     pub index: i64,
-    pub inputs: Vec<TransactionInput>,
+    pub inputs: Vec<Input>,
     #[ts(type = "Record<number, OpReturnData>")]
     #[serde(with = "indexmap::map::serde_seq")]
     pub op_return_data: IndexMap<u64, OpReturnData>,

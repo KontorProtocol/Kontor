@@ -83,6 +83,7 @@ impl HasContractId for CoreContext {
 
 pub struct Holder {
     pub holder_ref: super::kontor::built_in::context::HolderRef,
+    pub identity: Option<crate::database::types::Identity>,
 }
 
 impl From<&Signer> for HolderRef {

@@ -323,17 +323,20 @@ impl Runtime {
             let table = self.table.lock().await;
             table.get(&self_)?.clone()
         };
-        let holder_ref = match &signer {
+        let (holder_ref, identity) = match &signer {
             Signer::XOnlyPubKey(s) => {
                 let conn = self.get_storage_conn();
                 let height = self.storage.height;
-                let row = database::queries::ensure_signer(&conn, s, height).await?;
-                HolderRef::SignerId(row.signer_id as u64)
+                let id = database::queries::get_or_create_identity(&conn, s, height).await?;
+                (HolderRef::SignerId(id.signer_id as u64), Some(id))
             }
-            other => Self::_signer_to_holder_ref(other),
+            other => (Self::_signer_to_holder_ref(other), None),
         };
         let mut table = self.table.lock().await;
-        Ok(table.push(Holder { holder_ref })?)
+        Ok(table.push(Holder {
+            holder_ref,
+            identity,
+        })?)
     }
 
     pub(crate) async fn _get_contract_address<T>(
@@ -511,19 +514,28 @@ impl built_in::context::HostHolderWithStore for Runtime {
         if let Err(e) = Self::_validate_holder_ref(&ref_) {
             return Ok(Err(e));
         }
-        let resolved = match &ref_ {
+        let (resolved, identity) = match &ref_ {
             HolderRef::XOnlyPubkey(s) => {
                 let conn = runtime.get_storage_conn();
                 let height = runtime.storage.height;
-                let row = database::queries::ensure_signer(&conn, s, height)
+                let id = database::queries::get_or_create_identity(&conn, s, height)
                     .await
-                    .map_err(|e| anyhow::anyhow!("ensure_signer failed: {e}"))?;
-                HolderRef::SignerId(row.signer_id as u64)
+                    .map_err(|e| anyhow::anyhow!("get_or_create_identity failed: {e}"))?;
+                (HolderRef::SignerId(id.signer_id as u64), Some(id))
             }
-            other => other.clone(),
+            HolderRef::SignerId(id) => {
+                let id = database::types::Identity {
+                    signer_id: *id as i64,
+                };
+                (ref_.clone(), Some(id))
+            }
+            other => (other.clone(), None),
         };
         let mut table = runtime.table.lock().await;
-        Ok(Ok(table.push(Holder { holder_ref: resolved })?))
+        Ok(Ok(table.push(Holder {
+            holder_ref: resolved,
+            identity,
+        })?))
     }
 
     async fn as_ref<T>(
