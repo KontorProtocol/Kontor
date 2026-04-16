@@ -76,6 +76,11 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Identity {
+    pub signer_id: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct SignerRow {
     pub signer_id: i64,
