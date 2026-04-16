@@ -590,6 +590,30 @@ impl RegTester {
         self.inner.lock().await.kontor_client.clone()
     }
 
+    pub async fn get_signer_id(&self, xonly: &str) -> Result<Option<u64>> {
+        match self.kontor_client().await.registry_entry(xonly).await {
+            Ok(entry) => Ok(Some(entry.signer_id)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    pub async fn get_bls_pubkey(&self, xonly: &str) -> Result<Option<Vec<u8>>> {
+        match self.kontor_client().await.registry_entry(xonly).await {
+            Ok(entry) => Ok(entry.bls_pubkey),
+            Err(_) => Ok(None),
+        }
+    }
+
+    pub async fn get_signer_entry(
+        &self,
+        pubkey_or_id: &str,
+    ) -> Result<Option<indexer_types::RegistryEntryResponse>> {
+        match self.kontor_client().await.registry_entry(pubkey_or_id).await {
+            Ok(entry) => Ok(Some(entry)),
+            Err(_) => Ok(None),
+        }
+    }
+
     pub async fn mempool_accept_result(
         &self,
         raw_txs: &[String],

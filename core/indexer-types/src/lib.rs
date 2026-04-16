@@ -286,6 +286,7 @@ pub struct UtxoRef {
 pub enum HolderRef {
     XOnlyPubkey(String),
     ContractId(String),
+    SignerId(u64),
     Core,
     Burner,
     Utxo(UtxoRef),
@@ -307,6 +308,11 @@ impl core::str::FromStr for HolderRef {
             Self::Core
         } else if s == "burn" {
             Self::Burner
+        } else if let Some(id_str) = s.strip_prefix("__sid__") {
+            let id = id_str
+                .parse::<u64>()
+                .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
+            Self::SignerId(id)
         } else if s.starts_with("__cid__") {
             Self::ContractId(s.to_string())
         } else if let Some((txid, vout)) = s.rsplit_once(':') {

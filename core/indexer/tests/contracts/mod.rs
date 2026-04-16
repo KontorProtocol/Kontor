@@ -1,7 +1,5 @@
 mod amm_contract;
 mod bls_attack_vectors;
-#[allow(dead_code)]
-mod registry_helpers;
 mod bls_bulk_compose;
 mod bls_key_derivation_and_registration;
 mod bls_replay_protection;

@@ -12,6 +12,7 @@ pub fn generate(input: TokenStream) -> TokenStream {
                 match self {
                     Self::XOnlyPubkey(s) => write!(f, "{s}"),
                     Self::ContractId(s) => write!(f, "{s}"),
+                    Self::SignerId(id) => write!(f, "__sid__{id}"),
                     Self::Core => write!(f, "core"),
                     Self::Burner => write!(f, "burn"),
                     Self::Utxo(out_point) => write!(f, "{}:{}", out_point.txid, out_point.vout),

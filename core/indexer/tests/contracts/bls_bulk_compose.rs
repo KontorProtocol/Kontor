@@ -7,8 +7,6 @@ use indexer::database::types::OpResultId;
 use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts};
 use testlib::*;
 
-use super::registry_helpers::{get_entry_by_id, get_signer_id};
-
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 
 fn aggregate_call(
@@ -69,10 +67,10 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
     })?;
 
-    let signer1_id = get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+    let signer1_id = rt.get_signer_id( &signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+    let signer2_id = rt.get_signer_id( &signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
@@ -215,7 +213,7 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
             e
         )
     })?;
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -260,7 +258,7 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
         )
         .await;
     assert!(res.is_err(), "expected unknown signer_id to reject bundle");
-    let entry = get_entry_by_id(runtime, signer_id).await?;
+    let entry = rt.get_signer_entry(&signer_id.to_string()).await?;
     let entry = entry.ok_or_else(|| anyhow!("missing registry entry after rejection"))?;
     assert_eq!(
         entry.next_nonce, 0,
@@ -365,10 +363,10 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
             e
         )
     })?;
-    let signer1_id = get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+    let signer1_id = rt.get_signer_id( &signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+    let signer2_id = rt.get_signer_id( &signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 

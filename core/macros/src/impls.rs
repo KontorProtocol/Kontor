@@ -61,6 +61,10 @@ pub fn generate(config: Config) -> TokenStream {
                         HolderRef::Core
                     } else if s == "burn" {
                         HolderRef::Burner
+                    } else if let Some(id_str) = s.strip_prefix("__sid__") {
+                        let id = id_str.parse::<u64>()
+                            .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
+                        HolderRef::SignerId(id)
                     } else if s.starts_with("__cid__") {
                         HolderRef::ContractId(s.to_string())
                     } else if let Some((txid, vout)) = s.rsplit_once(':') {
@@ -89,6 +93,10 @@ pub fn generate(config: Config) -> TokenStream {
                         HolderRef::Core
                     } else if s == "burn" {
                         HolderRef::Burner
+                    } else if let Some(id_str) = s.strip_prefix("__sid__") {
+                        let id = id_str.parse::<u64>()
+                            .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
+                        HolderRef::SignerId(id)
                     } else if s.starts_with("__cid__") {
                         HolderRef::ContractId(s.to_string())
                     } else if let Some((txid, vout)) = s.rsplit_once(':') {

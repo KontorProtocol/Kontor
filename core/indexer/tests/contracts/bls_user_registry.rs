@@ -4,7 +4,6 @@ use indexer::bls::{RegistrationProof, validate_aggregate_shape};
 use indexer_types::{AggregateInfo, Inst, Insts};
 use testlib::*;
 
-use super::registry_helpers::{get_bls_pubkey, get_signer_id};
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_user_registry_register_direct_regtest() -> Result<()> {
@@ -23,10 +22,10 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
     .await?;
 
     let xonly = user.x_only_public_key().to_string();
-    let signer_id = get_signer_id(runtime, &xonly).await?;
+    let signer_id = rt.get_signer_id( &xonly).await?;
     assert!(signer_id.is_some(), "Expected signer to be registered");
 
-    let registered_bls_pubkey = get_bls_pubkey(runtime, &xonly).await?;
+    let registered_bls_pubkey = rt.get_bls_pubkey( &xonly).await?;
     assert_eq!(registered_bls_pubkey, Some(proof.bls_pubkey.to_vec()));
 
     Ok(())
@@ -67,10 +66,10 @@ async fn bls_user_registry_register_in_aggregate_rejected_regtest() -> Result<()
         err.to_string()
             .contains("RegisterBlsKey is not allowed in aggregate")
     );
-    assert_eq!(get_signer_id(runtime, &xonly1).await?, None);
-    assert_eq!(get_signer_id(runtime, &xonly2).await?, None);
-    assert_eq!(get_bls_pubkey(runtime, &xonly1).await?, None);
-    assert_eq!(get_bls_pubkey(runtime, &xonly2).await?, None);
+    assert_eq!(rt.get_signer_id( &xonly1).await?, None);
+    assert_eq!(rt.get_signer_id( &xonly2).await?, None);
+    assert_eq!(rt.get_bls_pubkey( &xonly1).await?, None);
+    assert_eq!(rt.get_bls_pubkey( &xonly2).await?, None);
 
     Ok(())
 }
@@ -92,8 +91,8 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
     .await?;
 
     let xonly = user.x_only_public_key().to_string();
-    let signer_id_before = get_signer_id(runtime, &xonly).await?;
-    let pk_before = get_bls_pubkey(runtime, &xonly).await?;
+    let signer_id_before = rt.get_signer_id( &xonly).await?;
+    let pk_before = rt.get_bls_pubkey( &xonly).await?;
 
     // Second registration with same key hits the early-return optimization in
     // register_bls_key, so no contract result is recorded. Ignore the result-lookup error.
@@ -108,8 +107,8 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
         )
         .await;
 
-    let signer_id_after = get_signer_id(runtime, &xonly).await?;
-    let pk_after = get_bls_pubkey(runtime, &xonly).await?;
+    let signer_id_after = rt.get_signer_id( &xonly).await?;
+    let pk_after = rt.get_bls_pubkey( &xonly).await?;
 
     assert_eq!(signer_id_before, signer_id_after);
     assert_eq!(pk_before, pk_after);
@@ -138,8 +137,8 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     let alt_proof = RegistrationProof::new(&user.keypair, &alt_sk.to_bytes())?;
 
     let xonly = user.x_only_public_key().to_string();
-    let signer_id_before = get_signer_id(runtime, &xonly).await?;
-    let pk_before = get_bls_pubkey(runtime, &xonly).await?;
+    let signer_id_before = rt.get_signer_id( &xonly).await?;
+    let pk_before = rt.get_bls_pubkey( &xonly).await?;
 
     // Registration with a different key is rejected by the runtime before
     // reaching the contract, so no op result is recorded. Ignore the error.
@@ -154,8 +153,8 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
         )
         .await;
 
-    let signer_id_after = get_signer_id(runtime, &xonly).await?;
-    let pk_after = get_bls_pubkey(runtime, &xonly).await?;
+    let signer_id_after = rt.get_signer_id( &xonly).await?;
+    let pk_after = rt.get_bls_pubkey( &xonly).await?;
     assert_eq!(signer_id_before, signer_id_after);
     assert_eq!(pk_before, pk_after);
     assert_eq!(pk_after, Some(original.bls_pubkey.to_vec()));
@@ -194,8 +193,8 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
         err.to_string()
             .contains("RegisterBlsKey is not allowed in aggregate")
     );
-    assert_eq!(get_signer_id(runtime, &user_xonly).await?, None);
-    assert_eq!(get_bls_pubkey(runtime, &user_xonly).await?, None);
+    assert_eq!(rt.get_signer_id( &user_xonly).await?, None);
+    assert_eq!(rt.get_bls_pubkey( &user_xonly).await?, None);
 
     // Next registration should get the expected ID (no gap from rejected aggregate)
     let mut next_user = rt.unregistered_identity().await?;
@@ -210,7 +209,7 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
     )
     .await?;
     let next_xonly = next_user.x_only_public_key().to_string();
-    let next_id = get_signer_id(runtime, &next_xonly).await?;
+    let next_id = rt.get_signer_id( &next_xonly).await?;
     assert!(
         next_id.is_some(),
         "next user should be registered after rejected aggregate"
@@ -261,8 +260,8 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
         err.to_string()
             .contains("RegisterBlsKey is not allowed in aggregate")
     );
-    assert_eq!(get_signer_id(runtime, &user_xonly).await?, None);
-    assert_eq!(get_bls_pubkey(runtime, &user_xonly).await?, None);
+    assert_eq!(rt.get_signer_id( &user_xonly).await?, None);
+    assert_eq!(rt.get_bls_pubkey( &user_xonly).await?, None);
 
     let mut next_user = rt.unregistered_identity().await?;
     let next_proof = RegistrationProof::new(&next_user.keypair, &next_user.bls_secret_key)?;
@@ -276,7 +275,7 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
     )
     .await?;
     let next_xonly = next_user.x_only_public_key().to_string();
-    let next_id = get_signer_id(runtime, &next_xonly).await?;
+    let next_id = rt.get_signer_id( &next_xonly).await?;
     assert!(
         next_id.is_some(),
         "next user should be registered after rejected aggregate"
@@ -324,7 +323,7 @@ async fn bls_user_registry_malformed_sig_lengths_in_aggregate_rejected_regtest()
                 .contains("RegisterBlsKey is not allowed in aggregate")
         );
         assert_eq!(
-            get_signer_id(runtime, &user_xonly).await?,
+            rt.get_signer_id( &user_xonly).await?,
             None,
             "{label}: malformed field must prevent registration"
         );

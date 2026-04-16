@@ -11,8 +11,6 @@ use indexer::database::types::OpResultId;
 use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts};
 use testlib::*;
 
-use super::registry_helpers::get_signer_id;
-
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 
 fn aggregate_call(
@@ -68,7 +66,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         )
     })?;
 
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -179,7 +177,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -250,7 +248,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     let signer = rt.identity().await?;
     let mut publisher = rt.identity().await?;
 
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
     let missing_contract = IndexerContractAddress {
@@ -378,10 +376,10 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         )
     })?;
 
-    let signer1_id = get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+    let signer1_id = rt.get_signer_id( &signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+    let signer2_id = rt.get_signer_id( &signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
@@ -499,7 +497,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -613,7 +611,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 

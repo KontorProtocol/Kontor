@@ -1,10 +1,12 @@
 use std::str::FromStr;
 
 use anyhow::Result;
-use bitcoin::Txid;
+use bitcoin::{Txid, XOnlyPublicKey};
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
+
+use crate::database;
 
 use super::{
     ContractAddress, Runtime,
@@ -270,24 +272,40 @@ impl Runtime {
         })?)
     }
 
-    fn _holder_ref_to_key(holder_ref: &HolderRef) -> String {
+    fn _holder_ref_to_key(holder_ref: &HolderRef) -> Option<String> {
         match holder_ref {
-            HolderRef::XOnlyPubkey(s) => s.clone(),
-            HolderRef::ContractId(s) => s.clone(),
-            HolderRef::Core => "core".to_string(),
-            HolderRef::Burner => "burn".to_string(),
-            HolderRef::Utxo(out_point) => format!("{}:{}", out_point.txid, out_point.vout),
+            HolderRef::XOnlyPubkey(s) => Some(s.clone()),
+            HolderRef::ContractId(s) => Some(s.clone()),
+            HolderRef::SignerId(_) => None,
+            HolderRef::Core => Some("core".to_string()),
+            HolderRef::Burner => Some("burn".to_string()),
+            HolderRef::Utxo(out_point) => {
+                Some(format!("{}:{}", out_point.txid, out_point.vout))
+            }
+        }
+    }
+
+    async fn _resolve_holder_key(&self, holder_ref: &HolderRef) -> Result<String> {
+        match holder_ref {
+            HolderRef::SignerId(id) => {
+                let conn = self.get_storage_conn();
+                let entry = database::queries::get_signer_entry_by_id(&conn, *id as i64)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("signer lookup failed: {e}"))?
+                    .ok_or_else(|| anyhow::anyhow!("unknown signer_id {id}"))?;
+                Ok(entry.x_only_pubkey)
+            }
+            other => Ok(Self::_holder_ref_to_key(other)
+                .expect("non-SignerId variants always have a key")),
         }
     }
 
     fn _validate_holder_ref(holder_ref: &HolderRef) -> Result<(), WitError> {
         match holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err(WitError::Validation(
-                        "x-only-pubkey must be 64 hex characters".to_string(),
-                    ));
-                }
+                XOnlyPublicKey::from_str(s).map_err(|e| {
+                    WitError::Validation(format!("invalid x-only-pubkey: {e}"))
+                })?;
             }
             HolderRef::ContractId(s) => {
                 if !s.starts_with("__cid__") {
@@ -301,6 +319,7 @@ impl Runtime {
                     ));
                 }
             }
+            HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
                 Txid::from_str(&out_point.txid).map_err(|e| {
                     WitError::Validation(format!("invalid txid: {e}"))
@@ -328,9 +347,20 @@ impl Runtime {
         Fuel::SignerAsHolder
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        let signer = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.clone()
+        };
+        let holder_ref = match &signer {
+            Signer::XOnlyPubKey(s) => {
+                let conn = self.get_storage_conn();
+                let height = self.storage.height;
+                let row = database::queries::ensure_signer(&conn, s, height).await?;
+                HolderRef::SignerId(row.signer_id as u64)
+            }
+            other => Self::_signer_to_holder_ref(other),
+        };
         let mut table = self.table.lock().await;
-        let signer = table.get(&self_)?;
-        let holder_ref = Self::_signer_to_holder_ref(signer);
         Ok(table.push(Holder { holder_ref })?)
     }
 
@@ -493,9 +523,11 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Fuel::HolderKey
             .consume(accessor, runtime.gauge.as_ref())
             .await?;
-        let table = runtime.table.lock().await;
-        let holder = table.get(&self_)?;
-        Ok(Self::_holder_ref_to_key(&holder.holder_ref))
+        let holder_ref = {
+            let table = runtime.table.lock().await;
+            table.get(&self_)?.holder_ref.clone()
+        };
+        runtime._resolve_holder_key(&holder_ref).await
     }
 
     async fn from_ref<T>(
@@ -509,8 +541,19 @@ impl built_in::context::HostHolderWithStore for Runtime {
         if let Err(e) = Self::_validate_holder_ref(&ref_) {
             return Ok(Err(e));
         }
+        let resolved = match &ref_ {
+            HolderRef::XOnlyPubkey(s) => {
+                let conn = runtime.get_storage_conn();
+                let height = runtime.storage.height;
+                let row = database::queries::ensure_signer(&conn, s, height)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("ensure_signer failed: {e}"))?;
+                HolderRef::SignerId(row.signer_id as u64)
+            }
+            other => other.clone(),
+        };
         let mut table = runtime.table.lock().await;
-        Ok(Ok(table.push(Holder { holder_ref: ref_ })?))
+        Ok(Ok(table.push(Holder { holder_ref: resolved })?))
     }
 
     async fn as_ref<T>(
