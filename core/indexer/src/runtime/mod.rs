@@ -372,13 +372,15 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64, ExecutionError> {
+    pub async fn get_or_create_identity(
+        &self,
+        x_only_pubkey: &str,
+    ) -> Result<database::types::Identity, ExecutionError> {
         let conn = self.get_storage_conn();
         let height = self.storage.height;
-        let row = database::queries::ensure_signer(&conn, x_only_pubkey, height)
+        database::queries::get_or_create_identity(&conn, x_only_pubkey, height)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
-        Ok(row.signer_id as u64)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }
 
     pub async fn register_bls_key(
@@ -433,22 +435,12 @@ impl Runtime {
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
 
-        let signer_row = database::queries::ensure_signer(
-            &conn,
-            &x_only_pk.to_string(),
-            self.storage.height,
-        )
-        .await
-        .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        let identity = self.get_or_create_identity(&x_only_pk.to_string()).await?;
 
-        database::queries::register_bls_key(
-            &conn,
-            signer_row.signer_id,
-            &proof.bls_pubkey,
-            self.storage.height,
-        )
-        .await
-        .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        identity
+            .register_bls_key(&conn, &proof.bls_pubkey, self.storage.height)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
 
         Ok(())
     }

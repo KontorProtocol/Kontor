@@ -9,7 +9,7 @@ use crate::{
     database::types::{
         BatchQueryResult, BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow,
         ContractRow, FileMetadataRow, HasRowId, Identity, OpResultId, OrderDirection, ResultQuery,
-        SignerEntry, SignerRow, TransactionQuery,
+        SignerEntry, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -1271,6 +1271,58 @@ impl Identity {
             .transpose()?
             .unwrap_or(0))
     }
+
+    pub async fn advance_nonce(
+        &self,
+        conn: &Connection,
+        caller_nonce: i64,
+        height: i64,
+    ) -> Result<i64, Error> {
+        let mut rows = conn
+            .query(
+                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                params![self.signer_id],
+            )
+            .await?;
+
+        let stored_nonce: i64 = rows
+            .next()
+            .await?
+            .ok_or_else(|| {
+                Error::InvalidData(format!("no nonce for signer_id {}", self.signer_id))
+            })?
+            .get(0)?;
+
+        if caller_nonce < stored_nonce {
+            return Err(Error::InvalidData(format!(
+                "nonce too low for signer_id {}: got {caller_nonce}, expected >= {stored_nonce}",
+                self.signer_id
+            )));
+        }
+
+        let next_nonce = caller_nonce + 1;
+        conn.execute(
+            "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
+            params![self.signer_id, next_nonce, height],
+        )
+        .await?;
+
+        Ok(next_nonce)
+    }
+
+    pub async fn register_bls_key(
+        &self,
+        conn: &Connection,
+        bls_pubkey: &[u8],
+        height: i64,
+    ) -> Result<(), Error> {
+        conn.execute(
+            "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
+            params![self.signer_id, bls_pubkey.to_vec(), height],
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1311,94 +1363,7 @@ pub async fn get_or_create_identity(
     Ok(Identity { signer_id })
 }
 
-pub async fn ensure_signer(
-    conn: &Connection,
-    x_only_pubkey: &str,
-    height: i64,
-) -> Result<SignerRow, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT id, x_only_pubkey, height FROM signers WHERE x_only_pubkey = ?",
-            params![x_only_pubkey],
-        )
-        .await?;
 
-    if let Some(row) = rows.next().await? {
-        return Ok(SignerRow {
-            signer_id: row.get(0)?,
-            x_only_pubkey: row.get(1)?,
-            height: row.get(2)?,
-        });
-    }
-
-    conn.execute(
-        "INSERT INTO signers (x_only_pubkey, height) VALUES (?, ?)",
-        params![x_only_pubkey, height],
-    )
-    .await?;
-
-    let signer_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, 0, ?)",
-        params![signer_id, height],
-    )
-    .await?;
-
-    Ok(SignerRow {
-        signer_id,
-        x_only_pubkey: x_only_pubkey.to_string(),
-        height,
-    })
-}
-
-pub async fn advance_nonce(
-    conn: &Connection,
-    signer_id: i64,
-    caller_nonce: i64,
-    height: i64,
-) -> Result<i64, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
-            params![signer_id],
-        )
-        .await?;
-
-    let stored_nonce: i64 = rows
-        .next()
-        .await?
-        .ok_or_else(|| Error::InvalidData(format!("no nonce for signer_id {signer_id}")))?
-        .get(0)?;
-
-    if caller_nonce < stored_nonce {
-        return Err(Error::InvalidData(format!(
-            "nonce too low for signer_id {signer_id}: got {caller_nonce}, expected >= {stored_nonce}"
-        )));
-    }
-
-    let next_nonce = caller_nonce + 1;
-    conn.execute(
-        "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
-        params![signer_id, next_nonce, height],
-    )
-    .await?;
-
-    Ok(next_nonce)
-}
-
-pub async fn register_bls_key(
-    conn: &Connection,
-    signer_id: i64,
-    bls_pubkey: &[u8],
-    height: i64,
-) -> Result<(), Error> {
-    conn.execute(
-        "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
-        params![signer_id, bls_pubkey.to_vec(), height],
-    )
-    .await?;
-    Ok(())
-}
 
 pub async fn get_signer_entry(
     conn: &Connection,
@@ -3649,31 +3614,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ensure_signer_creates_new() -> Result<()> {
+    async fn test_get_or_create_identity_creates_new() -> Result<()> {
         let (_, writer, _temp_dir) = new_test_db().await?;
         let conn = writer.connection();
         setup_block(&conn, 1).await?;
 
-        let row = ensure_signer(&conn, "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233", 1).await?;
-        assert_eq!(row.x_only_pubkey, "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233");
-        assert_eq!(row.height, 1);
-        assert!(row.signer_id > 0);
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+        assert!(identity.signer_id > 0);
+        assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_ensure_signer_returns_existing() -> Result<()> {
+    async fn test_get_or_create_identity_returns_existing() -> Result<()> {
         let (_, writer, _temp_dir) = new_test_db().await?;
         let conn = writer.connection();
         setup_block(&conn, 1).await?;
         setup_block(&conn, 2).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row1 = ensure_signer(&conn, pubkey, 1).await?;
-        let row2 = ensure_signer(&conn, pubkey, 2).await?;
-        assert_eq!(row1.signer_id, row2.signer_id);
-        assert_eq!(row1.height, 1);
+        let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
+        let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+        assert_eq!(id1.signer_id, id2.signer_id);
 
         Ok(())
     }
@@ -3686,12 +3650,12 @@ mod tests {
         setup_block(&conn, 2).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        let next = advance_nonce(&conn, row.signer_id, 0, 1).await?;
+        let next = row.advance_nonce(&conn, 0, 1).await?;
         assert_eq!(next, 1);
 
-        let next = advance_nonce(&conn, row.signer_id, 1, 2).await?;
+        let next = row.advance_nonce(&conn, 1, 2).await?;
         assert_eq!(next, 2);
 
         Ok(())
@@ -3704,9 +3668,9 @@ mod tests {
         setup_block(&conn, 1).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        let next = advance_nonce(&conn, row.signer_id, 5, 1).await?;
+        let next = row.advance_nonce(&conn, 5, 1).await?;
         assert_eq!(next, 6);
 
         Ok(())
@@ -3720,10 +3684,10 @@ mod tests {
         setup_block(&conn, 2).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        advance_nonce(&conn, row.signer_id, 0, 1).await?;
-        let result = advance_nonce(&conn, row.signer_id, 0, 2).await;
+        row.advance_nonce(&conn, 0, 1).await?;
+        let result = row.advance_nonce(&conn, 0, 2).await;
         assert!(result.is_err());
 
         Ok(())
@@ -3736,10 +3700,10 @@ mod tests {
         setup_block(&conn, 1).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
         let bls_key = vec![1u8; 48];
-        register_bls_key(&conn, row.signer_id, &bls_key, 1).await?;
+        row.register_bls_key(&conn,&bls_key, 1).await?;
 
         let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
         assert_eq!(entry.bls_pubkey, Some(bls_key));
@@ -3754,7 +3718,7 @@ mod tests {
         setup_block(&conn, 1).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
         let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
         assert_eq!(entry.signer_id, row.signer_id);
@@ -3772,7 +3736,7 @@ mod tests {
         setup_block(&conn, 1).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
         let entry = get_signer_entry_by_id(&conn, row.signer_id).await?.unwrap();
         assert_eq!(entry.x_only_pubkey, pubkey);
@@ -3790,9 +3754,9 @@ mod tests {
         setup_block(&conn, 3).await?;
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-        let row = ensure_signer(&conn, pubkey, 1).await?;
-        advance_nonce(&conn, row.signer_id, 0, 2).await?;
-        register_bls_key(&conn, row.signer_id, &vec![1u8; 48], 3).await?;
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+        row.advance_nonce(&conn, 0, 2).await?;
+        row.register_bls_key(&conn,&vec![1u8; 48], 3).await?;
 
         // Rollback to height 2 — should remove bls_key (height 3) but keep nonce (height 2)
         rollback_to_height(&conn, 2).await?;
@@ -3823,10 +3787,10 @@ mod tests {
         assert_eq!(identity.next_nonce(&conn).await?, 0);
 
         let bls_key = vec![1u8; 48];
-        register_bls_key(&conn, identity.signer_id, &bls_key, 1).await?;
+        identity.register_bls_key(&conn,&bls_key, 1).await?;
         assert_eq!(identity.bls_pubkey(&conn).await?, Some(bls_key));
 
-        advance_nonce(&conn, identity.signer_id, 0, 1).await?;
+        identity.advance_nonce(&conn, 0, 1).await?;
         assert_eq!(identity.next_nonce(&conn).await?, 1);
 
         Ok(())

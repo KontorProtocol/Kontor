@@ -361,13 +361,10 @@ async fn process_aggregate_input(
             };
             let conn = runtime.get_storage_conn();
             let height = runtime.storage.height;
-            match database::queries::advance_nonce(
-                &conn,
-                signer_id as i64,
-                nonce_val as i64,
-                height,
-            )
-            .await
+            let identity = database::types::Identity {
+                signer_id: signer_id as i64,
+            };
+            match identity.advance_nonce(&conn, nonce_val as i64, height).await
             {
                 Ok(_) => {}
                 Err(database::queries::Error::InvalidData(msg)) => {
@@ -394,14 +391,14 @@ async fn process_aggregate_input(
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
     if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
-        match runtime.ensure_signer(x_only).await {
+        match runtime.get_or_create_identity(x_only).await {
             Ok(_) => {}
             Err(ExecutionError::Deterministic(e)) => {
-                warn!("Failed to ensure signer for {x_only}: {e}");
+                warn!("Failed to register signer for {x_only}: {e}");
                 return Ok(());
             }
             Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("ensure_signer infrastructure failure"));
+                return Err(e.context("get_or_create_identity infrastructure failure"));
             }
         }
     }

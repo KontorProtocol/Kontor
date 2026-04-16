@@ -617,9 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
-        use crate::database::queries::{
-            advance_nonce, get_signer_entry_by_id, rollback_to_height,
-        };
+        use crate::database::queries::{get_signer_entry_by_id, rollback_to_height};
 
         let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
@@ -662,7 +660,8 @@ mod tests {
         )
         .await?;
 
-        advance_nonce(&conn, user.signer_id as i64, 0, 2).await?;
+        crate::database::types::Identity { signer_id: user.signer_id as i64 }
+            .advance_nonce(&conn, 0, 2).await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after advance");
@@ -687,7 +686,8 @@ mod tests {
         )
         .await?;
 
-        advance_nonce(&conn, user.signer_id as i64, 0, 2).await?;
+        crate::database::types::Identity { signer_id: user.signer_id as i64 }
+            .advance_nonce(&conn, 0, 2).await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after re-advance");
