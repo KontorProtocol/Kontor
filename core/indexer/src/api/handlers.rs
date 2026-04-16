@@ -360,11 +360,10 @@ pub async fn get_registry_entry(
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::registry::api::{advance_nonce, get_entry, get_entry_by_id};
     use crate::{
         api::{Env, handlers::get_registry_entry},
         bls::RegistrationProof,
-        database::queries::{insert_block, rollback_to_height},
+        database::queries::{get_signer_entry, insert_block},
         runtime::{ComponentCache, Runtime, Storage},
         test_utils::new_test_db,
     };
@@ -408,12 +407,14 @@ mod tests {
             )
             .await?;
 
-        let entry = get_entry(&mut *runtime, &x_only.to_string())
-            .await?
-            .expect("registry entry must exist after registration");
+        let conn = runtime.get_storage_conn();
+        let entry = get_signer_entry(&conn, &x_only.to_string())
+            .await
+            .map_err(|e| anyhow!("{e}"))?
+            .expect("signer entry must exist after registration");
 
         Ok(RegisteredUser {
-            signer_id: entry.signer_id,
+            signer_id: entry.signer_id as u64,
             x_only_pubkey: x_only.to_string(),
             bls_pubkey: proof.bls_pubkey.to_vec(),
         })
@@ -472,7 +473,7 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
-        assert_eq!(result.result.signer_id, 0);
+        assert_eq!(result.result.signer_id, users[0].signer_id);
         assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
         assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
         assert_eq!(result.result.next_nonce, 0);
@@ -485,11 +486,13 @@ mod tests {
         let (app, users, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/registry/entry/0").await;
+        let response: TestResponse = server
+            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
-        assert_eq!(result.result.signer_id, 0);
+        assert_eq!(result.result.signer_id, users[0].signer_id);
         assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
         assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
         assert_eq!(result.result.next_nonce, 0);
@@ -536,7 +539,9 @@ mod tests {
         let by_pk: TestResponse = server
             .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
             .await;
-        let by_id: TestResponse = server.get("/api/registry/entry/0").await;
+        let by_id: TestResponse = server
+            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .await;
 
         assert_eq!(by_pk.status_code(), StatusCode::OK);
         assert_eq!(by_id.status_code(), StatusCode::OK);
@@ -563,16 +568,19 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
-        assert_eq!(result.result.signer_id, 1);
+        assert_eq!(result.result.signer_id, users[1].signer_id);
         assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
         assert_eq!(result.result.bls_pubkey, Some(users[1].bls_pubkey.clone()));
         assert_eq!(result.result.next_nonce, 0);
+        assert_eq!(users[1].signer_id, users[0].signer_id + 1);
 
-        let by_id: TestResponse = server.get("/api/registry/entry/1").await;
+        let by_id: TestResponse = server
+            .get(&format!("/api/registry/entry/{}", users[1].signer_id))
+            .await;
         assert_eq!(by_id.status_code(), StatusCode::OK);
 
         let by_id_result: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
-        assert_eq!(by_id_result.result.signer_id, 1);
+        assert_eq!(by_id_result.result.signer_id, users[1].signer_id);
         assert_eq!(by_id_result.result.x_only_pubkey, users[1].x_only_pubkey);
         assert_eq!(by_id_result.result.next_nonce, 0);
 
@@ -581,11 +589,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_two_users_have_distinct_entries() -> Result<()> {
-        let (app, _users, _db) = create_test_app().await?;
+        let (app, users, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let resp0: TestResponse = server.get("/api/registry/entry/0").await;
-        let resp1: TestResponse = server.get("/api/registry/entry/1").await;
+        let resp0: TestResponse = server
+            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .await;
+        let resp1: TestResponse = server
+            .get(&format!("/api/registry/entry/{}", users[1].signer_id))
+            .await;
 
         assert_eq!(resp0.status_code(), StatusCode::OK);
         assert_eq!(resp1.status_code(), StatusCode::OK);
@@ -595,8 +607,8 @@ mod tests {
 
         assert_ne!(r0.result.x_only_pubkey, r1.result.x_only_pubkey);
         assert_ne!(r0.result.bls_pubkey, r1.result.bls_pubkey);
-        assert_eq!(r0.result.signer_id, 0);
-        assert_eq!(r1.result.signer_id, 1);
+        assert_eq!(r0.result.signer_id, users[0].signer_id);
+        assert_eq!(r1.result.signer_id, users[1].signer_id);
         assert_eq!(r0.result.next_nonce, 0);
         assert_eq!(r1.result.next_nonce, 0);
 
@@ -605,6 +617,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
+        use crate::database::queries::{
+            advance_nonce, get_signer_entry_by_id, rollback_to_height,
+        };
+
         let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
         let conn = writer.connection();
 
@@ -632,7 +648,7 @@ mod tests {
         runtime.storage.height = 1;
 
         let user = register_user(&mut runtime).await?;
-        let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist");
         assert_eq!(entry.next_nonce, 0);
@@ -645,25 +661,16 @@ mod tests {
                 .build(),
         )
         .await?;
-        runtime.storage.height = 2;
 
-        advance_nonce(
-            &mut runtime,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            user.signer_id,
-            0,
-        )
-        .await?
-        .map_err(|e| anyhow!("{e:?}"))?;
-        let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        advance_nonce(&conn, user.signer_id as i64, 0, 2).await?;
+        let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after advance");
         assert_eq!(entry.next_nonce, 1, "nonce must be 1 after advance");
 
         rollback_to_height(&conn, 1).await?;
-        runtime.storage.height = 1;
 
-        let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must survive rollback (registered at height 1)");
         assert_eq!(
@@ -679,17 +686,9 @@ mod tests {
                 .build(),
         )
         .await?;
-        runtime.storage.height = 2;
 
-        advance_nonce(
-            &mut runtime,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            user.signer_id,
-            0,
-        )
-        .await?
-        .map_err(|e| anyhow!("{e:?}"))?;
-        let entry = get_entry_by_id(&mut runtime, user.signer_id)
+        advance_nonce(&conn, user.signer_id as i64, 0, 2).await?;
+        let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after re-advance");
         assert_eq!(

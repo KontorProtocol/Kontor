@@ -7,7 +7,6 @@ pub mod filestorage;
 pub mod fuel;
 pub mod numerics;
 pub mod pool;
-pub mod registry;
 mod stack;
 pub mod staking;
 mod storage;
@@ -101,7 +100,7 @@ use wasmtime::{
 
 use crate::bls::RegistrationProof;
 use crate::database;
-use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
+use crate::database::native_contracts::{FILESTORAGE, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
@@ -298,12 +297,6 @@ impl Runtime {
             &Signer::Core(Box::new(Signer::Nobody)),
             "filestorage",
             FILESTORAGE,
-        )
-        .await?;
-        self.publish(
-            &Signer::Core(Box::new(Signer::Nobody)),
-            "registry",
-            REGISTRY,
         )
         .await?;
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
@@ -540,21 +533,7 @@ impl Runtime {
 }
 
 static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> = LazyLock::new(|| {
-    [
-        ("token", ["hold"].into()),
-        (
-            "registry",
-            [
-                "ensure-signer",
-                "get-entry",
-                "get-entry-by-id",
-                "get-signer-id",
-                "get-bls-pubkey",
-            ]
-            .into(),
-        ),
-    ]
-    .into()
+    [("token", ["hold"].into())].into()
 });
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
