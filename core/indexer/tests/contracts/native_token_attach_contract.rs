@@ -191,13 +191,22 @@ async fn test_native_token_attach_contract() -> Result<()> {
 
     let utxo_id = format!("{}:{}", reveal_transaction.compute_txid(), 0);
 
-    assert_eq!(transfer.src, internal_key.to_string());
-    assert_eq!(transfer.dst, utxo_id);
+    let seller_signer_id = rt
+        .get_signer_id(&internal_key.to_string())
+        .await?
+        .expect("seller signer_id");
+    assert_eq!(transfer.src, HolderRef::SignerId(seller_signer_id));
+    let utxo_ref = OutPoint {
+        txid: reveal_transaction.compute_txid().to_string(),
+        vout: 0,
+    };
+    assert_eq!(transfer.dst, HolderRef::Utxo(utxo_ref.clone()));
 
-    let balance = token::balance(runtime, &utxo_id).await?;
+    let balance = token::balance(runtime, HolderRef::Utxo(utxo_ref)).await?;
     assert_eq!(balance, Some(2u64.try_into().unwrap()));
 
-    let buyer_balance_before = token::balance(runtime, &buyer_x_only.to_string())
+    let buyer_ref = HolderRef::XOnlyPubkey(buyer_x_only.to_string());
+    let buyer_balance_before = token::balance(runtime, buyer_ref.clone())
         .await?
         .unwrap_or(0u64.try_into().unwrap());
 
@@ -221,12 +230,14 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let transfer =
         token::wave::detach_parse_return_expr(&detach_result.value.expect("Expected value"))?;
 
-    assert_eq!(transfer.src, utxo_id);
-    assert_eq!(transfer.dst, buyer_x_only.to_string());
-
-    let buyer_balance_after = token::balance(runtime, &buyer_x_only.to_string())
+    assert_eq!(transfer.src.to_string(), utxo_id);
+    let buyer_signer_id = rt
+        .get_signer_id(&buyer_x_only.to_string())
         .await?
-        .unwrap();
+        .expect("buyer signer_id");
+    assert_eq!(transfer.dst, HolderRef::SignerId(buyer_signer_id));
+
+    let buyer_balance_after = token::balance(runtime, buyer_ref).await?.unwrap();
     assert_eq!(
         buyer_balance_after - buyer_balance_before,
         2u64.try_into().unwrap()

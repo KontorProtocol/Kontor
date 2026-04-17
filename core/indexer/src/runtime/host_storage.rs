@@ -21,17 +21,19 @@ impl Runtime {
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
         let table = self.table.lock().await;
         let contract_id = table.get(&self_)?.get_contract_id();
-        OptionFuture::from(
-            self.storage
-                .get(fuel, contract_id, &path)
-                .await?
-                .map(async |bs| {
-                    Fuel::Get(bs.len())
-                        .consume(accessor, self.gauge.as_ref())
-                        .await?;
-                    deserialize(&bs)
-                }),
-        )
+        let raw = self.storage.get(fuel, contract_id, &path).await?;
+        if raw.is_none() {
+            tracing::debug!(
+                "storage read returned None: contract_id={contract_id} path={path} fuel={fuel} height={}",
+                self.storage.height
+            );
+        }
+        OptionFuture::from(raw.map(async |bs| {
+            Fuel::Get(bs.len())
+                .consume(accessor, self.gauge.as_ref())
+                .await?;
+            deserialize(&bs)
+        }))
         .await
         .transpose()
     }

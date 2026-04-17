@@ -3,16 +3,23 @@ use bitcoin::Txid;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use indexer_types::{Inst, OpMetadata};
+
 use crate::bitcoin_client::Client;
-use crate::block::filter_map;
+use crate::block::{filter_map, op_from_inst};
+use crate::database;
 use crate::retry::{new_backoff_unlimited, retry};
+use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
+use crate::runtime::kontor::built_in::context::HolderRef;
+use crate::runtime::registry;
+use crate::runtime::wit::{Holder, Signer};
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
 /// depends on block height/tx_index). All other ops are batchable.
 /// Aggregate inputs are always batchable.
-pub fn is_batchable(inputs: &[indexer_types::TransactionInput]) -> bool {
+pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
     inputs.iter().all(|input| {
         if input.insts.is_aggregate() {
             return true;
@@ -221,7 +228,7 @@ impl Executor for RuntimeExecutor {
 
 pub async fn process_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
@@ -256,20 +263,26 @@ pub async fn process_input(
 
 async fn process_direct_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    use crate::block::op_from_inst;
-    use indexer_types::OpMetadata;
+    let conn = runtime.get_storage_conn();
+    let holder_ref = HolderRef::XOnlyPubkey(input.x_only_pubkey.to_string());
+    let holder = Holder::from_holder_ref(holder_ref, &conn, height)
+        .await
+        .map_err(|e| anyhow::anyhow!("holder resolution failed: {e:?}"))?;
+    let identity = holder
+        .identity
+        .ok_or_else(|| anyhow::anyhow!("expected identity for x_only_pubkey signer"))?;
 
     let metadata = OpMetadata {
         previous_output: input.previous_output,
         input_index: input.input_index,
-        signer: input.witness_signer.clone(),
+        signer_id: identity.signer_id() as u64,
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
@@ -297,17 +310,13 @@ async fn process_direct_input(
 
 async fn process_aggregate_input(
     runtime: &mut Runtime,
-    input: &indexer_types::TransactionInput,
+    input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    use crate::block::op_from_inst;
-    use crate::runtime::{registry, wit::Signer};
-    use indexer_types::{Inst, OpMetadata};
-
     let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
         Ok(map) => map,
         Err(e) => {
@@ -329,12 +338,9 @@ async fn process_aggregate_input(
         .zip(agg.signer_ids.iter())
         .enumerate()
     {
-        let x_only = match signer_map.get(&signer_id) {
-            Some(x) => x.clone(),
-            None => {
-                warn!("signer_id {signer_id} not in signer_map after verification");
-                continue;
-            }
+        if !signer_map.contains_key(&signer_id) {
+            warn!("signer_id {signer_id} not in signer_map after verification");
+            continue;
         };
 
         runtime
@@ -360,31 +366,27 @@ async fn process_aggregate_input(
                     continue;
                 }
             };
-            let nonce_result = registry::api::advance_nonce(
-                runtime,
-                &Signer::Core(Box::new(Signer::Nobody)),
-                signer_id,
-                nonce_val,
-            )
-            .await;
-            match nonce_result {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    warn!("aggregate nonce check failed for signer {signer_id}: {e:?}");
+            let conn = runtime.get_storage_conn();
+            let identity = database::types::Identity::new(signer_id as i64);
+            match identity
+                .advance_nonce(&conn, nonce_val as i64, height)
+                .await
+            {
+                Ok(_) => {}
+                Err(database::queries::Error::InvalidData(msg)) => {
+                    warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
                     continue;
                 }
                 Err(e) => {
-                    warn!("aggregate nonce advance error for signer {signer_id}: {e}");
-                    continue;
+                    anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
                 }
             }
         }
 
-        let signer = Signer::XOnlyPubKey(x_only);
         let metadata = OpMetadata {
             previous_output: input.previous_output,
             input_index: input.input_index,
-            signer: signer.clone(),
+            signer_id,
         };
         let op = op_from_inst(inst.clone(), metadata);
         execute_op(runtime, &op).await?;
@@ -393,31 +395,18 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
-    use crate::runtime::ExecutionError;
-    use crate::runtime::wit::Signer;
-
-    if let Signer::XOnlyPubKey(x_only) = &op.metadata().signer {
-        match runtime.ensure_signer(x_only).await {
-            Ok(_) => {}
-            Err(ExecutionError::Deterministic(e)) => {
-                warn!("Failed to ensure signer for {x_only}: {e}");
-                return Ok(());
-            }
-            Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("ensure_signer infrastructure failure"));
-            }
-        }
-    }
+    let identity = database::types::Identity::new(op.metadata().signer_id as i64);
+    let signer = Signer::Id(identity);
 
     match op {
         indexer_types::Op::Publish {
-            metadata,
             gas_limit,
             name,
             bytes,
+            ..
         } => {
             runtime.set_gas_limit(*gas_limit);
-            match runtime.publish(&metadata.signer, name, bytes).await {
+            match runtime.publish(&signer, name, bytes).await {
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
@@ -428,7 +417,6 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             }
         }
         indexer_types::Op::Call {
-            metadata,
             gas_limit,
             contract,
             expr,
@@ -436,7 +424,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
         } => {
             runtime.set_gas_limit(*gas_limit);
             match runtime
-                .execute(Some(&metadata.signer), &(contract.into()), expr)
+                .execute(Some(&signer), &(contract.into()), expr)
                 .await
             {
                 Ok(_) => {}
@@ -448,33 +436,35 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 }
             }
         }
-        indexer_types::Op::Issuance { metadata, .. } => {
-            match runtime.issuance(&metadata.signer).await {
-                Ok(_) => {}
-                Err(ExecutionError::Deterministic(e)) => {
-                    warn!("Issuance operation failed: {e:#}");
-                }
-                Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Issuance infrastructure failure"));
-                }
+        indexer_types::Op::Issuance { .. } => match runtime.issuance(&signer).await {
+            Ok(_) => {}
+            Err(ExecutionError::Deterministic(e)) => {
+                warn!("Issuance operation failed: {e:#}");
             }
-        }
+            Err(ExecutionError::NonDeterministic(e)) => {
+                return Err(e.context("Issuance infrastructure failure"));
+            }
+        },
         indexer_types::Op::RegisterBlsKey {
-            metadata,
             bls_pubkey,
             schnorr_sig,
             bls_sig,
+            ..
         } => {
             match runtime
                 .register_bls_key(
-                    &metadata.signer,
+                    &signer,
                     bls_pubkey.as_slice(),
                     schnorr_sig.as_slice(),
                     bls_sig.as_slice(),
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => {
+                    registry::api::registered(runtime, &Signer::Core(Box::new(signer.clone())))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("registry.registered failed: {e}"))?;
+                }
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("RegisterBlsKey failed: {e:#}");
                 }

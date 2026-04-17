@@ -50,7 +50,7 @@ async fn test_native_token_contract() -> Result<()> {
     assert!(result > 957u64.try_into().unwrap());
     assert!(result <= 958u64.try_into().unwrap());
 
-    let result = token::balance(runtime, "foo").await?;
+    let result = token::balance(runtime, HolderRef::XOnlyPubkey("foo".to_string())).await?;
     assert_eq!(result, None);
 
     let balances = token::balances(runtime).await?;

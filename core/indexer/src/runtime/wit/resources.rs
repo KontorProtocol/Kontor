@@ -1,14 +1,67 @@
 use std::pin::Pin;
+use std::str::FromStr;
 
+use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
-pub use indexer_types::Signer;
 
-use crate::database::types::{FileMetadataRow, bytes_to_field_element};
+use crate::database::queries::get_or_create_identity;
+use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
+use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
 use kontor_crypto::field_from_uniform_bytes;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Signer {
+    Id(Identity),
+    Core(Box<Signer>),
+    ContractId { id: i64, key: String },
+    Nobody,
+}
+
+impl Signer {
+    pub fn new_contract_id(id: i64) -> Self {
+        Self::ContractId {
+            id,
+            key: format!("__cid__{id}"),
+        }
+    }
+
+    pub fn is_core(&self) -> bool {
+        matches!(self, Signer::Core(_))
+    }
+}
+
+impl core::ops::Deref for Signer {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match self {
+            Self::Id(identity) => identity.key(),
+            Self::Core(_) => "core",
+            Self::ContractId { key, .. } => key,
+            Self::Nobody => "nobody",
+        }
+    }
+}
+
+impl core::fmt::Display for Signer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", &**self)
+    }
+}
+
+impl From<&Signer> for HolderRef {
+    fn from(signer: &Signer) -> Self {
+        match signer {
+            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
+            Signer::ContractId { key, .. } => HolderRef::ContractId(key.clone()),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
+        }
+    }
+}
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
@@ -77,6 +130,70 @@ pub struct CoreContext {
 impl HasContractId for CoreContext {
     fn get_contract_id(&self) -> i64 {
         self.contract_id
+    }
+}
+
+pub struct Holder {
+    pub holder_ref: HolderRef,
+    pub identity: Option<Identity>,
+}
+
+impl Holder {
+    pub async fn from_holder_ref(
+        mut holder_ref: HolderRef,
+        conn: &libsql::Connection,
+        height: i64,
+    ) -> Result<Self, Error> {
+        match &holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                holder_ref = HolderRef::XOnlyPubkey(
+                    XOnlyPublicKey::from_str(s)
+                        .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?
+                        .to_string(),
+                );
+            }
+            HolderRef::ContractId(s) => {
+                if !s.starts_with("__cid__") {
+                    return Err(Error::Validation(
+                        "contract-id must start with __cid__".to_string(),
+                    ));
+                }
+                if s[7..].parse::<i64>().is_err() {
+                    return Err(Error::Validation(
+                        "contract-id must end with a valid integer".to_string(),
+                    ));
+                }
+            }
+            HolderRef::SignerId(_) => {}
+            HolderRef::Utxo(out_point) => {
+                Txid::from_str(&out_point.txid)
+                    .map_err(|e| Error::Validation(format!("invalid txid: {e}")))?;
+            }
+            HolderRef::Core | HolderRef::Burner => {}
+        }
+
+        let (resolved, identity) = match &holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                // Canonicalize to lowercase hex to avoid case-sensitive DB mismatches
+                let identity = get_or_create_identity(conn, s, height)
+                    .await
+                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
+                (
+                    HolderRef::SignerId(identity.signer_id() as u64),
+                    Some(identity),
+                )
+            }
+            HolderRef::SignerId(id) => {
+                let identity = Identity::new(*id as i64);
+                (holder_ref, Some(identity))
+            }
+            _ => (holder_ref, None),
+        };
+
+        Ok(Self {
+            holder_ref: resolved,
+            identity,
+        })
     }
 }
 

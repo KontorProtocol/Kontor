@@ -14,18 +14,8 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX};
 use indexer::test_utils::bls_test::construct_rogue_g2_pubkey;
-use indexer_types::{Inst, Signer};
-use testlib::{
-    AnyhowError, ContractAddress, Decimal, Error, Integer, RawFileDescriptor, Runtime, TypedCall,
-    import,
-};
-
-import!(
-    name = "registry",
-    height = 0,
-    tx_index = 0,
-    path = "../../native-contracts/registry/wit",
-);
+use indexer_types::Inst;
+use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
@@ -81,12 +71,12 @@ async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
 
     let attacker_xonly = attacker.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_bls_pubkey(runtime, &attacker_xonly).await?,
+        rt.get_bls_pubkey(&attacker_xonly).await?,
         None,
         "rogue key must not be registered"
     );
     assert_eq!(
-        registry::get_bls_pubkey(runtime, &victim_xonly).await?,
+        rt.get_bls_pubkey(&victim_xonly).await?,
         Some(victim.bls_pubkey.to_vec()),
         "victim's registered key must be unchanged"
     );
@@ -127,12 +117,12 @@ async fn bls_attack_proof_replay_rejected() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_bls_pubkey(runtime, &eve_xonly).await?,
+        rt.get_bls_pubkey(&eve_xonly).await?,
         None,
         "replayed proof must not register Eve"
     );
     assert_eq!(
-        registry::get_bls_pubkey(runtime, &alice_xonly).await?,
+        rt.get_bls_pubkey(&alice_xonly).await?,
         Some(alice.bls_pubkey.to_vec()),
         "Alice's registered key must be unchanged"
     );
@@ -185,7 +175,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        registry::get_bls_pubkey(runtime, &eve_xonly).await?,
+        rt.get_bls_pubkey(&eve_xonly).await?,
         None,
         "forged BLS binding must prevent registration"
     );

@@ -234,7 +234,7 @@ pub async fn test_commit_psbt_security_invariants(reg_tester: &mut RegTester) ->
         }
         let base_vb = tx_vbytes(&base_no_wit);
         let inputs_n = commit_psbt.unsigned_tx.input.len() as u64;
-        let base_share = if inputs_n > 0 { base_vb / inputs_n } else { 0 };
+        let base_share = base_vb.checked_div(inputs_n).unwrap_or(0);
         let mut with_dummy = commit_psbt.unsigned_tx.clone();
         let mut dw = bitcoin::Witness::new();
         dw.push(vec![0u8; 65]);
@@ -930,7 +930,7 @@ pub async fn test_portal_reveal_fairness_base_plus_witness(
     }
     let base_vb = tx_vbytes(&base_no_witness);
     let inputs_n = reveal_psbt.unsigned_tx.input.len() as u64;
-    let base_share = if inputs_n > 0 { base_vb / inputs_n } else { 0 };
+    let base_share = base_vb.checked_div(inputs_n).unwrap_or(0);
     let required = base_share
         .saturating_add(delta_vb)
         .saturating_mul(min_sat_per_vb);

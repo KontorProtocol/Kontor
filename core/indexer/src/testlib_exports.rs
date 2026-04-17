@@ -7,6 +7,7 @@ pub use crate::{
         wit::{
             Signer,
             kontor::built_in::{
+                context::{HolderRef, OutPoint},
                 error::Error,
                 file_registry::RawFileDescriptor,
                 foreign::ContractAddress,

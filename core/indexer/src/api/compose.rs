@@ -858,7 +858,7 @@ async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(Out
     }
 
     let mut funding_utxos: Vec<(OutPoint, TxOut)> = Vec::with_capacity(outpoints.len());
-    for (outpoint, res) in outpoints.into_iter().zip(results.into_iter()) {
+    for (outpoint, res) in outpoints.into_iter().zip(results) {
         let tx =
             res.map_err(|e| anyhow!("Failed to fetch transaction {}: {}", outpoint.txid, e))?;
         let maybe_prevout = tx.output.get(outpoint.vout as usize).cloned();

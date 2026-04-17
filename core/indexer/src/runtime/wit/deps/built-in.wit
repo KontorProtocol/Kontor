@@ -1,8 +1,27 @@
 package kontor:built-in;
 
 interface context {
+    use error.{error};
+
+    variant holder-ref {
+        x-only-pubkey(string),
+        contract-id(string),
+        signer-id(u64),
+        core,
+        burner,
+        utxo(out-point),
+    }
+
+    resource holder {
+        key: async func() -> string;
+        from-ref: static async func(ref: holder-ref) -> result<holder, error>;
+        as-ref: async func() -> holder-ref;
+    }
+
     resource signer {
-        to-string: async func() -> string;
+        key: async func() -> string;
+        as-holder: async func() -> holder;
+        as-ref: async func() -> holder-ref;
     }
 
     variant op-return-data {

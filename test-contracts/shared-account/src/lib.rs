@@ -7,7 +7,7 @@ interface!(name = "token", path = "../test-token/wit");
 
 #[derive(Clone, Default, Storage)]
 struct Account {
-    pub other_tenants: Map<String, bool>,
+    pub other_tenants: Map<Holder, bool>,
     pub balance: Integer,
     pub owner: String,
 }
@@ -18,11 +18,8 @@ struct SharedAccountStorage {
 }
 
 fn authorized(signer: &Signer, account: &AccountModel) -> bool {
-    account.owner() == signer.to_string()
-        || account
-            .other_tenants()
-            .get(signer.to_string())
-            .is_some_and(|b| b)
+    let holder: Holder = signer.as_holder();
+    account.owner() == signer.key() || account.other_tenants().get(&holder).is_some_and(|b| b)
 }
 
 fn insufficient_balance_error() -> Error {
@@ -49,23 +46,21 @@ impl Guest for SharedAccount {
         other_tenants: Vec<String>,
     ) -> Result<String, Error> {
         let signer = ctx.signer();
-        let balance =
-            token::balance(&token, &signer.to_string()).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
         let account_id = ctx.generate_id();
+        let tenant_holders: Vec<(Holder, bool)> = other_tenants
+            .into_iter()
+            .map(|t| (t.parse::<Holder>().expect("invalid holder"), true))
+            .collect();
         ctx.model().accounts().set(
-            account_id.clone(),
+            &account_id,
             Account {
                 balance: n,
-                owner: ctx.signer().to_string(),
-                other_tenants: Map::new(
-                    &other_tenants
-                        .into_iter()
-                        .map(|t| (t, true))
-                        .collect::<Vec<_>>(),
-                ),
+                owner: ctx.signer().key(),
+                other_tenants: Map::new(&tenant_holders),
             },
         );
         token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)?;
@@ -79,15 +74,14 @@ impl Guest for SharedAccount {
         n: Integer,
     ) -> Result<(), Error> {
         let signer = ctx.signer();
-        let balance =
-            token::balance(&token, &signer.to_string()).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
         let account = ctx
             .model()
             .accounts()
-            .get(account_id)
+            .get(&account_id)
             .ok_or(unknown_error())?;
         if !authorized(&signer, &account) {
             return Err(unauthorized_error());
@@ -106,7 +100,7 @@ impl Guest for SharedAccount {
         let account = ctx
             .model()
             .accounts()
-            .get(account_id)
+            .get(&account_id)
             .ok_or(unknown_error())?;
         if !authorized(&signer, &account) {
             return Err(unauthorized_error());
@@ -116,11 +110,11 @@ impl Guest for SharedAccount {
             return Err(insufficient_balance_error());
         }
         account.set_balance(balance - n);
-        token::transfer(&token, ctx.contract_signer(), &signer.to_string(), n)
+        token::transfer(&token, ctx.contract_signer(), &signer.key(), n)
     }
 
     fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
-        ctx.model().accounts().get(account_id).map(|a| a.balance())
+        ctx.model().accounts().get(&account_id).map(|a| a.balance())
     }
 
     fn token_balance(
@@ -132,10 +126,10 @@ impl Guest for SharedAccount {
     }
 
     fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {
-        ctx.model().accounts().get(account_id).map(|a| {
+        ctx.model().accounts().get(&account_id).map(|a| {
             [a.owner()]
                 .into_iter()
-                .chain(a.other_tenants().keys())
+                .chain(a.other_tenants().keys().map(|h| h.to_string()))
                 .collect()
         })
     }

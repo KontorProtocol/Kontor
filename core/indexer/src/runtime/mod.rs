@@ -31,7 +31,7 @@ pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
 };
-use stdlib::{contract_address, impls};
+use stdlib::{contract_address, holder_ref, impls};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -85,6 +85,7 @@ impl From<anyhow::Error> for ExecutionError {
 }
 
 pub use wit::kontor;
+pub use wit::kontor::built_in::context::OutPoint;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
 pub use wit::kontor::built_in::foreign::ContractAddress;
@@ -100,6 +101,7 @@ use wasmtime::{
 };
 
 use crate::bls::RegistrationProof;
+use crate::database;
 use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
@@ -299,14 +301,14 @@ impl Runtime {
             FILESTORAGE,
         )
         .await?;
+        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
+            .await?;
         self.publish(
             &Signer::Core(Box::new(Signer::Nobody)),
             "registry",
             REGISTRY,
         )
         .await?;
-        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
-            .await?;
         if !genesis_validators.is_empty() {
             let validators = genesis_validators.iter().cloned().map(Into::into).collect();
             staking::api::set_genesis_set(
@@ -368,25 +370,25 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
-        token::api::issuance(
+        let result = token::api::issuance(
             self,
             &Signer::Core(Box::new(signer.clone())),
             10u64.try_into().expect("u64 to decimal"),
         )
-        .await?
-        .expect("issuance(10) should never fail");
+        .await;
+        result?.expect("issuance(10) should never fail");
         Ok(())
     }
 
-    pub async fn ensure_signer(&mut self, x_only_pubkey: &str) -> Result<u64, ExecutionError> {
-        self.set_gas_limit(self.gas_limit_for_non_procs);
-        let entry = registry::api::ensure_signer(
-            self,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            x_only_pubkey,
-        )
-        .await?;
-        Ok(entry.signer_id)
+    pub async fn get_or_create_identity(
+        &self,
+        x_only_pubkey: &str,
+    ) -> Result<database::types::Identity, ExecutionError> {
+        let conn = self.get_storage_conn();
+        let height = self.storage.height;
+        database::queries::get_or_create_identity(&conn, x_only_pubkey, height)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }
 
     pub async fn register_bls_key(
@@ -396,28 +398,32 @@ impl Runtime {
         schnorr_sig: &[u8],
         bls_sig: &[u8],
     ) -> Result<(), ExecutionError> {
-        self.set_gas_limit(self.gas_limit_for_non_procs);
-
-        let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
+        let Signer::Id(identity) = signer else {
             return Err(ExecutionError::Deterministic(anyhow!(
-                "RegisterBlsKey requires an XOnlyPubKey signer"
+                "RegisterBlsKey requires an Id signer"
             )));
         };
-        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
-            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
-        let canonical_signer: Signer = Signer::XOnlyPubKey(x_only_pk.to_string());
 
-        let existing = registry::api::get_entry(self, &x_only_pk.to_string()).await?;
-        if let Some(entry) = existing {
-            if entry.bls_pubkey.as_deref() == Some(bls_pubkey) {
+        let conn = self.get_storage_conn();
+        let existing_bls = identity
+            .bls_pubkey(&conn)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        if let Some(existing) = existing_bls {
+            if existing == bls_pubkey {
                 return Ok(());
             }
-            if entry.bls_pubkey.is_some() {
-                return Err(ExecutionError::Deterministic(anyhow!(
-                    "BLS pubkey already registered for signer"
-                )));
-            }
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "BLS pubkey already registered for signer"
+            )));
         }
+
+        let x_only_pubkey = identity
+            .x_only_pubkey(&conn)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
+            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 
         let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {
             ExecutionError::Deterministic(anyhow!(
@@ -441,12 +447,11 @@ impl Runtime {
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
 
-        registry::api::register_bls_key(
-            self,
-            &Signer::Core(Box::new(canonical_signer)),
-            proof.bls_pubkey.to_vec(),
-        )
-        .await?;
+        identity
+            .register_bls_key(&conn, &proof.bls_pubkey, self.storage.height)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+
         Ok(())
     }
 
@@ -529,23 +534,8 @@ impl Runtime {
     }
 }
 
-static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> = LazyLock::new(|| {
-    [
-        ("token", ["hold"].into()),
-        (
-            "registry",
-            [
-                "ensure-signer",
-                "get-entry",
-                "get-entry-by-id",
-                "get-signer-id",
-                "get-bls-pubkey",
-            ]
-            .into(),
-        ),
-    ]
-    .into()
-});
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
+    LazyLock::new(|| [("token", ["hold"].into())].into());
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
     SKIP_RESULT_RULES

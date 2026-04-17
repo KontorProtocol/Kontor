@@ -8,8 +8,8 @@ use thiserror::Error as ThisError;
 use crate::{
     database::types::{
         BatchQueryResult, BlockQuery, CheckpointRow, ContractResultPublicRow, ContractResultRow,
-        ContractRow, FileMetadataRow, HasRowId, OpResultId, OrderDirection, ResultQuery,
-        TransactionQuery,
+        ContractRow, FileMetadataRow, HasRowId, Identity, OpResultId, OrderDirection, ResultQuery,
+        SignerEntry, TransactionQuery,
     },
     runtime::ContractAddress,
 };
@@ -260,10 +260,10 @@ pub async fn delete_contract_state(
 }
 
 fn base_exists_contract_state_query() -> String {
-    BASE_CONTRACT_STATE_QUERY
-        .replace("{{path_operator}}", "LIKE")
-        .replace("{{path_prefix}}", "")
-        .replace("{{path_suffix}}", "|| '%'")
+    BASE_CONTRACT_STATE_QUERY.replace(
+        "AND path {{path_operator}} {{path_prefix}} :path {{path_suffix}}",
+        "AND (path LIKE :path || '.%' OR path = :path)",
+    )
 }
 
 pub async fn exists_contract_state(
@@ -1228,6 +1228,198 @@ pub async fn select_existing_txids(
     Ok(result)
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Identity DAO
+// ─────────────────────────────────────────────────────────────────
+
+impl Identity {
+    pub async fn x_only_pubkey(&self, conn: &Connection) -> Result<String, Error> {
+        let mut rows = conn
+            .query(
+                "SELECT x_only_pubkey FROM signers WHERE id = ?",
+                params![self.signer_id()],
+            )
+            .await?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| Error::InvalidData(format!("unknown signer_id {}", self.signer_id())))?;
+        Ok(row.get(0)?)
+    }
+
+    pub async fn bls_pubkey(&self, conn: &Connection) -> Result<Option<Vec<u8>>, Error> {
+        let mut rows = conn
+            .query(
+                "SELECT bls_pubkey FROM bls_keys WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                params![self.signer_id()],
+            )
+            .await?;
+        Ok(rows.next().await?.map(|row| row.get(0)).transpose()?)
+    }
+
+    pub async fn next_nonce(&self, conn: &Connection) -> Result<i64, Error> {
+        let mut rows = conn
+            .query(
+                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                params![self.signer_id()],
+            )
+            .await?;
+        Ok(rows
+            .next()
+            .await?
+            .map(|row| row.get(0))
+            .transpose()?
+            .unwrap_or(0))
+    }
+
+    pub async fn advance_nonce(
+        &self,
+        conn: &Connection,
+        caller_nonce: i64,
+        height: i64,
+    ) -> Result<i64, Error> {
+        let mut rows = conn
+            .query(
+                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                params![self.signer_id()],
+            )
+            .await?;
+
+        let stored_nonce: i64 = rows
+            .next()
+            .await?
+            .ok_or_else(|| {
+                Error::InvalidData(format!("no nonce for signer_id {}", self.signer_id()))
+            })?
+            .get(0)?;
+
+        const MAX_NONCE_GAP: i64 = 10_000;
+
+        if caller_nonce < stored_nonce {
+            return Err(Error::InvalidData(format!(
+                "nonce too low for signer_id {}: got {caller_nonce}, expected >= {stored_nonce}",
+                self.signer_id()
+            )));
+        }
+        if caller_nonce - stored_nonce > MAX_NONCE_GAP {
+            return Err(Error::InvalidData(format!(
+                "nonce too far ahead for signer_id {}: got {caller_nonce}, expected <= {}",
+                self.signer_id(),
+                stored_nonce + MAX_NONCE_GAP
+            )));
+        }
+
+        let next_nonce = caller_nonce
+            .checked_add(1)
+            .ok_or_else(|| Error::InvalidData("nonce overflow".to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
+            params![self.signer_id(), next_nonce, height],
+        )
+        .await?;
+
+        Ok(next_nonce)
+    }
+
+    pub async fn register_bls_key(
+        &self,
+        conn: &Connection,
+        bls_pubkey: &[u8],
+        height: i64,
+    ) -> Result<(), Error> {
+        conn.execute(
+            "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
+            params![self.signer_id(), bls_pubkey.to_vec(), height],
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Signer Registry
+// ─────────────────────────────────────────────────────────────────
+
+pub async fn get_or_create_identity(
+    conn: &Connection,
+    x_only_pubkey: &str,
+    height: i64,
+) -> Result<Identity, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT id FROM signers WHERE x_only_pubkey = ?",
+            params![x_only_pubkey],
+        )
+        .await?;
+
+    if let Some(row) = rows.next().await? {
+        return Ok(Identity::new(row.get(0)?));
+    }
+
+    conn.execute(
+        "INSERT INTO signers (x_only_pubkey, height) VALUES (?, ?)",
+        params![x_only_pubkey, height],
+    )
+    .await?;
+
+    let signer_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, 0, ?)",
+        params![signer_id, height],
+    )
+    .await?;
+
+    Ok(Identity::new(signer_id))
+}
+
+pub async fn get_signer_entry(
+    conn: &Connection,
+    x_only_pubkey: &str,
+) -> Result<Option<SignerEntry>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+                s.id AS signer_id,
+                s.x_only_pubkey,
+                b.bls_pubkey,
+                n.next_nonce
+            FROM signers s
+            LEFT JOIN bls_keys b ON b.signer_id = s.id
+                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+            JOIN nonces n ON n.signer_id = s.id
+                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
+            WHERE s.x_only_pubkey = ?"#,
+            params![x_only_pubkey],
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn get_signer_entry_by_id(
+    conn: &Connection,
+    signer_id: i64,
+) -> Result<Option<SignerEntry>, Error> {
+    let mut rows = conn
+        .query(
+            r#"SELECT
+                s.id AS signer_id,
+                s.x_only_pubkey,
+                b.bls_pubkey,
+                n.next_nonce
+            FROM signers s
+            LEFT JOIN bls_keys b ON b.signer_id = s.id
+                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+            JOIN nonces n ON n.signer_id = s.id
+                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
+            WHERE s.id = ?"#,
+            params![signer_id],
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1618,7 +1810,7 @@ mod tests {
 
         // check existence
         assert!(contract_has_state(&conn, contract_id).await?);
-        assert!(exists_contract_state(&conn, contract_id, "test.").await?);
+        assert!(exists_contract_state(&conn, contract_id, "test").await?);
 
         assert_eq!(
             matching_path(&conn, contract_id, "test", r"^test.(path|foo|bar)(\..*|$)")
@@ -3375,6 +3567,223 @@ mod tests {
         assert_eq!(transactions[0].tx_index, Some(0));
         assert!(!meta.has_more);
         assert_eq!(meta.next_cursor, Some(transactions[0].id));
+
+        Ok(())
+    }
+
+    async fn setup_block(conn: &Connection, height: i64) -> Result<()> {
+        insert_block(
+            conn,
+            BlockRow {
+                height,
+                hash: new_mock_block_hash(height as u32),
+                relevant: true,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_or_create_identity_creates_new() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+        assert!(identity.signer_id() > 0);
+        assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_or_create_identity_returns_existing() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
+        let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+        assert_eq!(id1.signer_id(), id2.signer_id());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advance_nonce() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        let next = row.advance_nonce(&conn, 0, 1).await?;
+        assert_eq!(next, 1);
+
+        let next = row.advance_nonce(&conn, 1, 2).await?;
+        assert_eq!(next, 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advance_nonce_gap() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        let next = row.advance_nonce(&conn, 5, 1).await?;
+        assert_eq!(next, 6);
+
+        // Gap beyond MAX_NONCE_GAP is rejected
+        let result = row.advance_nonce(&conn, 20_000, 1).await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advance_nonce_replay_rejected() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        row.advance_nonce(&conn, 0, 1).await?;
+        let result = row.advance_nonce(&conn, 0, 2).await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_bls_key() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        let bls_key = vec![1u8; 48];
+        row.register_bls_key(&conn, &bls_key, 1).await?;
+
+        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        assert_eq!(entry.bls_pubkey, Some(bls_key));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_entry() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        assert_eq!(entry.signer_id, row.signer_id());
+        assert_eq!(entry.x_only_pubkey, pubkey);
+        assert_eq!(entry.bls_pubkey, None);
+        assert_eq!(entry.next_nonce, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_entry_by_id() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        let entry = get_signer_entry_by_id(&conn, row.signer_id())
+            .await?
+            .unwrap();
+        assert_eq!(entry.x_only_pubkey, pubkey);
+        assert_eq!(entry.next_nonce, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_signer_rollback() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+        setup_block(&conn, 3).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+        row.advance_nonce(&conn, 0, 2).await?;
+        row.register_bls_key(&conn, &[1u8; 48], 3).await?;
+
+        // Rollback to height 2 — should remove bls_key (height 3) but keep nonce (height 2)
+        rollback_to_height(&conn, 2).await?;
+
+        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        assert_eq!(entry.bls_pubkey, None);
+        assert_eq!(entry.next_nonce, 1);
+
+        // Rollback to height 0 — should remove everything
+        rollback_to_height(&conn, 0).await?;
+        let entry = get_signer_entry(&conn, pubkey).await?;
+        assert!(entry.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_identity_dao() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+
+        assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
+        assert_eq!(identity.bls_pubkey(&conn).await?, None);
+        assert_eq!(identity.next_nonce(&conn).await?, 0);
+
+        let bls_key = vec![1u8; 48];
+        identity.register_bls_key(&conn, &bls_key, 1).await?;
+        assert_eq!(identity.bls_pubkey(&conn).await?, Some(bls_key));
+
+        identity.advance_nonce(&conn, 0, 1).await?;
+        assert_eq!(identity.next_nonce(&conn).await?, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_or_create_identity_idempotent() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+        setup_block(&conn, 2).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
+        let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+        assert_eq!(id1.signer_id(), id2.signer_id());
 
         Ok(())
     }

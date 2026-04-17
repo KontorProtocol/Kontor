@@ -12,12 +12,6 @@ use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, In
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
-import!(
-    name = "registry",
-    height = 0,
-    tx_index = 0,
-    path = "../../native-contracts/registry/wit",
-);
 
 fn aggregate_call(
     nonce: u64,
@@ -72,7 +66,8 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -183,7 +178,8 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -254,7 +250,8 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     let signer = rt.identity().await?;
     let mut publisher = rt.identity().await?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
     let missing_contract = IndexerContractAddress {
@@ -382,10 +379,12 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         )
     })?;
 
-    let signer1_id = registry::get_signer_id(runtime, &signer1.x_only_public_key().to_string())
+    let signer1_id = rt
+        .get_signer_id(&signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = registry::get_signer_id(runtime, &signer2.x_only_public_key().to_string())
+    let signer2_id = rt
+        .get_signer_id(&signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
@@ -503,7 +502,8 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -517,40 +517,14 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         "precondition: nonce starts at 0"
     );
 
-    // Submit nonce=1 when next_nonce=0 — skipping ahead must be rejected.
-    let skipped_op = aggregate_call(
-        1,
-        50_000,
-        arith_contract.clone(),
-        arith::wave::eval_call_expr(99, arith::Op::Id),
-    );
-    let msg = skipped_op.aggregate_signing_message(signer_id)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
-    let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
 
-    let _ = rt
-        .instruction_insts(
-            &mut publisher,
-            aggregate_insts(vec![skipped_op], vec![signer_id], sig.to_bytes().to_vec()),
-        )
-        .await;
-
-    // Nonce must remain at 0 — the out-of-order op was rejected.
-    assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        0,
-        "out-of-order nonce must not advance"
-    );
-
-    // Confirm the correct nonce=0 still works after the rejected attempt.
+    // First, submit a valid nonce=0 op to advance nonce to 1.
     let valid_op = aggregate_call(
         0,
         50_000,
-        arith_contract,
+        arith_contract.clone(),
         arith::wave::eval_call_expr(42, arith::Op::Id),
     );
     let valid_msg = valid_op.aggregate_signing_message(signer_id)?;
@@ -579,6 +553,37 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
             .next_nonce,
         1,
         "nonce must advance after valid op"
+    );
+
+    // Now submit nonce=0 again (replay) — must be rejected.
+    let replay_op = aggregate_call(
+        0,
+        50_000,
+        arith_contract,
+        arith::wave::eval_call_expr(99, arith::Op::Id),
+    );
+    let replay_msg = replay_op.aggregate_signing_message(signer_id)?;
+    let replay_sig = sk.sign(&replay_msg, KONTOR_BLS_DST, &[]);
+
+    let _ = rt
+        .instruction_insts(
+            &mut publisher,
+            aggregate_insts(
+                vec![replay_op],
+                vec![signer_id],
+                replay_sig.to_bytes().to_vec(),
+            ),
+        )
+        .await;
+
+    // Nonce must remain at 1 — the replayed op was rejected.
+    assert_eq!(
+        client
+            .registry_entry(&signer_id.to_string())
+            .await?
+            .next_nonce,
+        1,
+        "replayed nonce must not advance"
     );
 
     Ok(())
@@ -617,7 +622,8 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         )
     })?;
 
-    let signer_id = registry::get_signer_id(runtime, &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 

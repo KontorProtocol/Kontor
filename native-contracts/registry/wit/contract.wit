@@ -3,60 +3,7 @@ package root:component;
 world root {
   include kontor:built-in/built-in;
   use kontor:built-in/context.{core-context, view-context, proc-context};
-  use kontor:built-in/error.{error};
-
-  record registry-entry {
-    signer-id: u64,
-    x-only-pubkey: string,
-    bls-pubkey: option<list<u8>>,
-    next-nonce: u64,
-  }
 
   export init: async func(ctx: borrow<proc-context>);
-
-  // Core-only: ensure an x-only pubkey has a registry entry, auto-assigning
-  // a signer-id on first use. Creates entry with no bls-pubkey.
-  export ensure-signer: async func(
-    ctx: borrow<core-context>,
-    x-only-pubkey: string
-  ) -> registry-entry;
-
-  // Core-only mutation: indexers register BLS keys after verifying proofs.
-  // If the entry already exists with no bls-pubkey (from ensure-signer),
-  // upgrades it in place preserving signer-id and next-nonce.
-  export register-bls-key: async func(
-    ctx: borrow<core-context>,
-    bls-pubkey: list<u8>
-  ) -> registry-entry;
-
-  export advance-nonce: async func(
-    ctx: borrow<core-context>,
-    signer-id: u64,
-    caller-nonce: u64
-  ) -> result<u64, error>;
-
-  export get-entry: async func(
-    ctx: borrow<view-context>,
-    x-only-pubkey: string
-  ) -> option<registry-entry>;
-
-  export get-entry-by-id: async func(
-    ctx: borrow<view-context>,
-    signer-id: u64
-  ) -> option<registry-entry>;
-
-  export get-signer-id: async func(
-    ctx: borrow<view-context>,
-    x-only-pubkey: string
-  ) -> option<u64>;
-
-  export get-bls-pubkey: async func(
-    ctx: borrow<view-context>,
-    x-only-pubkey: string
-  ) -> option<list<u8>>;
-
-  export get-next-signer-id: async func(
-    ctx: borrow<view-context>
-  ) -> u64;
+  export registered: async func(ctx: borrow<core-context>);
 }
-

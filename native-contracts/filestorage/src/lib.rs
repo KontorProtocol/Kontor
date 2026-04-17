@@ -103,10 +103,10 @@ impl Guest for Filestorage {
         };
 
         // Store the agreement and initialize node tracking
-        model.agreements().set(agreement_id.clone(), agreement);
+        model.agreements().set(&agreement_id, agreement);
         model
             .agreement_nodes()
-            .set(agreement_id.clone(), AgreementNodes::default());
+            .set(&agreement_id, AgreementNodes::default());
 
         // Increment count
         model.update_agreement_count(|c| c + 1);
@@ -129,7 +129,7 @@ impl Guest for Filestorage {
         let model = ctx.model();
         model
             .agreements()
-            .keys::<String>()
+            .keys()
             .filter_map(|agreement_id: String| {
                 let agreement = model.agreements().get(&agreement_id)?;
                 if !agreement.active() {
@@ -172,7 +172,7 @@ impl Guest for Filestorage {
         }
 
         // Add node to agreement (or reactivate if previously left)
-        nodes_state.nodes().set(node_id.clone(), true);
+        nodes_state.nodes().set(&node_id, true);
 
         // Increment node count
         nodes_state.update_node_count(|c| c + 1);
@@ -229,7 +229,7 @@ impl Guest for Filestorage {
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
         // Mark node as inactive (don't delete, just set to false)
-        nodes_state.nodes().set(node_id.clone(), false);
+        nodes_state.nodes().set(&node_id, false);
 
         // Decrement node count
         nodes_state.update_node_count(|c| c.saturating_sub(1));
@@ -300,7 +300,7 @@ impl Guest for Filestorage {
         let mut expired = 0u64;
 
         // Iterate through all challenges and expire those past deadline
-        for challenge_id in model.challenges().keys::<String>() {
+        for challenge_id in model.challenges().keys() {
             if let Some(challenge) = model.challenges().get(&challenge_id)
                 && challenge.status().load() == ChallengeStatus::Active
                 && challenge.deadline_height() <= current_height
@@ -342,7 +342,7 @@ impl Guest for Filestorage {
         // Get eligible agreements: active and agreement not already challenged
         let eligible_agreement_ids: Vec<String> = model
             .agreements()
-            .keys::<String>()
+            .keys()
             .filter(|aid: &String| {
                 model
                     .agreements()
@@ -414,7 +414,7 @@ impl Guest for Filestorage {
             };
             let active_nodes: Vec<String> = nodes_state
                 .nodes()
-                .keys::<String>()
+                .keys()
                 .filter(|nid: &String| nodes_state.nodes().get(nid).unwrap_or(false))
                 .collect();
 
@@ -462,7 +462,7 @@ impl Guest for Filestorage {
             };
             model
                 .challenges()
-                .set(challenge.challenge_id.clone(), challenge.clone());
+                .set(&challenge.challenge_id, challenge.clone());
 
             new_challenges.push(challenge);
         }
@@ -556,7 +556,7 @@ impl Guest for Filestorage {
 
         model
             .challenges()
-            .set(challenge.challenge_id.clone(), challenge.clone());
+            .set(&challenge.challenge_id, challenge.clone());
 
         Ok(challenge)
     }
@@ -610,7 +610,7 @@ impl Guest for Filestorage {
             let agreement =
                 model
                     .agreements()
-                    .get(challenge.agreement_id())
+                    .get(&challenge.agreement_id())
                     .ok_or(Error::Message(format!(
                         "Agreement not found: {}",
                         challenge.agreement_id()

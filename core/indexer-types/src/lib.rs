@@ -1,12 +1,10 @@
 extern crate alloc;
 
 use anyhow::Result;
-use bitcoin::{
-    BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion,
-};
+use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
 use indexmap::IndexMap;
-use macros::contract_address;
+use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
@@ -116,7 +114,7 @@ pub struct RevealParticipantInputs {
     #[ts(as = "String")]
     pub x_only_public_key: XOnlyPublicKey,
     #[ts(as = "String")]
-    pub commit_outpoint: OutPoint,
+    pub commit_outpoint: bitcoin::OutPoint,
     #[ts(as = "TxOutSchema")]
     pub commit_prevout: TxOut,
     pub commit_tap_leaf_script: TapLeafScript,
@@ -190,12 +188,13 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct TransactionInput {
+pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub witness_signer: Signer,
+    #[ts(as = "String")]
+    pub x_only_pubkey: XOnlyPublicKey,
     pub insts: Insts,
 }
 
@@ -206,7 +205,7 @@ pub struct Transaction {
     pub txid: Txid,
     #[ts(type = "number")]
     pub index: i64,
-    pub inputs: Vec<TransactionInput>,
+    pub inputs: Vec<Input>,
     #[ts(type = "Record<number, OpReturnData>")]
     #[serde(with = "indexmap::map::serde_seq")]
     pub op_return_data: IndexMap<u64, OpReturnData>,
@@ -224,41 +223,29 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub enum Signer {
-    Core(Box<Signer>),
-    XOnlyPubKey(String),
-    ContractId {
-        #[ts(type = "number")]
-        id: i64,
-        id_str: String,
-    },
-    Nobody,
+pub struct OutPoint {
+    pub txid: String,
+    pub vout: u64,
 }
 
-impl Signer {
-    pub fn new_contract_id(id: i64) -> Self {
-        Self::ContractId {
-            id,
-            id_str: format!("__cid__{}", id),
-        }
-    }
-
-    pub fn is_core(&self) -> bool {
-        matches!(self, Signer::Core(_))
-    }
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum HolderRef {
+    XOnlyPubkey(String),
+    ContractId(String),
+    SignerId(u64),
+    Core,
+    Burner,
+    Utxo(OutPoint),
 }
 
-impl core::ops::Deref for Signer {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Nobody => "nobody",
-            Self::Core(_) => "core",
-            Self::XOnlyPubKey(s) => s,
-            Self::ContractId { id_str, .. } => id_str,
-        }
+holder_ref!(HolderRef);
+
+impl core::fmt::Display for OutPoint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}", self.txid, self.vout)
     }
 }
 
@@ -278,7 +265,8 @@ pub struct OpMetadata {
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub signer: Signer,
+    #[ts(type = "number")]
+    pub signer_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

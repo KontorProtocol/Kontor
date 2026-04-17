@@ -79,7 +79,8 @@ impl LiteExecutor {
         let mut runtime = Runtime::new_with(engine, linker, component_cache, storage).await?;
         runtime.publish_native_contracts(genesis_validators).await?;
 
-        let signer = Signer::XOnlyPubKey(shared_pubkey);
+        let identity = runtime.get_or_create_identity(&shared_pubkey).await?;
+        let signer = Signer::Id(identity);
         runtime.issuance(&signer).await?;
 
         let contract_reader = ContractReader::new("../../test-contracts").await?;

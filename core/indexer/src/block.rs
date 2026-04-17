@@ -3,9 +3,7 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{
-    Inst, Insts, Op, OpMetadata, OpWithResult, Signer, Transaction, TransactionInput, deserialize,
-};
+use indexer_types::{Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize};
 use indexmap::IndexMap;
 use libsql::Connection;
 
@@ -83,10 +81,10 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                         && script_insts.next().is_none()
                         && let Ok(insts) = deserialize::<Insts>(&data)
                     {
-                        return Some(TransactionInput {
+                        return Some(Input {
                             previous_output: input.previous_output,
                             input_index: input_index as i64,
-                            witness_signer: Signer::XOnlyPubKey(signer.to_string()),
+                            x_only_pubkey: signer,
                             insts,
                         });
                     }
@@ -129,10 +127,13 @@ pub async fn inspect(
     let mut ops = Vec::new();
     for input in &tx.inputs {
         if !input.insts.is_aggregate() {
+            let entry =
+                crate::database::queries::get_signer_entry(conn, &input.x_only_pubkey.to_string())
+                    .await?;
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
-                signer: input.witness_signer.clone(),
+                signer_id: entry.map(|e| e.signer_id as u64).unwrap_or(0),
             };
             for (op_index, inst) in input.insts.ops.iter().enumerate() {
                 let op = op_from_inst(inst.clone(), metadata.clone());
@@ -159,7 +160,7 @@ mod tests {
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
-    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, Signer, serialize};
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, serialize};
 
     use super::filter_map;
     use crate::test_utils::{PublicKey as TestPublicKey, build_inscription};
@@ -232,7 +233,7 @@ mod tests {
         let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
         assert_eq!(parsed.inputs.len(), 1);
         let input = &parsed.inputs[0];
-        assert_eq!(input.witness_signer, Signer::XOnlyPubKey(xonly.to_string()));
+        assert_eq!(input.x_only_pubkey, xonly);
         assert_eq!(input.insts, insts);
     }
 
@@ -304,7 +305,7 @@ mod tests {
         let parsed = filter_map((0, tx)).expect("expected tx to be recognized");
         assert_eq!(parsed.inputs.len(), 1);
         let input = &parsed.inputs[0];
-        assert_eq!(input.witness_signer, Signer::XOnlyPubKey(xonly.to_string()));
+        assert_eq!(input.x_only_pubkey, xonly);
         assert_eq!(input.insts.ops.len(), 1);
         match &input.insts.ops[0] {
             Inst::Call {

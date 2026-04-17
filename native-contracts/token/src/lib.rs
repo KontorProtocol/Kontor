@@ -3,39 +3,40 @@ contract!(name = "token");
 
 use stdlib::*;
 
-const BURNER: &str = "burn";
-
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
-    pub ledger: Map<String, Decimal>,
+    pub ledger: Map<Holder, Decimal>,
     pub total_supply: Decimal,
 }
 
-fn make_utxo_id(txid: String, vout: u64) -> String {
-    format!("{}:{}", txid, vout)
+fn utxo_holder(out_point: context::OutPoint) -> Holder {
+    Holder::from_ref(&HolderRef::Utxo(out_point)).unwrap()
 }
 
 fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
-    if n <= 0u64.try_into().unwrap() {
+    if n <= 0u64.try_into()? {
         return Err(Error::Message("Amount must be positive".to_string()));
     }
 
     Ok(())
 }
 
-fn mint(model: &TokenStorageWriteModel, dst: String, amt: Decimal) -> Result<Mint, Error> {
+fn mint(model: &TokenStorageWriteModel, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
     assert_gt_zero(amt)?;
-    if amt > 1000u64.try_into().unwrap() {
+    if amt > 1000u64.try_into()? {
         return Err(Error::Message("Amount exceeds limit".to_string()));
     }
     let ledger = model.ledger();
     let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;
-    ledger.set(dst.clone(), new_amt);
+    ledger.set(&dst, new_amt);
     model.try_update_total_supply(|t| t.add(amt))?;
-    Ok(Mint { dst, amt: new_amt })
+    Ok(Mint {
+        dst: dst.into(),
+        amt: new_amt,
+    })
 }
 
-fn transfer(ctx: &ProcContext, src: String, dst: String, amt: Decimal) -> Result<Transfer, Error> {
+fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result<Transfer, Error> {
     assert_gt_zero(amt)?;
     let ledger = ctx.model().ledger();
 
@@ -46,9 +47,13 @@ fn transfer(ctx: &ProcContext, src: String, dst: String, amt: Decimal) -> Result
         return Err(Error::Message("insufficient funds".to_string()));
     }
 
-    ledger.set(src.clone(), src_amt.sub(amt)?);
-    ledger.set(dst.clone(), dst_amt.add(amt)?);
-    Ok(Transfer { src, dst, amt })
+    ledger.set(&src, src_amt.sub(amt)?);
+    ledger.set(&dst, dst_amt.add(amt)?);
+    Ok(Transfer {
+        src: src.into(),
+        dst: dst.into(),
+        amt,
+    })
 }
 
 impl Guest for Token {
@@ -59,82 +64,91 @@ impl Guest for Token {
     fn issuance(ctx: &CoreContext, amt: Decimal) -> Result<Mint, Error> {
         mint(
             &ctx.proc_context().model(),
-            ctx.signer_proc_context().signer().to_string(),
+            ctx.signer_proc_context().signer().into(),
             amt,
         )
     }
 
-    fn issue_to(ctx: &CoreContext, dst: String, amt: Decimal) -> Result<Mint, Error> {
-        mint(&ctx.proc_context().model(), dst, amt)
+    fn issue_to(ctx: &CoreContext, dst: HolderRef, amt: Decimal) -> Result<Mint, Error> {
+        mint(&ctx.proc_context().model(), dst.try_into()?, amt)
     }
 
     fn hold(ctx: &CoreContext, amt: Decimal) -> Result<Transfer, Error> {
-        Self::transfer(
+        transfer(
             &ctx.signer_proc_context(),
-            ctx.proc_context().signer().to_string(),
+            ctx.signer_proc_context().signer().into(),
+            CORE(),
             amt,
         )
     }
 
     fn release(ctx: &CoreContext, burn_amt: Decimal) -> Result<Burn, Error> {
-        let core = ctx.proc_context();
-        let burn = Self::burn(&core, burn_amt)?;
-        let amt = core
+        let proc_context = ctx.proc_context();
+        let burn = Self::burn(&proc_context, burn_amt)?;
+        let amt = proc_context
             .model()
             .ledger()
-            .get(core.signer().to_string())
+            .get(&CORE())
             .unwrap_or_default();
-        if amt > 0u64.try_into().unwrap() {
-            Self::transfer(&core, ctx.signer_proc_context().signer().to_string(), amt)?;
+        if amt > 0u64.try_into()? {
+            transfer(
+                &proc_context,
+                CORE(),
+                ctx.signer_proc_context().signer().into(),
+                amt,
+            )?;
         }
         Ok(Burn {
-            src: ctx.signer_proc_context().signer().to_string(),
+            src: ctx.signer_proc_context().signer().into(),
             ..burn
         })
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
-        mint(&ctx.model(), ctx.signer().to_string(), amt)
+        mint(&ctx.model(), ctx.signer().into(), amt)
     }
 
     fn burn(ctx: &ProcContext, amt: Decimal) -> Result<Burn, Error> {
-        let transfer = Self::transfer(ctx, BURNER.to_string(), amt)?;
+        transfer(ctx, ctx.signer().into(), BURNER(), amt)?;
         ctx.model().try_update_total_supply(|t| t.sub(amt))?;
         Ok(Burn {
-            src: transfer.src,
-            amt: transfer.amt,
+            src: ctx.signer().into(),
+            amt,
         })
     }
 
-    fn transfer(ctx: &ProcContext, dst: String, amt: Decimal) -> Result<Transfer, Error> {
-        let src = ctx.signer().to_string();
-        transfer(ctx, src, dst, amt)
+    fn transfer(ctx: &ProcContext, dst: HolderRef, amt: Decimal) -> Result<Transfer, Error> {
+        transfer(ctx, ctx.signer().into(), dst.try_into()?, amt)
     }
 
     fn attach(ctx: &ProcContext, vout: u64, amt: Decimal) -> Result<Transfer, Error> {
-        let dst = make_utxo_id(ctx.transaction().id(), vout);
-        Self::transfer(ctx, dst, amt)
+        let out_point = context::OutPoint {
+            txid: ctx.transaction().id(),
+            vout,
+        };
+        transfer(ctx, ctx.signer().into(), utxo_holder(out_point), amt)
     }
 
     fn detach(ctx: &ProcContext) -> Result<Transfer, Error> {
-        let out_point = ctx.transaction().out_point();
-        let src = make_utxo_id(out_point.txid, out_point.vout);
+        let src = utxo_holder(ctx.transaction().out_point());
         let amt = ctx
             .model()
             .ledger()
             .get(&src)
             .ok_or(Error::Message("Source has no balance".to_string()))?;
-        let dst =
-            if let Some(context::OpReturnData::PubKey(dst)) = ctx.transaction().op_return_data() {
-                dst
-            } else {
-                ctx.signer().to_string()
-            };
+        let dst = if let Some(context::OpReturnData::PubKey(pubkey)) =
+            ctx.transaction().op_return_data()
+        {
+            HolderRef::XOnlyPubkey(pubkey).try_into()?
+        } else {
+            ctx.signer().into()
+        };
         transfer(ctx, src, dst, amt)
     }
 
-    fn balance(ctx: &ViewContext, acc: String) -> Option<Decimal> {
-        ctx.model().ledger().get(acc)
+    fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
+        let holder: Holder = acc.try_into().ok()?;
+        ctx.model().ledger().get(&holder)
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
@@ -142,12 +156,13 @@ impl Guest for Token {
             .ledger()
             .keys()
             .filter_map(|acc| {
-                if [BURNER.to_string(), "core".to_string()].contains(&acc) {
+                let acc_ref = acc.as_ref();
+                if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
                     None
                 } else {
                     Some(Balance {
                         amt: ctx.model().ledger().get(&acc).unwrap_or_default(),
-                        acc,
+                        acc: acc_ref,
                     })
                 }
             })

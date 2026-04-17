@@ -76,6 +76,37 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Identity {
+    signer_id: i64,
+    key: String,
+}
+
+impl Identity {
+    pub fn new(signer_id: i64) -> Self {
+        Self {
+            signer_id,
+            key: format!("__sid__{signer_id}"),
+        }
+    }
+
+    pub fn signer_id(&self) -> i64 {
+        self.signer_id
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SignerEntry {
+    pub signer_id: i64,
+    pub x_only_pubkey: String,
+    pub bls_pubkey: Option<Vec<u8>>,
+    pub next_nonce: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct BatchQueryResult {
     pub consensus_height: i64,
