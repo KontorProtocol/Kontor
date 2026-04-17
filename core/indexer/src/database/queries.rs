@@ -260,10 +260,10 @@ pub async fn delete_contract_state(
 }
 
 fn base_exists_contract_state_query() -> String {
-    BASE_CONTRACT_STATE_QUERY
-        .replace("{{path_operator}}", "LIKE")
-        .replace("{{path_prefix}}", "")
-        .replace("{{path_suffix}}", "|| '.%' OR path = :path")
+    BASE_CONTRACT_STATE_QUERY.replace(
+        "AND path {{path_operator}} {{path_prefix}} :path {{path_suffix}}",
+        "AND (path LIKE :path || '.%' OR path = :path)",
+    )
 }
 
 pub async fn exists_contract_state(

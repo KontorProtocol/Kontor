@@ -367,7 +367,6 @@ async fn process_aggregate_input(
                 }
             };
             let conn = runtime.get_storage_conn();
-            let height = runtime.storage.height;
             let identity = database::types::Identity::new(signer_id as i64);
             match identity
                 .advance_nonce(&conn, nonce_val as i64, height)
