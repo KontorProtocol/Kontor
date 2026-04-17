@@ -1300,7 +1300,9 @@ impl Identity {
             )));
         }
 
-        let next_nonce = caller_nonce + 1;
+        let next_nonce = caller_nonce
+            .checked_add(1)
+            .ok_or_else(|| Error::InvalidData("nonce overflow".to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
             params![self.signer_id(), next_nonce, height],
