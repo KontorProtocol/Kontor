@@ -168,7 +168,11 @@ impl Guest for Staking {
             model.try_update_total_active_stake(|s| s.add(amount))?;
         }
 
-        token::transfer(ctx.signer(), ctx.contract_signer().as_holder().as_ref(), amount)?;
+        token::transfer(
+            ctx.signer(),
+            ctx.contract_signer().as_holder().as_ref(),
+            amount,
+        )?;
 
         Ok(make_validator_info(&holder, &entry))
     }
@@ -226,7 +230,10 @@ impl Guest for Staking {
         for v in &validators {
             token::issue_to(ctx.core_signer(), staking_ref.clone(), v.stake)
                 .expect("Failed to mint genesis stake");
-            let holder: Holder = v.x_only_pubkey.parse().expect("invalid holder in genesis set");
+            let holder: Holder = v
+                .x_only_pubkey
+                .parse()
+                .expect("invalid holder in genesis set");
             model.validators().set(
                 &holder,
                 ValidatorEntry {
@@ -269,11 +276,7 @@ impl Guest for Staking {
                         entry.set_status(STATUS_INACTIVE);
                         model.try_update_total_active_stake(|s| s.sub(stake))?;
                         model.update_active_count(|c| c - 1);
-                        token::transfer(
-                            ctx.proc_context().contract_signer(),
-                            key,
-                            stake,
-                        )?;
+                        token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
                         deactivated += 1;
                     }
                     _ => {}

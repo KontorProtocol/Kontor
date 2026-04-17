@@ -250,8 +250,18 @@ impl Guest for Pool {
         model.set_lp_total_supply(total - shares);
 
         let user_str = user.to_string();
-        token_dyn::transfer(&model.token_a(), ctx.contract_signer(), &user_str, res.amount_a)?;
-        token_dyn::transfer(&model.token_b(), ctx.contract_signer(), &user_str, res.amount_b)?;
+        token_dyn::transfer(
+            &model.token_a(),
+            ctx.contract_signer(),
+            &user_str,
+            res.amount_a,
+        )?;
+        token_dyn::transfer(
+            &model.token_b(),
+            ctx.contract_signer(),
+            &user_str,
+            res.amount_b,
+        )?;
 
         Ok(res)
     }

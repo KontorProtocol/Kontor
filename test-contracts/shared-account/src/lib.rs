@@ -19,11 +19,7 @@ struct SharedAccountStorage {
 
 fn authorized(signer: &Signer, account: &AccountModel) -> bool {
     let holder: Holder = signer.as_holder();
-    account.owner() == signer.key()
-        || account
-            .other_tenants()
-            .get(&holder)
-            .is_some_and(|b| b)
+    account.owner() == signer.key() || account.other_tenants().get(&holder).is_some_and(|b| b)
 }
 
 fn insufficient_balance_error() -> Error {
@@ -50,8 +46,7 @@ impl Guest for SharedAccount {
         other_tenants: Vec<String>,
     ) -> Result<String, Error> {
         let signer = ctx.signer();
-        let balance =
-            token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -79,8 +74,7 @@ impl Guest for SharedAccount {
         n: Integer,
     ) -> Result<(), Error> {
         let signer = ctx.signer();
-        let balance =
-            token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
