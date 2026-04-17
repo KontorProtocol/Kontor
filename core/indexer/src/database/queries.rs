@@ -1293,10 +1293,19 @@ impl Identity {
             })?
             .get(0)?;
 
+        const MAX_NONCE_GAP: i64 = 10_000;
+
         if caller_nonce < stored_nonce {
             return Err(Error::InvalidData(format!(
                 "nonce too low for signer_id {}: got {caller_nonce}, expected >= {stored_nonce}",
                 self.signer_id()
+            )));
+        }
+        if caller_nonce - stored_nonce > MAX_NONCE_GAP {
+            return Err(Error::InvalidData(format!(
+                "nonce too far ahead for signer_id {}: got {caller_nonce}, expected <= {}",
+                self.signer_id(),
+                stored_nonce + MAX_NONCE_GAP
             )));
         }
 
@@ -3634,6 +3643,10 @@ mod tests {
 
         let next = row.advance_nonce(&conn, 5, 1).await?;
         assert_eq!(next, 6);
+
+        // Gap beyond MAX_NONCE_GAP is rejected
+        let result = row.advance_nonce(&conn, 20_000, 1).await;
+        assert!(result.is_err());
 
         Ok(())
     }
