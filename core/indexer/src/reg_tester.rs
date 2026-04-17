@@ -1326,6 +1326,10 @@ impl RegTesterCluster {
         // Ensure all nodes have caught up before making identities available
         let info = self.reg_tester.info().await?;
         self.poll_all_nodes_height(info.height, 60).await?;
+        if let Some(consensus_height) = info.consensus_height {
+            self.poll_all_nodes_consensus_height(consensus_height, 60)
+                .await?;
+        }
 
         self.pool.extend_registered(identities).await;
         tracing::info!(registered, unregistered, "Pre-created identity pools");

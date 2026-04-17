@@ -23,7 +23,15 @@ pub fn generate(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl core::cmp::PartialEq for #ty {
             fn eq(&self, other: &Self) -> bool {
-                alloc::string::ToString::to_string(self) == alloc::string::ToString::to_string(other)
+                match (self, other) {
+                    (Self::XOnlyPubkey(a), Self::XOnlyPubkey(b)) => a == b,
+                    (Self::ContractId(a), Self::ContractId(b)) => a == b,
+                    (Self::SignerId(a), Self::SignerId(b)) => a == b,
+                    (Self::Core, Self::Core) => true,
+                    (Self::Burner, Self::Burner) => true,
+                    (Self::Utxo(a), Self::Utxo(b)) => a.txid == b.txid && a.vout == b.vout,
+                    _ => false,
+                }
             }
         }
 

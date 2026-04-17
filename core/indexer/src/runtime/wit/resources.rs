@@ -49,7 +49,7 @@ impl From<&Signer> for HolderRef {
             Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
             Signer::ContractId { key, .. } => HolderRef::ContractId(key.clone()),
             Signer::Core(_) => HolderRef::Core,
-            Signer::Nobody => HolderRef::Core,
+            Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
         }
     }
 }
