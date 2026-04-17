@@ -85,6 +85,7 @@ impl From<anyhow::Error> for ExecutionError {
 }
 
 pub use wit::kontor;
+pub use wit::kontor::built_in::context::OutPoint;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
 pub use wit::kontor::built_in::foreign::ContractAddress;

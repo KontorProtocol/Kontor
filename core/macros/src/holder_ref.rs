@@ -21,6 +21,31 @@ pub fn generate(input: TokenStream) -> TokenStream {
         }
 
         #[automatically_derived]
+        impl core::str::FromStr for #ty {
+            type Err = alloc::string::String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Ok(if s == "core" {
+                    Self::Core
+                } else if s == "burn" {
+                    Self::Burner
+                } else if let Some(id_str) = s.strip_prefix("__sid__") {
+                    let id = id_str.parse::<u64>()
+                        .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
+                    Self::SignerId(id)
+                } else if s.starts_with("__cid__") {
+                    Self::ContractId(s.to_string())
+                } else if let Some((txid, vout)) = s.rsplit_once(':') {
+                    let vout = vout.parse::<u64>()
+                        .map_err(|e| alloc::format!("invalid vout: {e}"))?;
+                    Self::Utxo(OutPoint { txid: txid.to_string(), vout })
+                } else {
+                    Self::XOnlyPubkey(s.to_string())
+                })
+            }
+        }
+
+        #[automatically_derived]
         impl core::cmp::PartialEq for #ty {
             fn eq(&self, other: &Self) -> bool {
                 match (self, other) {

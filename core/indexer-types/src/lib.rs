@@ -1,9 +1,7 @@
 extern crate alloc;
 
 use anyhow::Result;
-use bitcoin::{
-    BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion,
-};
+use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
 use indexmap::IndexMap;
 use macros::{contract_address, holder_ref};
@@ -116,7 +114,7 @@ pub struct RevealParticipantInputs {
     #[ts(as = "String")]
     pub x_only_public_key: XOnlyPublicKey,
     #[ts(as = "String")]
-    pub commit_outpoint: OutPoint,
+    pub commit_outpoint: bitcoin::OutPoint,
     #[ts(as = "TxOutSchema")]
     pub commit_prevout: TxOut,
     pub commit_tap_leaf_script: TapLeafScript,
@@ -227,7 +225,7 @@ pub struct Block {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct UtxoRef {
+pub struct OutPoint {
     pub txid: String,
     pub vout: u64,
 }
@@ -240,43 +238,14 @@ pub enum HolderRef {
     SignerId(u64),
     Core,
     Burner,
-    Utxo(UtxoRef),
+    Utxo(OutPoint),
 }
 
 holder_ref!(HolderRef);
 
-impl core::fmt::Display for UtxoRef {
+impl core::fmt::Display for OutPoint {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}:{}", self.txid, self.vout)
-    }
-}
-
-impl core::str::FromStr for HolderRef {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(if s == "core" {
-            Self::Core
-        } else if s == "burn" {
-            Self::Burner
-        } else if let Some(id_str) = s.strip_prefix("__sid__") {
-            let id = id_str
-                .parse::<u64>()
-                .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
-            Self::SignerId(id)
-        } else if s.starts_with("__cid__") {
-            Self::ContractId(s.to_string())
-        } else if let Some((txid, vout)) = s.rsplit_once(':') {
-            let vout = vout
-                .parse::<u64>()
-                .map_err(|e| alloc::format!("invalid vout: {e}"))?;
-            Self::Utxo(UtxoRef {
-                txid: txid.to_string(),
-                vout,
-            })
-        } else {
-            Self::XOnlyPubkey(s.to_string())
-        })
     }
 }
 

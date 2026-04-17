@@ -62,7 +62,7 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
-        use kontor::built_in::context::Holder;
+        use kontor::built_in::context::{Holder, OutPoint};
         use kontor::built_in::foreign::{ContractAddressModel, ContractAddressWriteModel, get_contract_address};
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 

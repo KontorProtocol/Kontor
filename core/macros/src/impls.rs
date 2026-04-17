@@ -55,60 +55,9 @@ pub fn generate(config: Config) -> TokenStream {
                 type Err = alloc::string::String;
 
                 fn from_str(s: &str) -> Result<Self, Self::Err> {
-                    use kontor::built_in::context::HolderRef;
-
-                    let holder_ref = if s == "core" {
-                        HolderRef::Core
-                    } else if s == "burn" {
-                        HolderRef::Burner
-                    } else if let Some(id_str) = s.strip_prefix("__sid__") {
-                        let id = id_str.parse::<u64>()
-                            .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
-                        HolderRef::SignerId(id)
-                    } else if s.starts_with("__cid__") {
-                        HolderRef::ContractId(s.to_string())
-                    } else if let Some((txid, vout)) = s.rsplit_once(':') {
-                        let vout = vout.parse::<u64>()
-                            .map_err(|e| alloc::format!("invalid vout: {e}"))?;
-                        HolderRef::Utxo(kontor::built_in::context::OutPoint {
-                            txid: txid.to_string(),
-                            vout,
-                        })
-                    } else {
-                        HolderRef::XOnlyPubkey(s.to_string())
-                    };
+                    let holder_ref: kontor::built_in::context::HolderRef = s.parse()?;
                     kontor::built_in::context::Holder::from_ref(&holder_ref)
                         .map_err(|e| alloc::format!("{:?}", e))
-                }
-            }
-
-            #[automatically_derived]
-            impl core::str::FromStr for kontor::built_in::context::HolderRef {
-                type Err = alloc::string::String;
-
-                fn from_str(s: &str) -> Result<Self, Self::Err> {
-                    use kontor::built_in::context::HolderRef;
-
-                    Ok(if s == "core" {
-                        HolderRef::Core
-                    } else if s == "burn" {
-                        HolderRef::Burner
-                    } else if let Some(id_str) = s.strip_prefix("__sid__") {
-                        let id = id_str.parse::<u64>()
-                            .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
-                        HolderRef::SignerId(id)
-                    } else if s.starts_with("__cid__") {
-                        HolderRef::ContractId(s.to_string())
-                    } else if let Some((txid, vout)) = s.rsplit_once(':') {
-                        let vout = vout.parse::<u64>()
-                            .map_err(|e| alloc::format!("invalid vout: {e}"))?;
-                        HolderRef::Utxo(kontor::built_in::context::OutPoint {
-                            txid: txid.to_string(),
-                            vout,
-                        })
-                    } else {
-                        HolderRef::XOnlyPubkey(s.to_string())
-                    })
                 }
             }
 
