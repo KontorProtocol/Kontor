@@ -217,9 +217,6 @@ impl Identity {
         self.keypair.x_only_public_key().0
     }
 
-    pub fn signer(&self) -> Signer {
-        Signer::XOnlyPubKey(self.x_only_public_key().to_string())
-    }
 }
 
 #[derive(Debug, Clone)]

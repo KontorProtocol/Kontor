@@ -138,7 +138,7 @@ pub async fn inspect(
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
-                signer_id: identity.signer_id as u64,
+                signer_id: identity.signer_id() as u64,
             };
             for (op_index, inst) in input.insts.ops.iter().enumerate() {
                 let op = op_from_inst(inst.clone(), metadata.clone());
@@ -165,7 +165,7 @@ mod tests {
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
-    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, Signer, serialize};
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, serialize};
 
     use super::filter_map;
     use crate::test_utils::{PublicKey as TestPublicKey, build_inscription};

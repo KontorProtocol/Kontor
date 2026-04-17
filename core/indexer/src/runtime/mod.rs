@@ -390,28 +390,32 @@ impl Runtime {
         schnorr_sig: &[u8],
         bls_sig: &[u8],
     ) -> Result<(), ExecutionError> {
-        let Signer::XOnlyPubKey(x_only_pubkey) = signer else {
+        let Signer::Id(identity) = signer else {
             return Err(ExecutionError::Deterministic(anyhow!(
-                "RegisterBlsKey requires an XOnlyPubKey signer"
+                "RegisterBlsKey requires an Id signer"
             )));
         };
-        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
-            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 
         let conn = self.get_storage_conn();
-        let existing = database::queries::get_signer_entry(&conn, &x_only_pk.to_string())
+        let existing_bls = identity
+            .bls_pubkey(&conn)
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
-        if let Some(entry) = existing {
-            if entry.bls_pubkey.as_deref() == Some(bls_pubkey) {
+        if let Some(existing) = existing_bls {
+            if existing == bls_pubkey {
                 return Ok(());
             }
-            if entry.bls_pubkey.is_some() {
-                return Err(ExecutionError::Deterministic(anyhow!(
-                    "BLS pubkey already registered for signer"
-                )));
-            }
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "BLS pubkey already registered for signer"
+            )));
         }
+
+        let x_only_pubkey = identity
+            .x_only_pubkey(&conn)
+            .await
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
+            .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 
         let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {
             ExecutionError::Deterministic(anyhow!(
@@ -434,8 +438,6 @@ impl Runtime {
             bls_sig,
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
-
-        let identity = self.get_or_create_identity(&x_only_pk.to_string()).await?;
 
         identity
             .register_bls_key(&conn, &proof.bls_pubkey, self.storage.height)

@@ -5,9 +5,9 @@ use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Signer {
+    Id(Identity),
     Core(Box<Signer>),
-    XOnlyPubKey(String),
-    ContractId { id: i64, id_str: String },
+    ContractId { id: i64, key: String },
     Nobody,
 }
 
@@ -15,7 +15,7 @@ impl Signer {
     pub fn new_contract_id(id: i64) -> Self {
         Self::ContractId {
             id,
-            id_str: format!("__cid__{}", id),
+            key: format!("__cid__{id}"),
         }
     }
 
@@ -29,30 +29,25 @@ impl core::ops::Deref for Signer {
 
     fn deref(&self) -> &str {
         match self {
-            Self::Nobody => "nobody",
+            Self::Id(identity) => identity.key(),
             Self::Core(_) => "core",
-            Self::XOnlyPubKey(s) => s,
-            Self::ContractId { id_str, .. } => id_str,
+            Self::ContractId { key, .. } => key,
+            Self::Nobody => "nobody",
         }
     }
 }
 
 impl core::fmt::Display for Signer {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Nobody => write!(f, "nobody"),
-            Self::Core(_) => write!(f, "core"),
-            Self::XOnlyPubKey(s) => write!(f, "{s}"),
-            Self::ContractId { id_str, .. } => write!(f, "{id_str}"),
-        }
+        write!(f, "{}", &**self)
     }
 }
 
 impl From<&Signer> for HolderRef {
     fn from(signer: &Signer) -> Self {
         match signer {
-            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
-            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
+            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
+            Signer::ContractId { key, .. } => HolderRef::ContractId(key.clone()),
             Signer::Core(_) => HolderRef::Core,
             Signer::Nobody => HolderRef::Core,
         }
@@ -183,12 +178,10 @@ impl Holder {
                         .map_err(|e| {
                             Error::Validation(format!("identity resolution failed: {e}"))
                         })?;
-                (HolderRef::SignerId(identity.signer_id as u64), Some(identity))
+                (HolderRef::SignerId(identity.signer_id() as u64), Some(identity))
             }
             HolderRef::SignerId(id) => {
-                let identity = Identity {
-                    signer_id: *id as i64,
-                };
+                let identity = Identity::new(*id as i64);
                 (holder_ref, Some(identity))
             }
             _ => (holder_ref, None),
@@ -198,17 +191,6 @@ impl Holder {
             holder_ref: resolved,
             identity,
         })
-    }
-}
-
-impl From<&Signer> for HolderRef {
-    fn from(signer: &Signer) -> Self {
-        match signer {
-            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
-            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
-            Signer::Core(_) => HolderRef::Core,
-            Signer::Nobody => HolderRef::Core,
-        }
     }
 }
 

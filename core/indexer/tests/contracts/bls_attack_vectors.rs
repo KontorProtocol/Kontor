@@ -14,7 +14,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX};
 use indexer::test_utils::bls_test::construct_rogue_g2_pubkey;
-use indexer_types::{Inst, Signer};
+use indexer_types::Inst;
 use testlib::*;
 
 

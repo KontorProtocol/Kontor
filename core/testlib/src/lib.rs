@@ -340,7 +340,14 @@ impl RuntimeLocal {
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let signer = Signer::XOnlyPubKey(x_only_pubkey);
+        let conn = self.runtime.get_storage_conn();
+        let identity = indexer::database::queries::get_or_create_identity(
+            &conn,
+            &x_only_pubkey,
+            self.runtime.storage.height,
+        )
+        .await?;
+        let signer = Signer::Id(identity);
         self.issuance(&signer).await?;
         Ok(signer)
     }
@@ -428,18 +435,10 @@ impl RuntimeRegtest {
         let mut nonce_counters: HashMap<u64, u64> = HashMap::new();
 
         for (signer, contract, expr) in calls {
-            let x_only = match signer {
-                Signer::XOnlyPubKey(x) => x.clone(),
-                _ => anyhow::bail!("BLS aggregate requires XOnlyPubKey signer"),
+            let signer_id = match signer {
+                Signer::Id(identity) => identity.signer_id() as u64,
+                _ => anyhow::bail!("BLS aggregate requires Id signer"),
             };
-
-            // Look up signer_id via view API
-            let result = self
-                .reg_tester
-                .view(&registry_addr, &format!("get-signer-id(\"{}\")", x_only))
-                .await?;
-            let signer_id: Option<u64> = from_wave_expr(&result);
-            let signer_id = signer_id.ok_or_else(|| anyhow!("No signer_id for {}", x_only))?;
 
             let nonce = nonce_counters.entry(signer_id).or_insert(0);
             let current_nonce = *nonce;
@@ -485,7 +484,12 @@ impl RuntimeRegtest {
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
         let identity = self.reg_tester.identity().await?;
-        let signer = identity.signer();
+        let signer_id = self
+            .reg_tester
+            .get_signer_id(&identity.x_only_public_key().to_string())
+            .await?
+            .expect("identity must be registered");
+        let signer = Signer::Id(indexer::database::types::Identity::new(signer_id as i64));
         self.identities.insert(signer.clone(), identity);
         Ok(signer)
     }

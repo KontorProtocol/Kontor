@@ -280,8 +280,6 @@ impl core::str::FromStr for HolderRef {
     }
 }
 
-}
-
 #[derive(Debug, Clone)]
 pub struct ContractAddress {
     pub name: String,

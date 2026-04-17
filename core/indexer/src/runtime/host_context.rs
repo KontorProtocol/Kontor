@@ -3,8 +3,6 @@ use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
 
-use crate::database;
-
 use super::{
     ContractAddress, Runtime,
     fuel::Fuel,
@@ -270,12 +268,7 @@ impl Runtime {
     }
 
     fn _signer_to_holder_ref(signer: &Signer) -> HolderRef {
-        match signer {
-            Signer::XOnlyPubKey(s) => HolderRef::XOnlyPubkey(s.clone()),
-            Signer::ContractId { id_str, .. } => HolderRef::ContractId(id_str.clone()),
-            Signer::Core(_) => HolderRef::Core,
-            Signer::Nobody => HolderRef::Core,
-        }
+        signer.into()
     }
 
     async fn _signer_as_holder<T>(

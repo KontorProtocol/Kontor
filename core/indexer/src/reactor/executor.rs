@@ -282,7 +282,7 @@ async fn process_direct_input(
     let metadata = OpMetadata {
         previous_output: input.previous_output,
         input_index: input.input_index,
-        signer_id: identity.signer_id as u64,
+        signer_id: identity.signer_id() as u64,
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
@@ -372,9 +372,7 @@ async fn process_aggregate_input(
             };
             let conn = runtime.get_storage_conn();
             let height = runtime.storage.height;
-            let identity = database::types::Identity {
-                signer_id: signer_id as i64,
-            };
+            let identity = database::types::Identity::new(signer_id as i64);
             match identity.advance_nonce(&conn, nonce_val as i64, height).await
             {
                 Ok(_) => {}
@@ -400,12 +398,8 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
-    let identity = database::types::Identity {
-        signer_id: op.metadata().signer_id as i64,
-    };
-    let conn = runtime.get_storage_conn();
-    let x_only_pubkey = identity.x_only_pubkey(&conn).await?;
-    let signer = Signer::XOnlyPubKey(x_only_pubkey);
+    let identity = database::types::Identity::new(op.metadata().signer_id as i64);
+    let signer = Signer::Id(identity);
 
     match op {
         indexer_types::Op::Publish {

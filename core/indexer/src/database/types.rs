@@ -76,9 +76,27 @@ pub struct CheckpointRow {
     pub hash: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identity {
-    pub signer_id: i64,
+    signer_id: i64,
+    key: String,
+}
+
+impl Identity {
+    pub fn new(signer_id: i64) -> Self {
+        Self {
+            signer_id,
+            key: format!("__sid__{signer_id}"),
+        }
+    }
+
+    pub fn signer_id(&self) -> i64 {
+        self.signer_id
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1237,13 +1237,13 @@ impl Identity {
         let mut rows = conn
             .query(
                 "SELECT x_only_pubkey FROM signers WHERE id = ?",
-                params![self.signer_id],
+                params![self.signer_id()],
             )
             .await?;
         let row = rows
             .next()
             .await?
-            .ok_or_else(|| Error::InvalidData(format!("unknown signer_id {}", self.signer_id)))?;
+            .ok_or_else(|| Error::InvalidData(format!("unknown signer_id {}", self.signer_id())))?;
         Ok(row.get(0)?)
     }
 
@@ -1251,7 +1251,7 @@ impl Identity {
         let mut rows = conn
             .query(
                 "SELECT bls_pubkey FROM bls_keys WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
-                params![self.signer_id],
+                params![self.signer_id()],
             )
             .await?;
         Ok(rows.next().await?.map(|row| row.get(0)).transpose()?)
@@ -1261,7 +1261,7 @@ impl Identity {
         let mut rows = conn
             .query(
                 "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
-                params![self.signer_id],
+                params![self.signer_id()],
             )
             .await?;
         Ok(rows
@@ -1281,7 +1281,7 @@ impl Identity {
         let mut rows = conn
             .query(
                 "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
-                params![self.signer_id],
+                params![self.signer_id()],
             )
             .await?;
 
@@ -1289,21 +1289,21 @@ impl Identity {
             .next()
             .await?
             .ok_or_else(|| {
-                Error::InvalidData(format!("no nonce for signer_id {}", self.signer_id))
+                Error::InvalidData(format!("no nonce for signer_id {}", self.signer_id()))
             })?
             .get(0)?;
 
         if caller_nonce < stored_nonce {
             return Err(Error::InvalidData(format!(
                 "nonce too low for signer_id {}: got {caller_nonce}, expected >= {stored_nonce}",
-                self.signer_id
+                self.signer_id()
             )));
         }
 
         let next_nonce = caller_nonce + 1;
         conn.execute(
             "INSERT OR REPLACE INTO nonces (signer_id, next_nonce, height) VALUES (?, ?, ?)",
-            params![self.signer_id, next_nonce, height],
+            params![self.signer_id(), next_nonce, height],
         )
         .await?;
 
@@ -1318,7 +1318,7 @@ impl Identity {
     ) -> Result<(), Error> {
         conn.execute(
             "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
-            params![self.signer_id, bls_pubkey.to_vec(), height],
+            params![self.signer_id(), bls_pubkey.to_vec(), height],
         )
         .await?;
         Ok(())
@@ -1342,9 +1342,7 @@ pub async fn get_or_create_identity(
         .await?;
 
     if let Some(row) = rows.next().await? {
-        return Ok(Identity {
-            signer_id: row.get(0)?,
-        });
+        return Ok(Identity::new(row.get(0)?));
     }
 
     conn.execute(
@@ -1360,7 +1358,7 @@ pub async fn get_or_create_identity(
     )
     .await?;
 
-    Ok(Identity { signer_id })
+    Ok(Identity::new(signer_id))
 }
 
 
@@ -3621,7 +3619,7 @@ mod tests {
 
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let identity = get_or_create_identity(&conn, pubkey, 1).await?;
-        assert!(identity.signer_id > 0);
+        assert!(identity.signer_id() > 0);
         assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
 
         Ok(())
@@ -3637,7 +3635,7 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
         let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
-        assert_eq!(id1.signer_id, id2.signer_id);
+        assert_eq!(id1.signer_id(), id2.signer_id());
 
         Ok(())
     }
@@ -3721,7 +3719,7 @@ mod tests {
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
         let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
-        assert_eq!(entry.signer_id, row.signer_id);
+        assert_eq!(entry.signer_id, row.signer_id());
         assert_eq!(entry.x_only_pubkey, pubkey);
         assert_eq!(entry.bls_pubkey, None);
         assert_eq!(entry.next_nonce, 0);
@@ -3738,7 +3736,7 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        let entry = get_signer_entry_by_id(&conn, row.signer_id).await?.unwrap();
+        let entry = get_signer_entry_by_id(&conn, row.signer_id()).await?.unwrap();
         assert_eq!(entry.x_only_pubkey, pubkey);
         assert_eq!(entry.next_nonce, 0);
 
@@ -3806,7 +3804,7 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
         let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
-        assert_eq!(id1.signer_id, id2.signer_id);
+        assert_eq!(id1.signer_id(), id2.signer_id());
 
         Ok(())
     }

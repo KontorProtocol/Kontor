@@ -372,7 +372,8 @@ mod tests {
     use axum_test::{TestResponse, TestServer};
     use bitcoin::key::rand::RngCore;
     use bitcoin::key::{Keypair, Secp256k1, rand};
-    use indexer_types::{BlockRow, RegistryEntryResponse, Signer};
+    use crate::runtime::wit::Signer;
+    use indexer_types::{BlockRow, RegistryEntryResponse};
     use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
@@ -396,7 +397,8 @@ mod tests {
 
         let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes())?;
         let x_only = keypair.x_only_public_key().0;
-        let signer = Signer::XOnlyPubKey(x_only.to_string());
+        let identity = runtime.get_or_create_identity(&x_only.to_string()).await?;
+        let signer = Signer::Id(identity);
 
         runtime
             .register_bls_key(
@@ -660,7 +662,7 @@ mod tests {
         )
         .await?;
 
-        crate::database::types::Identity { signer_id: user.signer_id as i64 }
+        crate::database::types::Identity::new(user.signer_id as i64)
             .advance_nonce(&conn, 0, 2).await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
@@ -686,7 +688,7 @@ mod tests {
         )
         .await?;
 
-        crate::database::types::Identity { signer_id: user.signer_id as i64 }
+        crate::database::types::Identity::new(user.signer_id as i64)
             .advance_nonce(&conn, 0, 2).await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
