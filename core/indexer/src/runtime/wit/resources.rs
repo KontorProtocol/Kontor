@@ -3,6 +3,15 @@ use std::str::FromStr;
 
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
+
+use crate::database::queries::get_or_create_identity;
+use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
+use crate::runtime::kontor::built_in::context::HolderRef;
+use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
+use kontor_crypto::Proof as CryptoProof;
+use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
+use kontor_crypto::field_from_uniform_bytes;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Signer {
     Id(Identity),
@@ -53,14 +62,6 @@ impl From<&Signer> for HolderRef {
         }
     }
 }
-
-use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
-use crate::runtime::kontor::built_in::context::HolderRef;
-use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
-use kontor_crypto::Proof as CryptoProof;
-use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
-use kontor_crypto::field_from_uniform_bytes;
-
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
@@ -133,20 +134,23 @@ impl HasContractId for CoreContext {
 }
 
 pub struct Holder {
-    pub holder_ref: super::kontor::built_in::context::HolderRef,
-    pub identity: Option<crate::database::types::Identity>,
+    pub holder_ref: HolderRef,
+    pub identity: Option<Identity>,
 }
 
 impl Holder {
     pub async fn from_holder_ref(
-        holder_ref: HolderRef,
+        mut holder_ref: HolderRef,
         conn: &libsql::Connection,
         height: i64,
     ) -> Result<Self, Error> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                XOnlyPublicKey::from_str(s)
-                    .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
+                holder_ref = HolderRef::XOnlyPubkey(
+                    XOnlyPublicKey::from_str(s)
+                        .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?
+                        .to_string(),
+                );
             }
             HolderRef::ContractId(s) => {
                 if !s.starts_with("__cid__") {
@@ -170,7 +174,8 @@ impl Holder {
 
         let (resolved, identity) = match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                let identity = crate::database::queries::get_or_create_identity(conn, s, height)
+                // Canonicalize to lowercase hex to avoid case-sensitive DB mismatches
+                let identity = get_or_create_identity(conn, s, height)
                     .await
                     .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
                 (
