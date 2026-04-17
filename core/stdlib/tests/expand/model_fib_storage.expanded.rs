@@ -123,7 +123,7 @@ impl ::core::clone::Clone for FibStorageCacheModel {
     }
 }
 impl FibStorageCacheModel {
-    pub fn get(&self, key: impl ToString) -> Option<FibValueModel> {
+    pub fn get(&self, key: &u64) -> Option<FibValueModel> {
         let base_path = self.base_path.push(key.to_string());
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueModel::new(self.ctx.clone(), base_path))
@@ -131,12 +131,7 @@ impl FibStorageCacheModel {
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
     }
-    pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
-        &'a self,
-    ) -> impl Iterator<Item = T> + 'a
-    where
-        <T as FromStr>::Err: Debug,
-    {
+    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
@@ -193,12 +188,12 @@ impl ::core::clone::Clone for FibStorageCacheWriteModel {
     }
 }
 impl FibStorageCacheWriteModel {
-    pub fn get(&self, key: impl ToString) -> Option<FibValueWriteModel> {
+    pub fn get(&self, key: &u64) -> Option<FibValueWriteModel> {
         let base_path = self.base_path.push(key.to_string());
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueWriteModel::new(self.ctx.clone(), base_path))
     }
-    pub fn set(&self, key: u64, value: FibValue) {
+    pub fn set(&self, key: &u64, value: FibValue) {
         stdlib::WriteStorage::__set(
             &self.ctx,
             self.base_path.push(key.to_string()),
@@ -208,12 +203,7 @@ impl FibStorageCacheWriteModel {
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
     }
-    pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
-        &'a self,
-    ) -> impl Iterator<Item = T> + 'a
-    where
-        <T as FromStr>::Err: Debug,
-    {
+    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

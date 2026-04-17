@@ -343,8 +343,7 @@ pub fn generate_functions(
             if let Type::Id(id) = &param.ty {
                 let ty_def = &resolve.types[*id];
                 if ty_def.name.as_deref() == Some("holder-ref") {
-                    let param_name =
-                        Ident::new(&param.name.to_snake_case(), Span::call_site());
+                    let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
                     params[i] = quote! { #param_name: impl Into<HolderRef> };
                 }
             }
@@ -452,8 +451,7 @@ pub fn generate_functions(
                 let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
                 if let Type::Id(id) = &param.ty {
                     let ty_def = &resolve.types[*id];
-                    if ty_def.name.as_deref() == Some("holder-ref")
-                    {
+                    if ty_def.name.as_deref() == Some("holder-ref") {
                         params.push(quote! { #param_name: impl Into<HolderRef> });
                         continue;
                     }
@@ -475,8 +473,7 @@ pub fn generate_functions(
                 let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
                 if let Type::Id(id) = &param.ty {
                     let ty_def = &resolve.types[*id];
-                    if ty_def.name.as_deref() == Some("holder-ref")
-                    {
+                    if ty_def.name.as_deref() == Some("holder-ref") {
                         params.push(quote! { #param_name: impl Into<HolderRef> });
                         continue;
                     }

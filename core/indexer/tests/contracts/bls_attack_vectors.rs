@@ -17,7 +17,6 @@ use indexer::test_utils::bls_test::construct_rogue_g2_pubkey;
 use indexer_types::Inst;
 use testlib::*;
 
-
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
@@ -72,12 +71,12 @@ async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
 
     let attacker_xonly = attacker.x_only_public_key().to_string();
     assert_eq!(
-        rt.get_bls_pubkey( &attacker_xonly).await?,
+        rt.get_bls_pubkey(&attacker_xonly).await?,
         None,
         "rogue key must not be registered"
     );
     assert_eq!(
-        rt.get_bls_pubkey( &victim_xonly).await?,
+        rt.get_bls_pubkey(&victim_xonly).await?,
         Some(victim.bls_pubkey.to_vec()),
         "victim's registered key must be unchanged"
     );
@@ -118,12 +117,12 @@ async fn bls_attack_proof_replay_rejected() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        rt.get_bls_pubkey( &eve_xonly).await?,
+        rt.get_bls_pubkey(&eve_xonly).await?,
         None,
         "replayed proof must not register Eve"
     );
     assert_eq!(
-        rt.get_bls_pubkey( &alice_xonly).await?,
+        rt.get_bls_pubkey(&alice_xonly).await?,
         Some(alice.bls_pubkey.to_vec()),
         "Alice's registered key must be unchanged"
     );
@@ -176,7 +175,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding() -> Result<()> {
 
     let eve_xonly = eve.x_only_public_key().to_string();
     assert_eq!(
-        rt.get_bls_pubkey( &eve_xonly).await?,
+        rt.get_bls_pubkey(&eve_xonly).await?,
         None,
         "forged BLS binding must prevent registration"
     );

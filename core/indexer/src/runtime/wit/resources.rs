@@ -145,9 +145,8 @@ impl Holder {
     ) -> Result<Self, Error> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                XOnlyPublicKey::from_str(s).map_err(|e| {
-                    Error::Validation(format!("invalid x-only-pubkey: {e}"))
-                })?;
+                XOnlyPublicKey::from_str(s)
+                    .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
             }
             HolderRef::ContractId(s) => {
                 if !s.starts_with("__cid__") {
@@ -163,22 +162,21 @@ impl Holder {
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
-                Txid::from_str(&out_point.txid).map_err(|e| {
-                    Error::Validation(format!("invalid txid: {e}"))
-                })?;
+                Txid::from_str(&out_point.txid)
+                    .map_err(|e| Error::Validation(format!("invalid txid: {e}")))?;
             }
             HolderRef::Core | HolderRef::Burner => {}
         }
 
         let (resolved, identity) = match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                let identity =
-                    crate::database::queries::get_or_create_identity(conn, s, height)
-                        .await
-                        .map_err(|e| {
-                            Error::Validation(format!("identity resolution failed: {e}"))
-                        })?;
-                (HolderRef::SignerId(identity.signer_id() as u64), Some(identity))
+                let identity = crate::database::queries::get_or_create_identity(conn, s, height)
+                    .await
+                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
+                (
+                    HolderRef::SignerId(identity.signer_id() as u64),
+                    Some(identity),
+                )
             }
             HolderRef::SignerId(id) => {
                 let identity = Identity::new(*id as i64);

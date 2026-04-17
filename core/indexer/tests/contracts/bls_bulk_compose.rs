@@ -67,10 +67,12 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         )
     })?;
 
-    let signer1_id = rt.get_signer_id( &signer1.x_only_public_key().to_string())
+    let signer1_id = rt
+        .get_signer_id(&signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = rt.get_signer_id( &signer2.x_only_public_key().to_string())
+    let signer2_id = rt
+        .get_signer_id(&signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
@@ -213,7 +215,8 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
             e
         )
     })?;
-    let signer_id = rt.get_signer_id( &signer.x_only_public_key().to_string())
+    let signer_id = rt
+        .get_signer_id(&signer.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
@@ -363,10 +366,12 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
             e
         )
     })?;
-    let signer1_id = rt.get_signer_id( &signer1.x_only_public_key().to_string())
+    let signer1_id = rt
+        .get_signer_id(&signer1.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer1"))?;
-    let signer2_id = rt.get_signer_id( &signer2.x_only_public_key().to_string())
+    let signer2_id = rt
+        .get_signer_id(&signer2.x_only_public_key().to_string())
         .await?
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 

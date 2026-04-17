@@ -1,5 +1,5 @@
 [workspace]
-members = ["token", "filestorage", "staking"]
+members = ["token", "filestorage", "staking", "registry"]
 resolver = "2"
 
 [profile.release]

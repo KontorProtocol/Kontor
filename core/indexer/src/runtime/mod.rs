@@ -7,6 +7,7 @@ pub mod filestorage;
 pub mod fuel;
 pub mod numerics;
 pub mod pool;
+pub mod registry;
 mod stack;
 pub mod staking;
 mod storage;
@@ -100,7 +101,7 @@ use wasmtime::{
 
 use crate::bls::RegistrationProof;
 use crate::database;
-use crate::database::native_contracts::{FILESTORAGE, STAKING, TOKEN};
+use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
@@ -301,6 +302,12 @@ impl Runtime {
         .await?;
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
             .await?;
+        self.publish(
+            &Signer::Core(Box::new(Signer::Nobody)),
+            "registry",
+            REGISTRY,
+        )
+        .await?;
         if !genesis_validators.is_empty() {
             let validators = genesis_validators.iter().cloned().map(Into::into).collect();
             staking::api::set_genesis_set(
@@ -362,13 +369,13 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
-        token::api::issuance(
+        let result = token::api::issuance(
             self,
             &Signer::Core(Box::new(signer.clone())),
             10u64.try_into().expect("u64 to decimal"),
         )
-        .await?
-        .expect("issuance(10) should never fail");
+        .await;
+        result?.expect("issuance(10) should never fail");
         Ok(())
     }
 
@@ -526,9 +533,8 @@ impl Runtime {
     }
 }
 
-static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> = LazyLock::new(|| {
-    [("token", ["hold"].into())].into()
-});
+static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
+    LazyLock::new(|| [("token", ["hold"].into())].into());
 
 fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
     SKIP_RESULT_RULES

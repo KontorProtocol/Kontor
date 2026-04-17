@@ -51,7 +51,16 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
             .replace(" ", "");
         matches!(
             segment.as_deref(),
-            Some("u64" | "i64" | "String" | "bool" | "ContractAddress" | "HolderRef" | "Integer" | "Decimal")
+            Some(
+                "u64"
+                    | "i64"
+                    | "String"
+                    | "bool"
+                    | "ContractAddress"
+                    | "HolderRef"
+                    | "Integer"
+                    | "Decimal"
+            )
         ) || ["Vec<u8>", "Vec::<u8>"].contains(&generic_segment.as_str())
     } else {
         false

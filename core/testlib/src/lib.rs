@@ -422,12 +422,6 @@ impl RuntimeRegtest {
     ) -> Result<Insts> {
         use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 
-        let registry_addr = ContractAddress {
-            name: "registry".to_string(),
-            height: 0,
-            tx_index: 0,
-        };
-
         let mut ops = Vec::with_capacity(calls.len());
         let mut signer_ids = Vec::with_capacity(calls.len());
         // Track nonce per signer — starts at 0 for each signer in this batch,

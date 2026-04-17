@@ -1,8 +1,8 @@
 mod resources;
 
 pub use resources::{
-    CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext, ProcStorage,
-    Proof, Signer, Transaction, ViewContext, ViewStorage,
+    CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
+    ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage,
 };
 
 wasmtime::component::bindgen!({

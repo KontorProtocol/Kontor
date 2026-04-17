@@ -263,7 +263,7 @@ fn base_exists_contract_state_query() -> String {
     BASE_CONTRACT_STATE_QUERY
         .replace("{{path_operator}}", "LIKE")
         .replace("{{path_prefix}}", "")
-        .replace("{{path_suffix}}", "|| '%'")
+        .replace("{{path_suffix}}", "|| '.%' OR path = :path")
 }
 
 pub async fn exists_contract_state(
@@ -1361,8 +1361,6 @@ pub async fn get_or_create_identity(
     Ok(Identity::new(signer_id))
 }
 
-
-
 pub async fn get_signer_entry(
     conn: &Connection,
     x_only_pubkey: &str,
@@ -1370,40 +1368,21 @@ pub async fn get_signer_entry(
     let mut rows = conn
         .query(
             r#"SELECT
-                s.id,
+                s.id AS signer_id,
                 s.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
             FROM signers s
-            LEFT JOIN (
-                SELECT signer_id, bls_pubkey
-                FROM bls_keys
-                WHERE signer_id = (SELECT id FROM signers WHERE x_only_pubkey = ?)
-                ORDER BY height DESC LIMIT 1
-            ) b ON b.signer_id = s.id
-            LEFT JOIN (
-                SELECT signer_id, next_nonce
-                FROM nonces
-                WHERE signer_id = (SELECT id FROM signers WHERE x_only_pubkey = ?)
-                ORDER BY height DESC LIMIT 1
-            ) n ON n.signer_id = s.id
+            LEFT JOIN bls_keys b ON b.signer_id = s.id
+                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+            JOIN nonces n ON n.signer_id = s.id
+                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
             WHERE s.x_only_pubkey = ?"#,
-            params![x_only_pubkey, x_only_pubkey, x_only_pubkey],
+            params![x_only_pubkey],
         )
         .await?;
 
-    Ok(rows
-        .next()
-        .await?
-        .map(|row| {
-            Ok::<_, Error>(SignerEntry {
-                signer_id: row.get(0)?,
-                x_only_pubkey: row.get(1)?,
-                bls_pubkey: row.get::<Option<Vec<u8>>>(2)?,
-                next_nonce: row.get::<Option<i64>>(3)?.unwrap_or(0),
-            })
-        })
-        .transpose()?)
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
 pub async fn get_signer_entry_by_id(
@@ -1413,38 +1392,21 @@ pub async fn get_signer_entry_by_id(
     let mut rows = conn
         .query(
             r#"SELECT
-                s.id,
+                s.id AS signer_id,
                 s.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
             FROM signers s
-            LEFT JOIN (
-                SELECT signer_id, bls_pubkey
-                FROM bls_keys WHERE signer_id = ?
-                ORDER BY height DESC LIMIT 1
-            ) b ON b.signer_id = s.id
-            LEFT JOIN (
-                SELECT signer_id, next_nonce
-                FROM nonces WHERE signer_id = ?
-                ORDER BY height DESC LIMIT 1
-            ) n ON n.signer_id = s.id
+            LEFT JOIN bls_keys b ON b.signer_id = s.id
+                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+            JOIN nonces n ON n.signer_id = s.id
+                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
             WHERE s.id = ?"#,
-            params![signer_id, signer_id, signer_id],
+            params![signer_id],
         )
         .await?;
 
-    Ok(rows
-        .next()
-        .await?
-        .map(|row| {
-            Ok::<_, Error>(SignerEntry {
-                signer_id: row.get(0)?,
-                x_only_pubkey: row.get(1)?,
-                bls_pubkey: row.get::<Option<Vec<u8>>>(2)?,
-                next_nonce: row.get::<Option<i64>>(3)?.unwrap_or(0),
-            })
-        })
-        .transpose()?)
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
 #[cfg(test)]
@@ -1837,7 +1799,7 @@ mod tests {
 
         // check existence
         assert!(contract_has_state(&conn, contract_id).await?);
-        assert!(exists_contract_state(&conn, contract_id, "test.").await?);
+        assert!(exists_contract_state(&conn, contract_id, "test").await?);
 
         assert_eq!(
             matching_path(&conn, contract_id, "test", r"^test.(path|foo|bar)(\..*|$)")
@@ -3701,7 +3663,7 @@ mod tests {
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
         let bls_key = vec![1u8; 48];
-        row.register_bls_key(&conn,&bls_key, 1).await?;
+        row.register_bls_key(&conn, &bls_key, 1).await?;
 
         let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
         assert_eq!(entry.bls_pubkey, Some(bls_key));
@@ -3736,7 +3698,9 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        let entry = get_signer_entry_by_id(&conn, row.signer_id()).await?.unwrap();
+        let entry = get_signer_entry_by_id(&conn, row.signer_id())
+            .await?
+            .unwrap();
         assert_eq!(entry.x_only_pubkey, pubkey);
         assert_eq!(entry.next_nonce, 0);
 
@@ -3754,7 +3718,7 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
         row.advance_nonce(&conn, 0, 2).await?;
-        row.register_bls_key(&conn,&vec![1u8; 48], 3).await?;
+        row.register_bls_key(&conn, &[1u8; 48], 3).await?;
 
         // Rollback to height 2 — should remove bls_key (height 3) but keep nonce (height 2)
         rollback_to_height(&conn, 2).await?;
@@ -3785,7 +3749,7 @@ mod tests {
         assert_eq!(identity.next_nonce(&conn).await?, 0);
 
         let bls_key = vec![1u8; 48];
-        identity.register_bls_key(&conn,&bls_key, 1).await?;
+        identity.register_bls_key(&conn, &bls_key, 1).await?;
         assert_eq!(identity.bls_pubkey(&conn).await?, Some(bls_key));
 
         identity.advance_nonce(&conn, 0, 1).await?;

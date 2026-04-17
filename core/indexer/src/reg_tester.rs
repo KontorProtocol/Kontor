@@ -23,7 +23,7 @@ use crate::{
     consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
     retry::retry_simple,
-    runtime::{ContractAddress, wit::Signer},
+    runtime::ContractAddress,
     test_utils,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -216,7 +216,6 @@ impl Identity {
     pub fn x_only_public_key(&self) -> XOnlyPublicKey {
         self.keypair.x_only_public_key().0
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -605,7 +604,12 @@ impl RegTester {
         &self,
         pubkey_or_id: &str,
     ) -> Result<Option<indexer_types::RegistryEntryResponse>> {
-        match self.kontor_client().await.registry_entry(pubkey_or_id).await {
+        match self
+            .kontor_client()
+            .await
+            .registry_entry(pubkey_or_id)
+            .await
+        {
             Ok(entry) => Ok(Some(entry)),
             Err(_) => Ok(None),
         }
@@ -1318,6 +1322,10 @@ impl RegTesterCluster {
         if !txids.is_empty() {
             self.reg_tester.wait_for_txids(&txids).await?;
         }
+
+        // Ensure all nodes have caught up before making identities available
+        let info = self.reg_tester.info().await?;
+        self.poll_all_nodes_height(info.height, 60).await?;
 
         self.pool.extend_registered(identities).await;
         tracing::info!(registered, unregistered, "Pre-created identity pools");

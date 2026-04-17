@@ -54,6 +54,14 @@ export type Event =
   | { "type": "BatchProcessed"; txids: Array<string> }
   | { "type": "Rolledback"; height: number };
 
+export type HolderRef =
+  | { "XOnlyPubkey": string }
+  | { "ContractId": string }
+  | { "SignerId": bigint }
+  | "Core"
+  | "Burner"
+  | { "Utxo": UtxoRef };
+
 export type Info = {
   version: string;
   target: string;
@@ -62,6 +70,13 @@ export type Info = {
   height: number;
   checkpoint: string | null;
   consensus_height: number | null;
+};
+
+export type Input = {
+  previous_output: string;
+  input_index: number;
+  x_only_pubkey: string;
+  insts: Insts;
 };
 
 export type Inst =
@@ -124,7 +139,7 @@ export type Op =
 export type OpMetadata = {
   previous_output: string;
   input_index: number;
-  signer: Signer;
+  signer_id: number;
 };
 
 export type OpWithResult = { op: Op; result: ResultRow | null };
@@ -211,10 +226,6 @@ export type RevealQuery = {
   envelope: number | null;
 };
 
-export type Signer = { "Core": Signer } | { "XOnlyPubKey": string } | {
-  "ContractId": { id: number; id_str: string };
-} | "Nobody";
-
 export type TapLeafScript = {
   leafVersion: number;
   script: string;
@@ -224,18 +235,11 @@ export type TapLeafScript = {
 export type Transaction = {
   txid: string;
   index: number;
-  inputs: Array<TransactionInput>;
+  inputs: Array<Input>;
   op_return_data: Record<number, OpReturnData>;
 };
 
 export type TransactionHex = { hex: string };
-
-export type TransactionInput = {
-  previous_output: string;
-  input_index: number;
-  witness_signer: Signer;
-  insts: Insts;
-};
 
 export type TransactionRow = {
   id: number;
@@ -247,6 +251,8 @@ export type TransactionRow = {
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };
+
+export type UtxoRef = { txid: string; vout: bigint };
 
 export type ViewExpr = { expr: string };
 

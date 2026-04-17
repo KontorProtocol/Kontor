@@ -15,6 +15,7 @@ use crate::{
     api::compose::reveal_inputs_from_query,
     block::inspect,
     built_info,
+    database::queries::{get_signer_entry, get_signer_entry_by_id},
     database::{
         queries::{
             self, get_blocks_paginated, get_checkpoint_latest, get_op_result,
@@ -23,7 +24,6 @@ use crate::{
         },
         types::{BlockQuery, OpResultId, ResultQuery, TransactionQuery},
     },
-    database::queries::{get_signer_entry, get_signer_entry_by_id},
     runtime::ContractAddress,
 };
 
@@ -331,7 +331,7 @@ pub async fn get_registry_entry(
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
-    let mut runtime = env.runtime_pool.get().await?;
+    let runtime = env.runtime_pool.get().await?;
 
     let conn = runtime.get_storage_conn();
     let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
@@ -360,6 +360,7 @@ pub async fn get_registry_entry(
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::wit::Signer;
     use crate::{
         api::{Env, handlers::get_registry_entry},
         bls::RegistrationProof,
@@ -372,7 +373,6 @@ mod tests {
     use axum_test::{TestResponse, TestServer};
     use bitcoin::key::rand::RngCore;
     use bitcoin::key::{Keypair, Secp256k1, rand};
-    use crate::runtime::wit::Signer;
     use indexer_types::{BlockRow, RegistryEntryResponse};
     use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
@@ -663,7 +663,8 @@ mod tests {
         .await?;
 
         crate::database::types::Identity::new(user.signer_id as i64)
-            .advance_nonce(&conn, 0, 2).await?;
+            .advance_nonce(&conn, 0, 2)
+            .await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after advance");
@@ -689,7 +690,8 @@ mod tests {
         .await?;
 
         crate::database::types::Identity::new(user.signer_id as i64)
-            .advance_nonce(&conn, 0, 2).await?;
+            .advance_nonce(&conn, 0, 2)
+            .await?;
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after re-advance");

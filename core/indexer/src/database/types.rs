@@ -99,7 +99,7 @@ impl Identity {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
     pub signer_id: i64,
     pub x_only_pubkey: String,

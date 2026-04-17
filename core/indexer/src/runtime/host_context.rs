@@ -157,6 +157,7 @@ impl Runtime {
             .await
             .transpose()?;
         if let Some(k) = &k {
+            tracing::trace!("keys.next() returned: {k:?}");
             Fuel::KeysNext(k.len() as u64)
                 .consume(accessor, self.gauge.as_ref())
                 .await?;
@@ -284,11 +285,15 @@ impl Runtime {
             table.get(&self_)?.clone()
         };
         let holder_ref = Self::_signer_to_holder_ref(&signer);
+        tracing::debug!("_signer_as_holder: signer={signer:?} holder_ref={holder_ref:?}");
         let conn = self.get_storage_conn();
         let height = self.storage.height;
         let holder = Holder::from_holder_ref(holder_ref, &conn, height)
             .await
-            .map_err(|e| anyhow::anyhow!("holder resolution failed: {e:?}"))?;
+            .map_err(|e| {
+                tracing::error!("holder resolution failed for signer {signer:?}: {e:?}");
+                anyhow::anyhow!("holder resolution failed: {e:?}")
+            })?;
         let mut table = self.table.lock().await;
         Ok(table.push(holder)?)
     }
@@ -467,18 +472,18 @@ impl built_in::context::HostHolderWithStore for Runtime {
             .await?;
         let conn = runtime.get_storage_conn();
         let height = runtime.storage.height;
-        let holder = match Holder::from_holder_ref(ref_, &conn, height).await {
+        let holder = match Holder::from_holder_ref(ref_.clone(), &conn, height).await {
             Ok(h) => h,
-            Err(e) => return Ok(Err(e)),
+            Err(e) => {
+                tracing::error!("Holder::from_ref failed for {ref_:?}: {e:?}");
+                return Ok(Err(e));
+            }
         };
         let mut table = runtime.table.lock().await;
         Ok(Ok(table.push(holder)?))
     }
 
-    async fn as_ref<T>(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<Holder>,
-    ) -> Result<HolderRef> {
+    async fn as_ref<T>(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::HolderAsRef
             .consume(accessor, runtime.gauge.as_ref())
@@ -516,10 +521,7 @@ impl built_in::context::HostSignerWithStore for Runtime {
             .await
     }
 
-    async fn as_ref<T>(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<Signer>,
-    ) -> Result<HolderRef> {
+    async fn as_ref<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::HolderAsRef
             .consume(accessor, runtime.gauge.as_ref())

@@ -3,9 +3,7 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{
-    Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize,
-};
+use indexer_types::{Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize};
 use indexmap::IndexMap;
 use libsql::Connection;
 
@@ -129,16 +127,13 @@ pub async fn inspect(
     let mut ops = Vec::new();
     for input in &tx.inputs {
         if !input.insts.is_aggregate() {
-            let identity = crate::database::queries::get_or_create_identity(
-                conn,
-                &input.x_only_pubkey.to_string(),
-                0,
-            )
-            .await?;
+            let entry =
+                crate::database::queries::get_signer_entry(conn, &input.x_only_pubkey.to_string())
+                    .await?;
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
-                signer_id: identity.signer_id() as u64,
+                signer_id: entry.map(|e| e.signer_id as u64).unwrap_or(0),
             };
             for (op_index, inst) in input.insts.ops.iter().enumerate() {
                 let op = op_from_inst(inst.clone(), metadata.clone());
