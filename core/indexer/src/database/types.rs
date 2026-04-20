@@ -240,6 +240,8 @@ pub struct ContractResultRow {
     pub func: String,
     pub gas: i64,
     pub value: Option<String>,
+    #[builder(default = 0)]
+    pub signer_id: i64,
 }
 
 impl ContractResultRow {
@@ -267,6 +269,7 @@ pub struct ContractResultPublicRow {
     pub contract_height: i64,
     pub contract_tx_index: i64,
     pub txid: Option<String>,
+    pub signer_id: i64,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -298,6 +301,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             }
             .to_string(),
             txid: row.txid,
+            signer_id: row.signer_id,
         }
     }
 }

@@ -468,6 +468,9 @@ impl Runtime {
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
         let result_index = self.result_id_counter.get().await as i64;
+        let signer_id = signer
+            .signer_id(self.core_signer_id())
+            .expect("signer_id must be set for result attribution");
         self.storage
             .insert_contract_result(
                 result_index,
@@ -475,6 +478,7 @@ impl Runtime {
                 func_name.to_string(),
                 gas as i64,
                 value,
+                signer_id,
             )
             .await
             .map_err(ExecutionError::NonDeterministic)?;

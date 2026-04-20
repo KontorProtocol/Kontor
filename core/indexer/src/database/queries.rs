@@ -920,7 +920,8 @@ pub async fn get_results_paginated(
         c.name as contract_name,
         c.height as contract_height,
         c.tx_index as contract_tx_index,
-        t.txid
+        t.txid,
+        r.signer_id
     "#;
     let from = r#"
         contract_results r
@@ -991,7 +992,8 @@ pub async fn get_op_result(
                 c.name as contract_name,
                 c.height as contract_height,
                 c.tx_index as contract_tx_index,
-                t.txid
+                t.txid,
+                r.signer_id
             FROM contract_results r
             LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
@@ -1030,7 +1032,8 @@ pub async fn get_contract_result(
                 op_index,
                 result_index,
                 gas,
-                value
+                value,
+                signer_id
             FROM contract_results
             WHERE tx_id IS :tx_id
               AND input_index IS :input_index
@@ -1064,8 +1067,9 @@ pub async fn insert_contract_result(
                 op_index,
                 result_index,
                 gas,
-                value
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                value,
+                signer_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         params![
             row.contract_id,
@@ -1077,7 +1081,8 @@ pub async fn insert_contract_result(
             row.op_index,
             row.result_index,
             row.gas,
-            row.value
+            row.value,
+            row.signer_id
         ],
     )
     .await?;
@@ -2418,6 +2423,13 @@ mod tests {
 
         let tx_id = insert_transaction(&conn, tx1.clone()).await?;
 
+        let signer_id = get_or_create_identity(
+            &conn,
+            "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
+            height,
+        )
+        .await?
+        .signer_id();
         let result = ContractResultRow::builder()
             .id(1)
             .tx_id(tx_id)
@@ -2427,6 +2439,7 @@ mod tests {
             .contract_id(contract_id)
             .value("".to_string())
             .gas(100)
+            .signer_id(signer_id)
             .build();
 
         insert_contract_result(&conn, result.clone()).await?;
@@ -2892,6 +2905,14 @@ mod tests {
         )
         .await?;
 
+        let signer_id = get_or_create_identity(
+            &conn,
+            "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
+            1,
+        )
+        .await?
+        .signer_id();
+
         let contract_1_id = insert_contract(
             &conn,
             ContractRow::builder()
@@ -2943,6 +2964,7 @@ mod tests {
                 .input_index(0)
                 .op_index(0)
                 .gas(100)
+                .signer_id(signer_id)
                 .build(),
         )
         .await?;
@@ -2957,6 +2979,7 @@ mod tests {
                 .input_index(0)
                 .op_index(0)
                 .gas(100)
+                .signer_id(signer_id)
                 .build(),
         )
         .await?;
@@ -2999,6 +3022,7 @@ mod tests {
                 .input_index(0)
                 .op_index(0)
                 .gas(100)
+                .signer_id(signer_id)
                 .build(),
         )
         .await?;
@@ -3012,6 +3036,7 @@ mod tests {
                 .input_index(0)
                 .op_index(0)
                 .gas(100)
+                .signer_id(signer_id)
                 .build(),
         )
         .await?;
@@ -3024,6 +3049,7 @@ mod tests {
                 .height(2)
                 .result_index(1)
                 .gas(100)
+                .signer_id(signer_id)
                 .build(),
         )
         .await?;

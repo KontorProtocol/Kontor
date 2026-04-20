@@ -185,6 +185,7 @@ export type ResultRow = {
   value: string | null;
   contract: string;
   txid: string | null;
+  signer_id: number;
 };
 
 export type RevealInputs = {

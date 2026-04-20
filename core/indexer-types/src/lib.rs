@@ -487,6 +487,8 @@ pub struct ResultRow {
     pub value: Option<String>,
     pub contract: String,
     pub txid: Option<String>,
+    #[ts(type = "number")]
+    pub signer_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

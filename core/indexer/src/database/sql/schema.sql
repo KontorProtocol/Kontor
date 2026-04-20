@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS contract_results (
   gas INTEGER NOT NULL,
   size INTEGER NOT NULL,
   value TEXT,
+  signer_id INTEGER NOT NULL,
   UNIQUE (
     tx_id,
     input_index,
@@ -78,7 +79,8 @@ CREATE TABLE IF NOT EXISTS contract_results (
     result_index
   ),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
-  FOREIGN KEY (tx_id) REFERENCES transactions (id)
+  FOREIGN KEY (tx_id) REFERENCES transactions (id),
+  FOREIGN KEY (signer_id) REFERENCES signers (id)
 );
 
 CREATE TABLE IF NOT EXISTS file_metadata (
