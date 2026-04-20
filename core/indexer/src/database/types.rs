@@ -86,7 +86,7 @@ impl Identity {
     pub fn new(signer_id: i64) -> Self {
         Self {
             signer_id,
-            key: format!("__sid__{signer_id}"),
+            key: signer_id.to_string(),
         }
     }
 

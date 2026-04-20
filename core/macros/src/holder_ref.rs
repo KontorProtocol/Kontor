@@ -11,8 +11,7 @@ pub fn generate(input: TokenStream) -> TokenStream {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 match self {
                     Self::XOnlyPubkey(s) => write!(f, "{s}"),
-                    Self::ContractId(s) => write!(f, "{s}"),
-                    Self::SignerId(id) => write!(f, "__sid__{id}"),
+                    Self::SignerId(id) => write!(f, "{id}"),
                     Self::Core => write!(f, "core"),
                     Self::Burner => write!(f, "burn"),
                     Self::Utxo(out_point) => write!(f, "{}:{}", out_point.txid, out_point.vout),
@@ -29,12 +28,8 @@ pub fn generate(input: TokenStream) -> TokenStream {
                     Self::Core
                 } else if s == "burn" {
                     Self::Burner
-                } else if let Some(id_str) = s.strip_prefix("__sid__") {
-                    let id = id_str.parse::<u64>()
-                        .map_err(|e| alloc::format!("invalid signer id: {e}"))?;
+                } else if let Ok(id) = s.parse::<u64>() {
                     Self::SignerId(id)
-                } else if s.starts_with("__cid__") {
-                    Self::ContractId(s.to_string())
                 } else if let Some((txid, vout)) = s.rsplit_once(':') {
                     let vout = vout.parse::<u64>()
                         .map_err(|e| alloc::format!("invalid vout: {e}"))?;
@@ -50,7 +45,6 @@ pub fn generate(input: TokenStream) -> TokenStream {
             fn eq(&self, other: &Self) -> bool {
                 match (self, other) {
                     (Self::XOnlyPubkey(a), Self::XOnlyPubkey(b)) => a == b,
-                    (Self::ContractId(a), Self::ContractId(b)) => a == b,
                     (Self::SignerId(a), Self::SignerId(b)) => a == b,
                     (Self::Core, Self::Core) => true,
                     (Self::Burner, Self::Burner) => true,

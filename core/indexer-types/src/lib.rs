@@ -234,7 +234,6 @@ pub struct OutPoint {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
-    ContractId(String),
     SignerId(u64),
     Core,
     Burner,

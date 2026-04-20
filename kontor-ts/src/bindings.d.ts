@@ -56,7 +56,6 @@ export type Event =
 
 export type HolderRef =
   | { "XOnlyPubkey": string }
-  | { "ContractId": string }
   | { "SignerId": bigint }
   | "Core"
   | "Burner"

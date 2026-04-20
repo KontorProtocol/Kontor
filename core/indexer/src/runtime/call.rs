@@ -112,7 +112,7 @@ impl Runtime {
             ))),
         }?;
 
-        if let Some(Signer::ContractId { id, .. }) = signer
+        if let Some(Signer::Contract { id, .. }) = signer
             && self.stack.peek().await != Some(*id)
         {
             return Err(ExecutionError::Deterministic(anyhow!(

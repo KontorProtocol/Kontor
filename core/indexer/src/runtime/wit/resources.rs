@@ -16,7 +16,7 @@ use kontor_crypto::field_from_uniform_bytes;
 pub enum Signer {
     Id(Identity),
     Core(Box<Signer>),
-    ContractId {
+    Contract {
         id: i64,
         signer_id: i64,
         key: String,
@@ -25,11 +25,11 @@ pub enum Signer {
 }
 
 impl Signer {
-    pub fn new_contract_id(id: i64, signer_id: i64) -> Self {
-        Self::ContractId {
+    pub fn new_contract(id: i64, signer_id: i64) -> Self {
+        Self::Contract {
             id,
             signer_id,
-            key: format!("__cid__{id}"),
+            key: signer_id.to_string(),
         }
     }
 
@@ -41,7 +41,7 @@ impl Signer {
     /// - `Id` → the identity's signer_id
     /// - `Core(Nobody)` → the reserved Core signer_id
     /// - `Core(inner)` → unwraps to inner's signer_id
-    /// - `ContractId` → the contract's signer_id
+    /// - `Contract` → the contract's signer_id
     /// - `Nobody` → None (only valid inside `Core`)
     pub fn signer_id(&self, core_signer_id: i64) -> Option<i64> {
         match self {
@@ -50,7 +50,7 @@ impl Signer {
                 Signer::Nobody => Some(core_signer_id),
                 _ => inner.signer_id(core_signer_id),
             },
-            Signer::ContractId { signer_id, .. } => Some(*signer_id),
+            Signer::Contract { signer_id, .. } => Some(*signer_id),
             Signer::Nobody => None,
         }
     }
@@ -63,7 +63,7 @@ impl core::ops::Deref for Signer {
         match self {
             Self::Id(identity) => identity.key(),
             Self::Core(_) => "core",
-            Self::ContractId { key, .. } => key,
+            Self::Contract { key, .. } => key,
             Self::Nobody => "nobody",
         }
     }
@@ -79,7 +79,7 @@ impl From<&Signer> for HolderRef {
     fn from(signer: &Signer) -> Self {
         match signer {
             Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
-            Signer::ContractId { key, .. } => HolderRef::ContractId(key.clone()),
+            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id as u64),
             Signer::Core(_) => HolderRef::Core,
             Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
         }
@@ -174,18 +174,6 @@ impl Holder {
                         .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?
                         .to_string(),
                 );
-            }
-            HolderRef::ContractId(s) => {
-                if !s.starts_with("__cid__") {
-                    return Err(Error::Validation(
-                        "contract-id must start with __cid__".to_string(),
-                    ));
-                }
-                if s[7..].parse::<i64>().is_err() {
-                    return Err(Error::Validation(
-                        "contract-id must end with a valid integer".to_string(),
-                    ));
-                }
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
@@ -367,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_signer_signer_id_contract() {
-        let signer = Signer::new_contract_id(3, 7);
+        let signer = Signer::new_contract(3, 7);
         assert_eq!(signer.signer_id(CORE_ID), Some(7));
     }
 

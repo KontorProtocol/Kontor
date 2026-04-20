@@ -84,7 +84,7 @@ impl Runtime {
                     anyhow::anyhow!("no signer_id found for contract_id {contract_id}")
                 })?;
         let mut table = self.table.lock().await;
-        Ok(table.push(Signer::new_contract_id(contract_id, signer_id))?)
+        Ok(table.push(Signer::new_contract(contract_id, signer_id))?)
     }
 
     async fn _proc_transaction<T>(
