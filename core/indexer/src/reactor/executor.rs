@@ -11,9 +11,8 @@ use crate::database;
 use crate::retry::{new_backoff_unlimited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
-use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::registry;
-use crate::runtime::wit::{Holder, Signer};
+use crate::runtime::wit::Signer;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
@@ -270,14 +269,9 @@ async fn process_direct_input(
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    let conn = runtime.get_storage_conn();
-    let holder_ref = HolderRef::XOnlyPubkey(input.x_only_pubkey.to_string());
-    let holder = Holder::from_holder_ref(holder_ref, &conn, height)
-        .await
-        .map_err(|e| anyhow::anyhow!("holder resolution failed: {e:?}"))?;
-    let identity = holder
-        .identity
-        .ok_or_else(|| anyhow::anyhow!("expected identity for x_only_pubkey signer"))?;
+    let identity = runtime
+        .get_or_create_identity(&input.x_only_pubkey.to_string())
+        .await?;
 
     let metadata = OpMetadata {
         previous_output: input.previous_output,

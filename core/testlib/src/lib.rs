@@ -5,8 +5,8 @@ use indexer::{
     bls::KONTOR_BLS_DST,
     database::{
         queries::{
-            contract_has_state, get_checkpoint_latest, get_transaction_by_txid, insert_contract,
-            insert_transaction,
+            contract_has_state, create_contract_signer, get_checkpoint_latest,
+            get_transaction_by_txid, insert_contract, insert_transaction,
         },
         types::{ContractRow, OpResultId},
     },
@@ -266,6 +266,7 @@ impl RuntimeLocal {
         };
 
         for (name, bytes) in contracts {
+            let signer_id = create_contract_signer(&conn, height).await?;
             let contract_id = insert_contract(
                 &conn,
                 ContractRow::builder()
@@ -273,6 +274,7 @@ impl RuntimeLocal {
                     .tx_index(tx_index)
                     .name(name.to_string())
                     .bytes(bytes.to_vec())
+                    .signer_id(signer_id)
                     .build(),
             )
             .await?;

@@ -56,11 +56,10 @@ export type Event =
 
 export type HolderRef =
   | { "XOnlyPubkey": string }
-  | { "ContractId": string }
   | { "SignerId": bigint }
   | "Core"
   | "Burner"
-  | { "Utxo": UtxoRef };
+  | { "Utxo": OutPoint };
 
 export type Info = {
   version: string;
@@ -144,6 +143,8 @@ export type OpMetadata = {
 
 export type OpWithResult = { op: Op; result: ResultRow | null };
 
+export type OutPoint = { txid: string; vout: bigint };
+
 export type PaginatedResponse<T> = {
   results: Array<T>;
   pagination: PaginationMeta;
@@ -184,6 +185,7 @@ export type ResultRow = {
   value: string | null;
   contract: string;
   txid: string | null;
+  signer_id: number;
 };
 
 export type RevealInputs = {
@@ -251,8 +253,6 @@ export type TransactionRow = {
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };
-
-export type UtxoRef = { txid: string; vout: bigint };
 
 export type ViewExpr = { expr: string };
 

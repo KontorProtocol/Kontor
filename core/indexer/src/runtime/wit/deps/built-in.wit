@@ -5,7 +5,6 @@ interface context {
 
     variant holder-ref {
         x-only-pubkey(string),
-        contract-id(string),
         signer-id(u64),
         core,
         burner,

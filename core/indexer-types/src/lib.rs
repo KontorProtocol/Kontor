@@ -234,7 +234,6 @@ pub struct OutPoint {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
-    ContractId(String),
     SignerId(u64),
     Core,
     Burner,
@@ -488,6 +487,8 @@ pub struct ResultRow {
     pub value: Option<String>,
     pub contract: String,
     pub txid: Option<String>,
+    #[ts(type = "number")]
+    pub signer_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
