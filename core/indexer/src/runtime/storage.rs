@@ -10,10 +10,11 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            delete_contract_state, delete_matching_paths, exists_contract_state,
-            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
-            get_latest_contract_state_value, insert_contract, insert_contract_result,
-            insert_contract_state, matching_path, path_prefix_filter_contract_state,
+            create_contract_signer, delete_contract_state, delete_matching_paths,
+            exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
+            insert_contract_result, insert_contract_state, matching_path, next_contract_id,
+            path_prefix_filter_contract_state,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -146,6 +147,10 @@ impl Storage {
     }
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<i64> {
+        // Reserve the contract's signer_id first. Single-threaded execution
+        // during block processing means peeking at MAX(id)+1 is safe.
+        let next_contract_id = next_contract_id(&self.conn).await?;
+        let signer_id = create_contract_signer(&self.conn, next_contract_id, self.height).await?;
         Ok(insert_contract(
             &self.conn,
             ContractRow::builder()
@@ -158,6 +163,7 @@ impl Storage {
                 )
                 .name(name.to_string())
                 .bytes(bytes.to_vec())
+                .signer_id(signer_id)
                 .build(),
         )
         .await?)

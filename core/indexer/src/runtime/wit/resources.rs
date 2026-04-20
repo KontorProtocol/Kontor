@@ -16,20 +16,43 @@ use kontor_crypto::field_from_uniform_bytes;
 pub enum Signer {
     Id(Identity),
     Core(Box<Signer>),
-    ContractId { id: i64, key: String },
+    ContractId {
+        id: i64,
+        signer_id: i64,
+        key: String,
+    },
     Nobody,
 }
 
 impl Signer {
-    pub fn new_contract_id(id: i64) -> Self {
+    pub fn new_contract_id(id: i64, signer_id: i64) -> Self {
         Self::ContractId {
             id,
+            signer_id,
             key: format!("__cid__{id}"),
         }
     }
 
     pub fn is_core(&self) -> bool {
         matches!(self, Signer::Core(_))
+    }
+
+    /// The effective signer_id for attribution purposes.
+    /// - `Id` → the identity's signer_id
+    /// - `Core(Nobody)` → the reserved Core signer_id
+    /// - `Core(inner)` → unwraps to inner's signer_id
+    /// - `ContractId` → the contract's signer_id
+    /// - `Nobody` → None (only valid inside `Core`)
+    pub fn signer_id(&self, core_signer_id: i64) -> Option<i64> {
+        match self {
+            Signer::Id(identity) => Some(identity.signer_id()),
+            Signer::Core(inner) => match inner.as_ref() {
+                Signer::Nobody => Some(core_signer_id),
+                _ => inner.signer_id(core_signer_id),
+            },
+            Signer::ContractId { signer_id, .. } => Some(*signer_id),
+            Signer::Nobody => None,
+        }
     }
 }
 
@@ -313,6 +336,45 @@ impl Proof {
 mod tests {
     use super::*;
     use crate::test_utils::{create_fake_file_metadata, valid_seed_field};
+
+    const CORE_ID: i64 = 1;
+
+    #[test]
+    fn test_signer_signer_id_id() {
+        let signer = Signer::Id(Identity::new(42));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_nobody() {
+        let signer = Signer::Core(Box::new(Signer::Nobody));
+        assert_eq!(signer.signer_id(CORE_ID), Some(CORE_ID));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_id_unwraps() {
+        let signer = Signer::Core(Box::new(Signer::Id(Identity::new(42))));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_core_recursive() {
+        let signer = Signer::Core(Box::new(Signer::Core(Box::new(Signer::Id(Identity::new(
+            42,
+        ))))));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_contract() {
+        let signer = Signer::new_contract_id(3, 7);
+        assert_eq!(signer.signer_id(CORE_ID), Some(7));
+    }
+
+    #[test]
+    fn test_signer_signer_id_nobody() {
+        assert_eq!(Signer::Nobody.signer_id(CORE_ID), None);
+    }
 
     #[test]
     fn test_build_challenge_success() {

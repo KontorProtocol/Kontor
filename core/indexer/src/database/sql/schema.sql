@@ -36,8 +36,10 @@ CREATE TABLE IF NOT EXISTS contracts (
   tx_index INTEGER NOT NULL,
   size INTEGER NOT NULL,
   bytes BLOB NOT NULL,
+  signer_id INTEGER,
   UNIQUE (name, height, tx_index),
-  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
+  FOREIGN KEY (signer_id) REFERENCES signers (id)
 );
 
 CREATE TABLE IF NOT EXISTS contract_state (

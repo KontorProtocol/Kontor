@@ -60,7 +60,7 @@ export type HolderRef =
   | { "SignerId": bigint }
   | "Core"
   | "Burner"
-  | { "Utxo": UtxoRef };
+  | { "Utxo": OutPoint };
 
 export type Info = {
   version: string;
@@ -143,6 +143,8 @@ export type OpMetadata = {
 };
 
 export type OpWithResult = { op: Op; result: ResultRow | null };
+
+export type OutPoint = { txid: string; vout: bigint };
 
 export type PaginatedResponse<T> = {
   results: Array<T>;
@@ -251,8 +253,6 @@ export type TransactionRow = {
 };
 
 export type TxOutSchema = { value: number; script_pubkey: string };
-
-export type UtxoRef = { txid: string; vout: bigint };
 
 export type ViewExpr = { expr: string };
 

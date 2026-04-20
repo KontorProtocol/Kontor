@@ -165,6 +165,7 @@ pub struct Runtime {
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<OpReturnData>,
     pub node_label: String,
+    core_signer_id: Option<i64>,
 }
 
 impl Runtime {
@@ -216,6 +217,7 @@ impl Runtime {
             previous_output: None,
             op_return_data: None,
             node_label: String::new(),
+            core_signer_id: None,
         })
     }
 
@@ -286,6 +288,11 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
+    pub fn core_signer_id(&self) -> i64 {
+        self.core_signer_id
+            .expect("core signer not initialized — publish_native_contracts must run first")
+    }
+
     pub async fn publish_native_contracts(
         &mut self,
         genesis_validators: &[GenesisValidator],
@@ -293,6 +300,11 @@ impl Runtime {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
         self.set_gas_limit(self.gas_limit_for_non_procs);
+
+        // Reserve the Core signer row before publishing any contracts
+        let core_id = database::queries::create_core_signer(&self.get_storage_conn()).await?;
+        self.core_signer_id = Some(core_id);
+
         self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
             .await?;
         self.publish(
@@ -422,6 +434,11 @@ impl Runtime {
             .x_only_pubkey(&conn)
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        if x_only_pubkey.starts_with("__") {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "cannot register BLS key for synthetic signer: {x_only_pubkey}"
+            )));
+        }
         let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 

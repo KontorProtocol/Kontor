@@ -165,6 +165,7 @@ pub struct ContractRow {
     pub height: i64,
     pub tx_index: i64,
     pub bytes: Vec<u8>,
+    pub signer_id: Option<i64>,
 }
 
 impl ContractRow {

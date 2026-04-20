@@ -378,8 +378,10 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
                 height,
                 tx_index,
                 size,
-                bytes
+                bytes,
+                signer_id
             ) VALUES (
+                ?,
                 ?,
                 ?,
                 ?,
@@ -392,7 +394,8 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
             row.height,
             row.tx_index,
             row.size(),
-            row.bytes
+            row.bytes,
+            row.signer_id
         ],
     )
     .await?;
@@ -1233,6 +1236,11 @@ pub async fn select_existing_txids(
 // ─────────────────────────────────────────────────────────────────
 
 impl Identity {
+    /// Returns the `x_only_pubkey` string for this signer. For synthetic
+    /// signers (Core, contracts) this is a `__`-prefixed sentinel (e.g.
+    /// `"__core__"`, `"__cid__5"`) that is NOT a valid secp256k1 key.
+    /// Callers that parse the result as an `XOnlyPublicKey` must guard
+    /// against these sentinels first.
     pub async fn x_only_pubkey(&self, conn: &Connection) -> Result<String, Error> {
         let mut rows = conn
             .query(
@@ -1370,6 +1378,83 @@ pub async fn get_or_create_identity(
     .await?;
 
     Ok(Identity::new(signer_id))
+}
+
+/// Create the reserved Core signer row. Idempotent — returns the existing id
+/// if one was already inserted.
+pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO signers (x_only_pubkey, height) VALUES ('__core__', 0)",
+        (),
+    )
+    .await?;
+
+    let mut rows = conn
+        .query(
+            "SELECT id FROM signers WHERE x_only_pubkey = '__core__'",
+            (),
+        )
+        .await?;
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| Error::InvalidData("core signer row missing after insert".to_string()))?;
+    Ok(row.get(0)?)
+}
+
+/// Create a synthetic signer row for a contract. Idempotent — returns the
+/// existing id if one was already inserted for this contract_id.
+pub async fn create_contract_signer(
+    conn: &Connection,
+    contract_id: i64,
+    height: i64,
+) -> Result<i64, Error> {
+    let key = format!("__cid__{contract_id}");
+    conn.execute(
+        "INSERT OR IGNORE INTO signers (x_only_pubkey, height) VALUES (?, ?)",
+        params![key.clone(), height],
+    )
+    .await?;
+
+    let mut rows = conn
+        .query(
+            "SELECT id FROM signers WHERE x_only_pubkey = ?",
+            params![key.clone()],
+        )
+        .await?;
+    let row = rows.next().await?.ok_or_else(|| {
+        Error::InvalidData(format!(
+            "contract signer row missing after insert for contract_id={contract_id}"
+        ))
+    })?;
+    Ok(row.get(0)?)
+}
+
+/// Return the next contract_id that will be assigned by the auto-increment.
+/// Safe under single-threaded runtime execution.
+pub async fn next_contract_id(conn: &Connection) -> Result<i64, Error> {
+    let mut rows = conn
+        .query("SELECT COALESCE(MAX(id), 0) + 1 FROM contracts", ())
+        .await?;
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| Error::InvalidData("failed to compute next contract_id".to_string()))?;
+    Ok(row.get(0)?)
+}
+
+/// Look up the signer_id associated with a contract.
+pub async fn get_contract_signer_id(
+    conn: &Connection,
+    contract_id: i64,
+) -> Result<Option<i64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT signer_id FROM contracts WHERE id = ?",
+            params![contract_id],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
 pub async fn get_signer_entry(
@@ -3609,6 +3694,36 @@ mod tests {
         let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
         let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
         assert_eq!(id1.signer_id(), id2.signer_id());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_core_signer_idempotent() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 0).await?;
+
+        let id1 = create_core_signer(&conn).await?;
+        let id2 = create_core_signer(&conn).await?;
+        assert_eq!(id1, id2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_contract_signer_idempotent() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let id1 = create_contract_signer(&conn, 42, 1).await?;
+        let id2 = create_contract_signer(&conn, 42, 1).await?;
+        assert_eq!(id1, id2);
+
+        // Different contract_id gets a different signer row
+        let id3 = create_contract_signer(&conn, 43, 1).await?;
+        assert_ne!(id1, id3);
 
         Ok(())
     }

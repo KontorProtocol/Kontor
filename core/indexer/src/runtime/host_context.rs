@@ -73,9 +73,18 @@ impl Runtime {
         Fuel::ProcContractSigner
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.contract_id
+        };
+        let signer_id =
+            crate::database::queries::get_contract_signer_id(&self.get_storage_conn(), contract_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no signer_id found for contract_id {contract_id}")
+                })?;
         let mut table = self.table.lock().await;
-        let contract_id = table.get(&self_)?.contract_id;
-        Ok(table.push(Signer::new_contract_id(contract_id))?)
+        Ok(table.push(Signer::new_contract_id(contract_id, signer_id))?)
     }
 
     async fn _proc_transaction<T>(
