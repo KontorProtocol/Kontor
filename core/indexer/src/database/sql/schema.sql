@@ -101,8 +101,16 @@ CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
 
 CREATE TABLE IF NOT EXISTS signers (
   id INTEGER PRIMARY KEY,
+  height INTEGER NOT NULL,
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS x_only_pubkeys (
+  signer_id INTEGER NOT NULL,
   x_only_pubkey TEXT NOT NULL UNIQUE,
   height INTEGER NOT NULL,
+  PRIMARY KEY (signer_id, height),
+  FOREIGN KEY (signer_id) REFERENCES signers (id),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 

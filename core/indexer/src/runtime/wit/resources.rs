@@ -158,7 +158,6 @@ impl HasContractId for CoreContext {
 
 pub struct Holder {
     pub holder_ref: HolderRef,
-    pub identity: Option<Identity>,
 }
 
 impl Holder {
@@ -169,11 +168,13 @@ impl Holder {
     ) -> Result<Self, Error> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                holder_ref = HolderRef::XOnlyPubkey(
-                    XOnlyPublicKey::from_str(s)
-                        .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?
-                        .to_string(),
-                );
+                // Canonicalize to lowercase hex and ensure the signer row exists.
+                let pk = XOnlyPublicKey::from_str(s)
+                    .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
+                let identity = get_or_create_identity(conn, &pk.to_string(), height)
+                    .await
+                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
+                holder_ref = HolderRef::SignerId(identity.signer_id() as u64);
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
@@ -183,28 +184,7 @@ impl Holder {
             HolderRef::Core | HolderRef::Burner => {}
         }
 
-        let (resolved, identity) = match &holder_ref {
-            HolderRef::XOnlyPubkey(s) => {
-                // Canonicalize to lowercase hex to avoid case-sensitive DB mismatches
-                let identity = get_or_create_identity(conn, s, height)
-                    .await
-                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
-                (
-                    HolderRef::SignerId(identity.signer_id() as u64),
-                    Some(identity),
-                )
-            }
-            HolderRef::SignerId(id) => {
-                let identity = Identity::new(*id as i64);
-                (holder_ref, Some(identity))
-            }
-            _ => (holder_ref, None),
-        };
-
-        Ok(Self {
-            holder_ref: resolved,
-            identity,
-        })
+        Ok(Self { holder_ref })
     }
 }
 

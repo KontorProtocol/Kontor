@@ -434,11 +434,6 @@ impl Runtime {
             .x_only_pubkey(&conn)
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
-        if x_only_pubkey.starts_with("__") {
-            return Err(ExecutionError::Deterministic(anyhow!(
-                "cannot register BLS key for synthetic signer: {x_only_pubkey}"
-            )));
-        }
         let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 

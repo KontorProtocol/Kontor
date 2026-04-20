@@ -1244,19 +1244,23 @@ impl Identity {
     /// Returns the `x_only_pubkey` string for this signer. For synthetic
     /// signers (Core, contracts) this is a `__`-prefixed sentinel (e.g.
     /// `"__core__"`, `"__cid__5"`) that is NOT a valid secp256k1 key.
-    /// Callers that parse the result as an `XOnlyPublicKey` must guard
-    /// against these sentinels first.
+    /// Returns the most recent x_only_pubkey for this signer. `Identity` wraps
+    /// a user signer by construction, so every `Identity` has an associated
+    /// pubkey.
     pub async fn x_only_pubkey(&self, conn: &Connection) -> Result<String, Error> {
         let mut rows = conn
             .query(
-                "SELECT x_only_pubkey FROM signers WHERE id = ?",
+                "SELECT x_only_pubkey FROM x_only_pubkeys \
+                 WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
                 params![self.signer_id()],
             )
             .await?;
-        let row = rows
-            .next()
-            .await?
-            .ok_or_else(|| Error::InvalidData(format!("unknown signer_id {}", self.signer_id())))?;
+        let row = rows.next().await?.ok_or_else(|| {
+            Error::InvalidData(format!(
+                "no x_only_pubkey for signer_id {}",
+                self.signer_id()
+            ))
+        })?;
         Ok(row.get(0)?)
     }
 
@@ -1360,7 +1364,7 @@ pub async fn get_or_create_identity(
 ) -> Result<Identity, Error> {
     let mut rows = conn
         .query(
-            "SELECT id FROM signers WHERE x_only_pubkey = ?",
+            "SELECT signer_id FROM x_only_pubkeys WHERE x_only_pubkey = ?",
             params![x_only_pubkey],
         )
         .await?;
@@ -1369,13 +1373,16 @@ pub async fn get_or_create_identity(
         return Ok(Identity::new(row.get(0)?));
     }
 
+    conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])
+        .await?;
+    let signer_id = conn.last_insert_rowid();
+
     conn.execute(
-        "INSERT INTO signers (x_only_pubkey, height) VALUES (?, ?)",
-        params![x_only_pubkey, height],
+        "INSERT INTO x_only_pubkeys (signer_id, x_only_pubkey, height) VALUES (?, ?, ?)",
+        params![signer_id, x_only_pubkey, height],
     )
     .await?;
 
-    let signer_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, 0, ?)",
         params![signer_id, height],
@@ -1385,54 +1392,31 @@ pub async fn get_or_create_identity(
     Ok(Identity::new(signer_id))
 }
 
-/// Create the reserved Core signer row. Idempotent — returns the existing id
-/// if one was already inserted.
+/// Create the reserved Core signer row. The Core signer row has id = 1 by
+/// construction — it's the first row inserted into `signers` at genesis, before
+/// any other signer. Idempotent — returns the existing id on repeat calls.
 pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
-    conn.execute(
-        "INSERT OR IGNORE INTO signers (x_only_pubkey, height) VALUES ('__core__', 0)",
-        (),
-    )
-    .await?;
-
-    let mut rows = conn
-        .query(
-            "SELECT id FROM signers WHERE x_only_pubkey = '__core__'",
-            (),
-        )
-        .await?;
-    let row = rows
+    let existing = conn
+        .query("SELECT id FROM signers ORDER BY id ASC LIMIT 1", ())
+        .await?
         .next()
         .await?
-        .ok_or_else(|| Error::InvalidData("core signer row missing after insert".to_string()))?;
-    Ok(row.get(0)?)
+        .map(|r| r.get::<i64>(0))
+        .transpose()?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    conn.execute("INSERT INTO signers (height) VALUES (0)", ())
+        .await?;
+    Ok(conn.last_insert_rowid())
 }
 
-/// Create a synthetic signer row for a contract. Idempotent — returns the
-/// existing id if one was already inserted for this contract_id.
-pub async fn create_contract_signer(
-    conn: &Connection,
-    contract_id: i64,
-    height: i64,
-) -> Result<i64, Error> {
-    let key = format!("__cid__{contract_id}");
-    conn.execute(
-        "INSERT OR IGNORE INTO signers (x_only_pubkey, height) VALUES (?, ?)",
-        params![key.clone(), height],
-    )
-    .await?;
-
-    let mut rows = conn
-        .query(
-            "SELECT id FROM signers WHERE x_only_pubkey = ?",
-            params![key.clone()],
-        )
+/// Create a signer row for a contract. No x_only_pubkey — contracts don't
+/// have bitcoin keys. The signer_id is assigned by auto-increment.
+pub async fn create_contract_signer(conn: &Connection, height: i64) -> Result<i64, Error> {
+    conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])
         .await?;
-    let row = rows.next().await?.ok_or_else(|| {
-        Error::InvalidData(format!(
-            "contract signer row missing after insert for contract_id={contract_id}"
-        ))
-    })?;
-    Ok(row.get(0)?)
+    Ok(conn.last_insert_rowid())
 }
 
 /// Return the next contract_id that will be assigned by the auto-increment.
@@ -1470,15 +1454,17 @@ pub async fn get_signer_entry(
         .query(
             r#"SELECT
                 s.id AS signer_id,
-                s.x_only_pubkey,
+                p.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
             FROM signers s
+            JOIN x_only_pubkeys p ON p.signer_id = s.id
+                AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
             LEFT JOIN bls_keys b ON b.signer_id = s.id
                 AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
             JOIN nonces n ON n.signer_id = s.id
                 AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
-            WHERE s.x_only_pubkey = ?"#,
+            WHERE p.x_only_pubkey = ?"#,
             params![x_only_pubkey],
         )
         .await?;
@@ -1494,10 +1480,12 @@ pub async fn get_signer_entry_by_id(
         .query(
             r#"SELECT
                 s.id AS signer_id,
-                s.x_only_pubkey,
+                p.x_only_pubkey,
                 b.bls_pubkey,
                 n.next_nonce
             FROM signers s
+            JOIN x_only_pubkeys p ON p.signer_id = s.id
+                AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
             LEFT JOIN bls_keys b ON b.signer_id = s.id
                 AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
             JOIN nonces n ON n.signer_id = s.id
@@ -3738,18 +3726,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_contract_signer_idempotent() -> Result<()> {
+    async fn test_create_contract_signer_assigns_unique_ids() -> Result<()> {
         let (_, writer, _temp_dir) = new_test_db().await?;
         let conn = writer.connection();
         setup_block(&conn, 1).await?;
 
-        let id1 = create_contract_signer(&conn, 42, 1).await?;
-        let id2 = create_contract_signer(&conn, 42, 1).await?;
-        assert_eq!(id1, id2);
-
-        // Different contract_id gets a different signer row
-        let id3 = create_contract_signer(&conn, 43, 1).await?;
-        assert_ne!(id1, id3);
+        let id1 = create_contract_signer(&conn, 1).await?;
+        let id2 = create_contract_signer(&conn, 1).await?;
+        assert_ne!(id1, id2);
 
         Ok(())
     }

@@ -6,7 +6,7 @@ use indexer::{
     database::{
         queries::{
             contract_has_state, create_contract_signer, get_checkpoint_latest,
-            get_transaction_by_txid, insert_contract, insert_transaction, next_contract_id,
+            get_transaction_by_txid, insert_contract, insert_transaction,
         },
         types::{ContractRow, OpResultId},
     },
@@ -266,8 +266,7 @@ impl RuntimeLocal {
         };
 
         for (name, bytes) in contracts {
-            let next_id = next_contract_id(&conn).await?;
-            let signer_id = create_contract_signer(&conn, next_id, height).await?;
+            let signer_id = create_contract_signer(&conn, height).await?;
             let contract_id = insert_contract(
                 &conn,
                 ContractRow::builder()
