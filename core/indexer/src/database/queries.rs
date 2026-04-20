@@ -1419,19 +1419,6 @@ pub async fn create_contract_signer(conn: &Connection, height: i64) -> Result<i6
     Ok(conn.last_insert_rowid())
 }
 
-/// Return the next contract_id that will be assigned by the auto-increment.
-/// Safe under single-threaded runtime execution.
-pub async fn next_contract_id(conn: &Connection) -> Result<i64, Error> {
-    let mut rows = conn
-        .query("SELECT COALESCE(MAX(id), 0) + 1 FROM contracts", ())
-        .await?;
-    let row = rows
-        .next()
-        .await?
-        .ok_or_else(|| Error::InvalidData("failed to compute next contract_id".to_string()))?;
-    Ok(row.get(0)?)
-}
-
 /// Look up the signer_id associated with a contract.
 pub async fn get_contract_signer_id(
     conn: &Connection,
