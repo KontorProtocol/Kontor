@@ -1433,29 +1433,28 @@ pub async fn get_contract_signer_id(
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
-pub async fn get_signer_entry(
+/// Shared SELECT + JOIN body for signer entry lookups. Uses LEFT JOINs so
+/// core and contract signers (which lack x_only_pubkeys/nonces rows) are
+/// returned with NULL fields rather than filtered out.
+const SIGNER_ENTRY_SELECT: &str = r#"SELECT
+        s.id AS signer_id,
+        p.x_only_pubkey,
+        b.bls_pubkey,
+        n.next_nonce
+    FROM signers s
+    LEFT JOIN x_only_pubkeys p ON p.signer_id = s.id
+        AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
+    LEFT JOIN bls_keys b ON b.signer_id = s.id
+        AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+    LEFT JOIN nonces n ON n.signer_id = s.id
+        AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)"#;
+
+pub async fn get_signer_entry_by_x_only_pubkey(
     conn: &Connection,
     x_only_pubkey: &str,
 ) -> Result<Option<SignerEntry>, Error> {
-    let mut rows = conn
-        .query(
-            r#"SELECT
-                s.id AS signer_id,
-                p.x_only_pubkey,
-                b.bls_pubkey,
-                n.next_nonce
-            FROM signers s
-            JOIN x_only_pubkeys p ON p.signer_id = s.id
-                AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
-            LEFT JOIN bls_keys b ON b.signer_id = s.id
-                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
-            JOIN nonces n ON n.signer_id = s.id
-                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
-            WHERE p.x_only_pubkey = ?"#,
-            params![x_only_pubkey],
-        )
-        .await?;
-
+    let sql = format!("{SIGNER_ENTRY_SELECT} WHERE p.x_only_pubkey = ?");
+    let mut rows = conn.query(&sql, params![x_only_pubkey]).await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
@@ -1463,26 +1462,29 @@ pub async fn get_signer_entry_by_id(
     conn: &Connection,
     signer_id: i64,
 ) -> Result<Option<SignerEntry>, Error> {
+    let sql = format!("{SIGNER_ENTRY_SELECT} WHERE s.id = ?");
+    let mut rows = conn.query(&sql, params![signer_id]).await?;
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+/// Look up a signer by BLS pubkey. Policy allows only one signer per BLS
+/// pubkey (enforced at registration in the runtime), but the schema permits
+/// historical rows if rotation is ever added — so pick the most recent.
+pub async fn get_signer_entry_by_bls_pubkey(
+    conn: &Connection,
+    bls_pubkey: &[u8],
+) -> Result<Option<SignerEntry>, Error> {
     let mut rows = conn
         .query(
-            r#"SELECT
-                s.id AS signer_id,
-                p.x_only_pubkey,
-                b.bls_pubkey,
-                n.next_nonce
-            FROM signers s
-            JOIN x_only_pubkeys p ON p.signer_id = s.id
-                AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
-            LEFT JOIN bls_keys b ON b.signer_id = s.id
-                AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
-            JOIN nonces n ON n.signer_id = s.id
-                AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)
-            WHERE s.id = ?"#,
-            params![signer_id],
+            "SELECT signer_id FROM bls_keys WHERE bls_pubkey = ? ORDER BY height DESC LIMIT 1",
+            params![bls_pubkey.to_vec()],
         )
         .await?;
-
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    let signer_id: i64 = match rows.next().await? {
+        Some(row) => row.get(0)?,
+        None => return Ok(None),
+    };
+    get_signer_entry_by_id(conn, signer_id).await
 }
 
 #[cfg(test)]
@@ -3792,14 +3794,16 @@ mod tests {
         let bls_key = vec![1u8; 48];
         row.register_bls_key(&conn, &bls_key, 1).await?;
 
-        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey)
+            .await?
+            .unwrap();
         assert_eq!(entry.bls_pubkey, Some(bls_key));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_get_signer_entry() -> Result<()> {
+    async fn test_get_signer_entry_by_x_only_pubkey() -> Result<()> {
         let (_, writer, _temp_dir) = new_test_db().await?;
         let conn = writer.connection();
         setup_block(&conn, 1).await?;
@@ -3807,11 +3811,13 @@ mod tests {
         let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
         let row = get_or_create_identity(&conn, pubkey, 1).await?;
 
-        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey)
+            .await?
+            .unwrap();
         assert_eq!(entry.signer_id, row.signer_id());
-        assert_eq!(entry.x_only_pubkey, pubkey);
+        assert_eq!(entry.x_only_pubkey.as_deref(), Some(pubkey));
         assert_eq!(entry.bls_pubkey, None);
-        assert_eq!(entry.next_nonce, 0);
+        assert_eq!(entry.next_nonce, Some(0));
 
         Ok(())
     }
@@ -3828,8 +3834,53 @@ mod tests {
         let entry = get_signer_entry_by_id(&conn, row.signer_id())
             .await?
             .unwrap();
-        assert_eq!(entry.x_only_pubkey, pubkey);
-        assert_eq!(entry.next_nonce, 0);
+        assert_eq!(entry.x_only_pubkey.as_deref(), Some(pubkey));
+        assert_eq!(entry.next_nonce, Some(0));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_entry_by_bls_pubkey() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 1).await?;
+
+        let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
+        let row = get_or_create_identity(&conn, pubkey, 1).await?;
+        let bls_key = vec![7u8; 48];
+        row.register_bls_key(&conn, &bls_key, 1).await?;
+
+        let entry = get_signer_entry_by_bls_pubkey(&conn, &bls_key)
+            .await?
+            .unwrap();
+        assert_eq!(entry.signer_id, row.signer_id());
+        assert_eq!(entry.bls_pubkey, Some(bls_key));
+
+        let missing = get_signer_entry_by_bls_pubkey(&conn, &[0u8; 48]).await?;
+        assert!(missing.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_entry_core_and_contract() -> Result<()> {
+        let (_, writer, _temp_dir) = new_test_db().await?;
+        let conn = writer.connection();
+        setup_block(&conn, 0).await?;
+        setup_block(&conn, 1).await?;
+
+        let core_id = create_core_signer(&conn).await?;
+        let core = get_signer_entry_by_id(&conn, core_id).await?.unwrap();
+        assert_eq!(core.x_only_pubkey, None);
+        assert_eq!(core.bls_pubkey, None);
+        assert_eq!(core.next_nonce, None);
+
+        let contract_id = create_contract_signer(&conn, 1).await?;
+        let contract = get_signer_entry_by_id(&conn, contract_id).await?.unwrap();
+        assert_eq!(contract.x_only_pubkey, None);
+        assert_eq!(contract.bls_pubkey, None);
+        assert_eq!(contract.next_nonce, None);
 
         Ok(())
     }
@@ -3850,13 +3901,15 @@ mod tests {
         // Rollback to height 2 — should remove bls_key (height 3) but keep nonce (height 2)
         rollback_to_height(&conn, 2).await?;
 
-        let entry = get_signer_entry(&conn, pubkey).await?.unwrap();
+        let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey)
+            .await?
+            .unwrap();
         assert_eq!(entry.bls_pubkey, None);
-        assert_eq!(entry.next_nonce, 1);
+        assert_eq!(entry.next_nonce, Some(1));
 
         // Rollback to height 0 — should remove everything
         rollback_to_height(&conn, 0).await?;
-        let entry = get_signer_entry(&conn, pubkey).await?;
+        let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey).await?;
         assert!(entry.is_none());
 
         Ok(())

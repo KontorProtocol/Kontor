@@ -158,18 +158,12 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let decoded1 = arith::wave::eval_parse_return_expr(v1);
     assert_eq!(decoded1.value, 18);
     assert_eq!(
-        client
-            .registry_entry(&signer1_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer1_id.to_string()).await?.next_nonce,
+        Some(1)
     );
     assert_eq!(
-        client
-            .registry_entry(&signer2_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer2_id.to_string()).await?.next_nonce,
+        Some(1)
     );
 
     // The contract's last_op should reflect the *second* inner call.
@@ -264,7 +258,8 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     let entry = rt.get_signer_entry(&signer_id.to_string()).await?;
     let entry = entry.ok_or_else(|| anyhow!("missing registry entry after rejection"))?;
     assert_eq!(
-        entry.next_nonce, 0,
+        entry.next_nonce,
+        Some(0),
         "unknown signer rejection must not advance nonce"
     );
     Ok(())

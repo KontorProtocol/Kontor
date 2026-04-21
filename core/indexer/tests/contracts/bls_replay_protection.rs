@@ -116,11 +116,8 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     // Op1 (duplicate nonce=0) was skipped; nonce advanced to 1 from op0 only.
     let client = rt.kontor_client().await;
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1)
     );
 
     // Follow-up op must use nonce=1 (op0 consumed nonce=0).
@@ -234,11 +231,8 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     // Nonce stays at 1 (only the first bundle's op consumed it).
     let client = rt.kontor_client().await;
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1)
     );
 
     Ok(())
@@ -283,11 +277,8 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
 
     let client = rt.kontor_client().await;
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1)
     );
 
     let arith_bytes = runtime
@@ -339,11 +330,8 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     let decoded = arith::wave::eval_parse_return_expr(v);
     assert_eq!(decoded.value, 12);
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        2
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(2)
     );
 
     Ok(())
@@ -456,18 +444,12 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
     let decoded3 = arith::wave::eval_parse_return_expr(v3);
     assert_eq!(decoded3.value, 11);
     assert_eq!(
-        client
-            .registry_entry(&signer1_id.to_string())
-            .await?
-            .next_nonce,
-        2
+        client.signer(&signer1_id.to_string()).await?.next_nonce,
+        Some(2)
     );
     assert_eq!(
-        client
-            .registry_entry(&signer2_id.to_string())
-            .await?
-            .next_nonce,
-        2
+        client.signer(&signer2_id.to_string()).await?.next_nonce,
+        Some(2)
     );
 
     Ok(())
@@ -509,11 +491,8 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
 
     let client = rt.kontor_client().await;
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        0,
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(0),
         "precondition: nonce starts at 0"
     );
 
@@ -547,11 +526,8 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
     let decoded = arith::wave::eval_parse_return_expr(v);
     assert_eq!(decoded.value, 42);
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1,
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1),
         "nonce must advance after valid op"
     );
 
@@ -578,11 +554,8 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
 
     // Nonce must remain at 1 — the replayed op was rejected.
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1,
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1),
         "replayed nonce must not advance"
     );
 
@@ -648,11 +621,8 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
 
     let client = rt.kontor_client().await;
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1)
     );
 
     let arith_runtime_contract: indexer::runtime::ContractAddress = arith_contract
@@ -674,11 +644,8 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
 
     // Nonce unchanged — the replayed op was rejected.
     assert_eq!(
-        client
-            .registry_entry(&signer_id.to_string())
-            .await?
-            .next_nonce,
-        1,
+        client.signer(&signer_id.to_string()).await?.next_nonce,
+        Some(1),
         "byte-for-byte replay must not advance nonce"
     );
 

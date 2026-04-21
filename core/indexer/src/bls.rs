@@ -172,8 +172,10 @@ impl SignerResolver {
         let entry = get_signer_entry_by_id(&conn, signer_id as i64)
             .await?
             .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
-        self.signer_map
-            .insert(signer_id, entry.x_only_pubkey.clone());
+        let x_only_pubkey = entry.x_only_pubkey.clone().ok_or_else(|| {
+            anyhow!("signer_id {signer_id} is not a user signer (no x_only_pubkey)")
+        })?;
+        self.signer_map.insert(signer_id, x_only_pubkey);
         let raw_bytes = entry
             .bls_pubkey
             .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?;
