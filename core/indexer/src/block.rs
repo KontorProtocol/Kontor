@@ -80,6 +80,10 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                     if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
                         && script_insts.next().is_none()
                         && let Ok(insts) = deserialize::<Insts>(&data)
+                        && insts
+                            .aggregate
+                            .as_ref()
+                            .is_none_or(|agg| agg.signer_ids.len() == insts.ops.len())
                     {
                         return Some(Input {
                             previous_output: input.previous_output,
@@ -126,25 +130,36 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        if !input.insts.is_aggregate() {
-            let entry =
-                crate::database::queries::get_signer_entry(conn, &input.x_only_pubkey.to_string())
-                    .await?;
+        // Per-op signer_ids: aggregates provide them directly,
+        // direct inputs broadcast the single witness signer to every op.
+        let signer_ids: Vec<u64> = match &input.insts.aggregate {
+            Some(agg) => agg.signer_ids.clone(),
+            None => {
+                let id = crate::database::queries::get_signer_entry(
+                    conn,
+                    &input.x_only_pubkey.to_string(),
+                )
+                .await?
+                .map(|e| e.signer_id as u64)
+                .unwrap_or(0);
+                vec![id; input.insts.ops.len()]
+            }
+        };
+
+        for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
-                signer_id: entry.map(|e| e.signer_id as u64).unwrap_or(0),
+                signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
-            for (op_index, inst) in input.insts.ops.iter().enumerate() {
-                let op = op_from_inst(inst.clone(), metadata.clone());
-                let id = OpResultId::builder()
-                    .txid(tx.txid.to_string())
-                    .input_index(input.input_index)
-                    .op_index(op_index as i64)
-                    .build();
-                let result = get_op_result(conn, &id).await?.map(Into::into);
-                ops.push(OpWithResult { op, result });
-            }
+            let op = op_from_inst(inst.clone(), metadata);
+            let id = OpResultId::builder()
+                .txid(tx.txid.to_string())
+                .input_index(input.input_index)
+                .op_index(op_index as i64)
+                .build();
+            let result = get_op_result(conn, &id).await?.map(Into::into);
+            ops.push(OpWithResult { op, result });
         }
     }
     Ok(ops)
