@@ -102,9 +102,9 @@ impl Identity {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
     pub signer_id: i64,
-    pub x_only_pubkey: String,
+    pub x_only_pubkey: Option<String>,
     pub bls_pubkey: Option<Vec<u8>>,
-    pub next_nonce: i64,
+    pub next_nonce: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

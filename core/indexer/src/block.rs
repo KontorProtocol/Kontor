@@ -135,7 +135,7 @@ pub async fn inspect(
         let signer_ids: Vec<u64> = match &input.insts.aggregate {
             Some(agg) => agg.signer_ids.clone(),
             None => {
-                let id = crate::database::queries::get_signer_entry(
+                let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
                     conn,
                     &input.x_only_pubkey.to_string(),
                 )

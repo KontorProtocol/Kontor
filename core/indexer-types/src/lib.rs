@@ -575,11 +575,11 @@ pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct RegistryEntryResponse {
+pub struct SignerResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
-    pub x_only_pubkey: String,
+    pub x_only_pubkey: Option<String>,
     pub bls_pubkey: Option<Vec<u8>>,
-    #[ts(type = "number")]
-    pub next_nonce: u64,
+    #[ts(type = "number | null")]
+    pub next_nonce: Option<u64>,
 }

@@ -7,7 +7,7 @@ use axum::{
 use bitcoin::consensus::encode;
 use indexer_types::{
     BlockRow, CommitOutputs, ComposeOutputs, ComposeQuery, ContractListRow, ContractResponse, Info,
-    OpWithResult, PaginatedResponse, RegistryEntryResponse, ResultRow, RevealOutputs, RevealQuery,
+    OpWithResult, PaginatedResponse, ResultRow, RevealOutputs, RevealQuery, SignerResponse,
     TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 
@@ -15,7 +15,9 @@ use crate::{
     api::compose::reveal_inputs_from_query,
     block::inspect,
     built_info,
-    database::queries::{get_signer_entry, get_signer_entry_by_id},
+    database::queries::{
+        get_signer_entry_by_bls_pubkey, get_signer_entry_by_id, get_signer_entry_by_x_only_pubkey,
+    },
     database::{
         queries::{
             self, get_blocks_paginated, get_checkpoint_latest, get_op_result,
@@ -324,37 +326,48 @@ pub async fn get_result(
         .into())
 }
 
-pub async fn get_registry_entry(
+/// Identifier accepted by `get_signer`. Disambiguated by shape — numeric is a
+/// signer_id, 64-char hex is an x-only pubkey, 192-char hex is a BLS pubkey.
+fn is_hex_of_len(s: &str, len: usize) -> bool {
+    s.len() == len && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+pub async fn get_signer(
     Path(identifier): Path<String>,
     State(env): State<Env>,
-) -> Result<RegistryEntryResponse> {
+) -> Result<SignerResponse> {
     if !*env.available.read().await {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     let runtime = env.runtime_pool.get().await?;
-
     let conn = runtime.get_storage_conn();
+
     let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
-        get_signer_entry_by_id(&conn, signer_id as i64)
-            .await
-            .map_err(|e| HttpError::BadRequest(e.to_string()))?
+        get_signer_entry_by_id(&conn, signer_id as i64).await
+    } else if is_hex_of_len(&identifier, 64) {
+        get_signer_entry_by_x_only_pubkey(&conn, &identifier).await
+    } else if is_hex_of_len(&identifier, 192) {
+        let bytes = hex::decode(&identifier)
+            .map_err(|e| HttpError::BadRequest(format!("invalid bls_pubkey hex: {e}")))?;
+        get_signer_entry_by_bls_pubkey(&conn, &bytes).await
     } else {
-        get_signer_entry(&conn, &identifier)
-            .await
-            .map_err(|e| HttpError::BadRequest(e.to_string()))?
+        return Err(HttpError::BadRequest(
+            "identifier must be signer_id (numeric), x-only pubkey (64 hex), or bls pubkey (192 hex)"
+                .to_string(),
+        )
+        .into());
     };
+    let entry = entry.map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
     match entry {
-        Some(e) => Ok(RegistryEntryResponse {
+        Some(e) => Ok(SignerResponse {
             signer_id: e.signer_id as u64,
             x_only_pubkey: e.x_only_pubkey,
             bls_pubkey: e.bls_pubkey,
-            next_nonce: e.next_nonce as u64,
+            next_nonce: e.next_nonce.map(|n| n as u64),
         }
         .into()),
-        None => {
-            Err(HttpError::NotFound(format!("registry entry not found for: {}", identifier)).into())
-        }
+        None => Err(HttpError::NotFound(format!("signer not found for: {identifier}")).into()),
     }
 }
 
@@ -362,9 +375,9 @@ pub async fn get_registry_entry(
 mod tests {
     use crate::runtime::wit::Signer;
     use crate::{
-        api::{Env, handlers::get_registry_entry},
+        api::{Env, handlers::get_signer},
         bls::RegistrationProof,
-        database::queries::{get_signer_entry, insert_block},
+        database::queries::{get_signer_entry_by_x_only_pubkey, insert_block},
         runtime::{ComponentCache, Runtime, Storage},
         test_utils::new_test_db,
     };
@@ -373,13 +386,13 @@ mod tests {
     use axum_test::{TestResponse, TestServer};
     use bitcoin::key::rand::RngCore;
     use bitcoin::key::{Keypair, Secp256k1, rand};
-    use indexer_types::{BlockRow, RegistryEntryResponse};
+    use indexer_types::{BlockRow, SignerResponse};
     use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
     #[derive(Debug, Serialize, Deserialize)]
-    struct RegistryResponse {
-        result: RegistryEntryResponse,
+    struct SignerResponseWrapper {
+        result: SignerResponse,
     }
 
     struct RegisteredUser {
@@ -410,7 +423,7 @@ mod tests {
             .await?;
 
         let conn = runtime.get_storage_conn();
-        let entry = get_signer_entry(&conn, &x_only.to_string())
+        let entry = get_signer_entry_by_x_only_pubkey(&conn, &x_only.to_string())
             .await
             .map_err(|e| anyhow!("{e}"))?
             .expect("signer entry must exist after registration");
@@ -455,80 +468,109 @@ mod tests {
         let env = Env::new_test(reader, db_dir.path(), db_name).await?;
 
         let app = Router::new()
-            .route(
-                "/api/registry/entry/{pubkey_or_id}",
-                get(get_registry_entry),
-            )
+            .route("/api/signers/{identifier}", get(get_signer))
             .with_state(env);
 
         Ok((app, vec![user0, user1], db_dir))
     }
 
     #[tokio::test]
-    async fn test_get_registry_entry_by_pubkey() -> Result<()> {
+    async fn test_get_signer_by_pubkey() -> Result<()> {
         let (app, users, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
         let response: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
+            .get(&format!("/api/signers/{}", users[0].x_only_pubkey))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.signer_id, users[0].signer_id);
-        assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
+        assert_eq!(
+            result.result.x_only_pubkey.as_deref(),
+            Some(users[0].x_only_pubkey.as_str())
+        );
         assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
-        assert_eq!(result.result.next_nonce, 0);
+        assert_eq!(result.result.next_nonce, Some(0));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_get_registry_entry_by_signer_id() -> Result<()> {
+    async fn test_get_signer_by_signer_id() -> Result<()> {
         let (app, users, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
         let response: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .get(&format!("/api/signers/{}", users[0].signer_id))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.signer_id, users[0].signer_id);
-        assert_eq!(result.result.x_only_pubkey, users[0].x_only_pubkey);
+        assert_eq!(
+            result.result.x_only_pubkey.as_deref(),
+            Some(users[0].x_only_pubkey.as_str())
+        );
         assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
-        assert_eq!(result.result.next_nonce, 0);
+        assert_eq!(result.result.next_nonce, Some(0));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_get_registry_entry_not_found_by_pubkey() -> Result<()> {
+    async fn test_get_signer_by_bls_pubkey() -> Result<()> {
+        let (app, users, _db) = create_test_app().await?;
+        let server = TestServer::new(app);
+
+        let bls_hex = hex::encode(&users[0].bls_pubkey);
+        let response: TestResponse = server.get(&format!("/api/signers/{bls_hex}")).await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        assert_eq!(result.result.signer_id, users[0].signer_id);
+        assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_not_found_by_pubkey() -> Result<()> {
         let (app, _, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
         let fake_xonly = "ab".repeat(32);
-        let response: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", fake_xonly))
-            .await;
+        let response: TestResponse = server.get(&format!("/api/signers/{fake_xonly}")).await;
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
 
         let error_body = response.text();
-        assert!(error_body.contains("registry entry not found"));
+        assert!(error_body.contains("signer not found"));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_get_registry_entry_not_found_by_id() -> Result<()> {
+    async fn test_get_signer_not_found_by_id() -> Result<()> {
         let (app, _, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/registry/entry/999999").await;
+        let response: TestResponse = server.get("/api/signers/999999").await;
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
 
         let error_body = response.text();
-        assert!(error_body.contains("registry entry not found"));
+        assert!(error_body.contains("signer not found"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_signer_invalid_identifier() -> Result<()> {
+        let (app, _, _db) = create_test_app().await?;
+        let server = TestServer::new(app);
+
+        // Not numeric, not 64 or 192 hex chars.
+        let response: TestResponse = server.get("/api/signers/notapubkey").await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
         Ok(())
     }
@@ -539,17 +581,17 @@ mod tests {
         let server = TestServer::new(app);
 
         let by_pk: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[0].x_only_pubkey))
+            .get(&format!("/api/signers/{}", users[0].x_only_pubkey))
             .await;
         let by_id: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .get(&format!("/api/signers/{}", users[0].signer_id))
             .await;
 
         assert_eq!(by_pk.status_code(), StatusCode::OK);
         assert_eq!(by_id.status_code(), StatusCode::OK);
 
-        let r_pk: RegistryResponse = serde_json::from_slice(by_pk.as_bytes())?;
-        let r_id: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
+        let r_pk: SignerResponseWrapper = serde_json::from_slice(by_pk.as_bytes())?;
+        let r_id: SignerResponseWrapper = serde_json::from_slice(by_id.as_bytes())?;
 
         assert_eq!(r_pk.result.signer_id, r_id.result.signer_id);
         assert_eq!(r_pk.result.x_only_pubkey, r_id.result.x_only_pubkey);
@@ -565,26 +607,32 @@ mod tests {
         let server = TestServer::new(app);
 
         let response: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[1].x_only_pubkey))
+            .get(&format!("/api/signers/{}", users[1].x_only_pubkey))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: RegistryResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.signer_id, users[1].signer_id);
-        assert_eq!(result.result.x_only_pubkey, users[1].x_only_pubkey);
+        assert_eq!(
+            result.result.x_only_pubkey.as_deref(),
+            Some(users[1].x_only_pubkey.as_str())
+        );
         assert_eq!(result.result.bls_pubkey, Some(users[1].bls_pubkey.clone()));
-        assert_eq!(result.result.next_nonce, 0);
+        assert_eq!(result.result.next_nonce, Some(0));
         assert_eq!(users[1].signer_id, users[0].signer_id + 1);
 
         let by_id: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[1].signer_id))
+            .get(&format!("/api/signers/{}", users[1].signer_id))
             .await;
         assert_eq!(by_id.status_code(), StatusCode::OK);
 
-        let by_id_result: RegistryResponse = serde_json::from_slice(by_id.as_bytes())?;
+        let by_id_result: SignerResponseWrapper = serde_json::from_slice(by_id.as_bytes())?;
         assert_eq!(by_id_result.result.signer_id, users[1].signer_id);
-        assert_eq!(by_id_result.result.x_only_pubkey, users[1].x_only_pubkey);
-        assert_eq!(by_id_result.result.next_nonce, 0);
+        assert_eq!(
+            by_id_result.result.x_only_pubkey.as_deref(),
+            Some(users[1].x_only_pubkey.as_str())
+        );
+        assert_eq!(by_id_result.result.next_nonce, Some(0));
 
         Ok(())
     }
@@ -595,24 +643,24 @@ mod tests {
         let server = TestServer::new(app);
 
         let resp0: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[0].signer_id))
+            .get(&format!("/api/signers/{}", users[0].signer_id))
             .await;
         let resp1: TestResponse = server
-            .get(&format!("/api/registry/entry/{}", users[1].signer_id))
+            .get(&format!("/api/signers/{}", users[1].signer_id))
             .await;
 
         assert_eq!(resp0.status_code(), StatusCode::OK);
         assert_eq!(resp1.status_code(), StatusCode::OK);
 
-        let r0: RegistryResponse = serde_json::from_slice(resp0.as_bytes())?;
-        let r1: RegistryResponse = serde_json::from_slice(resp1.as_bytes())?;
+        let r0: SignerResponseWrapper = serde_json::from_slice(resp0.as_bytes())?;
+        let r1: SignerResponseWrapper = serde_json::from_slice(resp1.as_bytes())?;
 
         assert_ne!(r0.result.x_only_pubkey, r1.result.x_only_pubkey);
         assert_ne!(r0.result.bls_pubkey, r1.result.bls_pubkey);
         assert_eq!(r0.result.signer_id, users[0].signer_id);
         assert_eq!(r1.result.signer_id, users[1].signer_id);
-        assert_eq!(r0.result.next_nonce, 0);
-        assert_eq!(r1.result.next_nonce, 0);
+        assert_eq!(r0.result.next_nonce, Some(0));
+        assert_eq!(r1.result.next_nonce, Some(0));
 
         Ok(())
     }
@@ -651,7 +699,7 @@ mod tests {
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist");
-        assert_eq!(entry.next_nonce, 0);
+        assert_eq!(entry.next_nonce, Some(0));
 
         insert_block(
             &conn,
@@ -668,7 +716,7 @@ mod tests {
         let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
             .await?
             .expect("entry must exist after advance");
-        assert_eq!(entry.next_nonce, 1, "nonce must be 1 after advance");
+        assert_eq!(entry.next_nonce, Some(1), "nonce must be 1 after advance");
 
         rollback_to_height(&conn, 1).await?;
 
@@ -676,7 +724,8 @@ mod tests {
             .await?
             .expect("entry must survive rollback (registered at height 1)");
         assert_eq!(
-            entry.next_nonce, 0,
+            entry.next_nonce,
+            Some(0),
             "nonce must revert to 0 after rolling back height 2"
         );
 
@@ -696,7 +745,8 @@ mod tests {
             .await?
             .expect("entry must exist after re-advance");
         assert_eq!(
-            entry.next_nonce, 1,
+            entry.next_nonce,
+            Some(1),
             "nonce must advance again from 0 after reorg"
         );
 

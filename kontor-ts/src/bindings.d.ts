@@ -164,13 +164,6 @@ export type ParticipantScripts = {
   chained_tap_leaf_script: TapLeafScript | null;
 };
 
-export type RegistryEntryResponse = {
-  signer_id: number;
-  x_only_pubkey: string;
-  bls_pubkey: Array<number> | null;
-  next_nonce: number;
-};
-
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {
@@ -226,6 +219,13 @@ export type RevealQuery = {
   participants: Array<RevealParticipantQuery>;
   op_return_data: Array<number> | null;
   envelope: number | null;
+};
+
+export type SignerResponse = {
+  signer_id: number;
+  x_only_pubkey: string | null;
+  bls_pubkey: Array<number> | null;
+  next_nonce: number | null;
 };
 
 export type TapLeafScript = {
