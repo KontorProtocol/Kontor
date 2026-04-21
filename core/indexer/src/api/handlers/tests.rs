@@ -2,7 +2,7 @@ use crate::runtime::wit::Signer;
 use crate::{
     api::{Env, handlers::get_signer},
     bls::RegistrationProof,
-    database::queries::{get_signer_entry_by_x_only_pubkey, insert_block},
+    database::queries::{get_signer_entry_by_x_only_pubkey, insert_block, insert_transaction},
     runtime::{ComponentCache, Runtime, Storage},
     test_utils::new_test_db,
 };
@@ -11,13 +11,58 @@ use axum::{Router, http::StatusCode, routing::get};
 use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
-use indexer_types::{BlockRow, SignerResponse};
+use indexer_types::{BlockRow, SignerResponse, TransactionRow};
+use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
+/// Envelope used by every JSON success response from the indexer API
+/// (`{ "result": ... }`). Tests deserialize into `ApiResult<T>` and read the
+/// inner `.result` field.
 #[derive(Debug, Serialize, Deserialize)]
-struct SignerResponseWrapper {
-    result: SignerResponse,
+pub(super) struct ApiResult<T> {
+    pub(super) result: T,
+}
+
+/// Spin up a fresh in-memory test DB and return an `Env` plus a writer
+/// connection for seeding fixture data. Drop the returned `TempDir` last —
+/// it owns the on-disk lifetime of the database.
+pub(super) async fn new_test_env() -> Result<(Env, Connection, TempDir)> {
+    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+    let env = Env::new_test(reader, db_dir.path(), db_name).await?;
+    Ok((env, conn, db_dir))
+}
+
+/// Insert a block row at `height` with the given hex hash.
+pub(super) async fn insert_block_at(conn: &Connection, height: i64, hash: &str) -> Result<()> {
+    insert_block(
+        conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(hash.parse()?)
+            .build(),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Insert a transaction row. Returns the assigned row id.
+pub(super) async fn insert_tx_at(
+    conn: &Connection,
+    height: i64,
+    tx_index: i64,
+    txid: &str,
+) -> Result<i64> {
+    Ok(insert_transaction(
+        conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(txid.to_string())
+            .tx_index(tx_index)
+            .build(),
+    )
+    .await?)
 }
 
 struct RegisteredUser {
@@ -61,15 +106,12 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
 }
 
 async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
-    let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-    let conn = writer.connection();
+    let (env, conn, db_dir) = new_test_env().await?;
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(0)
-            .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
-            .build(),
+        0,
+        "0000000000000000000000000000000000000000000000000000000000000000",
     )
     .await?;
 
@@ -77,20 +119,16 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(&[]).await?;
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(1)
-            .hash("0000000000000000000000000000000000000000000000000000000000000001".parse()?)
-            .build(),
+        1,
+        "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .await?;
 
     runtime.storage.height = 1;
     let user0 = register_user(&mut runtime).await?;
     let user1 = register_user(&mut runtime).await?;
-
-    let env = Env::new_test(reader, db_dir.path(), db_name).await?;
 
     let app = Router::new()
         .route("/api/signers/{identifier}", get(get_signer))
@@ -109,7 +147,7 @@ async fn test_get_signer_by_pubkey() -> Result<()> {
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
-    let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+    let result: ApiResult<SignerResponse> = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, users[0].signer_id);
     assert_eq!(
         result.result.x_only_pubkey.as_deref(),
@@ -131,7 +169,7 @@ async fn test_get_signer_by_signer_id() -> Result<()> {
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
-    let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+    let result: ApiResult<SignerResponse> = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, users[0].signer_id);
     assert_eq!(
         result.result.x_only_pubkey.as_deref(),
@@ -152,7 +190,7 @@ async fn test_get_signer_by_bls_pubkey() -> Result<()> {
     let response: TestResponse = server.get(&format!("/api/signers/{bls_hex}")).await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
-    let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+    let result: ApiResult<SignerResponse> = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, users[0].signer_id);
     assert_eq!(result.result.bls_pubkey, Some(users[0].bls_pubkey.clone()));
 
@@ -215,8 +253,8 @@ async fn test_lookup_by_pubkey_and_by_id_return_same_entry() -> Result<()> {
     assert_eq!(by_pk.status_code(), StatusCode::OK);
     assert_eq!(by_id.status_code(), StatusCode::OK);
 
-    let r_pk: SignerResponseWrapper = serde_json::from_slice(by_pk.as_bytes())?;
-    let r_id: SignerResponseWrapper = serde_json::from_slice(by_id.as_bytes())?;
+    let r_pk: ApiResult<SignerResponse> = serde_json::from_slice(by_pk.as_bytes())?;
+    let r_id: ApiResult<SignerResponse> = serde_json::from_slice(by_id.as_bytes())?;
 
     assert_eq!(r_pk.result.signer_id, r_id.result.signer_id);
     assert_eq!(r_pk.result.x_only_pubkey, r_id.result.x_only_pubkey);
@@ -236,7 +274,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);
 
-    let result: SignerResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+    let result: ApiResult<SignerResponse> = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(result.result.signer_id, users[1].signer_id);
     assert_eq!(
         result.result.x_only_pubkey.as_deref(),
@@ -251,7 +289,7 @@ async fn test_second_registered_user_gets_sequential_id() -> Result<()> {
         .await;
     assert_eq!(by_id.status_code(), StatusCode::OK);
 
-    let by_id_result: SignerResponseWrapper = serde_json::from_slice(by_id.as_bytes())?;
+    let by_id_result: ApiResult<SignerResponse> = serde_json::from_slice(by_id.as_bytes())?;
     assert_eq!(by_id_result.result.signer_id, users[1].signer_id);
     assert_eq!(
         by_id_result.result.x_only_pubkey.as_deref(),
@@ -277,8 +315,8 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
     assert_eq!(resp0.status_code(), StatusCode::OK);
     assert_eq!(resp1.status_code(), StatusCode::OK);
 
-    let r0: SignerResponseWrapper = serde_json::from_slice(resp0.as_bytes())?;
-    let r1: SignerResponseWrapper = serde_json::from_slice(resp1.as_bytes())?;
+    let r0: ApiResult<SignerResponse> = serde_json::from_slice(resp0.as_bytes())?;
+    let r1: ApiResult<SignerResponse> = serde_json::from_slice(resp1.as_bytes())?;
 
     assert_ne!(r0.result.x_only_pubkey, r1.result.x_only_pubkey);
     assert_ne!(r0.result.bls_pubkey, r1.result.bls_pubkey);
@@ -294,15 +332,12 @@ async fn test_two_users_have_distinct_entries() -> Result<()> {
 async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     use crate::database::queries::{get_signer_entry_by_id, rollback_to_height};
 
-    let (_, writer, (_db_dir, _db_name)) = new_test_db().await?;
-    let conn = writer.connection();
+    let (_env, conn, _db_dir) = new_test_env().await?;
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(0)
-            .hash("0000000000000000000000000000000000000000000000000000000000000000".parse()?)
-            .build(),
+        0,
+        "0000000000000000000000000000000000000000000000000000000000000000",
     )
     .await?;
 
@@ -310,12 +345,10 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     runtime.publish_native_contracts(&[]).await?;
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(1)
-            .hash("0000000000000000000000000000000000000000000000000000000000000001".parse()?)
-            .build(),
+        1,
+        "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .await?;
     runtime.storage.height = 1;
@@ -326,12 +359,10 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
         .expect("entry must exist");
     assert_eq!(entry.next_nonce, Some(0));
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(2)
-            .hash("0000000000000000000000000000000000000000000000000000000000000002".parse()?)
-            .build(),
+        2,
+        "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .await?;
 
@@ -354,12 +385,10 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
         "nonce must revert to 0 after rolling back height 2"
     );
 
-    insert_block(
+    insert_block_at(
         &conn,
-        BlockRow::builder()
-            .height(2)
-            .hash("0000000000000000000000000000000000000000000000000000000000000099".parse()?)
-            .build(),
+        2,
+        "0000000000000000000000000000000000000000000000000000000000000099",
     )
     .await?;
 
@@ -379,103 +408,60 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
 }
 
 mod transactions {
-    use crate::{
-        api::{
-            Env,
-            handlers::{
-                get_block, get_block_latest, get_block_transactions, get_transaction,
-                get_transactions,
-            },
-        },
-        database::queries::{insert_block, insert_transaction},
-        test_utils::new_test_db,
+    use crate::api::handlers::{
+        get_block, get_block_latest, get_block_transactions, get_transaction, get_transactions,
     };
     use anyhow::Result;
     use axum::{Router, http::StatusCode, routing::get};
     use axum_test::{TestResponse, TestServer};
     use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
-    use libsql::params;
-    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct BlockResponse {
-        result: BlockRow,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TransactionListResponseWrapper {
-        result: PaginatedResponse<TransactionRow>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TransactionResponse {
-        result: TransactionRow,
-    }
+    use super::{ApiResult, insert_block_at, insert_tx_at, new_test_env};
 
     async fn create_test_app() -> Result<(Router, TempDir)> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
+        let (env, conn, db_dir) = new_test_env().await?;
 
-        let conn = writer.connection();
+        insert_block_at(
+            &conn,
+            800000,
+            "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04",
+        )
+        .await?;
+        insert_block_at(
+            &conn,
+            800001,
+            "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05",
+        )
+        .await?;
+        insert_block_at(
+            &conn,
+            800002,
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        )
+        .await?;
 
-        // Insert blocks
-        let block1 = BlockRow::builder()
-            .height(800000)
-            .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?)
-            .build();
-        let block2 = BlockRow::builder()
-            .height(800001)
-            .hash("000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?)
-            .build();
-        let block3 = BlockRow::builder()
-            .height(800002)
-            .hash("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".parse()?)
-            .build();
-
-        insert_block(&conn, block1).await?;
-        insert_block(&conn, block2).await?;
-        insert_block(&conn, block3).await?;
-
-        let reader_conn = reader.connection().await?;
-        let mut reader_verify_rows = reader_conn
-            .query("SELECT COUNT(*) FROM blocks", params![])
-            .await?;
-        if let Some(row) = reader_verify_rows.next().await? {
-            let count: i64 = row.get(0)?;
-            assert_eq!(count, 3);
-        }
-
-        // Insert transactions
-        let tx1 = TransactionRow::builder()
-            .height(800000)
-            .txid(
-                "tx1_800000_0_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-                    .to_string(),
-            )
-            .tx_index(0)
-            .build();
-        let tx2 = TransactionRow::builder()
-            .height(800000)
-            .txid(
-                "tx2_800000_1_123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
-                    .to_string(),
-            )
-            .tx_index(1)
-            .build();
-        let tx3 = TransactionRow::builder()
-            .height(800001)
-            .txid(
-                "tx3_800001_0_fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
-                    .to_string(),
-            )
-            .tx_index(0)
-            .build();
-
-        insert_transaction(&conn, tx1).await?;
-        insert_transaction(&conn, tx2).await?;
-        insert_transaction(&conn, tx3).await?;
-
-        let env = Env::new_test(reader, db_dir.path(), db_name).await?;
+        insert_tx_at(
+            &conn,
+            800000,
+            0,
+            "tx1_800000_0_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        )
+        .await?;
+        insert_tx_at(
+            &conn,
+            800000,
+            1,
+            "tx2_800000_1_123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+        )
+        .await?;
+        insert_tx_at(
+            &conn,
+            800001,
+            0,
+            "tx3_800001_0_fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+        )
+        .await?;
 
         let router = Router::new()
             .route("/api/blocks/{identifier}", get(get_block))
@@ -499,7 +485,7 @@ mod transactions {
         let response: TestResponse = server.get("/api/blocks/800000").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: BlockResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<BlockRow> = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.height, 800000);
         assert_eq!(
             result.result.hash.to_string(),
@@ -519,7 +505,7 @@ mod transactions {
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: BlockResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<BlockRow> = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.height, 800001);
         assert_eq!(
             result.result.hash.to_string(),
@@ -562,7 +548,7 @@ mod transactions {
         let response: TestResponse = server.get("/api/blocks/latest").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: BlockResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<BlockRow> = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.height, 800002); // Highest block
         assert_eq!(
             result.result.hash.to_string(),
@@ -582,7 +568,8 @@ mod transactions {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         // This is correct - deserialize to the wrapper type first
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
 
         assert_eq!(result.result.results.len(), 3);
         assert_eq!(result.result.pagination.total_count, 3);
@@ -604,7 +591,8 @@ mod transactions {
         let response: TestResponse = server.get("/api/transactions?limit=3").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 3);
         assert_eq!(result.result.pagination.total_count, 3);
         assert!(!result.result.pagination.has_more);
@@ -622,7 +610,8 @@ mod transactions {
         let response: TestResponse = server.get("/api/transactions?limit=2&offset=1").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
         assert_eq!(result.result.pagination.total_count, 3);
         assert!(!result.result.pagination.has_more);
@@ -637,7 +626,8 @@ mod transactions {
 
         // First get transactions with limit to get cursor
         let response: TestResponse = server.get("/api/transactions?limit=1").await;
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
 
         assert_eq!(response.status_code(), StatusCode::OK);
         assert_eq!(result.result.results[0].height, 800001);
@@ -657,7 +647,8 @@ mod transactions {
             .get(&format!("/api/transactions?cursor={}", cursor))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
 
         assert_eq!(result.result.results.len(), 2);
 
@@ -686,7 +677,8 @@ mod transactions {
         let response: TestResponse = server.get("/api/transactions?height=800000").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
         assert_eq!(result.result.pagination.total_count, 2);
 
@@ -706,7 +698,8 @@ mod transactions {
         let response: TestResponse = server.get("/api/transactions?height=999999").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 0);
         assert_eq!(result.result.pagination.total_count, 0);
 
@@ -723,7 +716,7 @@ mod transactions {
         .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionResponse = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<TransactionRow> = serde_json::from_slice(response.as_bytes())?;
         assert_eq!(
             result.result.txid,
             "tx1_800000_0_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -756,13 +749,15 @@ mod transactions {
         // Test minimum limit
         let response: TestResponse = server.get("/api/transactions?limit=-1").await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 0); // Clamped to 0
 
         // Test maximum limit
         let response: TestResponse = server.get("/api/transactions?limit=2000").await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 3); // All available transactions
 
         Ok(())
@@ -787,7 +782,8 @@ mod transactions {
         let response: TestResponse = server.get("/api/blocks/800000/transactions").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
         assert_eq!(result.result.pagination.total_count, 2);
 
@@ -809,7 +805,8 @@ mod transactions {
         .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
         assert_eq!(result.result.pagination.total_count, 2);
 
@@ -836,52 +833,25 @@ mod transactions {
 }
 
 mod transactions_pagination {
-    use crate::{
-        api::{
-            Env,
-            handlers::{get_block, get_block_latest, get_transaction, get_transactions},
-        },
-        bitcoin_client::Client,
-        config::Config,
-        database::{
-            Reader, Writer,
-            queries::{insert_block, insert_contract, insert_contract_state, insert_transaction},
-            types::{ContractRow, ContractStateRow},
-        },
-        event::EventSubscriber,
-        runtime,
-        test_utils::new_test_db,
-    };
+    use crate::api::handlers::{get_block, get_block_latest, get_transaction, get_transactions};
+    use crate::database::queries::{insert_contract, insert_contract_state};
+    use crate::database::types::{ContractRow, ContractStateRow};
     use anyhow::Result;
     use axum::{Router, routing::get};
     use axum_test::{TestResponse, TestServer};
-    use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
-    use libsql::params;
+    use indexer_types::{PaginatedResponse, TransactionRow};
     use reqwest::StatusCode;
-    use serde::{Deserialize, Serialize};
-    use std::{path::PathBuf, sync::Arc};
-    use tokio::sync::{RwLock, mpsc};
-    use tokio_util::sync::CancellationToken;
+    use tempfile::TempDir;
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TransactionListResponseWrapper {
-        result: PaginatedResponse<TransactionRow>,
-    }
+    use super::{ApiResult, insert_block_at, insert_tx_at, new_test_env};
 
-    async fn create_test_app(
-        reader: Reader,
-        writer: Writer,
-        db_dir: PathBuf,
-        db_name: String,
-    ) -> Result<Router> {
-        let conn = writer.connection();
-        // Insert blocks for heights 800000-800005
-        for height in 800000..=800005 {
-            let block = BlockRow::builder()
-                .height(height)
-                .hash(format!("{:064x}", height).parse()?)
-                .build();
-            insert_block(&conn, block).await?;
+    /// Build the paginated test server with seeded blocks/transactions
+    /// (5+3+7+1+4+2 = 22 transactions across heights 800000–800005).
+    async fn setup() -> Result<(TestServer, TempDir)> {
+        let (env, conn, db_dir) = new_test_env().await?;
+
+        for height in 800000..=800005i64 {
+            insert_block_at(&conn, height, &format!("{:064x}", height)).await?;
         }
 
         insert_contract(
@@ -895,130 +865,52 @@ mod transactions_pagination {
         )
         .await?;
 
-        let mut reader_verify_rows = conn.query("SELECT COUNT(*) FROM blocks", params![]).await?;
-        if let Some(row) = reader_verify_rows.next().await? {
-            let count: i64 = row.get(0)?;
-            assert_eq!(count, 6);
+        // Per-height transaction counts. Some indexes also modify the token
+        // contract — captured below in `contract_state_writes`.
+        let counts: &[(i64, i64)] = &[
+            (800000, 5),
+            (800001, 3),
+            (800002, 7),
+            (800003, 1),
+            (800004, 4),
+            (800005, 2),
+        ];
+        let mut tx_ids: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+        for &(height, count) in counts {
+            let mut ids = Vec::with_capacity(count as usize);
+            for tx_index in 0..count {
+                let txid = format!("tx_{}_{}_hash{:056x}", height, tx_index, tx_index);
+                ids.push(insert_tx_at(&conn, height, tx_index, &txid).await?);
+            }
+            tx_ids.insert(height, ids);
         }
 
-        // Height 800000: 5 transactions (indices 0-4)
-        let mut tx_ids_800000 = Vec::new();
-        for tx_index in 0..5 {
-            let tx = TransactionRow::builder()
-                .height(800000)
-                .txid(format!("tx_800000_{}_hash{:056x}", tx_index, tx_index))
-                .tx_index(tx_index)
-                .build();
-            tx_ids_800000.push(insert_transaction(&conn, tx).await?);
-        }
-
-        // tx_index=1 modifies the token contract
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(1)
-                .tx_id(tx_ids_800000[1])
-                .height(800000)
-                .path("foo".to_string())
-                .build(),
-        )
-        .await?;
-
-        // Height 800001: 3 transactions (indices 0-2)
-        let mut tx_ids_800001 = Vec::new();
-        for tx_index in 0..3 {
-            let tx = TransactionRow::builder()
-                .height(800001)
-                .txid(format!("tx_800001_{}_hash{:056x}", tx_index, tx_index))
-                .tx_index(tx_index)
-                .build();
-            tx_ids_800001.push(insert_transaction(&conn, tx).await?);
-        }
-
-        // tx_index=2 modifies the token contract
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(1)
-                .tx_id(tx_ids_800001[2])
-                .height(800001)
-                .path("bar".to_string())
-                .build(),
-        )
-        .await?;
-
-        // Height 800002: 7 transactions (indices 0-6)
-        let mut tx_ids_800002 = Vec::new();
-        for tx_index in 0..7 {
-            let tx = TransactionRow::builder()
-                .height(800002)
-                .txid(format!("tx_800002_{}_hash{:056x}", tx_index, tx_index))
-                .tx_index(tx_index)
-                .build();
-            tx_ids_800002.push(insert_transaction(&conn, tx).await?);
-        }
-
-        // tx_index=3 modifies the token contract
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(1)
-                .tx_id(tx_ids_800002[3])
-                .height(800002)
-                .path("biz".to_string())
-                .build(),
-        )
-        .await?;
-
-        // Height 800003: 1 transaction (index 0)
-        let tx = TransactionRow::builder()
-            .height(800003)
-            .txid(
-                "tx_800003_0_hash0000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+        // Contract-state touches at (height, tx_index, path).
+        let contract_state_writes = [
+            (800000i64, 1usize, "foo"),
+            (800001, 2, "bar"),
+            (800002, 3, "biz"),
+        ];
+        for (height, tx_index, path) in contract_state_writes {
+            insert_contract_state(
+                &conn,
+                ContractStateRow::builder()
+                    .contract_id(1)
+                    .tx_id(tx_ids[&height][tx_index])
+                    .height(height)
+                    .path(path.to_string())
+                    .build(),
             )
-            .tx_index(0)
-            .build();
-        insert_transaction(&conn, tx).await?;
-
-        // Height 800004: 4 transactions (indices 0-3)
-        for tx_index in 0..4 {
-            let tx = TransactionRow::builder()
-                .height(800004)
-                .txid(format!("tx_800004_{}_hash{:056x}", tx_index, tx_index))
-                .tx_index(tx_index)
-                .build();
-            insert_transaction(&conn, tx).await?;
+            .await?;
         }
 
-        // Height 800005: 2 transactions (indices 0-1)
-        for tx_index in 0..2 {
-            let tx = TransactionRow::builder()
-                .height(800005)
-                .txid(format!("tx_800005_{}_hash{:056x}", tx_index, tx_index))
-                .tx_index(tx_index)
-                .build();
-            insert_transaction(&conn, tx).await?;
-        }
-
-        let (simulate_tx, _) = mpsc::channel(10);
-        let env = Env {
-            bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
-            config: Config::new_na(),
-            cancel_token: CancellationToken::new(),
-            available: Arc::new(RwLock::new(true)),
-            event_subscriber: EventSubscriber::new(),
-            runtime_pool: runtime::pool::new(db_dir, db_name).await?,
-            reader,
-            simulate_tx,
-        };
-
-        Ok(Router::new()
+        let router = Router::new()
             .route("/api/blocks/{identifier}", get(get_block))
             .route("/api/blocks/latest", get(get_block_latest))
             .route("/api/transactions", get(get_transactions))
             .route("/api/transactions/{txid}", get(get_transaction))
-            .with_state(env))
+            .with_state(env);
+        Ok((TestServer::new(router), db_dir))
     }
 
     async fn collect_all_transactions_with_cursor(
@@ -1049,7 +941,7 @@ mod transactions_pagination {
             let response: TestResponse = server.get(&url).await;
             assert_eq!(response.status_code(), StatusCode::OK);
 
-            let result: TransactionListResponseWrapper =
+            let result: ApiResult<PaginatedResponse<TransactionRow>> =
                 serde_json::from_slice(response.as_bytes())?;
 
             all_transactions.extend(result.result.results);
@@ -1092,7 +984,7 @@ mod transactions_pagination {
             let response: TestResponse = server.get(&url).await;
             assert_eq!(response.status_code(), StatusCode::OK);
 
-            let result: TransactionListResponseWrapper =
+            let result: ApiResult<PaginatedResponse<TransactionRow>> =
                 serde_json::from_slice(response.as_bytes())?;
 
             all_transactions.extend(result.result.results);
@@ -1109,9 +1001,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_no_gaps_all_transactions() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test with different page sizes
         for limit in [1, 2, 3, 5, 7, 10] {
@@ -1184,9 +1074,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_no_gaps_single_height() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test pagination for height 800000 (5 transactions)
         for limit in [1, 2, 3, 4, 5, 6] {
@@ -1261,9 +1149,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_no_gaps_height_with_many_transactions() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test pagination for height 800002 (7 transactions)
         for limit in [1, 2, 3, 4, 5, 6, 7, 8] {
@@ -1318,9 +1204,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_edge_cases() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test with limit=1 to ensure every transaction is returned exactly once
         let transactions =
@@ -1363,9 +1247,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_boundary_conditions() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test that cursor pagination works correctly when page size equals total count
         let height_800001_all =
@@ -1401,9 +1283,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_consistency_across_different_limits() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Collect all transactions with different page sizes
         let results_limit_1 =
@@ -1450,9 +1330,7 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_maintains_total_count() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         // Test that total_count decreases as we paginate (showing remaining items)
         let mut cursor: Option<i64> = None;
@@ -1471,7 +1349,7 @@ mod transactions_pagination {
             let response: TestResponse = server.get(&url).await;
             assert_eq!(response.status_code(), StatusCode::OK);
 
-            let result: TransactionListResponseWrapper =
+            let result: ApiResult<PaginatedResponse<TransactionRow>> =
                 serde_json::from_slice(response.as_bytes())?;
 
             let current_total_count = result.result.pagination.total_count;
@@ -1510,14 +1388,13 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_contract_address() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1";
         let response: TestResponse = server.get(url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
@@ -1534,7 +1411,8 @@ mod transactions_pagination {
         );
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
@@ -1550,7 +1428,8 @@ mod transactions_pagination {
         );
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
@@ -1565,14 +1444,13 @@ mod transactions_pagination {
 
     #[tokio::test]
     async fn test_cursor_pagination_contract_address_asc() -> Result<()> {
-        let (reader, writer, (db_dir, db_name)) = new_test_db().await?;
-        let app = create_test_app(reader, writer, db_dir.path().to_path_buf(), db_name).await?;
-        let server = TestServer::new(app);
+        let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";
         let response: TestResponse = server.get(url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
@@ -1589,7 +1467,8 @@ mod transactions_pagination {
         );
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
@@ -1605,7 +1484,8 @@ mod transactions_pagination {
         );
         let response: TestResponse = server.get(&url).await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        let result: TransactionListResponseWrapper = serde_json::from_slice(response.as_bytes())?;
+        let result: ApiResult<PaginatedResponse<TransactionRow>> =
+            serde_json::from_slice(response.as_bytes())?;
         let transactions = result.result.results;
         let meta = result.result.pagination;
 
