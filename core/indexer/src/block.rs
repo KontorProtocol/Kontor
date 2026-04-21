@@ -80,6 +80,10 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                     if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
                         && script_insts.next().is_none()
                         && let Ok(insts) = deserialize::<Insts>(&data)
+                        && insts
+                            .aggregate
+                            .as_ref()
+                            .is_none_or(|agg| agg.signer_ids.len() == insts.ops.len())
                     {
                         return Some(Input {
                             previous_output: input.previous_output,
@@ -146,7 +150,7 @@ pub async fn inspect(
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
-                signer_id: signer_ids[op_index],
+                signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
             let op = op_from_inst(inst.clone(), metadata);
             let id = OpResultId::builder()
