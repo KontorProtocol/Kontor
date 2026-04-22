@@ -137,11 +137,16 @@ impl MempoolFeeIndex {
         let mut blocks: Vec<ProjectedBlock> = vec![ProjectedBlock::default()];
         let mut included: HashSet<Txid> = HashSet::new();
 
-        for (txid, _info) in &sorted {
+        for (txid, info) in &sorted {
             let txid = **txid;
             if included.contains(&txid) {
                 continue;
             }
+            // Rate at which this whole package gets included by a miner.
+            // All ancestors pulled in by this tx are reported at this rate
+            // — a low-fee parent included via CPFP "costs" the package
+            // rate, not its own individual rate, from the median's POV.
+            let originating_rate = package_fee_rate(info);
             // Walk ancestors transitively (depth-first). Collect those
             // not yet included so we can add them before the tx itself.
             let mut ancestor_chain: Vec<Txid> = Vec::new();
@@ -190,10 +195,9 @@ impl MempoolFeeIndex {
                 let Some(anc_entry) = self.entries.get(&anc) else {
                     continue;
                 };
-                let rate = package_fee_rate(anc_entry);
                 let vsize = anc_entry.vsize;
                 let block = blocks.last_mut().unwrap();
-                block.entries.push((rate, vsize));
+                block.entries.push((originating_rate, vsize));
                 block.vsize += vsize;
                 included.insert(anc);
             }
@@ -451,6 +455,41 @@ mod tests {
         replacement.insert(txid(3), entry(300, 100, vec![]));
         idx.replace_all(replacement);
         assert_eq!(idx.len(), 1);
+    }
+
+    #[test]
+    fn cpfp_parent_attributed_at_package_rate() {
+        // Regression: bugbot caught us reporting CPFP parents at their
+        // own (low) individual rate, dragging the median down. A 600k vB
+        // parent at 1 sat/vB pulled in by a tiny high-fee child should
+        // contribute the *package* rate to the median, otherwise the
+        // parent dominates the block's vsize and median_fee_rate()
+        // returns 1 sat/vB — wrong.
+        let mut idx = MempoolFeeIndex::new();
+        let parent_id = txid(1);
+        let child_id = txid(2);
+
+        // Parent: 600k vB, 600k sats fee → 1 sat/vB individual.
+        idx.insert(
+            parent_id,
+            entry_with_package(600_000, 600_000, 600_000, 600_000, vec![]),
+        );
+        // Child: 100k vB, 3.4M sats → package = (600k + 3.4M) / (600k + 100k)
+        // = 4M / 700k ≈ 5.7 sat/vB.
+        idx.insert(
+            child_id,
+            entry_with_package(3_400_000, 100_000, 4_000_000, 700_000, vec![parent_id]),
+        );
+
+        let blocks = idx.project_blocks(1);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].vsize, 700_000);
+
+        let median = blocks[0].median_fee_rate();
+        assert!(
+            (5..=6).contains(&median),
+            "expected median ~5 sat/vB (package rate), got {median}"
+        );
     }
 
     #[test]

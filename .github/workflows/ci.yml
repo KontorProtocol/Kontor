@@ -86,7 +86,7 @@ jobs:
         run: cargo audit
         working-directory: ./native-contracts
       - name: Audit core
-        run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099  # rustls-webpki 0.102.8 pinned by libsql
+        run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0097  # rustls-webpki 0.102.8 pinned by libsql; rand 0.8.5 pulled by malachite/libp2p
         working-directory: ./core
 
   test:
