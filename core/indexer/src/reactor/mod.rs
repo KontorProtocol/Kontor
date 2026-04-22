@@ -663,7 +663,7 @@ pub fn run(
                                 break kontor_txs;
                             }
                             Some(other) => {
-                                unreachable!("Mempool delta event before initial Sync: {other:?}");
+                                bail!("Mempool delta event before initial Sync: {other:?}");
                             }
                             None => {
                                 bail!("Mempool channel closed before initial Sync");
