@@ -640,26 +640,41 @@ pub fn run(
                 let mut mempool_rx = mempool_rx;
                 let mut fee_index = mempool_fee_index::MempoolFeeIndex::new();
                 info!("Waiting for initial mempool sync before starting consensus");
-                let initial_kontor_txs = match mempool_rx.recv().await {
-                    Some(MempoolEvent::Sync {
-                        kontor_txs,
-                        fees,
-                        mempool_min_fee_sat_per_vb,
-                    }) => {
-                        fee_index.replace_all(fees);
-                        fee_index.set_min_fee(mempool_min_fee_sat_per_vb);
-                        info!(
-                            "Initial mempool sync complete: {} Kontor txs, {} fee entries",
-                            kontor_txs.len(),
-                            fee_index.len()
-                        );
-                        kontor_txs
-                    }
-                    Some(other) => {
-                        unreachable!("Mempool delta event before initial Sync: {other:?}");
-                    }
-                    None => {
-                        bail!("Mempool channel closed before initial Sync");
+                // Periodic log so operators can tell the wait isn't a deadlock
+                // when bitcoind is slow to reach handshake.
+                let mut log_ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+                log_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                log_ticker.tick().await; // consume the immediate first tick
+                let initial_kontor_txs = loop {
+                    select! {
+                        event = mempool_rx.recv() => match event {
+                            Some(MempoolEvent::Sync {
+                                kontor_txs,
+                                fees,
+                                mempool_min_fee_sat_per_vb,
+                            }) => {
+                                fee_index.replace_all(fees);
+                                fee_index.set_min_fee(mempool_min_fee_sat_per_vb);
+                                info!(
+                                    "Initial mempool sync complete: {} Kontor txs, {} fee entries",
+                                    kontor_txs.len(),
+                                    fee_index.len()
+                                );
+                                break kontor_txs;
+                            }
+                            Some(other) => {
+                                unreachable!("Mempool delta event before initial Sync: {other:?}");
+                            }
+                            None => {
+                                bail!("Mempool channel closed before initial Sync");
+                            }
+                        },
+                        _ = log_ticker.tick() => {
+                            warn!("Still waiting for initial mempool sync — bitcoind/listener not ready");
+                        }
+                        _ = cancel_token.cancelled() => {
+                            return Ok(());
+                        }
                     }
                 };
 

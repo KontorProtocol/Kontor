@@ -303,66 +303,65 @@ impl Client {
         self.call("testmempoolaccept", vec![raw_txs.into()]).await
     }
 
-    /// Idempotently check whether `raw_hex` is acceptable for the local
-    /// mempool and return its effective package fee rate.
-    ///
-    /// Wraps `testmempoolaccept` with two pieces of normalization:
-    /// - `txn-already-in-mempool` / `txn-already-known` are reported by
-    ///   Bitcoin Core as rejections but are idempotent successes from a
-    ///   caller's perspective.
-    /// - When those rejections fire, `testmempoolaccept` short-circuits
-    ///   without populating `fees` / `vsize`. We fall back to
-    ///   `getmempoolentry` for authoritative fee data on the already-known
-    ///   path so the caller always gets a fee rate.
-    pub async fn check_mempool_acceptance(
-        &self,
-        raw_hex: &str,
-        txid: &Txid,
-    ) -> Result<Acceptance, Error> {
-        let results: Vec<TestMempoolAcceptResult> = self
-            .call("testmempoolaccept", vec![serde_json::to_value([raw_hex])?])
-            .await?;
-        let Some(result) = results.into_iter().next() else {
-            return Err(Error::Unexpected(
-                "testmempoolaccept returned no result".to_string(),
-            ));
-        };
-
-        let already_known = matches!(
-            result.reject_reason.as_deref(),
-            Some("txn-already-in-mempool" | "txn-already-known")
-        );
-        if !result.allowed && !already_known {
-            return Ok(Acceptance::Rejected {
-                reason: result.reject_reason.unwrap_or_default(),
-            });
-        }
-
-        // Fees populated → use directly.
-        if let Some((fees, vsize)) = result.fees.as_ref().zip(result.vsize) {
-            return Ok(Acceptance::Accepted {
-                fee_rate_sat_per_vb: fees.effective_fee_rate_sat_per_vb(vsize),
-            });
-        }
-
-        // Already-known short-circuit — fetch authoritative fee data.
-        match self.get_mempool_entry(txid).await? {
-            Some(entry) => Ok(Acceptance::Accepted {
-                fee_rate_sat_per_vb: entry
-                    .fees
-                    .ancestor
-                    .to_sat()
-                    .checked_div(entry.ancestorsize)
-                    .unwrap_or(0),
-            }),
-            None => Ok(Acceptance::Rejected {
-                reason: "tx disappeared from mempool between calls".to_string(),
-            }),
-        }
-    }
-
     pub async fn stop(&self) -> Result<String, Error> {
         self.call("stop", vec![]).await
+    }
+}
+
+/// Idempotently check whether `raw_hex` is acceptable for the local
+/// mempool and return its effective package fee rate.
+///
+/// Wraps `testmempoolaccept` with two pieces of normalization:
+/// - `txn-already-in-mempool` / `txn-already-known` are reported by
+///   Bitcoin Core as rejections but are idempotent successes from a
+///   caller's perspective.
+/// - When those rejections fire, `testmempoolaccept` short-circuits
+///   without populating `fees` / `vsize`. We fall back to
+///   `getmempoolentry` for authoritative fee data on the already-known
+///   path so the caller always gets a fee rate.
+pub async fn check_mempool_acceptance<C: BitcoinRpc>(
+    client: &C,
+    raw_hex: &str,
+    txid: &Txid,
+) -> Result<Acceptance, Error> {
+    let raw_txs = [raw_hex.to_string()];
+    let results = client.test_mempool_accept(&raw_txs).await?;
+    let Some(result) = results.into_iter().next() else {
+        return Err(Error::Unexpected(
+            "testmempoolaccept returned no result".to_string(),
+        ));
+    };
+
+    let already_known = matches!(
+        result.reject_reason.as_deref(),
+        Some("txn-already-in-mempool" | "txn-already-known")
+    );
+    if !result.allowed && !already_known {
+        return Ok(Acceptance::Rejected {
+            reason: result.reject_reason.unwrap_or_default(),
+        });
+    }
+
+    // Fees populated → use directly.
+    if let Some((fees, vsize)) = result.fees.as_ref().zip(result.vsize) {
+        return Ok(Acceptance::Accepted {
+            fee_rate_sat_per_vb: fees.effective_fee_rate_sat_per_vb(vsize),
+        });
+    }
+
+    // Already-known short-circuit — fetch authoritative fee data.
+    match client.get_mempool_entry(txid).await? {
+        Some(entry) => Ok(Acceptance::Accepted {
+            fee_rate_sat_per_vb: entry
+                .fees
+                .ancestor
+                .to_sat()
+                .checked_div(entry.ancestorsize)
+                .unwrap_or(0),
+        }),
+        None => Ok(Acceptance::Rejected {
+            reason: "tx disappeared from mempool between calls".to_string(),
+        }),
     }
 }
 
@@ -401,6 +400,16 @@ pub trait BitcoinRpc: Send + Sync + Clone + 'static {
         &self,
         txids: &[Txid],
     ) -> impl Future<Output = Result<Vec<Result<Transaction, Error>>, Error>> + Send;
+
+    fn test_mempool_accept(
+        &self,
+        raw_txs: &[String],
+    ) -> impl Future<Output = Result<Vec<TestMempoolAcceptResult>, Error>> + Send;
+
+    fn send_raw_transaction(
+        &self,
+        raw_hex: &str,
+    ) -> impl Future<Output = Result<String, Error>> + Send;
 }
 
 impl BitcoinRpc for Client {
@@ -438,6 +447,15 @@ impl BitcoinRpc for Client {
         txids: &[Txid],
     ) -> Result<Vec<Result<Transaction, Error>>, Error> {
         self.get_raw_transactions(txids).await
+    }
+    async fn test_mempool_accept(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<Vec<TestMempoolAcceptResult>, Error> {
+        self.test_mempool_accept(raw_txs).await
+    }
+    async fn send_raw_transaction(&self, raw_hex: &str) -> Result<String, Error> {
+        self.send_raw_transaction(raw_hex).await
     }
 }
 

@@ -227,7 +227,7 @@ impl<E: Executor> Reactor<E> {
             if self
                 .executor
                 .validate_transaction(raw_tx, parsed, threshold)
-                .await
+                .await?
             {
                 txs.push(raw_tx.clone());
             } else {
@@ -334,7 +334,7 @@ impl<E: Executor> Reactor<E> {
                     if !self
                         .executor
                         .validate_transaction(tx, &parsed, threshold)
-                        .await
+                        .await?
                     {
                         warn!(%txid, "Rejecting proposal: transaction failed validation");
                         return Ok(None);

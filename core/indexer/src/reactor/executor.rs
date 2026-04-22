@@ -1,15 +1,15 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bitcoin::Txid;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use indexer_types::{Inst, OpMetadata};
 
-use crate::bitcoin_client::Client;
 use crate::bitcoin_client::types::Acceptance;
+use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{filter_map, op_from_inst};
 use crate::database;
-use crate::retry::{new_backoff_limited, new_backoff_unlimited, retry};
+use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
 use crate::runtime::registry;
@@ -44,13 +44,19 @@ pub trait Executor {
     /// `threshold_sat_per_vb` is the precomputed acceptance floor for this
     /// validation pass — typically `fee_index.fastest_fee() * 0.9`.
     /// Hoisting it to the caller avoids recomputing per tx in a batch.
-    /// Returns true if the transaction is valid for inclusion in a batch.
+    ///
+    /// Returns `Ok(true)` if the tx is valid for inclusion, `Ok(false)` if
+    /// it failed a policy check (batchability, mempool rejection, fee
+    /// threshold). Returns `Err` only for infrastructure failures that
+    /// indicate the validator can't safely continue (e.g. bitcoind RPC
+    /// unreachable after retries) — the reactor propagates this and shuts
+    /// down via the cancellation token.
     async fn validate_transaction(
         &self,
         raw: &bitcoin::Transaction,
         parsed: &indexer_types::Transaction,
         threshold_sat_per_vb: u64,
-    ) -> bool;
+    ) -> Result<bool>;
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
@@ -83,8 +89,8 @@ impl Executor for NoopExecutor {
         _raw: &bitcoin::Transaction,
         _parsed: &indexer_types::Transaction,
         _threshold_sat_per_vb: u64,
-    ) -> bool {
-        false
+    ) -> Result<bool> {
+        Ok(false)
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
@@ -135,9 +141,9 @@ impl Executor for RuntimeExecutor {
         raw: &bitcoin::Transaction,
         parsed: &indexer_types::Transaction,
         threshold_sat_per_vb: u64,
-    ) -> bool {
+    ) -> Result<bool> {
         if !is_batchable(&parsed.inputs) {
-            return false;
+            return Ok(false);
         }
 
         let raw_hex = bitcoin::consensus::encode::serialize_hex(raw);
@@ -145,31 +151,28 @@ impl Executor for RuntimeExecutor {
 
         // 1. Check Bitcoin's mempool policy + obtain the package fee rate.
         //    `check_mempool_acceptance` handles the idempotency and
-        //    already-known-fallback inside the client layer.
-        let acceptance = match retry(
-            || {
-                self.bitcoin_client
-                    .check_mempool_acceptance(&raw_hex, &txid)
-            },
+        //    already-known-fallback inside the client layer. RPC failure
+        //    after retries is fatal — bitcoind is unreachable.
+        let acceptance = retry(
+            || check_mempool_acceptance(&self.bitcoin_client, &raw_hex, &txid),
             "check_mempool_acceptance",
             new_backoff_limited(),
             self.cancel_token.clone(),
         )
         .await
-        {
-            Ok(a) => a,
-            Err(e) => {
-                warn!(%txid, %e, "check_mempool_acceptance failed");
-                return false;
-            }
-        };
+        .with_context(|| {
+            format!(
+                "check_mempool_acceptance failed after retries for {txid}; \
+                 bitcoind may be unreachable"
+            )
+        })?;
         let tx_fee_rate = match acceptance {
             Acceptance::Accepted {
                 fee_rate_sat_per_vb,
             } => fee_rate_sat_per_vb,
             Acceptance::Rejected { reason } => {
                 warn!(%txid, %reason, "Rejected by mempool policy");
-                return false;
+                return Ok(false);
             }
         };
 
@@ -181,12 +184,13 @@ impl Executor for RuntimeExecutor {
                 threshold = threshold_sat_per_vb,
                 "Rejected: fee rate below threshold"
             );
-            return false;
+            return Ok(false);
         }
 
         // 3. send_raw_transaction: broadcast to the network. Redundant
         //    with testmempoolaccept but catches races and ensures the tx
         //    is relayed to our bitcoind if we were the proposer.
+        //    RPC failure after retries is fatal (same reasoning as above).
         let result = retry(
             || async {
                 match self.bitcoin_client.send_raw_transaction(&raw_hex).await {
@@ -202,19 +206,21 @@ impl Executor for RuntimeExecutor {
                 }
             },
             "send_raw_transaction",
-            new_backoff_unlimited(),
+            new_backoff_limited(),
             self.cancel_token.clone(),
         )
-        .await;
+        .await
+        .with_context(|| {
+            format!(
+                "send_raw_transaction failed after retries for {txid}; \
+                 bitcoind may be unreachable"
+            )
+        })?;
         match result {
-            Ok(true) => true,
-            Ok(false) => {
+            true => Ok(true),
+            false => {
                 warn!(%txid, "Transaction rejected by bitcoind");
-                false
-            }
-            Err(e) => {
-                warn!(%txid, %e, "send_raw_transaction failed");
-                false
+                Ok(false)
             }
         }
     }
