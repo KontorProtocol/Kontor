@@ -1,9 +1,25 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
+use bitcoin::Amount;
 use bitcoin::hashes::Hash;
 use bitcoin::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
 use indexer_types::Block;
+
+/// Minimal mempool entry for listener tests — values don't matter except
+/// for the fee index plumbing.
+fn stub_entry() -> MempoolEntry {
+    MempoolEntry {
+        vsize: 1,
+        ancestorsize: 1,
+        fees: MempoolEntryFees {
+            base: Amount::from_sat(1),
+            ancestor: Amount::from_sat(1),
+        },
+        depends: vec![],
+    }
+}
 
 fn make_block(height: u64) -> Block {
     use bitcoin::hashes::Hash;
@@ -51,9 +67,9 @@ async fn fetch_mempool_empty() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
     let cancel = CancellationToken::new();
 
-    let (result, seq) = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
-    assert!(result.is_empty());
-    assert_eq!(seq, 0);
+    let snapshot = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
+    assert!(snapshot.kontor_txs.is_empty());
+    assert_eq!(snapshot.mempool_sequence, 0);
 }
 
 #[tokio::test]
@@ -63,9 +79,9 @@ async fn fetch_mempool_returns_sequence() {
     mock.set_mempool_sequence(42);
 
     let cancel = CancellationToken::new();
-    let (result, seq) = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
-    assert_eq!(result.len(), 1);
-    assert_eq!(seq, 42);
+    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    assert_eq!(snapshot.kontor_txs.len(), 1);
+    assert_eq!(snapshot.mempool_sequence, 42);
 }
 
 #[tokio::test]
@@ -95,9 +111,9 @@ async fn fetch_mempool_returns_filtered_transactions() {
         }
     };
 
-    let (result, _) = fetch_mempool(&mock, f, &cancel).await.unwrap();
-    assert_eq!(result.len(), 2);
-    let txids: Vec<_> = result.iter().map(|(t, _)| t.compute_txid()).collect();
+    let snapshot = fetch_mempool(&mock, f, &cancel).await.unwrap();
+    assert_eq!(snapshot.kontor_txs.len(), 2);
+    let txids: Vec<_> = snapshot.kontor_txs.iter().map(|(t, _)| *t).collect();
     assert!(txids.contains(&txid1));
     assert!(txids.contains(&txid3));
 }
@@ -110,11 +126,11 @@ async fn fetch_mempool_all_accepted() {
     mock.set_mempool(txs);
 
     let cancel = CancellationToken::new();
-    let (result, _) = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
 
-    assert_eq!(result.len(), 5);
+    assert_eq!(snapshot.kontor_txs.len(), 5);
     for txid in &expected_txids {
-        assert!(result.iter().any(|(t, _)| t.compute_txid() == *txid));
+        assert!(snapshot.kontor_txs.iter().any(|(t, _)| *t == *txid));
     }
 }
 
@@ -124,8 +140,8 @@ async fn fetch_mempool_all_rejected() {
     mock.set_mempool(vec![make_tx(1), make_tx(2)]);
 
     let cancel = CancellationToken::new();
-    let (result, _) = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
-    assert!(result.is_empty());
+    let snapshot = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
+    assert!(snapshot.kontor_txs.is_empty());
 }
 
 #[tokio::test]
@@ -136,8 +152,8 @@ async fn fetch_mempool_batches_large_mempool() {
     mock.set_mempool(txs);
 
     let cancel = CancellationToken::new();
-    let (result, _) = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
-    assert_eq!(result.len(), 250);
+    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    assert_eq!(snapshot.kontor_txs.len(), 250);
 }
 
 #[tokio::test]
@@ -175,6 +191,7 @@ async fn process_delta_transaction_added() {
     let tx = make_tx(1);
     let txid = tx.compute_txid();
     mock.set_mempool(vec![tx]);
+    mock.set_mempool_entry(txid, stub_entry());
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
     let cancel = CancellationToken::new();
@@ -191,8 +208,8 @@ async fn process_delta_transaction_added() {
     assert!(open);
 
     match event_rx.try_recv().unwrap() {
-        MempoolEvent::Insert(t, _) => assert_eq!(t.compute_txid(), txid),
-        other => panic!("Expected MempoolInsert, got {:?}", other),
+        MempoolEvent::KontorTxAdded { txid: t, .. } => assert_eq!(t, txid),
+        other => panic!("Expected KontorTxAdded, got {:?}", other),
     }
 }
 
@@ -429,8 +446,8 @@ async fn event_loop_snapshot_then_live_deltas() {
     .await;
 
     let events = collect_events(&mut event_rx);
-    assert!(matches!(&events[0], MempoolEvent::Sync(txs) if txs.len() == 3));
-    assert!(matches!(&events[1], MempoolEvent::Insert(t, _) if t.compute_txid() == txid3));
+    assert!(matches!(&events[0], MempoolEvent::Sync { kontor_txs, .. } if kontor_txs.len() == 3));
+    assert!(matches!(&events[1], MempoolEvent::KontorTxAdded { txid: t, .. } if *t == txid3));
     assert_eq!(events.len(), 2);
 }
 
@@ -502,10 +519,10 @@ async fn event_loop_filters_buffered_stale_replays_fresh() {
     .await;
 
     let events = collect_events(&mut event_rx);
-    assert!(matches!(&events[0], MempoolEvent::Sync(_)));
+    assert!(matches!(&events[0], MempoolEvent::Sync { .. }));
     // Only tx3 replayed (stale ones skipped)
     assert_eq!(events.len(), 2);
-    assert!(matches!(&events[1], MempoolEvent::Insert(t, _) if t.compute_txid() == txid3));
+    assert!(matches!(&events[1], MempoolEvent::KontorTxAdded { txid: t, .. } if *t == txid3));
 }
 
 #[tokio::test]
@@ -554,7 +571,7 @@ async fn event_loop_pre_handshake_messages_not_emitted_as_deltas() {
     let events = collect_events(&mut event_rx);
     // Only MempoolSync, no spurious delta
     assert_eq!(events.len(), 1);
-    assert!(matches!(&events[0], MempoolEvent::Sync(_)));
+    assert!(matches!(&events[0], MempoolEvent::Sync { .. }));
 }
 
 #[tokio::test]
@@ -627,7 +644,7 @@ async fn event_loop_live_remove_emits_mempool_remove() {
 
     let events = collect_events(&mut event_rx);
     assert_eq!(events.len(), 2);
-    assert!(matches!(&events[0], MempoolEvent::Sync(txs) if txs.is_empty()));
+    assert!(matches!(&events[0], MempoolEvent::Sync { kontor_txs, .. } if kontor_txs.is_empty()));
     assert!(matches!(&events[1], MempoolEvent::Remove(txid) if *txid == removed_txid));
 }
 

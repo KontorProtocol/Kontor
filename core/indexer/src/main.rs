@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
         Some(event_tx),
         Some(simulate_rx),
         engine_config,
-        Some(bitcoin.clone()),
+        bitcoin.clone(),
         Some(replay_tx),
         load_genesis_validators(&config)?,
         None,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::{
@@ -8,14 +9,34 @@ use bitcoin::{
 use indexer_types::Block;
 
 use super::error::Error;
-use super::types::{GetBlockchainInfoResult, GetRawMempoolResult};
+use super::types::{
+    GetBlockchainInfoResult, GetMempoolInfoResult, GetRawMempoolResult, MempoolEntry,
+    MempoolEntryFees,
+};
 use crate::bitcoin_client::client::BitcoinRpc;
+
+/// Minimal default mempool entry used when the test doesn't explicitly seed
+/// fee info for a tx. Fee values are negligible — tests that care about fee
+/// estimation should use `set_mempool_entry` to provide real values.
+fn stub_entry() -> MempoolEntry {
+    MempoolEntry {
+        vsize: 1,
+        ancestorsize: 1,
+        fees: MempoolEntryFees {
+            base: bitcoin::Amount::from_sat(1),
+            ancestor: bitcoin::Amount::from_sat(1),
+        },
+        depends: vec![],
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct MockBitcoinRpc {
     blocks: Arc<Mutex<Vec<Block>>>,
     mempool_txs: Arc<Mutex<Vec<bitcoin::Transaction>>>,
     mempool_sequence: Arc<Mutex<u64>>,
+    mempool_entries: Arc<Mutex<HashMap<Txid, MempoolEntry>>>,
+    mempool_min_fee_btc_per_kvb: Arc<Mutex<f64>>,
 }
 
 impl MockBitcoinRpc {
@@ -24,6 +45,8 @@ impl MockBitcoinRpc {
             blocks: Arc::new(Mutex::new(blocks)),
             mempool_txs: Arc::new(Mutex::new(vec![])),
             mempool_sequence: Arc::new(Mutex::new(0)),
+            mempool_entries: Arc::new(Mutex::new(HashMap::new())),
+            mempool_min_fee_btc_per_kvb: Arc::new(Mutex::new(0.00001)),
         }
     }
 
@@ -33,6 +56,14 @@ impl MockBitcoinRpc {
 
     pub fn set_mempool_sequence(&self, seq: u64) {
         *self.mempool_sequence.lock().unwrap() = seq;
+    }
+
+    pub fn set_mempool_entry(&self, txid: Txid, entry: MempoolEntry) {
+        self.mempool_entries.lock().unwrap().insert(txid, entry);
+    }
+
+    pub fn set_mempool_min_fee_btc_per_kvb(&self, fee: f64) {
+        *self.mempool_min_fee_btc_per_kvb.lock().unwrap() = fee;
     }
 
     pub fn append_blocks(&self, more: Vec<Block>) {
@@ -126,6 +157,38 @@ impl BitcoinRpc for MockBitcoinRpc {
         Ok(GetRawMempoolResult {
             txids: txs.iter().map(|tx| tx.compute_txid()).collect(),
             mempool_sequence: seq,
+        })
+    }
+
+    async fn get_mempool_entry(&self, txid: &Txid) -> Result<Option<MempoolEntry>, Error> {
+        // Explicit seeded entry wins; otherwise derive a stub from the raw
+        // tx (if present) so tests that don't care about fees still work.
+        if let Some(entry) = self.mempool_entries.lock().unwrap().get(txid).cloned() {
+            return Ok(Some(entry));
+        }
+        let txs = self.mempool_txs.lock().unwrap();
+        if txs.iter().any(|tx| tx.compute_txid() == *txid) {
+            Ok(Some(stub_entry()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn get_raw_mempool_verbose(&self) -> Result<HashMap<Txid, MempoolEntry>, Error> {
+        // Merge seeded entries with stub entries for any mempool tx the
+        // caller didn't explicitly set.
+        let mut out = self.mempool_entries.lock().unwrap().clone();
+        for tx in self.mempool_txs.lock().unwrap().iter() {
+            out.entry(tx.compute_txid()).or_insert_with(stub_entry);
+        }
+        Ok(out)
+    }
+
+    async fn get_mempool_info(&self) -> Result<GetMempoolInfoResult, Error> {
+        let fee = *self.mempool_min_fee_btc_per_kvb.lock().unwrap();
+        Ok(GetMempoolInfoResult {
+            mempool_min_fee_btc_per_kvb: fee,
+            min_relay_tx_fee_btc_per_kvb: fee,
         })
     }
 

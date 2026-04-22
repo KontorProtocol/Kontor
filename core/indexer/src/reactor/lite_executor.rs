@@ -160,6 +160,7 @@ impl Executor for LiteExecutor {
         &self,
         _raw: &bitcoin::Transaction,
         _parsed: &indexer_types::Transaction,
+        _threshold_sat_per_vb: u64,
     ) -> bool {
         true
     }
