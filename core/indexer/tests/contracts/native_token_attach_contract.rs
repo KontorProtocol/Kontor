@@ -113,7 +113,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
 
     let reveal_query = RevealQuery {
         commit_tx_hex: reveal_tx_hex.clone(),
-        sat_per_vbyte: 2,
+        sat_per_vbyte: Some(2),
         participants: vec![
             RevealParticipantQuery::builder()
                 .address(seller_address.to_string())

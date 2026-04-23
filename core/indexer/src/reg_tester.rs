@@ -384,9 +384,12 @@ impl RegTesterInner {
             .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
             .insts(insts)
             .build();
+        // sat_per_vbyte omitted on purpose — exercises the API's
+        // fastest_fee fallback. Under regtest the published fastest_fee
+        // sits at Fees::floor(1) until the reactor's first tick, so
+        // composes always see a valid (non-zero) rate.
         let query = ComposeQuery::builder()
             .instructions(vec![instructions])
-            .sat_per_vbyte(2)
             .build();
         let mut compose_res = self.kontor_client.compose(query).await?;
         let secp = Secp256k1::new();
@@ -1044,7 +1047,12 @@ impl RegTesterCluster {
             _genesis_dir: genesis_dir,
         };
 
-        cluster.poll_all_nodes_height(102, 60).await?;
+        // 120s instead of 60s — under parallel cluster-test load (many
+        // bitcoinds + many indexer nodes per process), the post-mine
+        // follow-up for height 102 can exceed 60s purely from IO/CPU
+        // contention. On healthy runs this completes in <10s; the
+        // longer ceiling only matters when something is actually wrong.
+        cluster.poll_all_nodes_height(102, 120).await?;
 
         if registered > 0 || unregistered > 0 {
             cluster
@@ -1318,11 +1326,13 @@ impl RegTesterCluster {
             self.reg_tester.wait_for_txids(&txids).await?;
         }
 
-        // Ensure all nodes have caught up before making identities available
+        // Ensure all nodes have caught up before making identities available.
+        // Same 120s ceiling as the post-mine wait — under parallel
+        // cluster-test load this catch-up can also exceed 60s.
         let info = self.reg_tester.info().await?;
-        self.poll_all_nodes_height(info.height, 60).await?;
+        self.poll_all_nodes_height(info.height, 120).await?;
         if let Some(consensus_height) = info.consensus_height {
-            self.poll_all_nodes_consensus_height(consensus_height, 60)
+            self.poll_all_nodes_consensus_height(consensus_height, 120)
                 .await?;
         }
 

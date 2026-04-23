@@ -24,8 +24,10 @@ pub struct InstructionQuery {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
-    #[ts(type = "number")]
-    pub sat_per_vbyte: u64,
+    /// Optional: when omitted, the server falls back to its currently
+    /// published `fastest_fee` (sat/vB) from `/api/fees`.
+    #[ts(type = "number | null")]
+    pub sat_per_vbyte: Option<u64>,
     #[ts(type = "number | null")]
     pub envelope: Option<u64>,
 }
@@ -90,8 +92,10 @@ pub struct RevealParticipantQuery {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct RevealQuery {
     pub commit_tx_hex: String,
-    #[ts(type = "number")]
-    pub sat_per_vbyte: u64,
+    /// Optional: when omitted, the server falls back to its currently
+    /// published `fastest_fee` (sat/vB) from `/api/fees`.
+    #[ts(type = "number | null")]
+    pub sat_per_vbyte: Option<u64>,
     pub participants: Vec<RevealParticipantQuery>,
     pub op_return_data: Option<Vec<u8>>,
     #[ts(type = "number | null")]

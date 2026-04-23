@@ -6,6 +6,21 @@ use crate::api::compose::{
 };
 use crate::api::{Env, error::HttpError, result::Result};
 
+/// Resolve the default `sat_per_vbyte` for a compose request that omitted
+/// the field. Returns `ServiceUnavailable` when the indexer hasn't
+/// finished its initial mempool sync — the published `fastest_fee` would
+/// just be `Fees::floor(1)` at that point, which is meaningless. Clients
+/// can still call compose with an explicit `sat_per_vbyte` during this
+/// window; this only fails the implicit-default path.
+async fn default_sat_per_vbyte(env: &Env) -> std::result::Result<u64, HttpError> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable(
+            "fee data not yet available; specify sat_per_vbyte explicitly or retry once the indexer is ready".to_string(),
+        ));
+    }
+    Ok(env.fees_rx.borrow().fastest)
+}
+
 pub async fn post_compose(
     State(env): State<Env>,
     Json(query): Json<ComposeQuery>,
@@ -14,7 +29,11 @@ pub async fn post_compose(
         return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
-    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
+    let default_fee = match query.sat_per_vbyte {
+        Some(v) => v,
+        None => default_sat_per_vbyte(&env).await?,
+    };
+    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin, default_fee)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
@@ -31,7 +50,11 @@ pub async fn post_compose_commit(
         return Err(HttpError::BadRequest("instructions too large".to_string()).into());
     }
 
-    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin)
+    let default_fee = match query.sat_per_vbyte {
+        Some(v) => v,
+        None => default_sat_per_vbyte(&env).await?,
+    };
+    let inputs = ComposeInputs::from_query(query, env.config.network, &env.bitcoin, default_fee)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let commit_inputs = CommitInputs::from(inputs);
@@ -46,7 +69,11 @@ pub async fn post_compose_reveal(
     State(env): State<Env>,
     Json(query): Json<RevealQuery>,
 ) -> Result<RevealOutputs> {
-    let inputs = reveal_inputs_from_query(query, env.config.network)
+    let default_fee = match query.sat_per_vbyte {
+        Some(v) => v,
+        None => default_sat_per_vbyte(&env).await?,
+    };
+    let inputs = reveal_inputs_from_query(query, env.config.network, default_fee)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let outputs = compose_reveal(inputs).map_err(|e| HttpError::BadRequest(e.to_string()))?;

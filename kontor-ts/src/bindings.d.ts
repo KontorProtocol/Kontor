@@ -33,7 +33,11 @@ export type ComposeOutputs = {
 
 export type ComposeQuery = {
   instructions: Array<InstructionQuery>;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   envelope: number | null;
 };
 
@@ -230,7 +234,11 @@ export type RevealParticipantQuery = {
 
 export type RevealQuery = {
   commit_tx_hex: string;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   participants: Array<RevealParticipantQuery>;
   op_return_data: Array<number> | null;
   envelope: number | null;

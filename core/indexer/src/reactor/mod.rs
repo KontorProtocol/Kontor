@@ -706,6 +706,20 @@ pub fn run(
                     }
                 };
 
+                // Compute and publish the first projection from the
+                // freshly-synced index, *before* anything signals
+                // readiness. Establishes the invariant: by the time
+                // `available = true`, the watch channel carries a
+                // projection derived from real bitcoind data — never
+                // the `Fees::floor(1)` placeholder. `take_dirty()`
+                // clears the flag so the first 2s tick doesn't
+                // immediately re-do the same compute.
+                let initial_fees = fee_index.recompute();
+                let _ = fee_index.take_dirty();
+                if let Some(tx) = fee_tx.as_ref() {
+                    let _ = tx.send(initial_fees);
+                }
+
                 let mut consensus = start_consensus(
                     engine_config,
                     &mut runtime,

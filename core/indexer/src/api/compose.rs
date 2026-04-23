@@ -60,6 +60,7 @@ impl ComposeInputs {
         query: ComposeQuery,
         network: bitcoin::Network,
         bitcoin_client: &Client,
+        default_sat_per_vbyte: u64,
     ) -> Result<Self> {
         if query.instructions.is_empty() {
             return Err(anyhow!("No instructions provided"));
@@ -68,7 +69,8 @@ impl ComposeInputs {
             return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
         }
 
-        if query.sat_per_vbyte == 0 {
+        let sat_per_vbyte = query.sat_per_vbyte.unwrap_or(default_sat_per_vbyte);
+        if sat_per_vbyte == 0 {
             return Err(anyhow!("Invalid fee rate"));
         }
         // Validate unique UTXOs within and across participants early
@@ -134,7 +136,7 @@ impl ComposeInputs {
             .await?;
 
         let fee_rate =
-            FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
+            FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
         let envelope = query
             .envelope
@@ -169,12 +171,13 @@ impl From<ComposeInputs> for CommitInputs {
 pub async fn reveal_inputs_from_query(
     query: RevealQuery,
     network: bitcoin::Network,
+    default_sat_per_vbyte: u64,
 ) -> Result<RevealInputs> {
-    if query.sat_per_vbyte == 0 {
+    let sat_per_vbyte = query.sat_per_vbyte.unwrap_or(default_sat_per_vbyte);
+    if sat_per_vbyte == 0 {
         return Err(anyhow!("Invalid fee rate"));
     }
-    let fee_rate =
-        FeeRate::from_sat_per_vb(query.sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
+    let fee_rate = FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
     let commit_tx = encode::deserialize_hex::<bitcoin::Transaction>(&query.commit_tx_hex)?;
 
