@@ -24,6 +24,19 @@ use crate::database::queries::{
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+use super::mempool_fee_index::MempoolFeeIndex;
+
+/// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
+/// per-batch acceptance threshold. 0.9 means we accept txs at or above
+/// 90% of the median fee rate in projected block 0.
+const FEE_THRESHOLD_MULTIPLIER: f64 = 0.9;
+
+/// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
+/// of `validate_transaction` so callers compute it once per validation
+/// pass rather than per-tx.
+fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
+    (fee_index.fastest_fee() as f64 * FEE_THRESHOLD_MULTIPLIER) as u64
+}
 
 impl<E: Executor> Reactor<E> {
     pub(super) async fn process_decided_batch(
@@ -200,7 +213,10 @@ impl<E: Executor> Reactor<E> {
             }
         }
 
-        // Per-tx validation — remove invalid txs from the pool
+        // Per-tx validation — remove invalid txs from the pool. Compute
+        // the fee threshold once for this batch (it's the same for every
+        // tx, since the index is a snapshot during this loop).
+        let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
         for (raw_tx, parsed) in self.consensus.pending_transactions.values() {
@@ -208,7 +224,11 @@ impl<E: Executor> Reactor<E> {
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            if self.executor.validate_transaction(raw_tx, parsed).await {
+            if self
+                .executor
+                .validate_transaction(raw_tx, parsed, threshold)
+                .await?
+            {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(txid);
@@ -299,6 +319,7 @@ impl<E: Executor> Reactor<E> {
                     warn!("Rejecting batch proposal: {reason}");
                     return Ok(None);
                 }
+                let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
                 for tx in transactions {
                     let txid = tx.compute_txid();
                     let parsed =
@@ -310,7 +331,11 @@ impl<E: Executor> Reactor<E> {
                             warn!(%txid, "Rejecting proposal: transaction failed to parse");
                             return Ok(None);
                         };
-                    if !self.executor.validate_transaction(tx, &parsed).await {
+                    if !self
+                        .executor
+                        .validate_transaction(tx, &parsed, threshold)
+                        .await?
+                    {
                         warn!(%txid, "Rejecting proposal: transaction failed validation");
                         return Ok(None);
                     }

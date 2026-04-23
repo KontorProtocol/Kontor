@@ -160,8 +160,9 @@ impl Executor for LiteExecutor {
         &self,
         _raw: &bitcoin::Transaction,
         _parsed: &indexer_types::Transaction,
-    ) -> bool {
-        true
+        _threshold_sat_per_vb: u64,
+    ) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {

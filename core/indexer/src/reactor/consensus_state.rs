@@ -9,6 +9,8 @@ use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use super::mempool_fee_index::MempoolFeeIndex;
+
 use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::core::Round;
@@ -70,6 +72,10 @@ pub struct ConsensusState {
     pub signing_provider: Ed25519Provider,
     pub address: Address,
     pub pending_transactions: HashMap<Txid, (bitcoin::Transaction, indexer_types::Transaction)>,
+    /// Mempool-based fee estimator. Owned by ConsensusState; the reactor's
+    /// mempool event loop mutates it directly, and `validate_transaction`
+    /// borrows it via `&MempoolFeeIndex` from the call site.
+    pub mempool_fee_index: MempoolFeeIndex,
     pub current_height: Height,
     pub current_round: Round,
     pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
@@ -121,6 +127,7 @@ impl ConsensusState {
         channels: Channels<Ctx>,
         engine_handle: malachitebft_app_channel::EngineHandle,
         validator_index: Option<usize>,
+        mempool_fee_index: MempoolFeeIndex,
     ) -> Self {
         let current_validator_set = genesis.validator_set;
 
@@ -148,6 +155,7 @@ impl ConsensusState {
             signing_provider,
             address,
             pending_transactions: std::collections::HashMap::new(),
+            mempool_fee_index,
             current_height,
             current_round: Round::new(0),
             undecided: BTreeMap::new(),

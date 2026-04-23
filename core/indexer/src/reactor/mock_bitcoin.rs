@@ -66,6 +66,8 @@ impl MockBitcoin {
     }
 
     pub fn generate_mempool_txs(&mut self, count: usize) -> Vec<MempoolEvent> {
+        use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
+        use crate::bitcoin_follower::event::KontorTx;
         let mut events = Vec::with_capacity(count);
         for _ in 0..count {
             self.tx_counter += 1;
@@ -76,7 +78,24 @@ impl MockBitcoin {
                 inputs: vec![],
                 op_return_data: Default::default(),
             };
-            events.push(MempoolEvent::Insert(tx.clone(), parsed));
+            let txid = tx.compute_txid();
+            let fee = MempoolEntry {
+                vsize: 1,
+                ancestorsize: 1,
+                fees: MempoolEntryFees {
+                    base: bitcoin::Amount::from_sat(1),
+                    ancestor: bitcoin::Amount::from_sat(1),
+                },
+                depends: vec![],
+            };
+            events.push(MempoolEvent::KontorTxAdded {
+                txid,
+                tx: KontorTx {
+                    raw: tx.clone(),
+                    parsed,
+                },
+                fee,
+            });
             self.mempool.push(tx);
         }
         events

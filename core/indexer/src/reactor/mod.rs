@@ -6,6 +6,7 @@ pub mod executor;
 mod handlers;
 #[cfg(test)]
 pub(crate) mod lite_executor;
+pub mod mempool_fee_index;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod reactor_cluster_tests;
@@ -282,30 +283,44 @@ impl<E: Executor> Reactor<E> {
                 }
                 Some(event) = self.mempool_rx.recv() => {
                     match event {
-                        MempoolEvent::Sync(txs) => {
-                            let count = txs.len();
+                        MempoolEvent::Sync { kontor_txs, fees, mempool_min_fee_sat_per_vb } => {
+                            let kontor_count = kontor_txs.len();
+                            let fee_count = fees.len();
                             self.consensus.pending_transactions.clear();
-                            for (raw, parsed) in txs {
+                            for (txid, tx) in kontor_txs {
                                 self.consensus.pending_transactions.insert(
-                                    raw.compute_txid(),
-                                    (raw, parsed),
+                                    txid,
+                                    (tx.raw, tx.parsed),
                                 );
                             }
-                            info!("MempoolSync {}", count);
+                            self.consensus.mempool_fee_index.replace_all(fees);
+                            self.consensus
+                                .mempool_fee_index
+                                .set_min_fee(mempool_min_fee_sat_per_vb);
+                            info!(
+                                "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
+                                kontor_count, fee_count, mempool_min_fee_sat_per_vb
+                            );
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
                         },
-                        MempoolEvent::Insert(tx, parsed) => {
-                            let txid = tx.compute_txid();
-                            self.consensus.pending_transactions.insert(txid, (tx, parsed));
-                            debug!("MempoolInsert {}", txid);
+                        MempoolEvent::KontorTxAdded { txid, tx, fee } => {
+                            self.consensus.pending_transactions.insert(txid, (tx.raw, tx.parsed));
+                            self.consensus.mempool_fee_index.insert(txid, fee);
+                            debug!("MempoolInsert (Kontor) {}", txid);
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
+                        },
+                        MempoolEvent::MempoolFeeSample { txid, fee } => {
+                            self.consensus.mempool_fee_index.insert(txid, fee);
+                            // No debounce reset — non-Kontor activity doesn't
+                            // affect what we can propose.
                         },
                         MempoolEvent::Remove(txid) => {
                             self.consensus.pending_transactions.remove(&txid);
+                            self.consensus.mempool_fee_index.remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
                     }
@@ -461,7 +476,7 @@ pub async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
     cancel_token: CancellationToken,
-    bitcoin_client: Option<&crate::bitcoin_client::Client>,
+    bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
@@ -526,11 +541,7 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
-    let mut exec = executor::RuntimeExecutor::new(cancel_token);
-
-    if let Some(client) = bitcoin_client {
-        exec = exec.with_bitcoin_client(client.clone());
-    }
+    let mut exec = executor::RuntimeExecutor::new(cancel_token, bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
     }
@@ -544,6 +555,7 @@ pub async fn start_consensus(
     observation_channels: Option<consensus_state::ObservationChannels>,
     timeouts: Option<LinearTimeouts>,
     last_block_height: u64,
+    mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
     let genesis = build_genesis_from_staking(runtime)
         .await
@@ -569,6 +581,7 @@ pub async fn start_consensus(
         engine_output.channels,
         engine_output._handle,
         validator_index,
+        mempool_fee_index,
     )
     .await;
     state.observation = observation_channels;
@@ -589,7 +602,7 @@ pub fn run(
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
-    bitcoin_client: Option<crate::bitcoin_client::Client>,
+    bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -602,7 +615,7 @@ pub fn run(
                     starting_block_height,
                     &writer,
                     cancel_token.clone(),
-                    bitcoin_client.as_ref(),
+                    bitcoin_client,
                     replay_tx,
                     &genesis_validators,
                 )
@@ -613,15 +626,76 @@ pub fn run(
                     propose: std::time::Duration::from_millis(ms),
                     ..LinearTimeouts::default()
                 });
-                let consensus = start_consensus(
+
+                // Gate consensus startup on the first MempoolEvent::Sync
+                // arriving from the listener. The fee index must be
+                // populated before we participate in voting/proposing,
+                // otherwise we'd validate proposals against an empty index
+                // (effectively no threshold check). Followers benefit too:
+                // a slightly delayed startup is preferable to running with
+                // a stale or absent mempool view.
+                //
+                // The listener guarantees Sync as the first event after
+                // its startup snapshot — anything else here means a bug.
+                let mut mempool_rx = mempool_rx;
+                let mut fee_index = mempool_fee_index::MempoolFeeIndex::new();
+                info!("Waiting for initial mempool sync before starting consensus");
+                // Periodic log so operators can tell the wait isn't a deadlock
+                // when bitcoind is slow to reach handshake.
+                let mut log_ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+                log_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                log_ticker.tick().await; // consume the immediate first tick
+                let initial_kontor_txs = loop {
+                    select! {
+                        event = mempool_rx.recv() => match event {
+                            Some(MempoolEvent::Sync {
+                                kontor_txs,
+                                fees,
+                                mempool_min_fee_sat_per_vb,
+                            }) => {
+                                fee_index.replace_all(fees);
+                                fee_index.set_min_fee(mempool_min_fee_sat_per_vb);
+                                info!(
+                                    "Initial mempool sync complete: {} Kontor txs, {} fee entries",
+                                    kontor_txs.len(),
+                                    fee_index.len()
+                                );
+                                break kontor_txs;
+                            }
+                            Some(other) => {
+                                bail!("Mempool delta event before initial Sync: {other:?}");
+                            }
+                            None => {
+                                bail!("Mempool channel closed before initial Sync");
+                            }
+                        },
+                        _ = log_ticker.tick() => {
+                            warn!("Still waiting for initial mempool sync — bitcoind/listener not ready");
+                        }
+                        _ = cancel_token.cancelled() => {
+                            return Ok(());
+                        }
+                    }
+                };
+
+                let mut consensus = start_consensus(
                     engine_config,
                     &mut runtime,
                     observation_channels,
                     timeouts,
                     last_height,
+                    fee_index,
                 )
                 .await
                 .context("start_consensus failed")?;
+
+                // Seed pending_transactions with the Kontor txs captured
+                // from the initial Sync.
+                for (txid, tx) in initial_kontor_txs {
+                    consensus
+                        .pending_transactions
+                        .insert(txid, (tx.raw, tx.parsed));
+                }
 
                 let mut reactor = Reactor::new(
                     exec,
