@@ -54,6 +54,21 @@ export type Event =
   | { "type": "BatchProcessed"; txids: Array<string> }
   | { "type": "Rolledback"; height: number };
 
+export type Fees = {
+  /**
+   * Recommended fee rate (sat/vB) to land in the next ~1 block.
+   */
+  fastest: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 3 blocks.
+   */
+  half_hour: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
+   */
+  hour: number;
+};
+
 export type HolderRef =
   | { "XOnlyPubkey": string }
   | { "SignerId": bigint }

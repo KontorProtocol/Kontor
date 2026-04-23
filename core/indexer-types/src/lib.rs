@@ -439,6 +439,34 @@ pub struct TransactionHex {
     pub hex: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Fees {
+    /// Recommended fee rate (sat/vB) to land in the next ~1 block.
+    #[ts(type = "number")]
+    pub fastest: u64,
+    /// Recommended fee rate (sat/vB) to land in roughly the next 3 blocks.
+    #[ts(type = "number")]
+    pub half_hour: u64,
+    /// Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
+    #[ts(type = "number")]
+    pub hour: u64,
+}
+
+impl Fees {
+    /// All three tiers floored to the same value. Used as the initial
+    /// snapshot before the reactor has produced any projection, and as
+    /// the reset state when the mempool's minimum fee changes — readers
+    /// never see a value below the current Bitcoin Core mempool floor.
+    pub fn floor(min_fee_sat_per_vb: u64) -> Self {
+        Self {
+            fastest: min_fee_sat_per_vb,
+            half_hour: min_fee_sat_per_vb,
+            hour: min_fee_sat_per_vb,
+        }
+    }
+}
+
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct OpWithResult {

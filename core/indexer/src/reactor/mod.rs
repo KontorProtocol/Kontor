@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use futures_util::future::pending;
-use indexer_types::{BlockRow, Event, OpWithResult};
+use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
     sync::{
@@ -69,12 +69,18 @@ pub struct Reactor<E: Executor> {
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
+    /// Optional sink for the latest fee tier snapshot. Published from
+    /// the reactor's periodic tick when the index is dirty so the API
+    /// (and other read-side consumers) can serve fee tiers without
+    /// touching the mempool index directly.
+    fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
 
     last_height: u64,
     last_hash: Option<BlockHash>,
 }
 
 impl<E: Executor> Reactor<E> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         executor: E,
         runtime: Runtime,
@@ -87,6 +93,7 @@ impl<E: Executor> Reactor<E> {
         consensus: consensus_state::ConsensusState,
         last_height: u64,
         last_hash: Option<BlockHash>,
+        fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
     ) -> Self {
         let mut runtime = runtime;
         runtime.node_label = consensus
@@ -105,6 +112,7 @@ impl<E: Executor> Reactor<E> {
             ready_tx,
             event_tx,
             consensus,
+            fee_tx,
         }
     }
 
@@ -233,6 +241,16 @@ impl<E: Executor> Reactor<E> {
         let debounce_duration = std::time::Duration::from_millis(500);
         let mut debounce_deadline: Option<tokio::time::Instant> = None;
 
+        // Periodic recompute + publish of fee tiers. 2s matches
+        // mempool.space's POLL_RATE_MS in production; staleness ≤2s is
+        // imperceptible for fee estimation. The tick is the *only*
+        // recompute path — sync readers (consensus
+        // `compute_fee_threshold`, the API) read whatever this tick
+        // last published. Skip catch-up ticks if the reactor was busy.
+        let mut fee_publish_ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+        fee_publish_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        fee_publish_ticker.tick().await; // consume the immediate first tick
+
         loop {
             // Drain pending block events before entering select
             while let Ok(event) = self.block_rx.try_recv() {
@@ -293,10 +311,9 @@ impl<E: Executor> Reactor<E> {
                                     (tx.raw, tx.parsed),
                                 );
                             }
-                            self.consensus.mempool_fee_index.replace_all(fees);
                             self.consensus
                                 .mempool_fee_index
-                                .set_min_fee(mempool_min_fee_sat_per_vb);
+                                .replace(fees, mempool_min_fee_sat_per_vb);
                             info!(
                                 "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
                                 kontor_count, fee_count, mempool_min_fee_sat_per_vb
@@ -404,7 +421,17 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
-
+                _ = fee_publish_ticker.tick() => {
+                    if self.consensus.mempool_fee_index.take_dirty() {
+                        let fees = self.consensus.mempool_fee_index.recompute();
+                        if let Some(tx) = self.fee_tx.as_ref() {
+                            // watch::Sender::send only errors when all
+                            // receivers have dropped — fine for the
+                            // reactor to keep running.
+                            let _ = tx.send(fees);
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -592,6 +619,7 @@ pub async fn start_consensus(
     Ok(state)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
@@ -607,6 +635,7 @@ pub fn run(
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: Option<u64>,
+    fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -653,8 +682,7 @@ pub fn run(
                                 fees,
                                 mempool_min_fee_sat_per_vb,
                             }) => {
-                                fee_index.replace_all(fees);
-                                fee_index.set_min_fee(mempool_min_fee_sat_per_vb);
+                                fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                                 info!(
                                     "Initial mempool sync complete: {} Kontor txs, {} fee entries",
                                     kontor_txs.len(),
@@ -709,6 +737,7 @@ pub fn run(
                     consensus,
                     last_height,
                     last_hash,
+                    fee_tx,
                 );
 
                 reactor.run().await

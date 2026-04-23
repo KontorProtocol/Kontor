@@ -2,7 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use deadpool::managed::Pool;
-use tokio::sync::{RwLock, mpsc::Sender};
+use indexer_types::Fees;
+use tokio::sync::{RwLock, mpsc::Sender, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -20,6 +21,9 @@ pub struct Env {
     pub bitcoin: Client,
     pub runtime_pool: Pool<runtime::pool::Manager>,
     pub simulate_tx: Sender<Simulation>,
+    /// Latest fee tier snapshot published by the reactor. `borrow()` is
+    /// non-blocking and returns the most recent value.
+    pub fees_rx: watch::Receiver<Fees>,
 }
 
 impl Env {
@@ -29,6 +33,7 @@ impl Env {
         db_name: String,
     ) -> Result<Self> {
         let (simulate_tx, _) = tokio::sync::mpsc::channel(10);
+        let (_, fees_rx) = watch::channel(Fees::floor(1));
         Ok(Self {
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
             config: Config::new_na(),
@@ -38,6 +43,7 @@ impl Env {
             runtime_pool: runtime::pool::new(db_path.to_path_buf(), db_name).await?,
             reader,
             simulate_tx,
+            fees_rx,
         })
     }
 }

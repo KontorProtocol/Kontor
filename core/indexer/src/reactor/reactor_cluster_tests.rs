@@ -343,6 +343,7 @@ impl ReactorCluster {
                 state,
                 0,
                 None,
+                None,
             );
 
             let _ = rtx.send(i).await;
