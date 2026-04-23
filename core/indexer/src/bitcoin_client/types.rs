@@ -152,7 +152,16 @@ impl TestMempoolAcceptResultFees {
 /// info, etc.) that we ignore.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MempoolEntry {
+    /// Sigop-adjusted virtual size in vbytes. Bitcoin Core computes this
+    /// as `GetVirtualTransactionSize(weight, sigOpCost, bytesPerSigOp)` —
+    /// `max(weight, sigOpCost * 20) / 4` — meaning sigop-heavy txs are
+    /// already accounted for. **Don't apply a second sigop adjustment**;
+    /// `gbt`-style projection consumers can treat this as the effective
+    /// vsize for block-fitness checks. See `mempool_entry.h` in Bitcoin
+    /// Core for the canonical definition.
     pub vsize: u64,
+    /// Sigop-adjusted vsize for this tx + all in-mempool ancestors.
+    /// Same adjustment applies; see `vsize` doc.
     pub ancestorsize: u64,
     pub fees: MempoolEntryFees,
     /// In-mempool parent txids (direct ancestors, not transitive).

@@ -142,20 +142,6 @@ impl MempoolFeeIndex {
     fn project_blocks(&self, n_blocks: usize) -> Vec<ProjectedBlock> {
         block_projection::project_blocks(&self.entries, n_blocks)
     }
-
-    /// Test helper to bump the floor without rebuilding `entries`.
-    /// Production code uses `replace`, which updates both atomically.
-    /// Mirrors the old standalone setter so existing fixture-style
-    /// tests don't have to be rewritten.
-    #[cfg(test)]
-    fn set_min_fee(&mut self, sat_per_vb: u64) {
-        let new_min = sat_per_vb.max(1);
-        if new_min != self.mempool_min_fee_sat_per_vb {
-            self.mempool_min_fee_sat_per_vb = new_min;
-            self.fees = Fees::floor(new_min);
-            self.dirty = true;
-        }
-    }
 }
 
 impl Default for MempoolFeeIndex {
@@ -280,14 +266,14 @@ mod tests {
     #[test]
     fn empty_mempool_returns_min_fee() {
         let mut idx = MempoolFeeIndex::new();
-        idx.set_min_fee(5);
+        idx.replace(HashMap::new(), 5);
         assert_eq!(idx.fastest_fee(), 5);
     }
 
     #[test]
     fn half_empty_block_returns_min_fee() {
         let mut idx = MempoolFeeIndex::new();
-        idx.set_min_fee(3);
+        idx.replace(HashMap::new(), 3);
         // 100 txs of ~1000 vB each = 100k vB total (far below HALF_BLOCK).
         for n in 0..100u8 {
             idx.insert(txid(n), entry(10_000 /* 10 sat/vB × 1000 */, 1_000, vec![]));
@@ -298,7 +284,6 @@ mod tests {
     #[test]
     fn full_block_returns_median() {
         let mut idx = MempoolFeeIndex::new();
-        idx.set_min_fee(1);
         // 2000 txs × 1000 vB = 2M vB → fills block 0 exactly with 1000 of them.
         // Use increasing fee rates so median is well-defined.
         for n in 0..200u8 {
@@ -402,14 +387,6 @@ mod tests {
         // picks up the change.
         let mut idx = MempoolFeeIndex::new();
         assert!(!idx.take_dirty(), "fresh index is clean");
-
-        // set_min_fee with the same value: no-op, no dirty.
-        idx.set_min_fee(1);
-        assert!(!idx.take_dirty(), "no-op set_min_fee should not dirty");
-
-        // Real change → dirty.
-        idx.set_min_fee(7);
-        assert!(idx.take_dirty(), "min_fee bump must dirty");
         assert!(!idx.take_dirty(), "take_dirty clears the flag");
 
         // insert always dirties.
@@ -427,6 +404,10 @@ mod tests {
             !idx.take_dirty(),
             "remove of missing entry should not dirty"
         );
+
+        // replace always dirties.
+        idx.replace(HashMap::new(), 5);
+        assert!(idx.take_dirty(), "replace must dirty");
     }
 
     #[test]
@@ -548,7 +529,6 @@ mod tests {
         // around 50 sat/vB. With no next block, the scaling branch should
         // multiply by (700k - 500k) / 500k = 0.4, giving ~20 sat/vB.
         let mut idx = MempoolFeeIndex::new();
-        idx.set_min_fee(1);
         // 70 entries × 10k vB at 50 sat/vB.
         for n in 0..70u8 {
             idx.insert(txid(n), entry(50 * 10_000, 10_000, vec![]));
@@ -627,7 +607,6 @@ mod tests {
         // Block 0 ~200 sat/vB, block 1 ~60 sat/vB, block 2 ~30 sat/vB.
         // halfHourFee = (block1.median + fastest_fee) / 2 ≈ (60 + 200) / 2.
         let mut idx = MempoolFeeIndex::new();
-        idx.set_min_fee(1);
 
         // Helper to make a unique txid from two bytes, avoiding the
         // 1-byte txid() collisions used elsewhere.
