@@ -274,7 +274,8 @@ mod tests {
     fn empty_mempool_returns_min_fee() {
         let mut idx = MempoolFeeIndex::new(None);
         idx.replace(HashMap::new(), 5);
-        assert_eq!(idx.fastest_fee(), 5);
+        let fastest = idx.recompute().fastest;
+        assert_eq!(fastest, 5);
     }
 
     #[test]
@@ -285,7 +286,8 @@ mod tests {
         for n in 0..100u8 {
             idx.insert(txid(n), entry(10_000 /* 10 sat/vB × 1000 */, 1_000, vec![]));
         }
-        assert_eq!(idx.fastest_fee(), 3);
+        let fastest = idx.recompute().fastest;
+        assert_eq!(fastest, 3);
     }
 
     #[test]
