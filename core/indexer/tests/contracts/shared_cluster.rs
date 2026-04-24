@@ -35,8 +35,11 @@ fn cleanup() {
     }
 }
 
-pub async fn new_runtime() -> Result<Runtime> {
-    let cluster = get().await;
+/// Build a `Runtime` (a per-module reg-tester wrapping a contract
+/// reader) from any `RegTesterCluster`. Works for both the shared
+/// OnceCell instance below and dedicated per-test clusters used by
+/// tests that need ledger isolation (e.g. `regtest_file_storage`).
+pub async fn build_runtime(cluster: &RegTesterCluster) -> Result<Runtime> {
     let reg_tester = cluster.new_module_reg_tester().await?;
     let contracts_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-contracts")
@@ -49,4 +52,9 @@ pub async fn new_runtime() -> Result<Runtime> {
         contract_reader,
         reg_tester,
     ))
+}
+
+pub async fn new_runtime() -> Result<Runtime> {
+    let cluster = get().await;
+    build_runtime(&cluster).await
 }

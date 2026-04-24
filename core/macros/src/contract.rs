@@ -227,6 +227,34 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
+        // Holder is serialized via its canonical key string (same as the
+        // `Map<Holder, _>` key pattern). Reads parse via `FromStr` and
+        // return `None` on a missing entry; the macro-generated getter's
+        // `.unwrap()` surfaces storage corruption as a panic — same
+        // behavior as every other primitive field. Holder is a WIT
+        // resource, so wit-bindgen doesn't auto-apply `#[derive(Storage)]`
+        // the way it does for HolderRef — we define Retrieve/Store
+        // directly here.
+        impl Retrieve<crate::context::ViewStorage> for context::Holder {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
+                s.parse().ok()
+            }
+        }
+
+        impl Retrieve<crate::context::ProcStorage> for context::Holder {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
+                s.parse().ok()
+            }
+        }
+
+        impl stdlib::Store<crate::context::ProcStorage> for context::Holder {
+            fn __set(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf, value: Self) {
+                stdlib::WriteStorage::__set_str(ctx, &path, &value.to_string());
+            }
+        }
+
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())

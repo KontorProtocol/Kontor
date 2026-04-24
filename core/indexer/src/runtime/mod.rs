@@ -5,6 +5,7 @@ pub mod counter;
 pub mod file_ledger;
 pub mod filestorage;
 pub mod fuel;
+pub mod nft;
 pub mod numerics;
 pub mod pool;
 pub mod registry;
@@ -103,7 +104,7 @@ use wasmtime::{
 
 use crate::bls::RegistrationProof;
 use crate::database;
-use crate::database::native_contracts::{FILESTORAGE, REGISTRY, STAKING, TOKEN};
+use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
@@ -306,22 +307,13 @@ impl Runtime {
         let core_id = database::queries::create_core_signer(&self.get_storage_conn()).await?;
         self.core_signer_id = Some(core_id);
 
-        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "token", TOKEN)
-            .await?;
-        self.publish(
-            &Signer::Core(Box::new(Signer::Nobody)),
-            "filestorage",
-            FILESTORAGE,
-        )
-        .await?;
-        self.publish(&Signer::Core(Box::new(Signer::Nobody)), "staking", STAKING)
-            .await?;
-        self.publish(
-            &Signer::Core(Box::new(Signer::Nobody)),
-            "registry",
-            REGISTRY,
-        )
-        .await?;
+        // Publish order matches NATIVE_CONTRACTS and determines contract
+        // IDs (1-indexed, assigned in iteration order). Adding a contract
+        // = appending to the slice; no manual count to maintain.
+        let core_signer = Signer::Core(Box::new(Signer::Nobody));
+        for (name, bytes) in NATIVE_CONTRACTS {
+            self.publish(&core_signer, name, bytes).await?;
+        }
         if !genesis_validators.is_empty() {
             let validators = genesis_validators.iter().cloned().map(Into::into).collect();
             staking::api::set_genesis_set(

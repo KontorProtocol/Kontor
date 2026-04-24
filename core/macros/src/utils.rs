@@ -58,6 +58,7 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
                     | "bool"
                     | "ContractAddress"
                     | "HolderRef"
+                    | "Holder"
                     | "Integer"
                     | "Decimal"
             )
