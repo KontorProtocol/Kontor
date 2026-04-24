@@ -1,6 +1,7 @@
 mod blocks;
 mod compose;
 mod contracts;
+mod fees;
 mod info;
 mod results;
 mod signers;
@@ -9,6 +10,7 @@ mod transactions;
 pub use blocks::*;
 pub use compose::*;
 pub use contracts::*;
+pub use fees::*;
 pub use info::*;
 pub use results::*;
 pub use signers::*;

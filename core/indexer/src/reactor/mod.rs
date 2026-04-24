@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use futures_util::future::pending;
-use indexer_types::{BlockRow, Event, OpWithResult};
+use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
     sync::{
@@ -75,6 +75,7 @@ pub struct Reactor<E: Executor> {
 }
 
 impl<E: Executor> Reactor<E> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         executor: E,
         runtime: Runtime,
@@ -233,6 +234,16 @@ impl<E: Executor> Reactor<E> {
         let debounce_duration = std::time::Duration::from_millis(500);
         let mut debounce_deadline: Option<tokio::time::Instant> = None;
 
+        // Periodic recompute + publish of fee tiers. 2s matches
+        // mempool.space's POLL_RATE_MS in production; staleness ≤2s is
+        // imperceptible for fee estimation. The tick is the *only*
+        // recompute path — sync readers (consensus
+        // `compute_fee_threshold`, the API) read whatever this tick
+        // last published. Skip catch-up ticks if the reactor was busy.
+        let mut fee_publish_ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+        fee_publish_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        fee_publish_ticker.tick().await; // consume the immediate first tick
+
         loop {
             // Drain pending block events before entering select
             while let Ok(event) = self.block_rx.try_recv() {
@@ -293,10 +304,14 @@ impl<E: Executor> Reactor<E> {
                                     (tx.raw, tx.parsed),
                                 );
                             }
-                            self.consensus.mempool_fee_index.replace_all(fees);
                             self.consensus
                                 .mempool_fee_index
-                                .set_min_fee(mempool_min_fee_sat_per_vb);
+                                .replace(fees, mempool_min_fee_sat_per_vb);
+                            // `replace` reset cached fees to the new
+                            // floor; recompute immediately so consensus
+                            // doesn't read a degraded threshold for the
+                            // 0-2s window before the next tick.
+                            self.consensus.mempool_fee_index.recompute();
                             info!(
                                 "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
                                 kontor_count, fee_count, mempool_min_fee_sat_per_vb
@@ -404,7 +419,12 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
-
+                _ = fee_publish_ticker.tick() => {
+                    if self.consensus.mempool_fee_index.take_dirty() {
+                        // recompute() publishes to fee_tx internally.
+                        self.consensus.mempool_fee_index.recompute();
+                    }
+                }
             }
         }
         Ok(())
@@ -592,6 +612,7 @@ pub async fn start_consensus(
     Ok(state)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     starting_block_height: u64,
     cancel_token: CancellationToken,
@@ -607,6 +628,7 @@ pub fn run(
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: Option<u64>,
+    fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -638,7 +660,10 @@ pub fn run(
                 // The listener guarantees Sync as the first event after
                 // its startup snapshot — anything else here means a bug.
                 let mut mempool_rx = mempool_rx;
-                let mut fee_index = mempool_fee_index::MempoolFeeIndex::new();
+                // The index owns the fee watch sender — every
+                // `recompute()` publishes automatically, so the call
+                // sites in the reactor don't have to remember to.
+                let mut fee_index = mempool_fee_index::MempoolFeeIndex::new(fee_tx);
                 info!("Waiting for initial mempool sync before starting consensus");
                 // Periodic log so operators can tell the wait isn't a deadlock
                 // when bitcoind is slow to reach handshake.
@@ -653,8 +678,7 @@ pub fn run(
                                 fees,
                                 mempool_min_fee_sat_per_vb,
                             }) => {
-                                fee_index.replace_all(fees);
-                                fee_index.set_min_fee(mempool_min_fee_sat_per_vb);
+                                fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                                 info!(
                                     "Initial mempool sync complete: {} Kontor txs, {} fee entries",
                                     kontor_txs.len(),
@@ -677,6 +701,16 @@ pub fn run(
                         }
                     }
                 };
+
+                // Compute the first projection from the freshly-synced
+                // index, *before* anything signals readiness.
+                // `recompute()` populates the cache, clears the dirty
+                // flag, and publishes via the index's owned watch
+                // sender — establishing the invariant that by the time
+                // `available = true`, the watch channel carries real
+                // bitcoind-derived data (never the `Fees::floor(1)`
+                // placeholder).
+                fee_index.recompute();
 
                 let mut consensus = start_consensus(
                     engine_config,

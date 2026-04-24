@@ -49,6 +49,7 @@ async fn main() -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
+    let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(
         api::run(Env {
@@ -60,6 +61,7 @@ async fn main() -> Result<()> {
             bitcoin: bitcoin.clone(),
             runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string()).await?,
             simulate_tx,
+            fees_rx,
         })
         .await?,
     );
@@ -120,6 +122,7 @@ async fn main() -> Result<()> {
         load_genesis_validators(&config)?,
         None,
         config.consensus_propose_timeout_ms,
+        Some(fees_tx),
     ));
     ready_rx.await?;
     {

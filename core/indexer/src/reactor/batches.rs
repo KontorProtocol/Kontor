@@ -34,8 +34,15 @@ const FEE_THRESHOLD_MULTIPLIER: f64 = 0.9;
 /// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
 /// of `validate_transaction` so callers compute it once per validation
 /// pass rather than per-tx.
+///
+/// Floored at `min_fee` so the threshold can never drop below
+/// bitcoind's actual mempool floor — even if `fastest_fee` is somehow
+/// stale, zero, or recently reset to a low value (e.g., after a ZMQ
+/// reconnect's Sync). Defense in depth against effectively disabling
+/// fee validation.
 fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
-    (fee_index.fastest_fee() as f64 * FEE_THRESHOLD_MULTIPLIER) as u64
+    let raw = (fee_index.fastest_fee() as f64 * FEE_THRESHOLD_MULTIPLIER) as u64;
+    raw.max(fee_index.min_fee())
 }
 
 impl<E: Executor> Reactor<E> {

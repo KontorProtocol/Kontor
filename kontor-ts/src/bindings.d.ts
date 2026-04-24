@@ -33,7 +33,11 @@ export type ComposeOutputs = {
 
 export type ComposeQuery = {
   instructions: Array<InstructionQuery>;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   envelope: number | null;
 };
 
@@ -53,6 +57,21 @@ export type Event =
   | { "type": "Processed"; block: BlockRow; txids: Array<string> }
   | { "type": "BatchProcessed"; txids: Array<string> }
   | { "type": "Rolledback"; height: number };
+
+export type Fees = {
+  /**
+   * Recommended fee rate (sat/vB) to land in the next ~1 block.
+   */
+  fastest: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 3 blocks.
+   */
+  half_hour: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
+   */
+  hour: number;
+};
 
 export type HolderRef =
   | { "XOnlyPubkey": string }
@@ -215,7 +234,11 @@ export type RevealParticipantQuery = {
 
 export type RevealQuery = {
   commit_tx_hex: string;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   participants: Array<RevealParticipantQuery>;
   op_return_data: Array<number> | null;
   envelope: number | null;

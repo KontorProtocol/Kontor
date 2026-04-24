@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::bitcoin_client::types::{
     Acceptance, CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult,
-    GetRawMempoolResult, MempoolEntry, TestMempoolAcceptResult,
+    GetRawMempoolResult, MempoolEntry, TestMempoolAcceptResult, fee_rate_sat_per_vb,
 };
 use crate::config::{Config, RegtestConfig};
 
@@ -350,14 +350,16 @@ pub async fn check_mempool_acceptance<C: BitcoinRpc>(
     }
 
     // Already-known short-circuit — fetch authoritative fee data.
+    // Round (don't truncate) the rate so a tx whose ancestor ratio
+    // comes out as 0.99 sat/vB is reported as 1, matching the
+    // testmempoolaccept path's behaviour and avoiding spurious
+    // sub-1-sat/vB rejections at the threshold-1 boundary.
     match client.get_mempool_entry(txid).await? {
         Some(entry) => Ok(Acceptance::Accepted {
-            fee_rate_sat_per_vb: entry
-                .fees
-                .ancestor
-                .to_sat()
-                .checked_div(entry.ancestorsize)
-                .unwrap_or(0),
+            fee_rate_sat_per_vb: fee_rate_sat_per_vb(
+                entry.fees.ancestor.to_sat(),
+                entry.ancestorsize,
+            ),
         }),
         None => Ok(Acceptance::Rejected {
             reason: "tx disappeared from mempool between calls".to_string(),

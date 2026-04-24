@@ -921,7 +921,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
 
     let reveal_query = RevealQuery {
         commit_tx_hex: reveal_tx_hex.clone(),
-        sat_per_vbyte: 2,
+        sat_per_vbyte: Some(2),
         participants: vec![RevealParticipantQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
