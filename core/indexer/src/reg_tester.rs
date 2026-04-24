@@ -22,7 +22,7 @@ use crate::{
     config::{GenesisConfig, GenesisValidatorConfig, RegtestConfig},
     consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
-    retry::retry_simple,
+    retry::{retry_extended, retry_simple},
     runtime::ContractAddress,
     test_utils,
 };
@@ -170,7 +170,11 @@ async fn run_kontor(
 
     let process = cmd.spawn()?;
     let client = KontorClient::new(format!("http://localhost:{api_port}/api"))?;
-    retry_simple(async || {
+    // Extended budget: cluster tests run 5 indexer processes in
+    // parallel; under heavy CI load, the standard ~25s budget isn't
+    // always enough for DB init + mempool sync + initial fee
+    // projection + consensus startup to complete on each one.
+    retry_extended(async || {
         let i = client.index().await?;
         if !i.available {
             bail!("Not available");

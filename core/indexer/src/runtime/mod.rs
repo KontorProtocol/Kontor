@@ -19,6 +19,7 @@ mod call;
 mod host_context;
 mod host_files;
 mod host_numbers;
+mod host_registry;
 mod host_storage;
 
 use bitcoin::XOnlyPublicKey;

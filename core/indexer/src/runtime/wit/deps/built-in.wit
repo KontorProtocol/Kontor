@@ -254,6 +254,15 @@ interface testing {
     host-panic: async func() -> string;
 }
 
+interface registry {
+    /// Consume fuel for a RegisterBlsKey operation. The actual verification
+    /// and DB write happen in the reactor (outside the contract's fuel
+    /// scope); this call meters the caller for the operation so the fuel
+    /// accounting matches reality. Traps on insufficient fuel — aborts
+    /// the enclosing contract call.
+    register-bls-key: async func();
+}
+
 world built-in {
     import context;
     import foreign;
@@ -262,4 +271,5 @@ world built-in {
     import numbers;
     import file-registry;
     import testing;
+    import registry;
 }

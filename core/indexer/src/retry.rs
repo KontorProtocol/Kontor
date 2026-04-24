@@ -19,6 +19,14 @@ pub fn new_backoff_limited() -> ExponentialBuilder {
     new_backoff().with_max_times(6)
 }
 
+/// Same shape as `new_backoff_limited` but with more attempts — ~65s
+/// total budget vs ~25s. For polling readiness of subprocesses that
+/// can be slow under heavy parallel CI load (e.g. cluster startup
+/// where 5 indexer processes are racing for resources).
+pub fn new_backoff_extended() -> ExponentialBuilder {
+    new_backoff().with_max_times(10)
+}
+
 pub fn notify<E: std::fmt::Debug>(action: &str) -> impl FnMut(&E, Duration) {
     move |e, d| {
         warn!("Retrying {} due to {:?} after {:?}", action, e, d);
@@ -56,5 +64,18 @@ where
 {
     let cancel_token = CancellationToken::new();
     let backoff = new_backoff_limited();
+    retry(operation, "test_operation", backoff, cancel_token).await
+}
+
+/// `retry_simple` with the extended backoff — use for slow subprocess
+/// readiness polls under contended CI load.
+pub async fn retry_extended<T, E, F, Fut>(operation: F) -> Result<T>
+where
+    E: std::fmt::Debug + Into<Error>,
+    Fut: Future<Output = Result<T, E>>,
+    F: FnMut() -> Fut,
+{
+    let cancel_token = CancellationToken::new();
+    let backoff = new_backoff_extended();
     retry(operation, "test_operation", backoff, cancel_token).await
 }
