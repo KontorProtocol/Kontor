@@ -347,8 +347,9 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::componen
             .await
             .expect("publish native");
 
-        // Extract compiled components from cache. Native contract IDs start at 1
-        // and are assigned in publish order; see `NATIVE_CONTRACTS`.
+        // Extract compiled components from cache. Native contract IDs start
+        // at 1 and are assigned in publish order; see
+        // `Runtime::publish_native_contracts`.
         let mut components = Vec::new();
         for id in 1..=NATIVE_CONTRACT_COUNT {
             if let Some(component) = cache.get(&id).await {
