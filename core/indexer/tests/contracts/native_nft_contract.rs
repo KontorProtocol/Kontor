@@ -18,7 +18,7 @@ fn file_descriptor(file_id: &str, root_seed: u8) -> RawFileDescriptor {
     )
 }
 
-#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
+#[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_native_nft_contract() -> Result<()> {
     let alice = runtime.identity().await?;
     let bob = runtime.identity().await?;
@@ -62,7 +62,7 @@ async fn test_native_nft_contract() -> Result<()> {
     // get_info on missing nft returns None.
     assert_eq!(nft::get_info(runtime, "does_not_exist").await?, None);
 
-    assert_eq!(nft::total_nfts(runtime).await?, 1);
+    assert_eq!(nft::total_minted(runtime).await?, 1);
 
     // Reusing the same nft_id with a fresh file_id must fail with the local
     // uniqueness error (raised before the filestorage call).
@@ -162,7 +162,7 @@ async fn test_native_nft_contract() -> Result<()> {
         Err(Error::Message("file_id cannot be empty".to_string()))
     );
 
-    // A second successful mint, owned by bob, exercises the `total_nfts`
+    // A second successful mint, owned by bob, exercises the `total_minted`
     // counter increment on a non-empty store and gives us an nft whose owner
     // is not the default signer for later checks.
     let second_mint = nft::mint(
@@ -175,7 +175,7 @@ async fn test_native_nft_contract() -> Result<()> {
     .await??;
     assert_eq!(second_mint.nft_id, nft_id_2);
     assert_eq!(second_mint.owner, bob_ref);
-    assert_eq!(nft::total_nfts(runtime).await?, 2);
+    assert_eq!(nft::total_minted(runtime).await?, 2);
 
     // transfer on a non-existent nft_id must fail before any owner check.
     let missing_nft = nft::transfer(runtime, &alice, "does_not_exist", &alice).await?;
@@ -215,8 +215,8 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_ne!(info_ab.owner, info_before.owner);
     assert_eq!(info_ab.agreement_id, file_id);
     assert_eq!(info_ab.description, description.to_string());
-    // total_nfts counts mints, not transfers: still 2 after the alice→bob move.
-    assert_eq!(nft::total_nfts(runtime).await?, 2);
+    // total_minted counts mints, not transfers: still 2 after the alice→bob move.
+    assert_eq!(nft::total_minted(runtime).await?, 2);
 
     // chained transfer: bob -> carol.
     let transfer_bc = nft::transfer(runtime, &bob, &minted.nft_id, &carol).await??;

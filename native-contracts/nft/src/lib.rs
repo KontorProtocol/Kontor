@@ -13,15 +13,13 @@ import!(
 const MAX_NFT_ID_LEN_BYTES: usize = 64;
 const MAX_DESCRIPTION_LEN_BYTES: usize = 2048;
 
-// `owner` is stored as the canonical `Holder` key string (same as
-// `Holder::to_string()`), then parsed back via `FromStr` at the API boundary.
-// This mirrors how `Map<Holder, _>` serializes its keys in other native
-// contracts and avoids storing a wit-bindgen resource (which doesn't support
-// `Storage`) or an enum variant (incompatible with the auto-derived `Retrieve`
-// for `HolderRef`).
-#[derive(Clone, Default, Storage)]
+// `Holder` is stored directly as a field; the macro-generated Storage
+// round-trips it via its canonical key string (same pattern as Map
+// keys). Default is dropped from the derive because Holder has no
+// sensible default.
+#[derive(Clone, Storage)]
 struct NftRecord {
-    pub owner: String,
+    pub owner: Holder,
     pub agreement_id: String,
     pub description: String,
 }
@@ -29,7 +27,7 @@ struct NftRecord {
 #[derive(Clone, Default, StorageRoot)]
 struct NftStorage {
     pub nfts: Map<String, NftRecord>,
-    pub total_nfts: u64,
+    pub total_minted: u64,
 }
 
 fn validate(model: &NftStorageWriteModel, nft_id: &str, description: &str) -> Result<(), Error> {
@@ -77,12 +75,12 @@ impl Guest for Nft {
         model.nfts().set(
             &nft_id,
             NftRecord {
-                owner: owner.to_string(),
+                owner: owner.clone(),
                 agreement_id: agreement_id.clone(),
                 description: description.clone(),
             },
         );
-        model.update_total_nfts(|total| total + 1);
+        model.update_total_minted(|total| total + 1);
 
         Ok(NftInfo {
             nft_id,
@@ -104,13 +102,12 @@ impl Guest for Nft {
             .ok_or(Error::Message("nft not found".to_string()))?;
 
         let signer: Holder = (&ctx.signer()).into();
-        let current_owner: Holder = nft.owner().parse().expect("stored owner must be valid");
-        if current_owner != signer {
+        if nft.owner() != signer {
             return Err(Error::Message("only owner can transfer".to_string()));
         }
 
         let new_owner: Holder = new_owner.try_into()?;
-        nft.set_owner(new_owner.to_string());
+        nft.set_owner(new_owner.clone());
         Ok(NftTransfer {
             nft_id,
             src: signer.as_ref(),
@@ -119,18 +116,15 @@ impl Guest for Nft {
     }
 
     fn get_info(ctx: &ViewContext, nft_id: String) -> Option<NftInfo> {
-        ctx.model().nfts().get(&nft_id).map(|nft| {
-            let owner: Holder = nft.owner().parse().expect("stored owner must be valid");
-            NftInfo {
-                nft_id: nft_id.clone(),
-                owner: owner.as_ref(),
-                agreement_id: nft.agreement_id(),
-                description: nft.description(),
-            }
+        ctx.model().nfts().get(&nft_id).map(|nft| NftInfo {
+            nft_id: nft_id.clone(),
+            owner: nft.owner().as_ref(),
+            agreement_id: nft.agreement_id(),
+            description: nft.description(),
         })
     }
 
-    fn total_nfts(ctx: &ViewContext) -> u64 {
-        ctx.model().total_nfts()
+    fn total_minted(ctx: &ViewContext) -> u64 {
+        ctx.model().total_minted()
     }
 }

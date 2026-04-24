@@ -6,8 +6,15 @@ pub const REGISTRY: &[u8] =
     include_bytes!("../../../../native-contracts/binaries/registry.wasm.br");
 pub const NFT: &[u8] = include_bytes!("../../../../native-contracts/binaries/nft.wasm.br");
 
-/// Number of native contracts published at genesis. Must match the number of
-/// `publish()` calls in `Runtime::publish_native_contracts`. Used by the test
-/// runtime to know how many native contract IDs to extract from the cache
-/// (IDs start at 1 and are assigned in publish order).
-pub const NATIVE_CONTRACT_COUNT: i64 = 5;
+/// Ordered list of native contracts published at genesis. Publish order
+/// determines contract IDs (1-indexed, assigned in iteration order), so
+/// treat additions as a protocol-level decision. The test runtime uses
+/// `NATIVE_CONTRACTS.len()` to know how many IDs to expect; adding to
+/// this list is the only change needed.
+pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
+    ("token", TOKEN),
+    ("filestorage", FILESTORAGE),
+    ("staking", STAKING),
+    ("registry", REGISTRY),
+    ("nft", NFT),
+];

@@ -49,5 +49,5 @@ world root {
   ) -> result<nft-transfer, error>;
 
   export get-info: async func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
-  export total-nfts: async func(ctx: borrow<view-context>) -> u64;
+  export total-minted: async func(ctx: borrow<view-context>) -> u64;
 }

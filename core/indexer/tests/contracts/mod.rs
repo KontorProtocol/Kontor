@@ -44,6 +44,7 @@ testlib::regtest_tests! {
     counter_contract,
     crypto_contract,
     fib_contract,
+    native_nft_contract,
     native_token_attach_contract,
     native_token_contract,
     ops_contract,
