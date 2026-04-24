@@ -52,12 +52,24 @@ fn example_1_registration_proof_from_fixed_seed() {
     println!("schnorr_sig:   {schnorr_sig}  (non-deterministic)");
     println!("bls_sig:       {bls_sig}");
 
-    // Sanity-check against the doc's published x_only_pubkey so the
-    // Taproot derivation stays pinned. bls_pubkey / bls_sig are
-    // deterministic from the seed too; see the doc.
+    // Pin every deterministic output against the doc so any drift in
+    // BIP-86 Taproot derivation, EIP-2333 BLS derivation, or BLS
+    // signing fails here rather than silently invalidating Example 1.
+    // schnorr_sig is excluded because BIP-340 uses random aux_rand.
     assert_eq!(
         x_only_pubkey,
         "a4b70d13d6d48919c40a0c0ddac146b18ba1dde08bd1af2224060040c6189282"
+    );
+    assert_eq!(
+        bls_pubkey,
+        "a56dd059afccd191121b9bb8ec2ff6b9b18e302064e18faca45b6e1b38eb7c7f\
+         37130d01ead92037459663c4ff9be3d8198223658e0a0196af2fe68de58cbce9\
+         e0299c76e6ec5223791344f3bbda528b7b81dea5fd55b204027d54fa242fdcec"
+    );
+    assert_eq!(
+        bls_sig,
+        "b118e8d7c7b5e83815c82b139365926e092ff383bdc92c39426af12c99485dfb\
+         da57e54861454a1bfc3fda1168db2134"
     );
 }
 
