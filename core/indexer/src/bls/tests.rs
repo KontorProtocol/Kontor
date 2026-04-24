@@ -21,6 +21,46 @@ async fn new_test_runtime() -> (Runtime, TempDir) {
     (runtime, tmp)
 }
 
+/// Generate Example 1 from BLS_key_derivation_and_registration.md. Keeps
+/// the test vectors in sync with the derivation code: run with
+/// `-- --nocapture` to emit the values to paste back into the doc.
+/// `bls_pubkey` and `bls_sig` are deterministic; `schnorr_sig` is not
+/// (BIP-340 uses random aux_rand) so the doc treats it as illustrative.
+#[test]
+fn example_1_registration_proof_from_fixed_seed() {
+    let seed_hex = "000102030405060708090a0b0c0d0e0f\
+                    101112131415161718191a1b1c1d1e1f\
+                    202122232425262728292a2b2c2d2e2f\
+                    303132333435363738393a3b3c3d3e3f";
+    let seed = hex::decode(seed_hex).expect("valid hex seed");
+
+    // Regtest/testnet paths (coin_type=1) — Example 1's network.
+    let keypair = crate::reg_tester::derive_taproot_keypair_from_seed(&seed, "m/86'/1'/0'/0/0")
+        .expect("taproot derivation");
+    let bls_sk = derivation::derive_bls_secret_key_eip2333(&seed, &[12381, 1, 0, 0])
+        .expect("bls derivation");
+
+    let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).expect("registration proof");
+    proof.verify().expect("proof verifies");
+
+    let x_only_pubkey = hex::encode(proof.x_only_pubkey);
+    let bls_pubkey = hex::encode(proof.bls_pubkey);
+    let schnorr_sig = hex::encode(proof.schnorr_sig);
+    let bls_sig = hex::encode(proof.bls_sig);
+    println!("x_only_pubkey: {x_only_pubkey}");
+    println!("bls_pubkey:    {bls_pubkey}");
+    println!("schnorr_sig:   {schnorr_sig}  (non-deterministic)");
+    println!("bls_sig:       {bls_sig}");
+
+    // Sanity-check against the doc's published x_only_pubkey so the
+    // Taproot derivation stays pinned. bls_pubkey / bls_sig are
+    // deterministic from the seed too; see the doc.
+    assert_eq!(
+        x_only_pubkey,
+        "a4b70d13d6d48919c40a0c0ddac146b18ba1dde08bd1af2224060040c6189282"
+    );
+}
+
 #[test]
 fn sign_and_verify_roundtrip() {
     let secp = Secp256k1::new();

@@ -117,6 +117,8 @@ The deterministic derivation outputs below (`x_only_pubkey`, `bls_pubkey`) shoul
 Outputs:
 
 - `x_only_pubkey` (hex, 32 bytes): `a4b70d13d6d48919c40a0c0ddac146b18ba1dde08bd1af2224060040c6189282`
-- `bls_pubkey` (hex, 96 bytes): TODO — regenerate after first test run with EIP-2333 derivation
-- `schnorr_sig` (hex, 64 bytes) (example): TODO — regenerate (depends on new bls_pubkey)
-- `bls_sig` (hex, 48 bytes) (example): TODO — regenerate (depends on new bls_pubkey)
+- `bls_pubkey` (hex, 96 bytes): `a56dd059afccd191121b9bb8ec2ff6b9b18e302064e18faca45b6e1b38eb7c7f37130d01ead92037459663c4ff9be3d8198223658e0a0196af2fe68de58cbce9e0299c76e6ec5223791344f3bbda528b7b81dea5fd55b204027d54fa242fdcec`
+- `bls_sig` (hex, 48 bytes): `b118e8d7c7b5e83815c82b139365926e092ff383bdc92c39426af12c99485dfbda57e54861454a1bfc3fda1168db2134`
+- `schnorr_sig` (hex, 64 bytes, illustrative — BIP-340 uses random `aux_rand`, so signatures produced from the same seed will differ across runs; any valid signature verifies): `df80f2691ccc11243d4fb3ba8371c2217d590adb7e64911c6f84de33be2b6a14e83bcd49cbb204e5624d2d35598ad508f1d78774d2987aa113918d45ed46e03d`
+
+`x_only_pubkey`, `bls_pubkey`, and `bls_sig` are deterministic from the seed and paths; regenerate whenever the derivation code changes (the test `bls::tests::example_1_registration_proof_from_fixed_seed` pins `x_only_pubkey` so it'll fail loudly on any drift).
