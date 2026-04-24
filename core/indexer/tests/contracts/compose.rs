@@ -31,20 +31,21 @@ use compose_tests::compose_helpers::{
     test_build_tap_script_and_script_address_empty_data_errs,
     test_build_tap_script_and_script_address_multi_push_and_structure,
     test_build_tap_script_chunk_boundaries_push_count,
-    test_calculate_op_return_fee_per_participant_deterministic,
-    test_calculate_op_return_fee_per_participant_exact_division,
-    test_calculate_op_return_fee_per_participant_fee_rate_scaling,
-    test_calculate_op_return_fee_per_participant_high_fee_rate,
-    test_calculate_op_return_fee_per_participant_large_participant_count,
-    test_calculate_op_return_fee_per_participant_many_participants,
-    test_calculate_op_return_fee_per_participant_minimum_fee_rate,
-    test_calculate_op_return_fee_per_participant_no_op_return,
-    test_calculate_op_return_fee_per_participant_round_up_ensures_coverage,
-    test_calculate_op_return_fee_per_participant_single_participant,
-    test_calculate_op_return_fee_per_participant_three_participants_rounds_up,
-    test_calculate_op_return_fee_per_participant_two_participants,
-    test_calculate_op_return_fee_per_participant_vsize_is_89_bytes,
-    test_calculate_op_return_fee_per_participant_zero_participants,
+    test_calculate_op_return_fee_for_participant_deterministic,
+    test_calculate_op_return_fee_for_participant_exact_division,
+    test_calculate_op_return_fee_for_participant_fee_rate_scaling,
+    test_calculate_op_return_fee_for_participant_high_fee_rate,
+    test_calculate_op_return_fee_for_participant_large_participant_count,
+    test_calculate_op_return_fee_for_participant_many_participants_exact_sum,
+    test_calculate_op_return_fee_for_participant_minimum_fee_rate,
+    test_calculate_op_return_fee_for_participant_no_op_return,
+    test_calculate_op_return_fee_for_participant_seven_participants_exact_coverage,
+    test_calculate_op_return_fee_for_participant_single_participant,
+    test_calculate_op_return_fee_for_participant_small_payload_scales_down,
+    test_calculate_op_return_fee_for_participant_three_participants_split,
+    test_calculate_op_return_fee_for_participant_two_participants_exact,
+    test_calculate_op_return_fee_for_participant_vsize_matches_serialized_output,
+    test_calculate_op_return_fee_for_participant_zero_participants,
     test_calculate_reveal_fee_delta_chained_adds_output_fee,
     test_calculate_reveal_fee_delta_deterministic,
     test_calculate_reveal_fee_delta_envelope_does_not_affect_fee,
@@ -499,21 +500,22 @@ async fn test_compose_regtest() -> Result<()> {
     test_calculate_reveal_fee_delta_witness_structure();
     test_calculate_reveal_fee_delta_with_real_tap_script(&mut reg_tester.clone()).await?;
 
-    info!("calculate_op_return_fee_per_participant");
-    test_calculate_op_return_fee_per_participant_no_op_return();
-    test_calculate_op_return_fee_per_participant_zero_participants();
-    test_calculate_op_return_fee_per_participant_single_participant();
-    test_calculate_op_return_fee_per_participant_two_participants();
-    test_calculate_op_return_fee_per_participant_three_participants_rounds_up();
-    test_calculate_op_return_fee_per_participant_many_participants();
-    test_calculate_op_return_fee_per_participant_fee_rate_scaling();
-    test_calculate_op_return_fee_per_participant_deterministic();
-    test_calculate_op_return_fee_per_participant_round_up_ensures_coverage();
-    test_calculate_op_return_fee_per_participant_minimum_fee_rate();
-    test_calculate_op_return_fee_per_participant_high_fee_rate();
-    test_calculate_op_return_fee_per_participant_vsize_is_89_bytes();
-    test_calculate_op_return_fee_per_participant_large_participant_count();
-    test_calculate_op_return_fee_per_participant_exact_division();
+    info!("calculate_op_return_fee_for_participant");
+    test_calculate_op_return_fee_for_participant_no_op_return();
+    test_calculate_op_return_fee_for_participant_zero_participants();
+    test_calculate_op_return_fee_for_participant_single_participant();
+    test_calculate_op_return_fee_for_participant_two_participants_exact();
+    test_calculate_op_return_fee_for_participant_three_participants_split();
+    test_calculate_op_return_fee_for_participant_many_participants_exact_sum();
+    test_calculate_op_return_fee_for_participant_fee_rate_scaling();
+    test_calculate_op_return_fee_for_participant_deterministic();
+    test_calculate_op_return_fee_for_participant_seven_participants_exact_coverage();
+    test_calculate_op_return_fee_for_participant_minimum_fee_rate();
+    test_calculate_op_return_fee_for_participant_high_fee_rate();
+    test_calculate_op_return_fee_for_participant_vsize_matches_serialized_output();
+    test_calculate_op_return_fee_for_participant_small_payload_scales_down();
+    test_calculate_op_return_fee_for_participant_large_participant_count();
+    test_calculate_op_return_fee_for_participant_exact_division();
 
     info!("legacy_taproot_envelope");
     test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;

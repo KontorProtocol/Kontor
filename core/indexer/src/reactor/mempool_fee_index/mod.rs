@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use bitcoin::Txid;
 use indexer_types::Fees;
+use tokio::sync::watch;
 
 use crate::bitcoin_client::types::MempoolEntry;
 
@@ -34,25 +35,31 @@ pub struct MempoolFeeIndex {
     /// `optimize_median_fee` floors at this value for coherence with
     /// Bitcoin Core. Updated together with `entries` via `replace`.
     mempool_min_fee_sat_per_vb: u64,
-    /// Set by every mutating call; cleared by `take_dirty()`. Gates the
-    /// reactor's periodic publish so we skip the recompute when nothing
-    /// has changed.
+    /// Set by every mutating call; cleared by `recompute()`. Gates the
+    /// reactor's periodic publish so we skip work when nothing has
+    /// changed.
     dirty: bool,
     /// Most recent fee tier snapshot — written by `recompute()`, read by
-    /// consensus (`compute_fee_threshold`) and the API. Reads accept
-    /// up-to-tick-interval staleness; the next tick refreshes after any
-    /// mutation. Initial / post-`replace` value is `Fees::floor(min_fee)`
-    /// so readers never see a value below the current floor.
+    /// consensus (`compute_fee_threshold`) and the API. Initial /
+    /// post-`replace` value is `Fees::floor(min_fee)` so readers never
+    /// see a value below the current floor.
     fees: Fees,
+    /// Optional sink for the fee snapshot. When set, every `recompute()`
+    /// publishes the new value here in addition to caching it locally.
+    /// Owning the sender on the index means the API watch-channel
+    /// always sees the same projection consensus does, with no need
+    /// for the caller to remember to publish after each compute.
+    fee_tx: Option<watch::Sender<Fees>>,
 }
 
 impl MempoolFeeIndex {
-    pub fn new() -> Self {
+    pub fn new(fee_tx: Option<watch::Sender<Fees>>) -> Self {
         Self {
             entries: HashMap::new(),
             mempool_min_fee_sat_per_vb: 1,
             dirty: false,
             fees: Fees::floor(1),
+            fee_tx,
         }
     }
 
@@ -118,10 +125,10 @@ impl MempoolFeeIndex {
         self.fees.hour
     }
 
-    /// Recompute all three fee tiers from the current `entries`, store
-    /// them in `fees`, and return the new snapshot. The only recompute
-    /// path — called from the reactor's periodic tick after
-    /// `take_dirty()` reports a mutation since the last publish.
+    /// Recompute all three fee tiers from the current `entries`, cache
+    /// them in `fees`, publish via `fee_tx` if set, and return the new
+    /// snapshot. Always clears `dirty` — the next periodic tick will
+    /// skip until a new mutation arrives.
     pub fn recompute(&mut self) -> Fees {
         let blocks = block_projection::project_blocks(&self.entries, 4);
         let min = self.mempool_min_fee_sat_per_vb;
@@ -133,6 +140,12 @@ impl MempoolFeeIndex {
             half_hour,
             hour,
         };
+        self.dirty = false;
+        if let Some(tx) = &self.fee_tx {
+            // Errors only when all receivers are dropped — fine, the
+            // reactor keeps running.
+            let _ = tx.send(self.fees);
+        }
         self.fees
     }
 
@@ -141,12 +154,6 @@ impl MempoolFeeIndex {
     #[cfg(test)]
     fn project_blocks(&self, n_blocks: usize) -> Vec<ProjectedBlock> {
         block_projection::project_blocks(&self.entries, n_blocks)
-    }
-}
-
-impl Default for MempoolFeeIndex {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -265,14 +272,14 @@ mod tests {
 
     #[test]
     fn empty_mempool_returns_min_fee() {
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         idx.replace(HashMap::new(), 5);
         assert_eq!(idx.fastest_fee(), 5);
     }
 
     #[test]
     fn half_empty_block_returns_min_fee() {
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         idx.replace(HashMap::new(), 3);
         // 100 txs of ~1000 vB each = 100k vB total (far below HALF_BLOCK).
         for n in 0..100u8 {
@@ -283,7 +290,7 @@ mod tests {
 
     #[test]
     fn full_block_returns_median() {
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         // 2000 txs × 1000 vB = 2M vB → fills block 0 exactly with 1000 of them.
         // Use increasing fee rates so median is well-defined.
         for n in 0..200u8 {
@@ -303,7 +310,7 @@ mod tests {
     fn cpfp_parent_and_child_included_together() {
         // Parent: 1 sat/vB, vsize 500, no deps
         // Child: 200 sat/vB individual, package rate 75.6 (60500 / 800)
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let parent_id = txid(1);
         let child_id = txid(2);
 
@@ -331,7 +338,7 @@ mod tests {
         // GP: 1 sat/vB, 400 vB, no deps
         // P: 1 sat/vB, 400 vB, depends on GP
         // C: package rate high (spans all three), 200 vB, depends on P
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let gp = txid(1);
         let p = txid(2);
         let c = txid(3);
@@ -372,7 +379,7 @@ mod tests {
 
     #[test]
     fn insert_and_remove_roundtrip() {
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let id = txid(42);
         idx.insert(id, entry(1000, 100, vec![]));
         assert_eq!(idx.len(), 1);
@@ -385,7 +392,7 @@ mod tests {
         // The reactor's periodic publish gates on `take_dirty()` —
         // every mutation must mark the index dirty so the next tick
         // picks up the change.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         assert!(!idx.take_dirty(), "fresh index is clean");
         assert!(!idx.take_dirty(), "take_dirty clears the flag");
 
@@ -412,7 +419,7 @@ mod tests {
 
     #[test]
     fn replace_wipes_previous_state() {
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         idx.insert(txid(1), entry(100, 100, vec![]));
         idx.insert(txid(2), entry(200, 100, vec![]));
         assert_eq!(idx.len(), 2);
@@ -436,7 +443,7 @@ mod tests {
         // contribute the *package* rate to the median, otherwise the
         // parent dominates the block's vsize and median_fee_rate()
         // returns 1 sat/vB — wrong.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let parent_id = txid(1);
         let child_id = txid(2);
 
@@ -480,7 +487,7 @@ mod tests {
         //
         // A (300k vB) + B (800k vB) = 1.1M vB > 1M block capacity. A should
         // be in block 0 alone (300k vB), B should spill to block 1.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let a_p = txid(1);
         let a_c = txid(2);
         let b_p = txid(3);
@@ -528,7 +535,7 @@ mod tests {
         // Block 0 fills to ~700k vB (between 500k and 950k) with median
         // around 50 sat/vB. With no next block, the scaling branch should
         // multiply by (700k - 500k) / 500k = 0.4, giving ~20 sat/vB.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         // 70 entries × 10k vB at 50 sat/vB.
         for n in 0..70u8 {
             idx.insert(txid(n), entry(50 * 10_000, 10_000, vec![]));
@@ -561,7 +568,7 @@ mod tests {
         //
         // The previous algorithm (no descendant rescoring) would
         // include B at its stale package rate of 10 sat/vB.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
         let p = txid(1);
         let a = txid(2);
         let b = txid(3);
@@ -606,7 +613,7 @@ mod tests {
         // following so the scaling branch doesn't fire on block 1).
         // Block 0 ~200 sat/vB, block 1 ~60 sat/vB, block 2 ~30 sat/vB.
         // halfHourFee = (block1.median + fastest_fee) / 2 ≈ (60 + 200) / 2.
-        let mut idx = MempoolFeeIndex::new();
+        let mut idx = MempoolFeeIndex::new(None);
 
         // Helper to make a unique txid from two bytes, avoiding the
         // 1-byte txid() collisions used elsewhere.

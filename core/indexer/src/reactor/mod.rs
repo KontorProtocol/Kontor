@@ -69,11 +69,6 @@ pub struct Reactor<E: Executor> {
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
-    /// Optional sink for the latest fee tier snapshot. Published from
-    /// the reactor's periodic tick when the index is dirty so the API
-    /// (and other read-side consumers) can serve fee tiers without
-    /// touching the mempool index directly.
-    fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
 
     last_height: u64,
     last_hash: Option<BlockHash>,
@@ -93,7 +88,6 @@ impl<E: Executor> Reactor<E> {
         consensus: consensus_state::ConsensusState,
         last_height: u64,
         last_hash: Option<BlockHash>,
-        fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
     ) -> Self {
         let mut runtime = runtime;
         runtime.node_label = consensus
@@ -112,7 +106,6 @@ impl<E: Executor> Reactor<E> {
             ready_tx,
             event_tx,
             consensus,
-            fee_tx,
         }
     }
 
@@ -314,6 +307,11 @@ impl<E: Executor> Reactor<E> {
                             self.consensus
                                 .mempool_fee_index
                                 .replace(fees, mempool_min_fee_sat_per_vb);
+                            // `replace` reset cached fees to the new
+                            // floor; recompute immediately so consensus
+                            // doesn't read a degraded threshold for the
+                            // 0-2s window before the next tick.
+                            self.consensus.mempool_fee_index.recompute();
                             info!(
                                 "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
                                 kontor_count, fee_count, mempool_min_fee_sat_per_vb
@@ -423,13 +421,8 @@ impl<E: Executor> Reactor<E> {
                 }
                 _ = fee_publish_ticker.tick() => {
                     if self.consensus.mempool_fee_index.take_dirty() {
-                        let fees = self.consensus.mempool_fee_index.recompute();
-                        if let Some(tx) = self.fee_tx.as_ref() {
-                            // watch::Sender::send only errors when all
-                            // receivers have dropped — fine for the
-                            // reactor to keep running.
-                            let _ = tx.send(fees);
-                        }
+                        // recompute() publishes to fee_tx internally.
+                        self.consensus.mempool_fee_index.recompute();
                     }
                 }
             }
@@ -667,7 +660,10 @@ pub fn run(
                 // The listener guarantees Sync as the first event after
                 // its startup snapshot — anything else here means a bug.
                 let mut mempool_rx = mempool_rx;
-                let mut fee_index = mempool_fee_index::MempoolFeeIndex::new();
+                // The index owns the fee watch sender — every
+                // `recompute()` publishes automatically, so the call
+                // sites in the reactor don't have to remember to.
+                let mut fee_index = mempool_fee_index::MempoolFeeIndex::new(fee_tx);
                 info!("Waiting for initial mempool sync before starting consensus");
                 // Periodic log so operators can tell the wait isn't a deadlock
                 // when bitcoind is slow to reach handshake.
@@ -706,19 +702,15 @@ pub fn run(
                     }
                 };
 
-                // Compute and publish the first projection from the
-                // freshly-synced index, *before* anything signals
-                // readiness. Establishes the invariant: by the time
-                // `available = true`, the watch channel carries a
-                // projection derived from real bitcoind data — never
-                // the `Fees::floor(1)` placeholder. `take_dirty()`
-                // clears the flag so the first 2s tick doesn't
-                // immediately re-do the same compute.
-                let initial_fees = fee_index.recompute();
-                let _ = fee_index.take_dirty();
-                if let Some(tx) = fee_tx.as_ref() {
-                    let _ = tx.send(initial_fees);
-                }
+                // Compute the first projection from the freshly-synced
+                // index, *before* anything signals readiness.
+                // `recompute()` populates the cache, clears the dirty
+                // flag, and publishes via the index's owned watch
+                // sender — establishing the invariant that by the time
+                // `available = true`, the watch channel carries real
+                // bitcoind-derived data (never the `Fees::floor(1)`
+                // placeholder).
+                fee_index.recompute();
 
                 let mut consensus = start_consensus(
                     engine_config,
@@ -751,7 +743,6 @@ pub fn run(
                     consensus,
                     last_height,
                     last_hash,
-                    fee_tx,
                 );
 
                 reactor.run().await

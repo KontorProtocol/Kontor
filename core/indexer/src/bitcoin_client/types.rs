@@ -133,15 +133,36 @@ pub struct TestMempoolAcceptResultFees {
     pub effective_feerate_btc_per_kvb: Option<f64>,
 }
 
+/// Convert a `(fee_sat, vsize)` pair to sat/vB, rounding to the nearest
+/// integer instead of truncating. Used wherever we report a fee rate
+/// to consumers that compare it to integer thresholds (consensus
+/// `validate_transaction`, the API). Truncation would push a tx at
+/// rate 0.99 sat/vB to 0, causing a 1-sat/vB threshold check to
+/// reject it spuriously.
+pub fn fee_rate_sat_per_vb(fee_sat: u64, vsize: u64) -> u64 {
+    if vsize == 0 {
+        return 0;
+    }
+    (fee_sat as f64 / vsize as f64).round() as u64
+}
+
 impl TestMempoolAcceptResultFees {
     /// Package fee rate in sat/vB. Falls back to `base / vsize` if the
     /// node didn't return `effective-feerate`.
+    ///
+    /// Uses `round` rather than truncating because `0.00001` (= 1 sat/vB
+    /// in BTC/kvB units) is not exactly representable in f64 — its
+    /// closest representation is `0.0000099999999999999991`, which
+    /// truncates to `0` instead of `1`. With truncation, every tx at
+    /// integer-sat/vB rates would round down by one, breaking the
+    /// threshold check (`tx_fee_rate < threshold` for a 1-sat/vB tx
+    /// when threshold is 1).
     pub fn effective_fee_rate_sat_per_vb(&self, vsize: u64) -> u64 {
         if let Some(btc_per_kvb) = self.effective_feerate_btc_per_kvb {
             // BTC/kvB → sat/vB: multiply by 100_000_000 (sat/BTC) / 1000 (vB/kvB) = 100_000
-            (btc_per_kvb * 100_000.0) as u64
+            (btc_per_kvb * 100_000.0).round() as u64
         } else {
-            self.base.to_sat().checked_div(vsize).unwrap_or(0)
+            fee_rate_sat_per_vb(self.base.to_sat(), vsize)
         }
     }
 }

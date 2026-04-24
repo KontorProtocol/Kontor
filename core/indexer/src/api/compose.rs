@@ -288,8 +288,16 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     let mut participants: Vec<RevealParticipantInputs> =
         Vec::with_capacity(params.instructions.len());
 
+    let n = params.instructions.len();
+
     // Single loop: build tap scripts, calculate reveal fees, build commit tx, build reveal participants
     for (i, instruction) in params.instructions.iter().enumerate() {
+        // This participant's share of the empty-tx header overhead, used
+        // for both the commit and reveal txs. compose_reveal must use the
+        // same per-index split or the script outputs (set in commit) will
+        // not cover the actual reveal fee.
+        let base_header_fee = calculate_base_header_fee_for_participant(i, n, params.fee_rate)?;
+
         // 1. Build tap script for this participant
         let (tap_script, script_spendable_address, control_block) =
             build_tap_script_and_script_address(
@@ -297,7 +305,8 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
                 instruction.instruction.clone(),
             )?;
 
-        // 2. Calculate reveal fee delta using helper
+        // 2. Calculate reveal fee delta using helper, plus this
+        //    participant's share of the reveal tx's base header overhead.
         let has_chained = instruction.chained_instruction.is_some();
         let reveal_fee = calculate_reveal_fee_delta(
             &mut dummy_reveal_tx,
@@ -306,7 +315,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             has_chained,
             params.fee_rate,
             params.envelope,
-        )?;
+        )? + base_header_fee;
 
         // 3. Build commit transaction outputs for this participant
 
@@ -333,6 +342,7 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
             script_spend_output_value,
             params.fee_rate,
             params.envelope,
+            base_header_fee,
         )
         .map_err(|e| anyhow!("participant {}: {}", i, e))?;
 
@@ -429,12 +439,8 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         ));
     }
 
-    // Calculate OP_RETURN fee to split evenly among participants
-    let op_return_fee_per_participant = calculate_op_return_fee_per_participant(
-        params.op_return_data.is_some(),
-        params.participants.len(),
-        params.fee_rate,
-    )?;
+    let n = params.participants.len();
+    let op_return_data: Option<&[u8]> = params.op_return_data.as_deref();
 
     // Dummy tx for delta-based reveal fee calculation (OP_RETURN fee handled separately)
     let mut dummy_reveal_tx = Transaction {
@@ -457,7 +463,14 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
     let mut pending_change_outputs: Vec<TxOut> = Vec::with_capacity(params.participants.len());
 
     // Single loop: calculate fees, add inputs, add chained outputs, gather change
-    for p in params.participants.iter() {
+    for (i, p) in params.participants.iter().enumerate() {
+        // Per-participant shares of OP_RETURN and base header overhead.
+        // Must match the splits used in compose_commit so that script
+        // outputs cover the actual reveal fee exactly.
+        let op_return_fee =
+            calculate_op_return_fee_for_participant(op_return_data, i, n, params.fee_rate)?;
+        let base_header_fee = calculate_base_header_fee_for_participant(i, n, params.fee_rate)?;
+
         // Calculate reveal fee delta using helper
         let has_chained = p.chained_instruction.is_some();
         let participant_delta_fee = calculate_reveal_fee_delta(
@@ -469,8 +482,9 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
             params.envelope,
         )?;
 
-        // Total fee includes participant's share of OP_RETURN overhead
-        let reveal_fee = participant_delta_fee + op_return_fee_per_participant;
+        // Total fee includes participant's share of OP_RETURN and base
+        // header overhead.
+        let reveal_fee = participant_delta_fee + op_return_fee + base_header_fee;
 
         // Add input
         psbt.unsigned_tx.input.push(TxIn {
@@ -617,29 +631,98 @@ pub fn build_tap_script_and_script_address(
 // Fee Estimation
 // ============================================================================
 
-/// Calculate the OP_RETURN fee to be split evenly among participants.
+/// Distribute `total` evenly across `num_participants`, returning the
+/// share for participant `participant_index`. The first `total % N`
+/// participants pay `base + 1`; the rest pay `base`, where `base =
+/// total / N`. Summing across all indices yields `total` exactly — no
+/// over-collection (unlike a naive `div_ceil`).
+fn distribute_fee(total: u64, participant_index: usize, num_participants: usize) -> u64 {
+    if num_participants == 0 {
+        return 0;
+    }
+    let n = num_participants as u64;
+    let base = total / n;
+    let remainder = total % n;
+    base + if (participant_index as u64) < remainder {
+        1
+    } else {
+        0
+    }
+}
+
+/// Calculate this participant's share of the OP_RETURN output fee.
 ///
-/// Returns the per-participant share of the OP_RETURN output fee (rounded up).
-/// Returns 0 if no OP_RETURN data is present or no participants.
-pub fn calculate_op_return_fee_per_participant(
-    has_op_return: bool,
+/// Returns 0 if no OP_RETURN data is present or no participants. The
+/// total fee is derived from the actual serialized size of the
+/// OP_RETURN output (not the policy maximum), so smaller payloads
+/// pay proportionally less. Split using `distribute_fee` so the sum
+/// across all participants exactly covers the output — no stray sats.
+pub fn calculate_op_return_fee_for_participant(
+    op_return_data: Option<&[u8]>,
+    participant_index: usize,
     num_participants: usize,
     fee_rate: FeeRate,
 ) -> Result<u64> {
-    if !has_op_return || num_participants == 0 {
+    let Some(data) = op_return_data else {
+        return Ok(0);
+    };
+    if num_participants == 0 {
         return Ok(0);
     }
-
-    // OP_RETURN output: 8 (value) + 1 (script len varint) + 1 (OP_RETURN) + 1 (push len) + up to 80 bytes
-    // Max size with 80-byte payload = 91 bytes
-    let op_return_vsize = 9 + MAX_OP_RETURN_BYTES as u64;
+    let mut script = ScriptBuf::new();
+    script.push_opcode(OP_RETURN);
+    script.push_slice(PushBytesBuf::try_from(data.to_vec())?);
+    let txout = TxOut {
+        value: Amount::ZERO,
+        script_pubkey: script,
+    };
+    // OP_RETURN is a non-witness output; its vsize contribution equals
+    // its serialized length.
+    let op_return_vsize = encode::serialize(&txout).len() as u64;
     let total_fee = fee_rate
         .fee_vb(op_return_vsize)
         .ok_or(anyhow!("fee calculation overflow"))?
         .to_sat();
+    Ok(distribute_fee(
+        total_fee,
+        participant_index,
+        num_participants,
+    ))
+}
 
-    // Split evenly among participants (round up to ensure full coverage)
-    Ok(total_fee.div_ceil(num_participants as u64))
+/// Calculate this participant's share of the empty-tx header overhead.
+///
+/// Per-participant delta-based fee accounting (`calculate_reveal_fee_delta`,
+/// `estimate_participant_commit_fees`) only charges each participant for
+/// the marginal vbytes they add. The base tx header (version + counts +
+/// locktime — about 11 vbytes) is never billed to anyone, so the signed
+/// tx falls below the requested fee rate. Split that overhead using
+/// `distribute_fee` so every participant pays the same effective rate
+/// and the total exactly covers the header — no over-collection.
+pub fn calculate_base_header_fee_for_participant(
+    participant_index: usize,
+    num_participants: usize,
+    fee_rate: FeeRate,
+) -> Result<u64> {
+    if num_participants == 0 {
+        return Ok(0);
+    }
+    let empty_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    };
+    let header_vsize = empty_tx.vsize() as u64;
+    let total_fee = fee_rate
+        .fee_vb(header_vsize)
+        .ok_or(anyhow!("fee calculation overflow"))?
+        .to_sat();
+    Ok(distribute_fee(
+        total_fee,
+        participant_index,
+        num_participants,
+    ))
 }
 
 /// Calculate reveal fee delta for a single participant.
@@ -716,6 +799,7 @@ pub fn select_utxos_for_commit(
     script_spend_output_value: u64,
     fee_rate: FeeRate,
     envelope: u64,
+    base_header_fee_per_participant: u64,
 ) -> Result<(Vec<(OutPoint, TxOut)>, u64)> {
     if utxos.is_empty() {
         return Err(anyhow!("no UTXOs provided"));
@@ -729,9 +813,12 @@ pub fn select_utxos_for_commit(
         selected_sum += txout.value.to_sat();
         selected.push((outpoint, txout));
 
-        // Estimate fees with and without change output
+        // Estimate fees with and without change output, then add this
+        // participant's share of the empty-tx header overhead.
         let (fee_with_change, fee_no_change) =
             estimate_participant_commit_fees(current_tx, &selected, fee_rate)?;
+        let fee_with_change = fee_with_change + base_header_fee_per_participant;
+        let fee_no_change = fee_no_change + base_header_fee_per_participant;
 
         // Check if we can afford script output + fee + dust-threshold change
         let required_with_change = script_spend_output_value
@@ -1077,5 +1164,123 @@ mod tests {
 
         assert!(current_size > 5_000_000);
         Ok(())
+    }
+
+    /// Compose at the minimum 1 sat/vB rate, sign for real, and verify
+    /// the actual on-chain fee rate meets the requested rate. Regression
+    /// guard for the missing base-header undercharge that previously
+    /// produced ~0.92 sat/vB outputs.
+    #[test]
+    fn compose_meets_min_fee_rate_when_signed() {
+        use crate::api::compose::{ComposeInputs, InstructionInputs, compose};
+        use bitcoin::key::TapTweak;
+        use bitcoin::sighash::{Prevouts, SighashCache};
+        use bitcoin::taproot::Signature as TaprootSig;
+        use bitcoin::{
+            Address, Amount, FeeRate, KnownHrp, OutPoint, TapLeafHash, TapSighashType, TxOut, Txid,
+            Witness, hashes::Hash, secp256k1::Message,
+        };
+
+        let secp = Secp256k1::new();
+        let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+        let internal_key = keypair.x_only_public_key().0;
+        let address = Address::p2tr(&secp, internal_key, None, KnownHrp::Regtest);
+
+        let funding_outpoint = OutPoint::new(Txid::from_byte_array([0x42; 32]), 0);
+        let funding_value: u64 = 1_000_000;
+        let funding_txout = TxOut {
+            value: Amount::from_sat(funding_value),
+            script_pubkey: address.script_pubkey(),
+        };
+
+        let params = ComposeInputs::builder()
+            .instructions(vec![InstructionInputs {
+                address: address.clone(),
+                x_only_public_key: internal_key,
+                funding_utxos: vec![(funding_outpoint, funding_txout.clone())],
+                instruction: b"hello".to_vec(),
+                chained_instruction: None,
+            }])
+            .fee_rate(FeeRate::from_sat_per_vb(1).unwrap())
+            .envelope(546)
+            .build();
+
+        let outputs = compose(params).expect("compose");
+
+        let mut commit_tx = outputs.commit_transaction.clone();
+        let mut sighasher = SighashCache::new(commit_tx.clone());
+        let sighash = sighasher
+            .taproot_key_spend_signature_hash(
+                0,
+                &Prevouts::All(std::slice::from_ref(&funding_txout)),
+                TapSighashType::Default,
+            )
+            .expect("sighash");
+        let tweaked = keypair.tap_tweak(&secp, None);
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let sig = secp.sign_schnorr(&msg, &tweaked.to_keypair());
+        let sig = TaprootSig {
+            signature: sig,
+            sighash_type: TapSighashType::Default,
+        };
+        commit_tx.input[0].witness.push(sig.to_vec());
+
+        let commit_out_total: u64 = commit_tx.output.iter().map(|o| o.value.to_sat()).sum();
+        let commit_fee = funding_value - commit_out_total;
+        let commit_vsize = commit_tx.vsize() as u64;
+        assert!(
+            commit_fee >= commit_vsize,
+            "commit underpays: fee={} vsize={} ({:.4} sat/vB)",
+            commit_fee,
+            commit_vsize,
+            commit_fee as f64 / commit_vsize as f64
+        );
+
+        let tap_script = outputs.per_participant[0]
+            .commit_tap_leaf_script
+            .script
+            .clone();
+        let taproot_spend_info = TaprootBuilder::new()
+            .add_leaf(0, tap_script.clone())
+            .expect("add leaf")
+            .finalize(&secp, internal_key)
+            .expect("finalize");
+        let control_block = taproot_spend_info
+            .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+            .expect("control block");
+
+        let mut reveal_tx = outputs.reveal_transaction.clone();
+        let reveal_prevout = commit_tx.output[0].clone();
+        let mut sighasher = SighashCache::new(reveal_tx.clone());
+        let sighash = sighasher
+            .taproot_script_spend_signature_hash(
+                0,
+                &Prevouts::All(std::slice::from_ref(&reveal_prevout)),
+                TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
+                TapSighashType::Default,
+            )
+            .expect("sighash");
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let sig = secp.sign_schnorr(&msg, &keypair);
+        let sig = TaprootSig {
+            signature: sig,
+            sighash_type: TapSighashType::Default,
+        };
+        let mut witness = Witness::new();
+        witness.push(sig.to_vec());
+        witness.push(tap_script.as_bytes());
+        witness.push(control_block.serialize());
+        reveal_tx.input[0].witness = witness;
+
+        let reveal_out_total: u64 = reveal_tx.output.iter().map(|o| o.value.to_sat()).sum();
+        let reveal_fee = reveal_prevout.value.to_sat() - reveal_out_total;
+        let reveal_vsize = reveal_tx.vsize() as u64;
+        assert!(
+            reveal_fee >= reveal_vsize,
+            "reveal underpays: fee={} vsize={} ({:.4} sat/vB)",
+            reveal_fee,
+            reveal_vsize,
+            reveal_fee as f64 / reveal_vsize as f64
+        );
     }
 }

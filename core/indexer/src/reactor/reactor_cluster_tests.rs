@@ -318,7 +318,7 @@ impl ReactorCluster {
                 engine_output.channels,
                 engine_output._handle,
                 validator_index,
-                crate::reactor::mempool_fee_index::MempoolFeeIndex::new(),
+                crate::reactor::mempool_fee_index::MempoolFeeIndex::new(None),
             )
             .await;
             state.timeouts = LinearTimeouts {
@@ -342,7 +342,6 @@ impl ReactorCluster {
                 sim_rx,
                 state,
                 0,
-                None,
                 None,
             );
 

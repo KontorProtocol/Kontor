@@ -5,7 +5,7 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
-    build_tap_script_and_script_address, calculate_op_return_fee_per_participant,
+    build_tap_script_and_script_address, calculate_op_return_fee_for_participant,
     calculate_reveal_fee_delta, compose_reveal, estimate_key_spend_fee,
     estimate_participant_commit_fees, select_utxos_for_commit,
 };
@@ -1312,7 +1312,7 @@ pub fn test_select_utxos_for_commit_empty_utxos_errors() {
     let utxos: Vec<(OutPoint, TxOut)> = vec![];
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
 
-    let result = select_utxos_for_commit(&base_tx, utxos, 1000, fee_rate, 330);
+    let result = select_utxos_for_commit(&base_tx, utxos, 1000, fee_rate, 330, 0);
 
     assert!(result.is_err(), "Empty UTXOs should error");
     let err_msg = result.err().unwrap().to_string();
@@ -1331,7 +1331,7 @@ pub fn test_select_utxos_for_commit_single_utxo_sufficient() {
     let script_output = 1000;
     let envelope = 330;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok(), "Should succeed with sufficient UTXO");
     let (selected, fee) = result.unwrap();
@@ -1354,7 +1354,7 @@ pub fn test_select_utxos_for_commit_single_utxo_insufficient() {
     let script_output = 10_000;
     let envelope = 330;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_err(), "Should fail with insufficient UTXO");
     let err_msg = result.err().unwrap().to_string();
@@ -1373,8 +1373,14 @@ pub fn test_select_utxos_for_commit_multiple_utxos_selects_minimum() {
     let script_output = 1000;
     let envelope = 330;
 
-    let result =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(
+        &base_tx,
+        utxos.clone(),
+        script_output,
+        fee_rate,
+        envelope,
+        0,
+    );
 
     assert!(result.is_ok(), "Should succeed");
     let (selected, fee) = result.unwrap();
@@ -1406,8 +1412,14 @@ pub fn test_select_utxos_for_commit_selects_in_order() {
     let script_output = 1000;
     let envelope = 330;
 
-    let result =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(
+        &base_tx,
+        utxos.clone(),
+        script_output,
+        fee_rate,
+        envelope,
+        0,
+    );
 
     assert!(result.is_ok(), "Should succeed");
     let (selected, _) = result.unwrap();
@@ -1430,7 +1442,7 @@ pub fn test_select_utxos_for_commit_change_above_dust() {
     let script_output = 1000;
     let envelope = 330;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok());
     let (selected, fee) = result.unwrap();
@@ -1471,7 +1483,7 @@ pub fn test_select_utxos_for_commit_change_below_dust() {
     let utxos = make_utxos_with_values(&[2300]);
     let script_output = 1000;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok());
     let (selected, fee) = result.unwrap();
@@ -1511,6 +1523,7 @@ pub fn test_select_utxos_for_commit_fee_rate_affects_selection() {
         script_output,
         fee_rate_low,
         envelope,
+        0,
     );
     let result_high = select_utxos_for_commit(
         &base_tx,
@@ -1518,6 +1531,7 @@ pub fn test_select_utxos_for_commit_fee_rate_affects_selection() {
         script_output,
         fee_rate_high,
         envelope,
+        0,
     );
 
     assert!(result_low.is_ok(), "Should succeed at low fee rate");
@@ -1545,8 +1559,10 @@ pub fn test_select_utxos_for_commit_script_output_value_affects_selection() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let envelope = 330;
 
-    let result_small = select_utxos_for_commit(&base_tx, utxos.clone(), 1000, fee_rate, envelope);
-    let result_large = select_utxos_for_commit(&base_tx, utxos.clone(), 20000, fee_rate, envelope);
+    let result_small =
+        select_utxos_for_commit(&base_tx, utxos.clone(), 1000, fee_rate, envelope, 0);
+    let result_large =
+        select_utxos_for_commit(&base_tx, utxos.clone(), 20000, fee_rate, envelope, 0);
 
     assert!(result_small.is_ok(), "Small script output should succeed");
     let (selected_small, _) = result_small.unwrap();
@@ -1569,7 +1585,7 @@ pub fn test_select_utxos_for_commit_with_existing_base_tx() {
     let script_output = 1000;
     let envelope = 330;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok(), "Should succeed with existing base tx");
     let (selected, fee) = result.unwrap();
@@ -1592,8 +1608,14 @@ pub fn test_select_utxos_for_commit_returns_correct_subset() {
     let script_output = 2000;
     let envelope = 330;
 
-    let result =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(
+        &base_tx,
+        utxos.clone(),
+        script_output,
+        fee_rate,
+        envelope,
+        0,
+    );
 
     assert!(result.is_ok());
     let (selected, _) = result.unwrap();
@@ -1622,7 +1644,7 @@ pub fn test_select_utxos_for_commit_exact_amount_no_change() {
 
     let utxos = make_utxos_with_values(&[2000]);
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok());
     let (selected, fee) = result.unwrap();
@@ -1646,8 +1668,14 @@ pub fn test_select_utxos_for_commit_many_small_utxos() {
     // Many small UTXOs - each one adds fee, so need many to cover
     let utxos = make_utxos_with_values(&[500, 500, 500, 500, 500, 1000, 1000, 1000, 1000, 10000]);
 
-    let result =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(
+        &base_tx,
+        utxos.clone(),
+        script_output,
+        fee_rate,
+        envelope,
+        0,
+    );
 
     assert!(result.is_ok(), "Should eventually have enough");
     let (selected, fee) = result.unwrap();
@@ -1674,9 +1702,10 @@ pub fn test_select_utxos_for_commit_envelope_affects_change_threshold() {
     // Same UTXOs but different envelope values
     let utxos = make_utxos_with_values(&[3000]);
 
-    let result_low = select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, 100);
+    let result_low =
+        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, 100, 0);
     let result_high =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, 1000);
+        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, 1000, 0);
 
     assert!(result_low.is_ok());
     let (_, fee_low) = result_low.unwrap();
@@ -1698,9 +1727,15 @@ pub fn test_select_utxos_for_commit_deterministic() {
     let script_output = 2000;
     let envelope = 330;
 
-    let result1 =
-        select_utxos_for_commit(&base_tx, utxos.clone(), script_output, fee_rate, envelope);
-    let result2 = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result1 = select_utxos_for_commit(
+        &base_tx,
+        utxos.clone(),
+        script_output,
+        fee_rate,
+        envelope,
+        0,
+    );
+    let result2 = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result1.is_ok() && result2.is_ok());
     let (selected1, fee1) = result1.unwrap();
@@ -1722,7 +1757,7 @@ pub fn test_select_utxos_for_commit_insufficient_with_fees() {
     // But we only have 12000 sats
     let utxos = make_utxos_with_values(&[4000, 4000, 4000]);
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     // This should fail because total (12000) < script_output (5000) + fee (~15000+ with 3 inputs)
     assert!(
@@ -1744,7 +1779,7 @@ pub fn test_select_utxos_for_commit_edge_case_change_equals_envelope() {
 
     let utxos = make_utxos_with_values(&[2800]); // Slightly above to ensure success
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     assert!(result.is_ok());
     let (selected, fee) = result.unwrap();
@@ -1772,7 +1807,7 @@ pub async fn test_select_utxos_for_commit_with_real_utxo(reg_tester: &mut RegTes
     let script_output = 1000;
     let envelope = 330;
 
-    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope);
+    let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
     // Real UTXO from regtest should have enough value
     assert!(
@@ -2340,175 +2375,144 @@ pub async fn test_calculate_reveal_fee_delta_with_real_tap_script(
 }
 
 // ============================================================================
-// calculate_op_return_fee_per_participant tests
+// calculate_op_return_fee_for_participant tests
 // ============================================================================
+//
+// OP_RETURN output vsize for an 80-byte payload:
+//   8 (value) + 1 (script_len varint) + 1 (OP_RETURN) + 2 (OP_PUSHDATA1 + len)
+//   + 80 (data) = 92 vbytes
 
-pub fn test_calculate_op_return_fee_per_participant_no_op_return() {
+const MAX_DATA: &[u8] = &[0u8; 80];
+
+pub fn test_calculate_op_return_fee_for_participant_no_op_return() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // has_op_return = false should return 0
-    let fee = calculate_op_return_fee_per_participant(false, 3, fee_rate).unwrap();
-
+    let fee = calculate_op_return_fee_for_participant(None, 0, 3, fee_rate).unwrap();
     assert_eq!(fee, 0, "No OP_RETURN should return 0 fee");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_zero_participants() {
+pub fn test_calculate_op_return_fee_for_participant_zero_participants() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // num_participants = 0 should return 0
-    let fee = calculate_op_return_fee_per_participant(true, 0, fee_rate).unwrap();
-
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 0, fee_rate).unwrap();
     assert_eq!(fee, 0, "Zero participants should return 0 fee");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_single_participant() {
+pub fn test_calculate_op_return_fee_for_participant_single_participant() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 1, fee_rate).unwrap();
-
-    // OP_RETURN vsize = 9 + 80 = 89 vbytes
-    // At 10 sat/vb = 890 sats
-    assert_eq!(
-        fee, 890,
-        "Single participant should pay full fee: got {}",
-        fee
-    );
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate).unwrap();
+    // 92 vbytes * 10 sat/vb = 920 sats
+    assert_eq!(fee, 920, "Single participant pays full fee: got {}", fee);
 }
 
-pub fn test_calculate_op_return_fee_per_participant_two_participants() {
+pub fn test_calculate_op_return_fee_for_participant_two_participants_exact() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 2, fee_rate).unwrap();
-
-    // Total = 890 sats, split 2 ways = 445 each
-    assert_eq!(
-        fee, 445,
-        "Two participants should split evenly: got {}",
-        fee
-    );
+    let fee_a = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 2, fee_rate).unwrap();
+    let fee_b = calculate_op_return_fee_for_participant(Some(MAX_DATA), 1, 2, fee_rate).unwrap();
+    // Total = 920 sats, split 2 ways = 460 each (exact)
+    assert_eq!(fee_a, 460);
+    assert_eq!(fee_b, 460);
+    assert_eq!(fee_a + fee_b, 920, "Sum should equal total exactly");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_three_participants_rounds_up() {
+pub fn test_calculate_op_return_fee_for_participant_three_participants_split() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 3, fee_rate).unwrap();
-
-    // Total = 890 sats, split 3 ways = 296.67 -> rounds up to 297
-    assert_eq!(fee, 297, "Three participants should round up: got {}", fee);
+    // Total = 920. 920 / 3 = 306 r 2. First 2 indices pay 307, last pays 306.
+    let fee0 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 3, fee_rate).unwrap();
+    let fee1 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 1, 3, fee_rate).unwrap();
+    let fee2 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 2, 3, fee_rate).unwrap();
+    assert_eq!(fee0, 307);
+    assert_eq!(fee1, 307);
+    assert_eq!(fee2, 306);
+    assert_eq!(fee0 + fee1 + fee2, 920, "Sum should equal total exactly");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_many_participants() {
+pub fn test_calculate_op_return_fee_for_participant_many_participants_exact_sum() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 100, fee_rate).unwrap();
-
-    // Total = 890 sats, split 100 ways = 8.9 -> rounds up to 9
-    assert_eq!(
-        fee, 9,
-        "100 participants should get ~9 sats each: got {}",
-        fee
-    );
+    let total: u64 = (0..100)
+        .map(|i| calculate_op_return_fee_for_participant(Some(MAX_DATA), i, 100, fee_rate).unwrap())
+        .sum();
+    assert_eq!(total, 920, "Sum across 100 participants should equal 920");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_fee_rate_scaling() {
-    // Double fee rate = double the per-participant fee
+pub fn test_calculate_op_return_fee_for_participant_fee_rate_scaling() {
     let fee_rate_5 = FeeRate::from_sat_per_vb(5).unwrap();
     let fee_rate_10 = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee_5 = calculate_op_return_fee_per_participant(true, 1, fee_rate_5).unwrap();
-    let fee_10 = calculate_op_return_fee_per_participant(true, 1, fee_rate_10).unwrap();
-
-    assert_eq!(
-        fee_10,
-        fee_5 * 2,
-        "Double fee rate should double fee: {} vs {}",
-        fee_10,
-        fee_5 * 2
-    );
+    let fee_5 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate_5).unwrap();
+    let fee_10 =
+        calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate_10).unwrap();
+    assert_eq!(fee_10, fee_5 * 2, "Double fee rate should double fee");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_deterministic() {
+pub fn test_calculate_op_return_fee_for_participant_deterministic() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    let fee1 = calculate_op_return_fee_per_participant(true, 5, fee_rate).unwrap();
-    let fee2 = calculate_op_return_fee_per_participant(true, 5, fee_rate).unwrap();
-
+    let fee1 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 2, 5, fee_rate).unwrap();
+    let fee2 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 2, 5, fee_rate).unwrap();
     assert_eq!(fee1, fee2, "Same inputs should produce same output");
 }
 
-pub fn test_calculate_op_return_fee_per_participant_round_up_ensures_coverage() {
+pub fn test_calculate_op_return_fee_for_participant_seven_participants_exact_coverage() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // Total = 890 sats
-    // With 7 participants: 890 / 7 = 127.14 -> rounds up to 128
-    // 128 * 7 = 896 >= 890 (covers the full fee)
-    let fee = calculate_op_return_fee_per_participant(true, 7, fee_rate).unwrap();
-    let total_collected = fee * 7;
-
-    assert!(
-        total_collected >= 890,
-        "Round-up should ensure full coverage: {} * 7 = {} >= 890",
-        fee,
-        total_collected
-    );
+    // 920 / 7 = 131 r 3. First 3 pay 132, rest pay 131. Sum = 3*132 + 4*131 = 920.
+    let total: u64 = (0..7)
+        .map(|i| calculate_op_return_fee_for_participant(Some(MAX_DATA), i, 7, fee_rate).unwrap())
+        .sum();
+    assert_eq!(total, 920, "Exact coverage: {} = 920", total);
 }
 
-pub fn test_calculate_op_return_fee_per_participant_minimum_fee_rate() {
+pub fn test_calculate_op_return_fee_for_participant_minimum_fee_rate() {
     let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 1, fee_rate).unwrap();
-
-    // At 1 sat/vb, 89 vbytes = 89 sats
-    assert_eq!(fee, 89, "At 1 sat/vb, fee should be 89 sats: got {}", fee);
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate).unwrap();
+    // At 1 sat/vb, 92 vbytes = 92 sats
+    assert_eq!(fee, 92, "At 1 sat/vb, fee should equal vsize: got {}", fee);
 }
 
-pub fn test_calculate_op_return_fee_per_participant_high_fee_rate() {
+pub fn test_calculate_op_return_fee_for_participant_high_fee_rate() {
     let fee_rate = FeeRate::from_sat_per_vb(500).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 1, fee_rate).unwrap();
-
-    // At 500 sat/vb, 89 vbytes = 44,500 sats
-    assert_eq!(
-        fee, 44_500,
-        "At 500 sat/vb, fee should be 44,500 sats: got {}",
-        fee
-    );
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate).unwrap();
+    // At 500 sat/vb, 92 vbytes = 46,000 sats
+    assert_eq!(fee, 46_000, "At 500 sat/vb: got {}", fee);
 }
 
-pub fn test_calculate_op_return_fee_per_participant_vsize_is_89_bytes() {
-    // Verify the constant vsize calculation: 9 + MAX_OP_RETURN_BYTES (80) = 89
+pub fn test_calculate_op_return_fee_for_participant_vsize_matches_serialized_output() {
+    // 80-byte payload → OP_RETURN + OP_PUSHDATA1 + len + data = 83-byte script
+    // Output: 8 (value) + 1 (script_len varint) + 83 = 92 vbytes
     let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
-
-    let fee = calculate_op_return_fee_per_participant(true, 1, fee_rate).unwrap();
-
-    // At 1 sat/vb, fee = vsize
-    assert_eq!(fee, 89, "OP_RETURN vsize should be 89 bytes: got {}", fee);
-}
-
-pub fn test_calculate_op_return_fee_per_participant_large_participant_count() {
-    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
-
-    // With 1000 participants, each should pay very little
-    let fee = calculate_op_return_fee_per_participant(true, 1000, fee_rate).unwrap();
-
-    // Total = 890, split 1000 ways = 0.89 -> rounds up to 1
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1, fee_rate).unwrap();
     assert_eq!(
-        fee, 1,
-        "1000 participants should each pay 1 sat: got {}",
+        fee, 92,
+        "OP_RETURN vsize for 80-byte payload is 92: got {}",
         fee
     );
 }
 
-pub fn test_calculate_op_return_fee_per_participant_exact_division() {
-    // Find a case where division is exact
+pub fn test_calculate_op_return_fee_for_participant_small_payload_scales_down() {
+    // 5-byte payload → OP_RETURN + OP_PUSHBYTES_5 + data = 7-byte script
+    // Output: 8 + 1 + 7 = 16 vbytes. Much less than 80-byte payload.
+    let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+    let small: &[u8] = &[0u8; 5];
+    let fee = calculate_op_return_fee_for_participant(Some(small), 0, 1, fee_rate).unwrap();
+    assert_eq!(fee, 16, "5-byte payload → 16 vbytes: got {}", fee);
+}
+
+pub fn test_calculate_op_return_fee_for_participant_large_participant_count() {
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+    // 920 / 1000 = 0 r 920. First 920 pay 1, last 80 pay 0.
+    let fee0 = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 1000, fee_rate).unwrap();
+    let fee_last =
+        calculate_op_return_fee_for_participant(Some(MAX_DATA), 999, 1000, fee_rate).unwrap();
+    assert_eq!(fee0, 1);
+    assert_eq!(fee_last, 0);
+    let total: u64 = (0..1000)
+        .map(|i| {
+            calculate_op_return_fee_for_participant(Some(MAX_DATA), i, 1000, fee_rate).unwrap()
+        })
+        .sum();
+    assert_eq!(total, 920, "Sum across 1000 participants should equal 920");
+}
 
-    // Total = 890 sats
-    // 890 / 2 = 445 (exact)
-    let fee = calculate_op_return_fee_per_participant(true, 2, fee_rate).unwrap();
-
-    assert_eq!(fee, 445, "Exact division should work: got {}", fee);
-
-    // Verify: 445 * 2 = 890 (exactly covers)
-    assert_eq!(fee * 2, 890, "Should exactly cover the fee");
+pub fn test_calculate_op_return_fee_for_participant_exact_division() {
+    let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+    // 920 / 2 = 460 exactly.
+    let fee = calculate_op_return_fee_for_participant(Some(MAX_DATA), 0, 2, fee_rate).unwrap();
+    assert_eq!(fee, 460, "Exact division: got {}", fee);
+    assert_eq!(fee * 2, 920, "Should exactly cover the fee");
 }
