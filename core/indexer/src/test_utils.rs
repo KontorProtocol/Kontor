@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
 
+use crate::database::native_contracts::NATIVE_CONTRACT_COUNT;
 use crate::database::queries::insert_block;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
@@ -346,9 +347,10 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::componen
             .await
             .expect("publish native");
 
-        // Extract compiled components from cache (IDs 1-4 for native contracts)
+        // Extract compiled components from cache. Native contract IDs start at 1
+        // and are assigned in publish order; see `NATIVE_CONTRACTS`.
         let mut components = Vec::new();
-        for id in 1..=4i64 {
+        for id in 1..=NATIVE_CONTRACT_COUNT {
             if let Some(component) = cache.get(&id).await {
                 components.push((id, component));
             }

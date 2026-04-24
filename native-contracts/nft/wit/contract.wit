@@ -1,0 +1,56 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{holder-ref, view-context, proc-context};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/file-registry.{raw-file-descriptor};
+
+  record token-metadata {
+    name: string,
+    description: string,
+  }
+
+  record nft-mint {
+    token-id: string,
+    owner: holder-ref,
+    metadata: token-metadata,
+  }
+
+  record nft-transfer {
+    token-id: string,
+    src: holder-ref,
+    dst: holder-ref,
+  }
+
+  export init: async func(ctx: borrow<proc-context>);
+
+  /// Mint a new NFT backed by a filestorage agreement created from `descriptor`.
+  ///
+  /// Validation rules enforced by the contract:
+  /// - `name` must be non-empty and at most 64 bytes (UTF-8 length, no trim,
+  ///   case-sensitive, globally unique across all NFTs).
+  /// - `description` must be non-empty and at most 2048 bytes.
+  /// - `descriptor.file_id` is validated by `filestorage::create_agreement`
+  ///   (non-empty) and shares its global namespace.
+  ///
+  /// On success the returned `token-id` is the agreement id created by
+  /// filestorage, which equals `descriptor.file_id`.
+  export mint: async func(
+    ctx: borrow<proc-context>,
+    name: string,
+    description: string,
+    descriptor: raw-file-descriptor
+  ) -> result<nft-mint, error>;
+
+  export transfer: async func(
+    ctx: borrow<proc-context>,
+    token-id: string,
+    new-owner: holder-ref
+  ) -> result<nft-transfer, error>;
+
+  export owner-of: async func(ctx: borrow<view-context>, token-id: string) -> option<holder-ref>;
+  export metadata-of: async func(ctx: borrow<view-context>, token-id: string) -> option<token-metadata>;
+  export token-id-by-name: async func(ctx: borrow<view-context>, name: string) -> option<string>;
+  export total-tokens: async func(ctx: borrow<view-context>) -> u64;
+}
