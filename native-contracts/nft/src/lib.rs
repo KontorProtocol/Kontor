@@ -32,11 +32,7 @@ struct NftStorage {
     pub total_nfts: u64,
 }
 
-fn validate(
-    model: &NftStorageWriteModel,
-    nft_id: &str,
-    description: &str,
-) -> Result<(), Error> {
+fn validate(model: &NftStorageWriteModel, nft_id: &str, description: &str) -> Result<(), Error> {
     if nft_id.is_empty() {
         return Err(Error::Message("nft_id cannot be empty".to_string()));
     }
