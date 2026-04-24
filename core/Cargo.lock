@@ -3745,7 +3745,6 @@ dependencies = [
  "fastnum",
  "ff",
  "futures-util",
- "glob",
  "hex",
  "hkdf",
  "indexer-types",
