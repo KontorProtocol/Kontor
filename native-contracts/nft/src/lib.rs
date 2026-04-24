@@ -60,11 +60,6 @@ impl Guest for Nft {
         description: String,
         file_descriptor: RawFileDescriptor,
     ) -> Result<NftInfo, Error> {
-        // Effects before interactions (CEI pattern): validate inputs and
-        // local uniqueness invariants before the cross-contract call into
-        // filestorage. `file_id` validity is delegated to
-        // `filestorage::create_agreement`; the returned `agreement_id` is
-        // stored as the NFT's link to the underlying file.
         let model = ctx.model();
         validate(&model, &nft_id, &description)?;
 
