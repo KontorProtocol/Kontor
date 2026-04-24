@@ -96,7 +96,6 @@ axum-test = "=20.0.0"
 proptest = "=1.11.0"
 
 [build-dependencies]
-glob = { workspace = true }
 built = "=0.8.0"
 prost-build = "0.13.5"
 protox = "0.8.0"

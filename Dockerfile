@@ -1,146 +1,92 @@
 # syntax=docker/dockerfile:1
 
-# Tool builder stage - builds and caches cargo tools
-FROM rust:alpine AS tool-builder
-RUN apk add --no-cache musl-dev g++ gcc make curl
-RUN rustup target add wasm32-unknown-unknown
-RUN cargo install wasm-opt --locked
+# Pinned Rust + cargo-chef base image. Used for every Rust stage so
+# cargo-chef is preinstalled and all builder stages share one image.
+# Bumping is deliberate: chef version must match recipe.json format,
+# rust version must match rust-toolchain.toml.
+ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.77-rust-1.95.0-slim-trixie
 
-# Download pre-built sccache binary instead of compiling (much faster and avoids static linking issues)
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then \
-        SCCACHE_ARCH="x86_64-unknown-linux-musl"; \
-    elif [ "$ARCH" = "aarch64" ]; then \
-        SCCACHE_ARCH="aarch64-unknown-linux-musl"; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    SCCACHE_VERSION="v0.8.2" && \
-    curl -L "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}.tar.gz" | \
-    tar xz && \
-    mv "sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}/sccache" /usr/local/cargo/bin/ && \
-    chmod +x /usr/local/cargo/bin/sccache && \
-    rm -rf "sccache-${SCCACHE_VERSION}-${SCCACHE_ARCH}"
-
-# Planner stage - generates dependency recipe using official cargo-chef image
-FROM lukemathwalker/cargo-chef:latest-rust-alpine AS planner
+# ---------------------------------------------------------------------
+# Planner — generates recipe.json from Cargo.toml / Cargo.lock.
+# Cheapest stage; its output drives the cacher.
+# ---------------------------------------------------------------------
+FROM ${CHEF_IMAGE} AS planner
 WORKDIR /build
 COPY core core
 WORKDIR /build/core
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Builder base - builds dependencies once and caches them
-FROM rust:alpine AS builder-base
+# ---------------------------------------------------------------------
+# Builder base — apt deps shared across every Rust build stage below.
+# No wasm32 target or Binaryen: test-contracts compilation was moved
+# to testlib's build.rs, and testlib is a dev-dependency that never
+# gets pulled in by a `cargo build --release -p indexer` production
+# build.
+# ---------------------------------------------------------------------
+FROM ${CHEF_IMAGE} AS builder-base
 
-RUN apk add --no-cache \
-    musl-dev \
-    zeromq-dev \
-    boost-dev \
-    pkgconfig \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
     cmake \
     make \
     g++ \
-    gcc \
-    perl \
-    linux-headers \
-    bash \
-    brotli \
-    sqlite-dev \
-    git \
-    tcl \
-    curl \
-    wget \
-    unzip \
-    pcre2-dev
+    libzmq3-dev \
+    libboost-system-dev \
+    libboost-thread-dev \
+    libboost-chrono-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built cargo tools instead of building them
-COPY --from=planner /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/
-COPY --from=tool-builder /usr/local/cargo/bin/wasm-opt /usr/local/cargo/bin/
-COPY --from=tool-builder /usr/local/cargo/bin/sccache /usr/local/cargo/bin/
-
-# Install wasm32 target directly instead of copying
-RUN rustup target add wasm32-unknown-unknown
-
-WORKDIR /build
-
-# Sqlean builder stage - builds sqlean extensions (cached separately)
-FROM builder-base AS sqlean-builder
-WORKDIR /tmp
-RUN wget -q https://github.com/nalgeon/sqlean/archive/refs/tags/0.28.2.tar.gz && \
-    tar xzf 0.28.2.tar.gz && \
-    cd sqlean-0.28.2 && \
-    make download-sqlite && \
-    make download-external && \
-    make prepare-dist && \
-    mkdir -p /sqlean-musl && \
-    echo "Building crypto extension for musl..." && \
-    gcc -O3 -Isrc -DSQLEAN_VERSION='"0.28.2"' -z now -z relro -Wall -Wsign-compare -Wno-unknown-pragmas -fPIC -shared \
-       src/sqlite3-crypto.c src/crypto/*.c \
-       -o dist/crypto.so && \
-    echo "Building regexp extension for musl..." && \
-    gcc -O3 -Isrc -DSQLEAN_VERSION='"0.28.2"' -z now -z relro -Wall -Wsign-compare -Wno-unknown-pragmas -fPIC -shared \
-       -include src/regexp/constants.h src/sqlite3-regexp.c src/regexp/*.c src/regexp/pcre2/*.c \
-       -o dist/regexp.so && \
-    cp dist/crypto.so dist/regexp.so /sqlean-musl/ && \
-    cd /tmp && rm -rf sqlean-0.28.2 0.28.2.tar.gz
-
-# Cacher stage - builds dependencies (cached separately from source code)
+# ---------------------------------------------------------------------
+# Cacher — builds the full dependency tree once from recipe.json. As
+# long as Cargo.lock is unchanged, this whole layer is a cache hit and
+# the stage is skipped entirely in subsequent builds. This is the
+# mechanism doing the real caching work — sccache would add overhead
+# here without contributing; BuildKit cache mounts don't persist
+# across CI runs, so per-rustc-call caching has nothing to hit.
+# ---------------------------------------------------------------------
 FROM builder-base AS cacher
 WORKDIR /build/core
 COPY --from=planner /build/core/recipe.json recipe.json
-ENV RUSTFLAGS="-C target-feature=-crt-static"
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_DIR=/sccache
-RUN --mount=type=cache,target=/sccache \
-    cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# Builder stage - builds actual code
+# ---------------------------------------------------------------------
+# Builder — copies real source, builds the indexer binary. Inherits
+# pre-compiled deps from the cacher stage.
+# ---------------------------------------------------------------------
 FROM builder-base AS builder
 WORKDIR /build
 
-# Copy sqlean from sqlean-builder stage
-COPY --from=sqlean-builder /sqlean-musl /build/sqlean-musl
-
-# Copy cached dependencies from cacher stage
 COPY --from=cacher /build/core/target /build/core/target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 
-# Copy source code
 COPY . .
 
-# Replace the glibc sqlean extensions with musl versions
-RUN rm -rf core/indexer/sqlean-0.28.2/linux-* && \
-    mkdir -p core/indexer/sqlean-0.28.2/linux-x64 && \
-    mkdir -p core/indexer/sqlean-0.28.2/linux-arm64 && \
-    cp /build/sqlean-musl/*.so core/indexer/sqlean-0.28.2/linux-x64/ && \
-    cp /build/sqlean-musl/*.so core/indexer/sqlean-0.28.2/linux-arm64/
-
-# Build only the indexer (dependencies already built)
 WORKDIR /build/core
-ENV RUSTFLAGS="-C target-feature=-crt-static"
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_DIR=/sccache
-RUN --mount=type=cache,target=/sccache \
-    cargo build --release --package indexer
+RUN cargo build --release --package indexer
 
-# Runtime stage
-FROM alpine:latest
+# ---------------------------------------------------------------------
+# Runtime — minimal Debian slim with only the runtime .so deps and
+# the compiled binary. No toolchain, no source, no package-manager
+# state.
+# ---------------------------------------------------------------------
+FROM docker.io/debian:trixie-slim
 
-RUN apk add --no-cache \
-    zeromq \
-    boost-libs \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libzmq5 \
+    libboost-system1.83.0 \
+    libboost-thread1.83.0 \
+    libboost-chrono1.83.0t64 \
+    libpcre2-8-0 \
     ca-certificates \
-    libgcc \
-    libstdc++ \
-    pcre2
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN addgroup -g 1000 kontor && \
-    adduser -D -u 1000 -G kontor kontor
-
-RUN mkdir -p /data && chown -R kontor:kontor /data
+RUN groupadd --system --gid 1000 kontor && \
+    useradd --system --uid 1000 --gid kontor --create-home --home-dir /home/kontor kontor && \
+    mkdir -p /data && chown -R kontor:kontor /data
 
 COPY --from=builder /build/core/target/release/kontor /usr/local/bin/kontor
-RUN chmod +x /usr/local/bin/kontor
 
 USER kontor
 WORKDIR /home/kontor
@@ -149,10 +95,17 @@ ENV DATA_DIR=/data \
     API_PORT=9333 \
     ZMQ_ADDRESS=tcp://127.0.0.1:28332 \
     NETWORK=bitcoin \
-    STARTING_BLOCK_HEIGHT=921300 \
-    BITCOIN_RPC_USER=rpc \
-    BITCOIN_RPC_PASSWORD=rpc
+    STARTING_BLOCK_HEIGHT=946452
+# No default BITCOIN_RPC_USER / BITCOIN_RPC_PASSWORD — operators must
+# supply them; the indexer fails loudly at startup if they're missing.
 
 EXPOSE 9333
 VOLUME ["/data"]
+
+# Health check — hits the indexer's /api root once it's serving.
+# 60s start period covers cold boot: DB init, mempool sync, first
+# fee projection.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl --fail --silent "http://127.0.0.1:${API_PORT}/api" || exit 1
+
 ENTRYPOINT ["/usr/local/bin/kontor"]
