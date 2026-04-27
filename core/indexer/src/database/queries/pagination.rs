@@ -1,8 +1,9 @@
 use indexer_types::PaginationMeta;
-use libsql::{Connection, Value, de::from_row};
 use serde::de::DeserializeOwned;
+use turso::{Connection, Value};
 
 use super::Error;
+use crate::database::de::collect_rows;
 use crate::database::types::{HasRowId, OrderDirection};
 
 pub fn filter_cursor(cursor: Option<i64>) -> Option<i64> {
@@ -100,10 +101,7 @@ where
         )
         .await?;
 
-    let mut results: Vec<T> = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(from_row(&row)?);
-    }
+    let mut results: Vec<T> = collect_rows(&mut rows).await?;
 
     let has_more = results.len() > limit as usize;
 

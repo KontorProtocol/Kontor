@@ -27,7 +27,7 @@ use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
 pub use file_ledger::FileLedger;
 use futures_util::future::OptionFuture;
-use libsql::Connection;
+use turso::Connection;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,

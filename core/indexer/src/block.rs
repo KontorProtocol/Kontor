@@ -5,7 +5,7 @@ use bitcoin::{
 };
 use indexer_types::{Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize};
 use indexmap::IndexMap;
-use libsql::Connection;
+use turso::Connection;
 
 use crate::database::{queries::get_op_result, types::OpResultId};
 

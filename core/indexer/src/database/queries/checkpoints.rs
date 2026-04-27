@@ -1,6 +1,7 @@
-use libsql::{Connection, de::from_row, params};
+use turso::{Connection, params};
 
 use super::Error;
+use crate::database::de::first_row;
 use crate::database::types::CheckpointRow;
 
 pub async fn get_checkpoint_by_height(
@@ -13,7 +14,7 @@ pub async fn get_checkpoint_by_height(
             params![height],
         )
         .await?;
-    Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut row).await
 }
 
 pub async fn get_checkpoint_latest(conn: &Connection) -> Result<Option<CheckpointRow>, Error> {
@@ -23,5 +24,5 @@ pub async fn get_checkpoint_latest(conn: &Connection) -> Result<Option<Checkpoin
             params![],
         )
         .await?;
-    Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut row).await
 }

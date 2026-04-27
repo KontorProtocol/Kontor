@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use bitcoin::hashes::Hash;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
-use libsql::{Connection, params};
+use turso::{Connection, params};
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -37,7 +37,7 @@ fn calculate_combined_hash(state: &ContractStateRow, prev_hash: &str) -> String 
     hex::encode(hasher.finalize()).to_uppercase()
 }
 
-async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
+async fn setup_test_data(conn: &turso::Connection) -> Result<()> {
     // Insert blocks
     for height in [800000, 800001, 800002] {
         let hash = format!(
@@ -153,11 +153,11 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
 }
 
 async fn count_checkpoints(conn: &Connection) -> i64 {
-    let stmt = conn
+    let mut stmt = conn
         .prepare("SELECT COUNT(*) FROM checkpoints")
         .await
         .unwrap();
-    let mut rows = stmt.query(libsql::params![]).await.unwrap();
+    let mut rows = stmt.query(turso::params![]).await.unwrap();
     rows.next()
         .await
         .unwrap()
@@ -325,7 +325,8 @@ async fn test_database() -> Result<()> {
 #[tokio::test]
 async fn test_transaction() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let tx = writer.connection().transaction().await?;
+    let mut conn = writer.connection();
+    let tx = conn.transaction().await?;
     let height = 800000;
     let hash = new_mock_block_hash(height as u32);
     let block = BlockRow::builder().height(height).hash(hash).build();
@@ -343,7 +344,7 @@ async fn test_crypto_extension() -> Result<()> {
         .query("SELECT hex(crypto_sha256('abc'))", params![])
         .await?;
     let row = rows.next().await?.unwrap();
-    let hash = row.get_str(0)?;
+    let hash: String = row.get(0)?;
     assert_eq!(
         hash,
         "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
@@ -749,13 +750,12 @@ async fn test_contracts_gapless() -> Result<()> {
     }
     let query = "SELECT id FROM contracts ORDER BY height ASC";
     let get_ids = async |conn: &Connection| {
-        conn.query(query, params![])
-            .await
-            .unwrap()
-            .into_stream()
-            .map(|row| row.unwrap().get::<i64>(0).unwrap())
-            .collect::<Vec<_>>()
-            .await
+        let mut rows = conn.query(query, params![]).await.unwrap();
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            out.push(row.get::<i64>(0).unwrap());
+        }
+        out
     };
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
     rollback_to_height(&conn, 3).await?;

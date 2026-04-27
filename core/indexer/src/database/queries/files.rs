@@ -1,6 +1,7 @@
-use libsql::{Connection, Value, de::from_row, params};
+use turso::{Connection, Value, params};
 
 use super::Error;
+use crate::database::de::{collect_rows, first_row};
 use crate::database::types::FileMetadataRow;
 
 pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetadataRow>, Error> {
@@ -23,11 +24,7 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
         )
         .await?;
 
-    let mut entries = Vec::new();
-    while let Some(row) = rows.next().await? {
-        entries.push(from_row(&row)?);
-    }
-    Ok(entries)
+    collect_rows(&mut rows).await
 }
 
 pub async fn select_file_metadata_by_file_id(
@@ -54,7 +51,7 @@ pub async fn select_file_metadata_by_file_id(
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn insert_file_metadata(

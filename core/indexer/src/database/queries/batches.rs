@@ -1,4 +1,4 @@
-use libsql::{Connection, params};
+use turso::{Connection, params};
 
 use super::Error;
 use crate::database::types::BatchQueryResult;

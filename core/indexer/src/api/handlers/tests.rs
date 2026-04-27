@@ -12,7 +12,7 @@ use axum_test::{TestResponse, TestServer};
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1, rand};
 use indexer_types::{BlockRow, SignerResponse, TransactionRow};
-use libsql::Connection;
+use turso::Connection;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 

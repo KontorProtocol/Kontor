@@ -142,7 +142,7 @@ impl HasContractId for FallContext {
 }
 
 pub struct Keys {
-    pub stream: Pin<Box<dyn Stream<Item = Result<String, libsql::Error>> + Send>>,
+    pub stream: Pin<Box<dyn Stream<Item = Result<String, turso::Error>> + Send>>,
 }
 
 pub struct CoreContext {
@@ -163,7 +163,7 @@ pub struct Holder {
 impl Holder {
     pub async fn from_holder_ref(
         mut holder_ref: HolderRef,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         height: i64,
     ) -> Result<Self, Error> {
         match &holder_ref {

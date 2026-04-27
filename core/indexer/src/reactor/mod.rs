@@ -112,13 +112,13 @@ impl<E: Executor> Reactor<E> {
     /// Clone of the shared write connection from Runtime.storage.
     /// All DB connections in the reactor (Reactor, ConsensusState, Storage)
     /// share the same underlying connection via Arc.
-    fn db_conn(&self) -> libsql::Connection {
+    fn db_conn(&self) -> turso::Connection {
         self.runtime.storage.conn.clone()
     }
 
     /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
     async fn resolve_tx_from_db(
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         txid: &Txid,
     ) -> Option<bitcoin::Transaction> {
         if let Ok(Some(raw_bytes)) = select_unconfirmed_batch_tx(conn, &txid.to_string()).await

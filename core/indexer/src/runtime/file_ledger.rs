@@ -10,7 +10,7 @@ use crate::database::queries::{
 };
 use crate::database::types::FileMetadataRow;
 use crate::runtime::wit::FileDescriptor;
-use libsql::Connection;
+use turso::Connection;
 
 /// Inner state protected by a single mutex
 struct FileLedgerInner {
@@ -184,12 +184,12 @@ mod tests {
     use indexer_types::{BlockRow, TransactionRow};
     use kontor_crypto::FileLedger as CryptoFileLedger;
 
-    fn create_test_storage(conn: libsql::Connection) -> Storage {
+    fn create_test_storage(conn: turso::Connection) -> Storage {
         Storage::builder().conn(conn).build()
     }
 
     /// Helper to set up a block and transaction in the database
-    async fn setup_block_and_tx(conn: &libsql::Connection, height: i64) -> Result<()> {
+    async fn setup_block_and_tx(conn: &turso::Connection, height: i64) -> Result<()> {
         let hash = new_mock_block_hash(height as u32);
         let block = BlockRow::builder().height(height).hash(hash).build();
         insert_block(conn, block).await?;

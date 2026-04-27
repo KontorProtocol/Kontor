@@ -24,8 +24,8 @@ pub use transactions::*;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-    #[error("LibSQL error: {0}")]
-    LibSQL(#[from] libsql::Error),
+    #[error("Turso error: {0}")]
+    Turso(#[from] turso::Error),
     #[error("Row deserialization error: {0}")]
     RowDeserialization(#[from] serde::de::value::Error),
     #[error("Invalid cursor format")]

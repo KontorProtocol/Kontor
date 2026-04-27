@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use deadpool::managed::{self, Pool, RecycleError};
-use libsql::Error;
+use turso::Error;
 
 use super::connection::new_connection;
 
@@ -27,7 +27,7 @@ impl Manager {
 }
 
 impl managed::Manager for Manager {
-    type Type = libsql::Connection;
+    type Type = turso::Connection;
     type Error = Error;
 
     async fn create(&self) -> Result<Self::Type, Error> {
@@ -41,7 +41,7 @@ impl managed::Manager for Manager {
     ) -> managed::RecycleResult<Error> {
         let recycle_count = self.recycle_count.fetch_add(1, Ordering::Relaxed) as u64;
         let n: u64 = conn
-            .query("SELECT $1", libsql::params![recycle_count])
+            .query("SELECT $1", turso::params![recycle_count])
             .await
             .map_err(|e| RecycleError::Message(format!("{}", e).into()))?
             .next()

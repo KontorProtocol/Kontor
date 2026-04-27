@@ -119,7 +119,7 @@ pub struct ObservationChannels {
 
 impl ConsensusState {
     pub async fn new(
-        conn: libsql::Connection,
+        conn: turso::Connection,
         signing_provider: Ed25519Provider,
         genesis: Genesis,
         address: Address,
@@ -269,7 +269,7 @@ impl ConsensusState {
 
     pub async fn check_finality(
         &mut self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         last_height: u64,
     ) -> Vec<FinalityEvent> {
         let mut events = Vec::new();
@@ -359,7 +359,7 @@ impl ConsensusState {
         }
     }
 
-    pub async fn get_checkpoint(&self, conn: &libsql::Connection) -> Option<[u8; 32]> {
+    pub async fn get_checkpoint(&self, conn: &turso::Connection) -> Option<[u8; 32]> {
         match get_checkpoint_latest(conn).await {
             Ok(Some(row)) => {
                 if let Ok(decoded) = hex::decode(&row.hash)
@@ -377,7 +377,7 @@ impl ConsensusState {
 
     pub(super) async fn get_decided_from_anchor(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         from_anchor: u64,
     ) -> Result<Vec<DeferredDecision>> {
         let batches = select_batches_from_anchor(conn, from_anchor as i64)
@@ -412,7 +412,7 @@ impl ConsensusState {
 
     pub async fn block_hash_at_height(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         height: u64,
     ) -> Option<bitcoin::BlockHash> {
         match select_block_at_height(conn, height as i64).await {
@@ -423,7 +423,7 @@ impl ConsensusState {
 
     async fn load_raw_txs_if_unfinalized(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         anchor_height: i64,
         consensus_height: i64,
     ) -> Result<Option<Vec<bitcoin::Transaction>>> {
@@ -484,7 +484,7 @@ impl ConsensusState {
 
     pub(super) async fn get_decided_range(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         start: Height,
         end: Height,
     ) -> Result<Vec<(Value, crate::consensus::CommitCertificate<Ctx>)>> {
@@ -511,7 +511,7 @@ impl ConsensusState {
 
     pub(super) async fn min_decided_height(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
     ) -> Result<Option<Height>> {
         Ok(select_min_batch_height(conn)
             .await
@@ -523,7 +523,7 @@ impl ConsensusState {
     /// The reactor is responsible for DB truncation and calling `initiate_rollback`.
     pub async fn run_finality_checks(
         &mut self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         last_height: u64,
     ) -> Option<(u64, HashSet<Txid>)> {
         let finality_events = self.check_finality(conn, last_height).await;
@@ -546,7 +546,7 @@ impl ConsensusState {
     /// Validate batch-level rules. Returns a rejection reason if any rule fails.
     pub(super) async fn validate_batch(
         &self,
-        conn: &libsql::Connection,
+        conn: &turso::Connection,
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
         txids: &[String],

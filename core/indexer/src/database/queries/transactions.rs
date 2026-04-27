@@ -1,10 +1,11 @@
 use indexer_types::{PaginationMeta, TransactionRow};
-use libsql::{Connection, Value, de::from_row, params};
+use turso::{Connection, Value, params};
 
 use super::Error;
 use super::batches::delete_unconfirmed_batch_tx;
 use super::contracts::get_contract_id_from_address;
 use super::pagination::get_paginated;
+use crate::database::de::{collect_rows, first_row};
 use crate::database::types::TransactionQuery;
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
@@ -42,7 +43,7 @@ pub async fn get_transaction_by_txid(
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn get_transactions_at_height(
@@ -56,11 +57,7 @@ pub async fn get_transactions_at_height(
         )
         .await?;
 
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(from_row(&row)?);
-    }
-    Ok(results)
+    collect_rows(&mut rows).await
 }
 
 pub async fn get_transactions_paginated(
@@ -115,12 +112,12 @@ pub async fn select_existing_txids(
         "SELECT txid FROM transactions WHERE txid IN ({})",
         placeholders.join(", ")
     );
-    let params: Vec<libsql::Value> = txids
+    let params: Vec<turso::Value> = txids
         .iter()
-        .map(|t| libsql::Value::from(t.clone()))
+        .map(|t| turso::Value::from(t.clone()))
         .collect();
     let mut rows = conn
-        .query(&sql, libsql::params::Params::Positional(params))
+        .query(&sql, turso::params::Params::Positional(params))
         .await?;
     let mut result = std::collections::HashSet::new();
     while let Some(row) = rows.next().await? {

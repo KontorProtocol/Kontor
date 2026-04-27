@@ -1,7 +1,8 @@
 use futures_util::{Stream, stream};
-use libsql::{Connection, de::from_row, params};
+use turso::{Connection, params};
 
 use super::Error;
+use crate::database::de::first_row;
 use crate::database::types::ContractStateRow;
 
 const BASE_CONTRACT_STATE_QUERY: &str = include_str!("../sql/base_contract_state_query.sql");
@@ -75,7 +76,7 @@ pub async fn get_latest_contract_state(
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn get_latest_contract_state_value(
@@ -160,7 +161,7 @@ pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: i64,
     path: String,
-) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
+) -> Result<impl Stream<Item = Result<String, turso::Error>> + Send + 'static, Error> {
     let rows = conn
         .query(
             PATH_PREFIX_FILTER_QUERY,

@@ -1,7 +1,8 @@
 use indexer_types::ContractListRow;
-use libsql::{Connection, de::from_row, params};
+use turso::{Connection, params};
 
 use super::Error;
+use crate::database::de::collect_rows;
 use crate::database::types::ContractRow;
 use crate::runtime::ContractAddress;
 
@@ -45,11 +46,7 @@ pub async fn get_contracts(conn: &Connection) -> Result<Vec<ContractListRow>, Er
             params![],
         )
         .await?;
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(from_row(&row)?);
-    }
-    Ok(results)
+    collect_rows(&mut rows).await
 }
 
 pub async fn get_contract_bytes_by_address(

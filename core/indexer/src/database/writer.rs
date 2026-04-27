@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use libsql::Connection;
+use turso::Connection;
 
 use super::connection::new_connection;
 

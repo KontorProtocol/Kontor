@@ -1,9 +1,10 @@
 use indexer_types::PaginationMeta;
-use libsql::{Connection, Value, de::from_row, named_params, params};
+use turso::{Connection, Value, named_params, params};
 
 use super::Error;
 use super::contracts::get_contract_id_from_address;
 use super::pagination::get_paginated;
+use crate::database::de::first_row;
 use crate::database::types::{
     ContractResultPublicRow, ContractResultRow, OpResultId, OrderDirection, ResultQuery,
 };
@@ -117,7 +118,7 @@ pub async fn get_op_result(
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn get_contract_result(
@@ -156,7 +157,7 @@ pub async fn get_contract_result(
             },
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn insert_contract_result(

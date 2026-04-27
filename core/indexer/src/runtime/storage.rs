@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use bitcoin::Txid;
 use bon::Builder;
 use futures_util::Stream;
-use libsql::Connection;
+use turso::Connection;
 use regex::bytes::RegexBuilder;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
@@ -213,7 +213,7 @@ impl Storage {
         &self,
         contract_id: i64,
         path: String,
-    ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static> {
+    ) -> Result<impl Stream<Item = Result<String, turso::Error>> + Send + 'static> {
         Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path).await?)
     }
 

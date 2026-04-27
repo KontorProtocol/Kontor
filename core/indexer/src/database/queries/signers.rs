@@ -1,6 +1,7 @@
-use libsql::{Connection, de::from_row, params};
+use turso::{Connection, params};
 
 use super::Error;
+use crate::database::de::first_row;
 use crate::database::types::{Identity, SignerEntry};
 
 impl Identity {
@@ -211,7 +212,7 @@ pub async fn get_signer_entry_by_x_only_pubkey(
 ) -> Result<Option<SignerEntry>, Error> {
     let sql = format!("{SIGNER_ENTRY_SELECT} WHERE p.x_only_pubkey = ?");
     let mut rows = conn.query(&sql, params![x_only_pubkey]).await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn get_signer_entry_by_id(
@@ -220,7 +221,7 @@ pub async fn get_signer_entry_by_id(
 ) -> Result<Option<SignerEntry>, Error> {
     let sql = format!("{SIGNER_ENTRY_SELECT} WHERE s.id = ?");
     let mut rows = conn.query(&sql, params![signer_id]).await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 /// Look up a signer by BLS pubkey. Policy allows only one signer per BLS

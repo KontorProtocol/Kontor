@@ -15,7 +15,7 @@ use bitcoin::{
 };
 use indexer_types::{Block, BlockRow, Transaction};
 use indexmap::IndexMap;
-use libsql::Connection;
+use turso::Connection;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};

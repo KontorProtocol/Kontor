@@ -26,7 +26,8 @@ tower = { workspace = true }
 wasmtime = { workspace = true }
 wasm-wave = { workspace = true }
 wit-component = { workspace = true }
-libsql = { workspace = true }
+turso = { workspace = true }
+turso_core = { workspace = true }
 tracing = { workspace = true }
 bon = { workspace = true }
 tempfile = { workspace = true }

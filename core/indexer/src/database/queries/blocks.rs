@@ -1,9 +1,10 @@
 use bitcoin::BlockHash;
 use indexer_types::{BlockRow, PaginationMeta};
-use libsql::{Connection, Value, de::from_row, params};
+use turso::{Connection, Value, params};
 
 use super::Error;
 use super::pagination::get_paginated;
+use crate::database::de::{collect_rows, first_row};
 use crate::database::types::BlockQuery;
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -30,7 +31,7 @@ pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, 
             params![],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<BlockRow>, Error> {
@@ -40,11 +41,7 @@ pub async fn select_recent_blocks(conn: &Connection, limit: i64) -> Result<Vec<B
             params![limit],
         )
         .await?;
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(from_row(&row)?);
-    }
-    Ok(results)
+    collect_rows(&mut rows).await
 }
 
 pub async fn select_block_by_height_or_hash(
@@ -57,7 +54,7 @@ pub async fn select_block_by_height_or_hash(
             params![identifier, identifier],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn select_block_at_height(
@@ -70,7 +67,7 @@ pub async fn select_block_at_height(
             params![height],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn select_block_with_hash(
@@ -83,7 +80,7 @@ pub async fn select_block_with_hash(
             params![hash.to_string()],
         )
         .await?;
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    first_row(&mut rows).await
 }
 
 pub async fn get_blocks_paginated(
