@@ -1093,6 +1093,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2b_simd"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b79834656f71332577234b50bfc009996f7449e0c056884e6a02492ded0ca2f3"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "constant_time_eq 0.4.2",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1569,6 +1580,18 @@ name = "const-str"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f421161cb492475f1661ddc9815a745a1c894592070661180fdec3d4872e9c3"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "cookie"
@@ -4022,24 +4045,48 @@ dependencies = [
 
 [[package]]
 name = "kontor-crypto"
-version = "0.1.6"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fdfb2e1147b046fedecd240907ba0b7526d2bec3344f6ac830dcad910e59278"
+checksum = "ba64047d9983ee210dd9af9f0132c38c5973858e6d74c4ab0f0fa520c94f4caa"
 dependencies = [
  "bincode",
+ "blake2b_simd",
  "clap",
+ "constant_time_eq 0.3.1",
  "ff",
  "generic-array 0.14.7",
+ "kontor-crypto-core",
+ "libc",
  "nova-snark",
+ "num-bigint 0.4.6",
  "once_cell",
  "rand 0.8.5",
- "reed-solomon-erasure",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
+]
+
+[[package]]
+name = "kontor-crypto-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c69296ba68591d88f4e9339c09e528488d0d8bcb20b2fd4cf75e835091f29d2"
+dependencies = [
+ "blake2b_simd",
+ "constant_time_eq 0.3.1",
+ "ff",
+ "generic-array 0.14.7",
+ "halo2curves",
+ "nova-snark",
+ "once_cell",
+ "reed-solomon-erasure",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
