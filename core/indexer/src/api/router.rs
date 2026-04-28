@@ -7,6 +7,7 @@ use axum::{
     routing::{any, get, post},
 };
 use indexer_types::ErrorResponse;
+use metrics_exporter_prometheus::PrometheusHandle;
 use reqwest::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -20,7 +21,7 @@ use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contracts, get_fees, get_index,
-    get_result, get_results, get_signer, get_transaction, get_transaction_inspect,
+    get_metrics, get_result, get_results, get_signer, get_transaction, get_transaction_inspect,
     get_transactions, post_compose, post_contract, post_simulate, post_transaction_hex_inspect,
     stop,
 };
@@ -86,11 +87,19 @@ fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> axum::response::Respons
         .into_response()
 }
 
-pub fn new(context: Env) -> Router {
+pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
+
+    // Scrape endpoint sits in its own sub-router with PrometheusHandle as
+    // state, merged outside the API's middleware/CORS/timeout stack so
+    // GMP scrapes don't go through the 30s request timeout layer.
+    let metrics_router = Router::new()
+        .route("/metrics", get(get_metrics))
+        .with_state(prom_handle);
 
     Router::new()
         .route("/ws", any(ws::handler))
+        .merge(metrics_router)
         .nest(
             "/api",
             Router::new()

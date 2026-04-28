@@ -1,10 +1,14 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
+use metrics::{gauge, histogram};
 use tracing::{info, warn};
 
 use crate::block;
 use crate::consensus::finality_types::StateEvent;
+use crate::metrics::{BLOCK_DURATION, BLOCK_HEIGHT};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
     rollback_to_height, select_block_at_height, select_block_latest,
@@ -202,6 +206,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn handle_block(&mut self, block: Block) -> Result<()> {
+        let started_at = Instant::now();
         let height = block.height;
         let hash = block.hash;
         let prev_hash = block.prev_hash;
@@ -251,6 +256,8 @@ impl<E: Executor> Reactor<E> {
             .commit()
             .await
             .context("Failed to commit block transaction")?;
+        // Reflect what's actually persisted, not what we're mid-processing.
+        gauge!(BLOCK_HEIGHT).set(height as f64);
 
         // Update cached validator set after block execution
         // (process_pending_validators may have activated/deactivated validators)
@@ -287,6 +294,7 @@ impl<E: Executor> Reactor<E> {
             tx_count = block.transactions.len(),
             "Block processed"
         );
+        histogram!(BLOCK_DURATION).record(started_at.elapsed().as_secs_f64());
 
         Ok(())
     }

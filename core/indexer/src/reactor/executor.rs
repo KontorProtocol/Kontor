@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use bitcoin::Txid;
+use metrics::counter;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -9,6 +10,7 @@ use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{filter_map, op_from_inst};
 use crate::database;
+use crate::metrics::ITEMS_INDEXED;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
@@ -434,6 +436,7 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
+    counter!(ITEMS_INDEXED).increment(1);
     let identity = database::types::Identity::new(op.metadata().signer_id as i64);
     let signer = Signer::Id(identity);
 
