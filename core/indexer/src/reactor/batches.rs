@@ -8,6 +8,7 @@ use indexer_types::Event;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
+use metrics::gauge;
 use prost::Message;
 use tracing::{info, warn};
 
@@ -20,6 +21,7 @@ use crate::database::queries::{
     insert_batch, insert_transaction, insert_unconfirmed_batch_tx, select_block_at_height,
     select_existing_txids,
 };
+use crate::metrics::CONSENSUS_HEIGHT;
 
 use super::Reactor;
 use super::consensus_state;
@@ -54,6 +56,7 @@ impl<E: Executor> Reactor<E> {
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
     ) -> Result<()> {
+        let started_at = Instant::now();
         let conn = self.db_conn();
 
         info!(
@@ -76,6 +79,7 @@ impl<E: Executor> Reactor<E> {
             )
             .await
             .context("Failed to insert empty batch")?;
+            gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
 
             let checkpoint = self.consensus.get_checkpoint(&conn).await;
             self.consensus.emit_state_event(StateEvent::BatchApplied {
@@ -88,6 +92,7 @@ impl<E: Executor> Reactor<E> {
             info!(
                 anchor = anchor_height,
                 consensus_height = %consensus_height,
+                duration_ms = started_at.elapsed().as_millis() as u64,
                 "Empty batch recorded"
             );
             return Ok(());
@@ -169,6 +174,7 @@ impl<E: Executor> Reactor<E> {
             .commit()
             .await
             .context("Failed to commit batch transaction")?;
+        gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
 
         let checkpoint = self.consensus.get_checkpoint(&conn).await;
         self.consensus.emit_state_event(StateEvent::BatchApplied {
@@ -181,6 +187,7 @@ impl<E: Executor> Reactor<E> {
         info!(
             anchor = anchor_height,
             consensus_height = %consensus_height,
+            duration_ms = started_at.elapsed().as_millis() as u64,
             "Batch processing complete"
         );
 

@@ -3,16 +3,16 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
-use metrics::{gauge, histogram};
+use metrics::gauge;
 use tracing::{info, warn};
 
 use crate::block;
 use crate::consensus::finality_types::StateEvent;
-use crate::metrics::{BLOCK_DURATION, BLOCK_HEIGHT};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
     rollback_to_height, select_block_at_height, select_block_latest,
 };
+use crate::metrics::BLOCK_HEIGHT;
 use crate::runtime::{
     filestorage::api::{expire_challenges, generate_challenges_for_block},
     staking::api::process_pending_validators,
@@ -292,9 +292,9 @@ impl<E: Executor> Reactor<E> {
             %hash,
             unbatched_count,
             tx_count = block.transactions.len(),
+            duration_ms = started_at.elapsed().as_millis() as u64,
             "Block processed"
         );
-        histogram!(BLOCK_DURATION).record(started_at.elapsed().as_secs_f64());
 
         Ok(())
     }
