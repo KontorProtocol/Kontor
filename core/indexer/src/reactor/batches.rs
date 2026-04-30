@@ -8,7 +8,7 @@ use indexer_types::Event;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
-use metrics::gauge;
+use metrics::{counter, gauge};
 use prost::Message;
 use tracing::{info, warn};
 
@@ -21,7 +21,7 @@ use crate::database::queries::{
     insert_batch, insert_transaction, insert_unconfirmed_batch_tx, select_block_at_height,
     select_existing_txids,
 };
-use crate::metrics::CONSENSUS_HEIGHT;
+use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
 use super::Reactor;
 use super::consensus_state;
@@ -175,6 +175,17 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to commit batch transaction")?;
         gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
+        // Counter increments only after commit so we count ops persisted,
+        // not ops attempted (mirrors the block path; simulation can't reach
+        // here so it never inflates the metric).
+        let executed_ops: u64 = parsed_txs
+            .iter()
+            .flat_map(|t| t.inputs.iter())
+            .map(|input| input.insts.ops.len() as u64)
+            .sum();
+        if executed_ops > 0 {
+            counter!(ITEMS_INDEXED).increment(executed_ops);
+        }
 
         let checkpoint = self.consensus.get_checkpoint(&conn).await;
         self.consensus.emit_state_event(StateEvent::BatchApplied {

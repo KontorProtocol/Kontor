@@ -91,15 +91,16 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
     // Scrape endpoint sits in its own sub-router with PrometheusHandle as
-    // state, merged outside the API's middleware/CORS/timeout stack so
-    // GMP scrapes don't go through the 30s request timeout layer.
+    // state, merged AFTER `.layer()` and `.with_state()` so GMP scrapes
+    // bypass the API's middleware stack (30s timeout, CORS, request-id,
+    // catch-panic, trace) — `Router::layer` only applies to routes
+    // already in the router at the time of the call.
     let metrics_router = Router::new()
         .route("/metrics", get(get_metrics))
         .with_state(prom_handle);
 
     Router::new()
         .route("/ws", any(ws::handler))
-        .merge(metrics_router)
         .nest(
             "/api",
             Router::new()
@@ -170,4 +171,5 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 )),
         )
         .with_state(context)
+        .merge(metrics_router)
 }

@@ -3,7 +3,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
-use metrics::gauge;
+use metrics::{counter, gauge};
 use tracing::{info, warn};
 
 use crate::block;
@@ -12,7 +12,7 @@ use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
     rollback_to_height, select_block_at_height, select_block_latest,
 };
-use crate::metrics::BLOCK_HEIGHT;
+use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
     filestorage::api::{expire_challenges, generate_challenges_for_block},
     staking::api::process_pending_validators,
@@ -57,8 +57,10 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Execute a block: insert block row, process transactions.
-    /// Returns the number of unbatched (non-deduped) transactions.
-    pub(super) async fn execute_block(&mut self, block: &Block) -> Result<usize> {
+    /// Returns the number of unbatched (non-deduped) transactions, plus
+    /// the count of ops actually executed (only ops in non-deduped txs —
+    /// deduped txs were already executed via batch).
+    pub(super) async fn execute_block(&mut self, block: &Block) -> Result<(usize, u64)> {
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -71,6 +73,7 @@ impl<E: Executor> Reactor<E> {
         .context("insert_block failed")?;
 
         let mut unbatched_count = 0;
+        let mut executed_ops: u64 = 0;
         for (i, t) in block.transactions.iter().enumerate() {
             if get_transaction_by_txid(&self.db_conn(), &t.txid.to_string())
                 .await
@@ -89,6 +92,11 @@ impl<E: Executor> Reactor<E> {
             }
 
             unbatched_count += 1;
+            executed_ops += t
+                .inputs
+                .iter()
+                .map(|input| input.insts.ops.len() as u64)
+                .sum::<u64>();
             let tx_id = insert_transaction(
                 &self.db_conn(),
                 indexer_types::TransactionRow::builder()
@@ -107,7 +115,7 @@ impl<E: Executor> Reactor<E> {
                 .context("execute_transaction failed")?;
         }
 
-        Ok(unbatched_count)
+        Ok((unbatched_count, executed_ops))
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results, then rollback.
@@ -243,7 +251,7 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to begin block transaction")?;
 
-        let unbatched_count = self
+        let (unbatched_count, executed_ops) = self
             .execute_block(&block)
             .await
             .context("execute_block failed")?;
@@ -257,7 +265,12 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to commit block transaction")?;
         // Reflect what's actually persisted, not what we're mid-processing.
+        // Op counter increments only after commit so the simulation path
+        // (rolls back instead of committing) doesn't inflate it.
         gauge!(BLOCK_HEIGHT).set(height as f64);
+        if executed_ops > 0 {
+            counter!(ITEMS_INDEXED).increment(executed_ops);
+        }
 
         // Update cached validator set after block execution
         // (process_pending_validators may have activated/deactivated validators)
