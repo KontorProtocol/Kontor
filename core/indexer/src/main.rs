@@ -16,6 +16,24 @@ use tracing::{error, info};
 #[tokio::main]
 async fn main() -> Result<()> {
     logging::setup();
+
+    // Install the Prometheus recorder before any worker spawns. `metrics::*`
+    // macro calls before this silently no-op. Spawn the upkeep tick so
+    // histogram buckets don't accumulate stale data.
+    let prom_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install Prometheus recorder");
+    {
+        let h = prom_handle.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                h.run_upkeep();
+            }
+        });
+    }
+
     info!("Kontor");
     info!(
         version = built_info::PKG_VERSION,
@@ -52,17 +70,21 @@ async fn main() -> Result<()> {
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(
-        api::run(Env {
-            config: config.clone(),
-            cancel_token: cancel_token.clone(),
-            available: available.clone(),
-            reader: reader.clone(),
-            event_subscriber: event_subscriber.clone(),
-            bitcoin: bitcoin.clone(),
-            runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string()).await?,
-            simulate_tx,
-            fees_rx,
-        })
+        api::run(
+            Env {
+                config: config.clone(),
+                cancel_token: cancel_token.clone(),
+                available: available.clone(),
+                reader: reader.clone(),
+                event_subscriber: event_subscriber.clone(),
+                bitcoin: bitcoin.clone(),
+                runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string())
+                    .await?,
+                simulate_tx,
+                fees_rx,
+            },
+            prom_handle.clone(),
+        )
         .await?,
     );
 
