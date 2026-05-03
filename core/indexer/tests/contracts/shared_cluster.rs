@@ -19,8 +19,8 @@ pub async fn get() -> Arc<RegTesterCluster> {
     CLUSTER.lock().unwrap().as_ref().unwrap().clone()
 }
 
-#[ctor::dtor]
-fn cleanup() {
+#[dtor::dtor]
+unsafe fn cleanup() {
     let cluster = {
         let mut guard = match CLUSTER.lock() {
             Ok(g) => g,
