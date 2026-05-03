@@ -3,7 +3,7 @@ use libsql::{Connection, Value, de::from_row, named_params, params};
 
 use super::Error;
 use super::contracts::get_contract_id_from_address;
-use super::pagination::get_paginated;
+use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::{
     ContractResultPublicRow, ContractResultRow, OpResultId, OrderDirection, ResultQuery,
 };
@@ -45,7 +45,8 @@ pub async fn get_results_paginated(
     }
 
     if let Some(func) = &query.func {
-        where_clauses.push(format!("r.func = '{}'", func));
+        where_clauses.push("r.func = :func".to_string());
+        params.push((":func".to_string(), Value::from(func.clone())));
     }
 
     if let Some(height) = query.height {
@@ -65,6 +66,11 @@ pub async fn get_results_paginated(
         params.push((":start_height".to_string(), Value::Integer(height)));
     }
 
+    if let Some(signer_id) = query.signer_id {
+        where_clauses.push("r.signer_id = :signer_id".to_string());
+        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+    }
+
     get_paginated(
         conn,
         var,
@@ -72,10 +78,12 @@ pub async fn get_results_paginated(
         from,
         where_clauses,
         params,
-        query.order,
-        query.cursor,
-        query.offset,
-        query.limit,
+        PageOptions {
+            order: query.order,
+            cursor: query.cursor,
+            offset: query.offset,
+            limit: query.limit,
+        },
     )
     .await
 }

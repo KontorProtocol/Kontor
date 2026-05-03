@@ -13,6 +13,18 @@ pub fn clamp_limit(limit: Option<i64>) -> i64 {
     limit.map_or(20, |l| l.clamp(0, 1000))
 }
 
+/// Pagination controls extracted from a Query type.
+///
+/// `cursor` and `offset` are mutually exclusive — if both are set, `cursor`
+/// wins and `offset` is ignored (and `next_offset` is suppressed in the
+/// response). Callers should treat them as alternative pagination modes.
+pub struct PageOptions {
+    pub order: OrderDirection,
+    pub cursor: Option<i64>,
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+}
+
 pub async fn get_paginated<T>(
     conn: &Connection,
     var: &str,
@@ -20,28 +32,28 @@ pub async fn get_paginated<T>(
     from: &str,
     mut where_clauses: Vec<String>,
     mut params: Vec<(String, Value)>,
-    order: OrderDirection,
-    cursor: Option<i64>,
-    offset: Option<i64>,
-    limit: Option<i64>,
+    page: PageOptions,
 ) -> Result<(Vec<T>, PaginationMeta), Error>
 where
     T: DeserializeOwned + HasRowId,
 {
+    let PageOptions {
+        order,
+        cursor,
+        offset,
+        limit,
+    } = page;
     let cursor = filter_cursor(cursor);
     let limit = clamp_limit(limit);
+    let id_name = T::id_name();
 
     if let Some(cursor) = cursor {
-        where_clauses.push(format!(
-            "{}.{} {} :cursor",
-            var,
-            T::id_name(),
-            if order == OrderDirection::Desc {
-                "<"
-            } else {
-                ">"
-            }
-        ));
+        let cmp = if order == OrderDirection::Desc {
+            "<"
+        } else {
+            ">"
+        };
+        where_clauses.push(format!("{var}.{id_name} {cmp} :cursor"));
         params.push((":cursor".to_string(), Value::Integer(cursor)));
     }
 
@@ -53,13 +65,7 @@ where
 
     let total_count = conn
         .query(
-            &format!(
-                "SELECT COUNT(DISTINCT {}.{}) FROM {} {}",
-                var,
-                T::id_name(),
-                from,
-                where_sql
-            ),
+            &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
             params.clone(),
         )
         .await?
@@ -88,13 +94,6 @@ where
                 LIMIT :limit
                 {offset_clause}
                 "#,
-                selects = selects,
-                from = from,
-                where_sql = where_sql,
-                var = var,
-                id_name = T::id_name(),
-                order = order,
-                offset_clause = offset_clause
             ),
             params,
         )

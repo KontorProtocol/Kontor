@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::database::types::{
-    BlockQuery, ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow, OpResultId,
-    OrderDirection, ResultQuery, TransactionQuery,
+    BlockQuery, ContractQuery, ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow,
+    OpResultId, OrderDirection, ResultQuery, TransactionQuery,
 };
 use crate::runtime::ContractAddress;
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
@@ -716,7 +716,7 @@ async fn test_contracts() -> Result<()> {
         .unwrap();
     let bytes = get_contract_bytes_by_id(&conn, id).await?.unwrap();
     assert_eq!(bytes, row.bytes);
-    let rows = get_contracts(&conn).await?;
+    let (rows, _) = get_contracts_paginated(&conn, ContractQuery::builder().build()).await?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0], ContractListRow { id, ..row.into() });
     Ok(())
@@ -764,6 +764,144 @@ async fn test_contracts_gapless() -> Result<()> {
         insert(&conn, i).await;
     }
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_contracts_paginated() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .hash(new_mock_block_hash(1))
+            .height(1)
+            .build(),
+    )
+    .await?;
+
+    let mut ids = Vec::new();
+    for i in 0i64..5 {
+        let id = insert_contract(
+            &conn,
+            ContractRow::builder()
+                .name(format!("c{}", i))
+                .height(1)
+                .tx_index(i)
+                .bytes(vec![])
+                .build(),
+        )
+        .await?;
+        ids.push(id);
+    }
+
+    // Default order is DESC — page 1 returns the latest 2.
+    let (page1, meta1) =
+        get_contracts_paginated(&conn, ContractQuery::builder().limit(2).build()).await?;
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0].id, ids[4]);
+    assert_eq!(page1[1].id, ids[3]);
+    assert!(meta1.has_more);
+    assert_eq!(meta1.total_count, 5);
+
+    // Cursor follows: next page picks up below the cursor id.
+    let (page2, meta2) = get_contracts_paginated(
+        &conn,
+        ContractQuery::builder()
+            .limit(2)
+            .cursor(meta1.next_cursor.unwrap())
+            .build(),
+    )
+    .await?;
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2[0].id, ids[2]);
+    assert_eq!(page2[1].id, ids[1]);
+    assert!(meta2.has_more);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_contracts_signer_id_filter() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .hash(new_mock_block_hash(1))
+            .height(1)
+            .build(),
+    )
+    .await?;
+
+    let signer_a = get_or_create_identity(
+        &conn,
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        1,
+    )
+    .await?
+    .signer_id();
+    let signer_b = get_or_create_identity(
+        &conn,
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        1,
+    )
+    .await?
+    .signer_id();
+
+    // 2 contracts for signer_a, 1 for signer_b, 1 with no signer (publish without signer).
+    let id_a1 = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("a1".to_string())
+            .height(1)
+            .tx_index(0)
+            .bytes(vec![])
+            .signer_id(signer_a)
+            .build(),
+    )
+    .await?;
+    let id_a2 = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("a2".to_string())
+            .height(1)
+            .tx_index(1)
+            .bytes(vec![])
+            .signer_id(signer_a)
+            .build(),
+    )
+    .await?;
+    let _id_b = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("b".to_string())
+            .height(1)
+            .tx_index(2)
+            .bytes(vec![])
+            .signer_id(signer_b)
+            .build(),
+    )
+    .await?;
+    insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("anon".to_string())
+            .height(1)
+            .tx_index(3)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+
+    let (rows, meta) =
+        get_contracts_paginated(&conn, ContractQuery::builder().signer_id(signer_a).build())
+            .await?;
+    assert_eq!(meta.total_count, 2);
+    let returned: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(returned, vec![id_a2, id_a1]);
+    assert!(rows.iter().all(|r| r.signer_id == Some(signer_a)));
+
     Ok(())
 }
 
@@ -1536,6 +1674,31 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
+    // Second signer with a single result at height 1 — exercises the
+    // signer_id filter narrowing without affecting the height-filtered
+    // assertion below (which counts only height=2 rows).
+    let signer_id_2 = get_or_create_identity(
+        &conn,
+        "ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766",
+        1,
+    )
+    .await?
+    .signer_id();
+    insert_contract_result(
+        &conn,
+        ContractResultRow::builder()
+            .contract_id(contract_1_id)
+            .height(1)
+            .tx_id(tx_id_1_3)
+            .input_index(0)
+            .op_index(0)
+            .result_index(1)
+            .gas(100)
+            .signer_id(signer_id_2)
+            .build(),
+    )
+    .await?;
+
     let (_, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
@@ -1544,7 +1707,7 @@ async fn test_get_results_query() -> Result<()> {
             .build(),
     )
     .await?;
-    assert_eq!(meta.total_count, 5);
+    assert_eq!(meta.total_count, 6);
 
     // NULL tx_id result is included with txid: None
     let (results, _) = get_results_paginated(
@@ -1576,7 +1739,8 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].contract_name, "token");
     assert_eq!(results[0].contract_height, 1);
     assert_eq!(results[0].contract_tx_index, 1);
-    assert_eq!(meta.total_count, 2);
+    // signer_id_2 also has a result on the "token" contract at height=1.
+    assert_eq!(meta.total_count, 3);
 
     // func filtering
     let (results, meta) = get_results_paginated(
@@ -1637,6 +1801,33 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].height, 2);
     assert_eq!(meta.total_count, 1);
     assert!(!meta.has_more);
+
+    // signer_id filter — first signer has 5 results, second has 1.
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .signer_id(signer_id)
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results.len(), 5);
+    assert_eq!(meta.total_count, 5);
+    assert!(results.iter().all(|r| r.signer_id == signer_id));
+
+    let (results, meta) = get_results_paginated(
+        &conn,
+        ResultQuery::builder()
+            .signer_id(signer_id_2)
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(meta.total_count, 1);
+    assert_eq!(results[0].signer_id, signer_id_2);
 
     Ok(())
 }
@@ -2159,6 +2350,206 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
     assert_eq!(transactions[0].tx_index, Some(0));
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_signer_id_querying() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    // Self-contained fixture rather than setup_test_data — keeps the
+    // signer_id assertions independent of changes to the shared bed.
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .build(),
+    )
+    .await?;
+
+    let signer_a = get_or_create_identity(
+        &conn,
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        1,
+    )
+    .await?
+    .signer_id();
+    let signer_b = get_or_create_identity(
+        &conn,
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        1,
+    )
+    .await?
+    .signer_id();
+
+    let token_id = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("token".to_string())
+            .height(1)
+            .tx_index(0)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+
+    // Insert 5 txs and capture their ids.
+    let mut tx_ids = Vec::new();
+    for i in 0i64..5 {
+        let id = insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(1)
+                .txid(new_mock_transaction((i + 1) as u32).txid.to_string())
+                .tx_index(i)
+                .build(),
+        )
+        .await?;
+        tx_ids.push(id);
+    }
+
+    // Result distribution:
+    // tx 0: signer_a, 1 result
+    // tx 1: signer_a, 2 results (exercises DISTINCT in the JOIN)
+    // tx 2: signer_b, 1 result
+    // tx 3: signer_a, 1 result + a contract_state row on `token`
+    //       (covers signer_id + contract combined — two joins)
+    // tx 4: no results (control — must not appear in any signer query)
+    let insert_result = async |tx_id: i64, signer_id: i64, result_index: i64| {
+        insert_contract_result(
+            &conn,
+            ContractResultRow::builder()
+                .contract_id(token_id)
+                .height(1)
+                .tx_id(tx_id)
+                .input_index(0)
+                .op_index(0)
+                .result_index(result_index)
+                .gas(100)
+                .signer_id(signer_id)
+                .build(),
+        )
+        .await
+    };
+    insert_result(tx_ids[0], signer_a, 0).await?;
+    insert_result(tx_ids[1], signer_a, 0).await?;
+    insert_result(tx_ids[1], signer_a, 1).await?;
+    insert_result(tx_ids[2], signer_b, 0).await?;
+    insert_result(tx_ids[3], signer_a, 0).await?;
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(token_id)
+            .tx_id(tx_ids[3])
+            .height(1)
+            .path("foo".to_string())
+            .build(),
+    )
+    .await?;
+
+    // 1) signer filter narrows correctly. signer_a → 3 distinct txs
+    //    (tx 0, 1, 3). DISTINCT must collapse tx 1's two results.
+    let (txs, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_a)
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 3);
+    assert_eq!(meta.total_count, 3);
+    let ids: Vec<i64> = txs.iter().map(|t| t.id).collect();
+    assert_eq!(ids, vec![tx_ids[0], tx_ids[1], tx_ids[3]]);
+
+    // 2) signer_b → 1 tx
+    let (txs, _) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_b)
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 1);
+    assert_eq!(txs[0].id, tx_ids[2]);
+
+    // 3) signer_id + cursor pagination still works.
+    let (txs, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_a)
+            .order(OrderDirection::Asc)
+            .limit(2)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 2);
+    assert!(meta.has_more);
+    assert_eq!(meta.next_cursor, Some(txs[1].id));
+    let (txs, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_a)
+            .maybe_cursor(meta.next_cursor)
+            .order(OrderDirection::Asc)
+            .limit(2)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 1);
+    assert_eq!(txs[0].id, tx_ids[3]);
+    assert!(!meta.has_more);
+
+    // 4) signer_id + height combined.
+    let (txs, _) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_a)
+            .height(1)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 3);
+
+    // 5) signer_id + contract combined — two joins (contract_results +
+    //    contract_state). Only tx 3 has a state row on `token`.
+    let (txs, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(signer_a)
+            .contract(ContractAddress {
+                name: "token".to_string(),
+                height: 1,
+                tx_index: 0,
+            })
+            .order(OrderDirection::Asc)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert_eq!(txs.len(), 1);
+    assert_eq!(txs[0].id, tx_ids[3]);
+    assert_eq!(meta.total_count, 1);
+
+    // 6) Empty result set — bogus signer_id.
+    let (txs, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .signer_id(9999)
+            .limit(10)
+            .build(),
+    )
+    .await?;
+    assert!(txs.is_empty());
+    assert_eq!(meta.total_count, 0);
+    assert!(!meta.has_more);
 
     Ok(())
 }
