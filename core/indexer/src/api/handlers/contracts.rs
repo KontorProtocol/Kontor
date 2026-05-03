@@ -2,9 +2,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use indexer_types::{
-    ContractListRow, ContractResponse, PaginatedResponse, ViewExpr, ViewResult,
-};
+use indexer_types::{ContractListRow, ContractResponse, PaginatedResponse, ViewExpr, ViewResult};
 
 use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};

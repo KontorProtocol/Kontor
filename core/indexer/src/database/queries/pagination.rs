@@ -48,7 +48,11 @@ where
     let id_name = T::id_name();
 
     if let Some(cursor) = cursor {
-        let cmp = if order == OrderDirection::Desc { "<" } else { ">" };
+        let cmp = if order == OrderDirection::Desc {
+            "<"
+        } else {
+            ">"
+        };
         where_clauses.push(format!("{var}.{id_name} {cmp} :cursor"));
         params.push((":cursor".to_string(), Value::Integer(cursor)));
     }

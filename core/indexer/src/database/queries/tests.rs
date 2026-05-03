@@ -796,11 +796,8 @@ async fn test_get_contracts_paginated() -> Result<()> {
     }
 
     // Default order is DESC — page 1 returns the latest 2.
-    let (page1, meta1) = get_contracts_paginated(
-        &conn,
-        ContractQuery::builder().limit(2).build(),
-    )
-    .await?;
+    let (page1, meta1) =
+        get_contracts_paginated(&conn, ContractQuery::builder().limit(2).build()).await?;
     assert_eq!(page1.len(), 2);
     assert_eq!(page1[0].id, ids[4]);
     assert_eq!(page1[1].id, ids[3]);
@@ -897,11 +894,9 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
     )
     .await?;
 
-    let (rows, meta) = get_contracts_paginated(
-        &conn,
-        ContractQuery::builder().signer_id(signer_a).build(),
-    )
-    .await?;
+    let (rows, meta) =
+        get_contracts_paginated(&conn, ContractQuery::builder().signer_id(signer_a).build())
+            .await?;
     assert_eq!(meta.total_count, 2);
     let returned: Vec<i64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(returned, vec![id_a2, id_a1]);
