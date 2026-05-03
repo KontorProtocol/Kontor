@@ -4,7 +4,7 @@ use libsql::{Connection, Value, de::from_row, params};
 use super::Error;
 use super::batches::delete_unconfirmed_batch_tx;
 use super::contracts::get_contract_id_from_address;
-use super::pagination::get_paginated;
+use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::TransactionQuery;
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
@@ -111,10 +111,12 @@ pub async fn get_transactions_paginated(
         &from,
         where_clauses,
         params,
-        query.order,
-        query.cursor,
-        query.offset,
-        query.limit,
+        PageOptions {
+            order: query.order,
+            cursor: query.cursor,
+            offset: query.offset,
+            limit: query.limit,
+        },
     )
     .await
 }

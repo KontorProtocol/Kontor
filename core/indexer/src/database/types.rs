@@ -28,7 +28,7 @@ pub fn field_element_to_bytes(fe: &FieldElement) -> [u8; 32] {
 
 pub trait HasRowId {
     fn id(&self) -> i64;
-    fn id_name() -> String;
+    fn id_name() -> &'static str;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
@@ -65,8 +65,8 @@ impl HasRowId for BlockRow {
         self.height
     }
 
-    fn id_name() -> String {
-        "height".to_string()
+    fn id_name() -> &'static str {
+        "height"
     }
 }
 
@@ -140,8 +140,8 @@ impl HasRowId for TransactionRow {
         self.id
     }
 
-    fn id_name() -> String {
-        "id".to_string()
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 
@@ -163,8 +163,8 @@ impl HasRowId for ContractListRow {
         self.id
     }
 
-    fn id_name() -> String {
-        "id".to_string()
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 
@@ -304,8 +304,8 @@ impl HasRowId for ContractResultPublicRow {
         self.id
     }
 
-    fn id_name() -> String {
-        "id".to_string()
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 

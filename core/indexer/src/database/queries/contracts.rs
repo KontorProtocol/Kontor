@@ -2,7 +2,7 @@ use indexer_types::{ContractListRow, PaginationMeta};
 use libsql::{Connection, Value, params};
 
 use super::Error;
-use super::pagination::get_paginated;
+use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::{ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
 
@@ -57,10 +57,12 @@ pub async fn get_contracts_paginated(
         &format!("contracts {}", var),
         where_clauses,
         params,
-        query.order,
-        query.cursor,
-        query.offset,
-        query.limit,
+        PageOptions {
+            order: query.order,
+            cursor: query.cursor,
+            offset: query.offset,
+            limit: query.limit,
+        },
     )
     .await
 }
