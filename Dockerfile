@@ -109,3 +109,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl --fail --silent "http://127.0.0.1:${API_PORT}/api" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/kontor"]
+CMD ["run"]
