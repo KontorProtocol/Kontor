@@ -47,6 +47,7 @@ export type ContractListRow = {
   height: number;
   tx_index: number;
   size: number;
+  signer_id: number | null;
 };
 
 export type ContractResponse = { wit: string };
