@@ -153,7 +153,18 @@ impl From<ContractRow> for ContractListRow {
             height: row.height,
             tx_index: row.tx_index,
             size: row.bytes.len() as i64,
+            signer_id: row.signer_id,
         }
+    }
+}
+
+impl HasRowId for ContractListRow {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
+    fn id_name() -> String {
+        "id".to_string()
     }
 }
 
@@ -190,6 +201,20 @@ pub struct BlockQuery {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ContractQuery {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub cursor: Option<i64>,
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+    #[builder(default)]
+    #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
+    #[serde(default)]
+    pub order: OrderDirection,
+    pub signer_id: Option<i64>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<i64>,
@@ -203,6 +228,7 @@ pub struct TransactionQuery {
     pub height: Option<i64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
+    pub signer_id: Option<i64>,
 }
 
 #[serde_as]
@@ -222,6 +248,7 @@ pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub func: Option<String>,
+    pub signer_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]

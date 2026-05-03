@@ -1,11 +1,15 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
-use indexer_types::{ContractListRow, ContractResponse, ViewExpr, ViewResult};
+use indexer_types::{
+    ContractListRow, ContractResponse, PaginatedResponse, ViewExpr, ViewResult,
+};
 
+use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries;
+use crate::database::types::ContractQuery;
 use crate::runtime::ContractAddress;
 
 pub async fn post_contract(
@@ -34,9 +38,18 @@ pub async fn post_contract(
     .into())
 }
 
-pub async fn get_contracts(State(env): State<Env>) -> Result<Vec<ContractListRow>> {
-    let conn = env.reader.connection().await?;
-    Ok(queries::get_contracts(&conn).await?.into())
+pub async fn get_contracts(
+    Query(query): Query<ContractQuery>,
+    State(env): State<Env>,
+) -> Result<PaginatedResponse<ContractListRow>> {
+    validate_query(query.cursor, query.offset)?;
+    let (results, pagination) =
+        queries::get_contracts_paginated(&*env.reader.connection().await?, query).await?;
+    Ok(PaginatedResponse {
+        results,
+        pagination,
+    }
+    .into())
 }
 
 pub async fn get_contract(

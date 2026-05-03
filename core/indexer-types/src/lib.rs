@@ -398,6 +398,8 @@ pub struct ContractListRow {
     pub tx_index: i64,
     #[ts(type = "number")]
     pub size: i64,
+    #[ts(type = "number | null")]
+    pub signer_id: Option<i64>,
 }
 
 #[serde_as]

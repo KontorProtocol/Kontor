@@ -73,13 +73,30 @@ pub async fn get_transactions_paginated(
         "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
     let mut from = "transactions t".to_string();
     let mut where_clauses = vec![];
+    let mut needs_distinct = false;
+
     if let Some(address) = &query.contract {
         let contract_id = get_contract_id_from_address(conn, address)
             .await?
             .ok_or(Error::ContractNotFound(address.to_string()))?;
-        selects = format!("DISTINCT {}", selects);
+        needs_distinct = true;
         from = format!("{} JOIN contract_state c ON c.tx_id = t.id", from);
         where_clauses.push(format!("c.contract_id = {}", contract_id));
+    }
+
+    if let Some(signer_id) = query.signer_id {
+        // contract_results carries the per-op signer (set by execute_op),
+        // including per-input signer for aggregated/bulk transactions —
+        // so this captures "transactions a user was involved in" via any
+        // op that produced a result.
+        needs_distinct = true;
+        from = format!("{} JOIN contract_results r ON r.tx_id = t.id", from);
+        where_clauses.push("r.signer_id = :signer_id".to_string());
+        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+    }
+
+    if needs_distinct {
+        selects = format!("DISTINCT {}", selects);
     }
 
     if let Some(height) = query.height {

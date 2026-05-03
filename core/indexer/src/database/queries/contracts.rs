@@ -1,8 +1,9 @@
-use indexer_types::ContractListRow;
-use libsql::{Connection, de::from_row, params};
+use indexer_types::{ContractListRow, PaginationMeta};
+use libsql::{Connection, Value, params};
 
 use super::Error;
-use crate::database::types::ContractRow;
+use super::pagination::get_paginated;
+use crate::database::types::{ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
@@ -38,18 +39,30 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
     Ok(conn.last_insert_rowid())
 }
 
-pub async fn get_contracts(conn: &Connection) -> Result<Vec<ContractListRow>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT id, name, height, tx_index, size FROM contracts ORDER BY id DESC",
-            params![],
-        )
-        .await?;
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(from_row(&row)?);
+pub async fn get_contracts_paginated(
+    conn: &Connection,
+    query: ContractQuery,
+) -> Result<(Vec<ContractListRow>, PaginationMeta), Error> {
+    let var = "c";
+    let mut where_clauses = vec![];
+    let mut params: Vec<(String, Value)> = vec![];
+    if let Some(signer_id) = query.signer_id {
+        where_clauses.push("c.signer_id = :signer_id".to_string());
+        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
     }
-    Ok(results)
+    get_paginated(
+        conn,
+        var,
+        "c.id, c.name, c.height, c.tx_index, c.size, c.signer_id",
+        &format!("contracts {}", var),
+        where_clauses,
+        params,
+        query.order,
+        query.cursor,
+        query.offset,
+        query.limit,
+    )
+    .await
 }
 
 pub async fn get_contract_bytes_by_address(

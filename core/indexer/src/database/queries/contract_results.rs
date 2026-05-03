@@ -65,6 +65,11 @@ pub async fn get_results_paginated(
         params.push((":start_height".to_string(), Value::Integer(height)));
     }
 
+    if let Some(signer_id) = query.signer_id {
+        where_clauses.push("r.signer_id = :signer_id".to_string());
+        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+    }
+
     get_paginated(
         conn,
         var,
