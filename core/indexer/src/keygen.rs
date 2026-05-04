@@ -158,10 +158,9 @@ mod tests {
         // The pubkey emitted by keygen must match what the running daemon
         // computes from the same private key via private_key_from_hex().
         let v = derive_validator(&TEST_SEED, 0);
-        let parsed = crate::consensus::signing::private_key_from_hex(&hex::encode(
-            v.ed25519_private,
-        ))
-        .unwrap();
+        let parsed =
+            crate::consensus::signing::private_key_from_hex(&hex::encode(v.ed25519_private))
+                .unwrap();
         assert_eq!(*parsed.public_key().as_bytes(), v.ed25519_pubkey);
     }
 
