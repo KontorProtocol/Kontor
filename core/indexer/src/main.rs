@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_daemon(config: Config) -> Result<()> {
-    logging::setup();
+    logging::setup_with_format(config.log_format);
 
     // Install the Prometheus recorder before any worker spawns. `metrics::*`
     // macro calls before this silently no-op. Spawn the upkeep tick so

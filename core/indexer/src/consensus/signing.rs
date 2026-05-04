@@ -9,11 +9,6 @@ use crate::consensus::{Ctx, Proposal, Vote};
 
 pub use malachitebft_signing_ed25519::*;
 
-/// Generate a deterministic private key from a seed byte array.
-pub fn private_key_from_seed(seed: [u8; 32]) -> PrivateKey {
-    PrivateKey::from(seed)
-}
-
 /// Generate a random private key (for follower/sync-only nodes).
 pub fn generate_random_private_key() -> PrivateKey {
     let key_bytes: [u8; 32] = rand::random();
