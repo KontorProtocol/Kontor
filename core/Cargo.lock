@@ -3834,6 +3834,7 @@ dependencies = [
  "anyhow",
  "bitcoin",
  "bon 3.9.1",
+ "clap",
  "indexmap 2.14.0",
  "macros",
  "postcard",

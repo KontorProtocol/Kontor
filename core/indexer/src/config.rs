@@ -4,6 +4,7 @@ use bitcoin::Network;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+use crate::consensus::signing::ConsensusMode;
 use crate::logging;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
@@ -75,8 +76,16 @@ pub struct Config {
     // --- Consensus ---
     #[clap(
         long,
+        env = "CONSENSUS_MODE",
+        default_value = "follower",
+        help = "validator (signs votes/proposals) | follower (sync-only)"
+    )]
+    pub consensus_mode: ConsensusMode,
+
+    #[clap(
+        long,
         env = "CONSENSUS_PRIVATE_KEY",
-        help = "Hex-encoded Ed25519 private key for consensus participation"
+        help = "Hex-encoded Ed25519 private key for consensus participation (validator mode only)"
     )]
     pub consensus_private_key: Option<String>,
 
@@ -137,6 +146,7 @@ impl Config {
             api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
+            consensus_mode: ConsensusMode::Follower,
             consensus_private_key: None,
             consensus_private_key_file: None,
             consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),

@@ -20,6 +20,7 @@ async fn get_info(env: &Env) -> anyhow::Result<Info> {
         target: built_info::TARGET.to_string(),
         network: env.config.network.to_string(),
         available: *env.available.read().await,
+        consensus_mode: env.config.consensus_mode,
         height,
         checkpoint,
         consensus_height,

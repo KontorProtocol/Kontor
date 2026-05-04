@@ -425,6 +425,24 @@ pub struct PaginatedResponse<T> {
     pub pagination: PaginationMeta,
 }
 
+/// Whether this node participates in consensus voting.
+///
+/// Surfaced in the `Info` response so operators monitoring the cluster
+/// externally can confirm a pod's actual mode rather than just trusting
+/// the config they passed in.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, clap::ValueEnum,
+)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[serde(rename_all = "lowercase")]
+pub enum ConsensusMode {
+    /// Signs votes and proposals.
+    Validator,
+    /// Sync-only; does not participate in consensus.
+    #[default]
+    Follower,
+}
+
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Info {
@@ -432,6 +450,7 @@ pub struct Info {
     pub target: String,
     pub network: String,
     pub available: bool,
+    pub consensus_mode: ConsensusMode,
     #[ts(type = "number")]
     pub height: i64,
     pub checkpoint: Option<String>,

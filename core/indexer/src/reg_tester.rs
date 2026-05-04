@@ -157,7 +157,9 @@ async fn run_kontor(
         .arg(format!("tcp://127.0.0.1:{zmq_port}"));
 
     if let Some(c) = consensus {
-        cmd.arg("--consensus-private-key")
+        cmd.arg("--consensus-mode")
+            .arg("validator")
+            .arg("--consensus-private-key")
             .arg(&c.private_key_hex)
             .arg("--consensus-listen-addr")
             .arg(&c.listen_addr)

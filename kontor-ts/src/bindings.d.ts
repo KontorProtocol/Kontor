@@ -41,6 +41,15 @@ export type ComposeQuery = {
   envelope: number | null;
 };
 
+/**
+ * Whether this node participates in consensus voting.
+ *
+ * Surfaced in the `Info` response so operators monitoring the cluster
+ * externally can confirm a pod's actual mode rather than just trusting
+ * the config they passed in.
+ */
+export type ConsensusMode = "validator" | "follower";
+
 export type ContractListRow = {
   id: number;
   name: string;
@@ -86,6 +95,7 @@ export type Info = {
   target: string;
   network: string;
   available: boolean;
+  consensus_mode: ConsensusMode;
   height: number;
   checkpoint: string | null;
   consensus_height: number | null;
