@@ -224,8 +224,8 @@ mod tests {
 
     #[test]
     fn resolve_missing_file_is_rejected() {
-        let err = resolve_consensus_private_key(None, Some(Path::new("/nonexistent/path")))
-            .unwrap_err();
+        let err =
+            resolve_consensus_private_key(None, Some(Path::new("/nonexistent/path"))).unwrap_err();
         assert!(err.to_string().to_lowercase().contains("reading"));
     }
 }
