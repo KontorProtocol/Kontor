@@ -4,18 +4,47 @@ use std::thread::available_parallelism;
 
 use crate::api::Env;
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
+use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+#[derive(Parser)]
+#[command(
+    name = "kontor",
+    author = "Unspendable Labs",
+    version = "0.1.0",
+    about = "Kontor is a Bitcoin Layer 2"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the indexer daemon.
+    Run(Config),
+    /// Generate validator keys deterministically from a master seed.
+    Keygen(KeygenArgs),
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    logging::setup();
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Run(config) => run_daemon(config).await,
+        Command::Keygen(args) => keygen::run(args),
+    }
+}
+
+async fn run_daemon(config: Config) -> Result<()> {
+    logging::setup_with_format(config.log_format);
 
     // Install the Prometheus recorder before any worker spawns. `metrics::*`
     // macro calls before this silently no-op. Spawn the upkeep tick so
@@ -39,7 +68,6 @@ async fn main() -> Result<()> {
         version = built_info::PKG_VERSION,
         target = built_info::TARGET
     );
-    let config = Config::try_parse()?;
     info!("{:#?}", config);
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();

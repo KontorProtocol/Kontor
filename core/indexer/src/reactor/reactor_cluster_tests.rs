@@ -11,6 +11,7 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
+use crate::keygen;
 use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
@@ -105,13 +106,16 @@ struct RollbackResult {
 #[allow(dead_code)]
 impl ReactorCluster {
     async fn start_with(total: usize, initial: usize) -> Result<Self> {
-        let private_keys: Vec<PrivateKey> = (0..total)
-            .map(|i| {
-                let mut seed = [0u8; 32];
-                seed[0] = i as u8;
-                seed[31] = 42;
-                crate::consensus::signing::private_key_from_seed(seed)
-            })
+        // Same derivation path operators run in production via `kontor keygen`
+        // — fixed master seed gives reproducible test runs.
+        const TEST_MASTER_SEED: [u8; 32] = [0x42u8; 32];
+        let validator_keys: Vec<keygen::ValidatorKeys> = (0..total)
+            .map(|i| keygen::derive_validator(&TEST_MASTER_SEED, i as u32))
+            .collect();
+
+        let private_keys: Vec<PrivateKey> = validator_keys
+            .iter()
+            .map(|k| PrivateKey::from(k.ed25519_private))
             .collect();
 
         let validators: Vec<Validator> = private_keys
@@ -119,13 +123,12 @@ impl ReactorCluster {
             .map(|pk| Validator::new(pk.public_key(), 100 as VotingPower))
             .collect();
 
-        let genesis_validators: Vec<GenesisValidator> = private_keys
+        let genesis_validators: Vec<GenesisValidator> = validator_keys
             .iter()
-            .enumerate()
-            .map(|(i, pk)| GenesisValidator {
-                x_only_pubkey: format!("{:064x}", i + 1),
+            .map(|k| GenesisValidator {
+                x_only_pubkey: hex::encode(k.x_only_pubkey),
                 stake: crate::runtime::Decimal::try_from(100u64).unwrap(),
-                ed25519_pubkey: pk.public_key().as_bytes().to_vec(),
+                ed25519_pubkey: k.ed25519_pubkey.to_vec(),
             })
             .collect();
 

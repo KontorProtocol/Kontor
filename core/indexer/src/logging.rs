@@ -1,11 +1,9 @@
 use std::sync::Once;
 
-use clap::{Parser, ValueEnum};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, Registry, filter, layer::SubscriberExt};
-
-use crate::config::Config;
 
 static INIT: Once = Once::new();
 
@@ -16,11 +14,16 @@ pub enum Format {
     Plain,
 }
 
+/// Tests and other in-process callers — defaults to plain format.
 pub fn setup() {
+    setup_with_format(Format::Plain);
+}
+
+/// Daemon entrypoint passes the format already-parsed from the `run`
+/// subcommand. Re-parsing argv here would fail because the top-level CLI
+/// requires a subcommand and `Config` no longer parses standalone.
+pub fn setup_with_format(log_format: Format) {
     INIT.call_once(|| {
-        let log_format = Config::try_parse()
-            .map(|c| c.log_format)
-            .unwrap_or(Format::Plain);
         let base_filter = filter::Targets::new()
             .with_default(LevelFilter::INFO)
             .with_target("arc_malachitebft", Level::WARN);

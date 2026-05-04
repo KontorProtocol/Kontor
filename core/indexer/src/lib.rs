@@ -8,6 +8,7 @@ pub mod config;
 pub mod consensus;
 pub mod database;
 pub mod event;
+pub mod keygen;
 pub mod legacy_test_utils;
 pub mod logging;
 pub mod metrics;

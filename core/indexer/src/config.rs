@@ -7,12 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::logging;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
-#[clap(
-    author = "Unspendable Labs",
-    version = "0.1.0",
-    about = "Kontor",
-    long_about = r#"Kontor is a Bitcoin Layer 2"#
-)]
 pub struct Config {
     #[clap(
         long,

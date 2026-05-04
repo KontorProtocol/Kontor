@@ -22,6 +22,7 @@ use crate::{
     config::{GenesisConfig, GenesisValidatorConfig, RegtestConfig},
     consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
+    keygen,
     retry::{retry_extended, retry_simple},
     runtime::ContractAddress,
     test_utils,
@@ -137,7 +138,8 @@ async fn run_kontor(
     let config = RegtestConfig::default();
     let program = format!("{}/../target/release/kontor", env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(program);
-    cmd.arg("--api-port")
+    cmd.arg("run")
+        .arg("--api-port")
         .arg(api_port.to_string())
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
@@ -912,26 +914,27 @@ impl RegTesterCluster {
             bls_pubkey,
         };
 
-        // Generate Ed25519 keypairs for all validators (including inactive)
-        let ed25519_keys: Vec<Ed25519PrivateKey> = (0..total)
-            .map(|i| {
-                let mut key_seed = [0u8; 32];
-                key_seed[0] = i as u8;
-                key_seed[1] = 0xAB;
-                Ed25519PrivateKey::from(key_seed)
-            })
+        // Same derivation path operators run via `kontor keygen`. Distinct
+        // master seed from the in-process cluster so the two test setups
+        // produce different keys (avoids accidental cross-test coupling).
+        const REGTEST_MASTER_SEED: [u8; 32] = [0xABu8; 32];
+        let validator_keys: Vec<keygen::ValidatorKeys> = (0..total)
+            .map(|i| keygen::derive_validator(&REGTEST_MASTER_SEED, i as u32))
+            .collect();
+        let ed25519_keys: Vec<Ed25519PrivateKey> = validator_keys
+            .iter()
+            .map(|k| Ed25519PrivateKey::from(k.ed25519_private))
             .collect();
 
         // Write genesis file (only genesis_count validators)
         let genesis_config = GenesisConfig {
-            validators: ed25519_keys
+            validators: validator_keys
                 .iter()
                 .take(genesis_count)
-                .enumerate()
-                .map(|(i, key)| GenesisValidatorConfig {
-                    x_only_pubkey: format!("{:064x}", i + 1),
+                .map(|k| GenesisValidatorConfig {
+                    x_only_pubkey: hex::encode(k.x_only_pubkey),
                     stake: "100".to_string(),
-                    ed25519_pubkey: hex::encode(key.public_key().as_bytes()),
+                    ed25519_pubkey: hex::encode(k.ed25519_pubkey),
                 })
                 .collect(),
         };
