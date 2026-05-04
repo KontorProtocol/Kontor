@@ -136,13 +136,15 @@ async fn run_daemon(config: Config) -> Result<()> {
     .await;
     handles.push(follower_handle);
 
-    let (private_key, consensus_enabled) =
-        indexer::consensus::signing::resolve_consensus_private_key(
-            config.consensus_private_key.as_deref(),
-            config.consensus_private_key_file.as_deref(),
-        )?;
+    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
+        config.consensus_mode,
+        config.consensus_private_key.as_deref(),
+        config.consensus_private_key_file.as_deref(),
+    )?;
+    let consensus_enabled =
+        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
     if !consensus_enabled {
-        info!("No consensus private key provided, running as sync-only follower");
+        info!("Consensus mode: follower — sync-only, will not sign");
     }
     let engine_config = reactor::engine::EngineConfig {
         private_key,
