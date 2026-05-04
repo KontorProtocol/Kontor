@@ -29,7 +29,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the indexer daemon.
-    Run(Config),
+    Run(Box<Config>),
     /// Generate validator keys deterministically from a master seed.
     Keygen(KeygenArgs),
 }
@@ -38,7 +38,7 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run(config) => run_daemon(config).await,
+        Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
     }
 }
@@ -136,18 +136,14 @@ async fn run_daemon(config: Config) -> Result<()> {
     .await;
     handles.push(follower_handle);
 
-    let (private_key, consensus_enabled) = if let Some(key_hex) = &config.consensus_private_key {
-        (
-            indexer::consensus::signing::private_key_from_hex(key_hex)?,
-            true,
-        )
-    } else {
+    let (private_key, consensus_enabled) =
+        indexer::consensus::signing::resolve_consensus_private_key(
+            config.consensus_private_key.as_deref(),
+            config.consensus_private_key_file.as_deref(),
+        )?;
+    if !consensus_enabled {
         info!("No consensus private key provided, running as sync-only follower");
-        (
-            indexer::consensus::signing::generate_random_private_key(),
-            false,
-        )
-    };
+    }
     let engine_config = reactor::engine::EngineConfig {
         private_key,
         listen_addr: config.consensus_listen_addr.clone(),

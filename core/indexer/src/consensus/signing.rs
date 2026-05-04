@@ -1,4 +1,6 @@
-use anyhow::Context;
+use std::path::Path;
+
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 
@@ -22,6 +24,41 @@ pub fn private_key_from_hex(hex_str: &str) -> anyhow::Result<PrivateKey> {
         anyhow::anyhow!("Ed25519 private key must be 32 bytes, got {}", v.len())
     })?;
     Ok(PrivateKey::from(key_array))
+}
+
+/// Resolve the consensus private key from config: prefer the inline hex
+/// value, fall back to reading from a file path (`_FILE` convention for
+/// k8s-mounted secrets), refuse to start if both are set, otherwise
+/// generate a random key and run as a sync-only follower.
+///
+/// Returns `(key, consensus_enabled)` — `consensus_enabled` is false
+/// only when neither source was provided (the random-key follower path).
+pub fn resolve_consensus_private_key(
+    inline_hex: Option<&str>,
+    file_path: Option<&Path>,
+) -> anyhow::Result<(PrivateKey, bool)> {
+    if inline_hex.is_some() && file_path.is_some() {
+        bail!(
+            "both --consensus-private-key and --consensus-private-key-file are set; \
+             pick one (typically the file form for k8s)"
+        );
+    }
+    if let Some(hex) = inline_hex {
+        return Ok((private_key_from_hex(hex)?, true));
+    }
+    if let Some(path) = file_path {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("reading consensus private key from {}", path.display()))?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!(
+                "consensus private key file {} is empty",
+                path.display()
+            ));
+        }
+        return Ok((private_key_from_hex(trimmed)?, true));
+    }
+    Ok((generate_random_private_key(), false))
 }
 
 pub trait Hashable {
@@ -132,5 +169,63 @@ impl SigningProvider<Ctx> for Ed25519Provider {
         Ok(VerificationResult::from_bool(
             public_key.verify(extension.as_ref(), signature).is_ok(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    const KEY_HEX: &str = "8a9314fb7c22dc4ab1cb39fe1041be2923b4c78ce99ba0e04497e5e006a1cd35";
+
+    #[test]
+    fn resolve_inline_hex() {
+        let (_pk, enabled) = resolve_consensus_private_key(Some(KEY_HEX), None).unwrap();
+        assert!(enabled);
+    }
+
+    #[test]
+    fn resolve_from_file() {
+        let mut f = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, KEY_HEX.as_bytes()).unwrap();
+        let (_pk, enabled) = resolve_consensus_private_key(None, Some(f.path())).unwrap();
+        assert!(enabled);
+    }
+
+    #[test]
+    fn resolve_from_file_trims_whitespace_and_newline() {
+        // K8s-mounted secrets usually end with a trailing newline; make sure we strip.
+        let mut f = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, format!("  {KEY_HEX}\n").as_bytes()).unwrap();
+        let (_pk, enabled) = resolve_consensus_private_key(None, Some(f.path())).unwrap();
+        assert!(enabled);
+    }
+
+    #[test]
+    fn resolve_inline_and_file_set_is_rejected() {
+        let f = NamedTempFile::new().unwrap();
+        let err = resolve_consensus_private_key(Some(KEY_HEX), Some(f.path())).unwrap_err();
+        assert!(err.to_string().contains("both"));
+    }
+
+    #[test]
+    fn resolve_empty_file_is_rejected() {
+        let f = NamedTempFile::new().unwrap();
+        let err = resolve_consensus_private_key(None, Some(f.path())).unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn resolve_neither_falls_back_to_follower() {
+        let (_pk, enabled) = resolve_consensus_private_key(None, None).unwrap();
+        assert!(!enabled);
+    }
+
+    #[test]
+    fn resolve_missing_file_is_rejected() {
+        let err =
+            resolve_consensus_private_key(None, Some(Path::new("/nonexistent/path"))).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("reading"));
     }
 }

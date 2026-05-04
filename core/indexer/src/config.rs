@@ -80,6 +80,19 @@ pub struct Config {
     )]
     pub consensus_private_key: Option<String>,
 
+    /// Path to a file containing the hex-encoded Ed25519 private key.
+    /// Standard `_FILE` convention for k8s-mounted secrets — pairs with an
+    /// init container that derives the per-pod key from a master seed and
+    /// writes it to a shared volume. Mutually exclusive with
+    /// `--consensus-private-key`; if both are set, the daemon refuses to
+    /// start so a misconfiguration can't silently pick the wrong source.
+    #[clap(
+        long,
+        env = "CONSENSUS_PRIVATE_KEY_FILE",
+        help = "Path to a file containing the hex-encoded Ed25519 private key (alternative to --consensus-private-key for k8s secret mounts)"
+    )]
+    pub consensus_private_key_file: Option<PathBuf>,
+
     #[clap(
         long,
         env = "CONSENSUS_LISTEN_ADDR",
@@ -125,6 +138,7 @@ impl Config {
             data_dir: "will be set".into(),
             starting_block_height: 1,
             consensus_private_key: None,
+            consensus_private_key_file: None,
             consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
             consensus_peers: Vec::new(),
             genesis_file: PathBuf::new(),
