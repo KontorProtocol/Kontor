@@ -505,6 +505,18 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to query latest block during startup")?
     {
+        // The native block at height 0 is inserted by this function on
+        // first boot (below). On subsequent boots — if no real bitcoin
+        // blocks have been indexed yet — `select_block_latest` returns
+        // it. Treat that case as a fresh start, since `starting_block_height`
+        // is allowed to be (and typically is) much higher than 0.
+        Some(block) if block.height == 0 => {
+            info!(
+                "Only native block found, starting from height {}",
+                starting_block_height
+            );
+            (starting_block_height - 1, None)
+        }
         Some(block) => {
             let block_height = block.height as u64;
             if block_height < starting_block_height - 1 {
