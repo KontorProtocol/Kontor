@@ -125,12 +125,18 @@ pub struct Config {
     )]
     pub genesis_file: PathBuf,
 
+    /// Hard deadline for kontor's empty-batch fallback is 80% of this value
+    /// (see `consensus_state::PendingProposal::hard_deadline`). Tuned to match
+    /// the reactor's 500ms debounce; lower values fire empty batches too
+    /// aggressively for kontor's Bitcoin-anchored mempool turnover. Override
+    /// only if you know the debounce model and have a reason.
     #[clap(
         long,
         env = "CONSENSUS_PROPOSE_TIMEOUT_MS",
-        help = "Consensus propose timeout in milliseconds (default: 3000)"
+        default_value = "10000",
+        help = "Consensus propose timeout in milliseconds"
     )]
-    pub consensus_propose_timeout_ms: Option<u64>,
+    pub consensus_propose_timeout_ms: u64,
 }
 
 impl Config {
@@ -152,7 +158,7 @@ impl Config {
             consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
             consensus_peers: Vec::new(),
             genesis_file: PathBuf::new(),
-            consensus_propose_timeout_ms: None,
+            consensus_propose_timeout_ms: 10000,
         }
     }
 }

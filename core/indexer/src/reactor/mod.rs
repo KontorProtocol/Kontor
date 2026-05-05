@@ -627,7 +627,7 @@ pub fn run(
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: Vec<crate::runtime::GenesisValidator>,
     observation_channels: Option<consensus_state::ObservationChannels>,
-    consensus_propose_timeout_ms: Option<u64>,
+    consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
@@ -644,8 +644,8 @@ pub fn run(
                 .await
                 .context("create_runtime_executor failed")?;
 
-                let timeouts = consensus_propose_timeout_ms.map(|ms| LinearTimeouts {
-                    propose: std::time::Duration::from_millis(ms),
+                let timeouts = Some(LinearTimeouts {
+                    propose: std::time::Duration::from_millis(consensus_propose_timeout_ms),
                     ..LinearTimeouts::default()
                 });
 

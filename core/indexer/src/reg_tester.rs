@@ -164,9 +164,7 @@ async fn run_kontor(
             .arg("--consensus-listen-addr")
             .arg(&c.listen_addr)
             .arg("--genesis-file")
-            .arg(&c.genesis_file)
-            .arg("--consensus-propose-timeout-ms")
-            .arg("10000");
+            .arg(&c.genesis_file);
         for peer in &c.peers {
             cmd.arg("--consensus-peers").arg(peer);
         }
