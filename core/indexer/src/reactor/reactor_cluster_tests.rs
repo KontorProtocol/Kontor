@@ -23,7 +23,6 @@ use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::types::core::VotingPower;
-use malachitebft_core_types::LinearTimeouts;
 
 fn allocate_port() -> u16 {
     static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(19000);
@@ -324,10 +323,6 @@ impl ReactorCluster {
                 crate::reactor::mempool_fee_index::MempoolFeeIndex::new(None),
             )
             .await;
-            state.timeouts = LinearTimeouts {
-                propose: Duration::from_secs(10),
-                ..Default::default()
-            };
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,
                 finality_tx: ftx,
