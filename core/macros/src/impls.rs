@@ -15,8 +15,119 @@ pub fn generate(config: Config) -> TokenStream {
         quote! { kontor::built_in::numbers }
     };
 
+    let signer_and_holder_impls = if host {
+        // Host mode: Display is impl'd directly on indexer_types::Signer
+        quote! {}
+    } else {
+        quote! {
+            impl core::fmt::Display for kontor::built_in::context::Signer {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    write!(f, "{}", self.key())
+                }
+            }
+
+            #[automatically_derived]
+            impl core::fmt::Display for kontor::built_in::context::Holder {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    write!(f, "{}", self.key())
+                }
+            }
+
+            #[automatically_derived]
+            impl Clone for kontor::built_in::context::Holder {
+                fn clone(&self) -> Self {
+                    kontor::built_in::context::Holder::from_ref(&self.as_ref()).expect("clone of valid Holder failed")
+                }
+            }
+
+            #[automatically_derived]
+            impl PartialEq for kontor::built_in::context::Holder {
+                fn eq(&self, other: &Self) -> bool {
+                    self.key() == other.key()
+                }
+            }
+
+            #[automatically_derived]
+            impl Eq for kontor::built_in::context::Holder {}
+
+            #[automatically_derived]
+            impl core::str::FromStr for kontor::built_in::context::Holder {
+                type Err = alloc::string::String;
+
+                fn from_str(s: &str) -> Result<Self, Self::Err> {
+                    let holder_ref: kontor::built_in::context::HolderRef = s.parse()?;
+                    kontor::built_in::context::Holder::from_ref(&holder_ref)
+                        .map_err(|e| alloc::format!("{:?}", e))
+                }
+            }
+
+            #[automatically_derived]
+            impl TryFrom<kontor::built_in::context::HolderRef> for kontor::built_in::context::Holder {
+                type Error = error::Error;
+
+                fn try_from(holder_ref: kontor::built_in::context::HolderRef) -> Result<Self, Self::Error> {
+                    kontor::built_in::context::Holder::from_ref(&holder_ref)
+                }
+            }
+
+            #[automatically_derived]
+            impl TryFrom<&kontor::built_in::context::HolderRef> for kontor::built_in::context::Holder {
+                type Error = error::Error;
+
+                fn try_from(holder_ref: &kontor::built_in::context::HolderRef) -> Result<Self, Self::Error> {
+                    kontor::built_in::context::Holder::from_ref(holder_ref)
+                }
+            }
+
+            #[automatically_derived]
+            impl From<&kontor::built_in::context::Signer> for kontor::built_in::context::Holder {
+                fn from(signer: &kontor::built_in::context::Signer) -> Self {
+                    signer.as_holder()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Signer> for kontor::built_in::context::Holder {
+                fn from(signer: kontor::built_in::context::Signer) -> Self {
+                    signer.as_holder()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<&kontor::built_in::context::Signer> for kontor::built_in::context::HolderRef {
+                fn from(signer: &kontor::built_in::context::Signer) -> Self {
+                    signer.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Signer> for kontor::built_in::context::HolderRef {
+                fn from(signer: kontor::built_in::context::Signer) -> Self {
+                    signer.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<&kontor::built_in::context::Holder> for kontor::built_in::context::HolderRef {
+                fn from(holder: &kontor::built_in::context::Holder) -> Self {
+                    holder.as_ref()
+                }
+            }
+
+            #[automatically_derived]
+            impl From<kontor::built_in::context::Holder> for kontor::built_in::context::HolderRef {
+                fn from(holder: kontor::built_in::context::Holder) -> Self {
+                    holder.as_ref()
+                }
+            }
+        }
+    };
+
     quote! {
         contract_address!(kontor::built_in::foreign::ContractAddress);
+        holder_ref!(kontor::built_in::context::HolderRef);
+
+        #signer_and_holder_impls
 
         #[automatically_derived]
         impl PartialEq for kontor::built_in::error::Error {
@@ -325,7 +436,7 @@ pub fn generate(config: Config) -> TokenStream {
         #[automatically_derived]
         impl PartialEq for kontor::built_in::numbers::Decimal {
             fn eq(&self, other: &Self) -> bool {
-                #numerics_mod_name::eq_decimal(*self, *other)
+                #numerics_mod_name::eq_decimal(*self, *other).expect("eq_decimal failed")
             }
         }
 
@@ -333,45 +444,52 @@ pub fn generate(config: Config) -> TokenStream {
         impl Eq for kontor::built_in::numbers::Decimal {}
 
         #[automatically_derived]
-        impl From<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
-            fn from(i: kontor::built_in::numbers::Integer) -> kontor::built_in::numbers::Decimal {
+        impl TryFrom<kontor::built_in::numbers::Integer> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: kontor::built_in::numbers::Integer) -> Result<kontor::built_in::numbers::Decimal, Self::Error> {
                 #numerics_mod_name::integer_to_decimal(i)
             }
         }
 
-        impl From<u64> for kontor::built_in::numbers::Decimal {
-            fn from(i: u64) -> Self {
+        impl TryFrom<u64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: u64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::u64_to_decimal(i)
             }
         }
 
-        impl From<u32> for kontor::built_in::numbers::Decimal {
-            fn from(i: u32) -> Self {
-                (i as u64).into()
+        impl TryFrom<u32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: u32) -> Result<Self, Self::Error> {
+                (i as u64).try_into()
             }
         }
 
-        impl From<i64> for kontor::built_in::numbers::Decimal {
-            fn from(i: i64) -> Self {
+        impl TryFrom<i64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: i64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::s64_to_decimal(i)
             }
         }
 
-        impl From<i32> for kontor::built_in::numbers::Decimal {
-            fn from(i: i32) -> Self {
-                (i as i64).into()
+        impl TryFrom<i32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(i: i32) -> Result<Self, Self::Error> {
+                (i as i64).try_into()
             }
         }
 
-        impl From<f64> for kontor::built_in::numbers::Decimal {
-            fn from(f: f64) -> Self {
+        impl TryFrom<f64> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(f: f64) -> Result<Self, Self::Error> {
                 #numerics_mod_name::f64_to_decimal(f)
             }
         }
 
-        impl From<f32> for kontor::built_in::numbers::Decimal {
-            fn from(f: f32) -> Self {
-                (f as f64).into()
+        impl TryFrom<f32> for kontor::built_in::numbers::Decimal {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(f: f32) -> Result<Self, Self::Error> {
+                (f as f64).try_into()
             }
         }
 
@@ -386,5 +504,6 @@ pub fn generate(config: Config) -> TokenStream {
                 s.as_str().into()
             }
         }
+
     }
 }

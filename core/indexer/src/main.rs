@@ -4,24 +4,70 @@ use std::thread::available_parallelism;
 
 use crate::api::Env;
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
+use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+#[derive(Parser)]
+#[command(
+    name = "kontor",
+    author = "Unspendable Labs",
+    version = "0.1.0",
+    about = "Kontor is a Bitcoin Layer 2"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the indexer daemon.
+    Run(Box<Config>),
+    /// Generate validator keys deterministically from a master seed.
+    Keygen(KeygenArgs),
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    logging::setup();
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Run(config) => run_daemon(*config).await,
+        Command::Keygen(args) => keygen::run(args),
+    }
+}
+
+async fn run_daemon(config: Config) -> Result<()> {
+    logging::setup_with_format(config.log_format);
+
+    // Install the Prometheus recorder before any worker spawns. `metrics::*`
+    // macro calls before this silently no-op. Spawn the upkeep tick so
+    // histogram buckets don't accumulate stale data.
+    let prom_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install Prometheus recorder");
+    {
+        let h = prom_handle.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                h.run_upkeep();
+            }
+        });
+    }
+
     info!("Kontor");
     info!(
         version = built_info::PKG_VERSION,
         target = built_info::TARGET
     );
-    let config = Config::try_parse()?;
     info!("{:#?}", config);
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
@@ -49,27 +95,35 @@ async fn main() -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
+    let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
     handles.push(
-        api::run(Env {
-            config: config.clone(),
-            cancel_token: cancel_token.clone(),
-            available: available.clone(),
-            reader: reader.clone(),
-            event_subscriber: event_subscriber.clone(),
-            bitcoin: bitcoin.clone(),
-            runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string()).await?,
-            simulate_tx,
-        })
+        api::run(
+            Env {
+                config: config.clone(),
+                cancel_token: cancel_token.clone(),
+                available: available.clone(),
+                reader: reader.clone(),
+                event_subscriber: event_subscriber.clone(),
+                bitcoin: bitcoin.clone(),
+                runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string())
+                    .await?,
+                simulate_tx,
+                fees_rx,
+            },
+            prom_handle.clone(),
+        )
         .await?,
     );
 
-    let conn = &*reader.connection().await?;
-    let recent_blocks = select_recent_blocks(conn, 50).await?;
-    let known_hashes: Vec<_> = recent_blocks
-        .iter()
-        .map(|b| (b.height as u64, b.hash))
-        .collect();
+    let known_hashes = {
+        let conn = reader.connection().await?;
+        let recent_blocks = select_recent_blocks(&conn, 50).await?;
+        recent_blocks
+            .iter()
+            .map(|b| (b.height as u64, b.hash))
+            .collect::<Vec<_>>()
+    };
 
     let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
@@ -82,23 +136,23 @@ async fn main() -> Result<()> {
     .await;
     handles.push(follower_handle);
 
-    // Build consensus engine config if a private key is provided
-    let engine_config = config.consensus_private_key.as_ref().map(|key_hex| {
-        let key_bytes = hex::decode(key_hex).expect("Invalid consensus private key hex");
-        let key_array: [u8; 32] = key_bytes
-            .try_into()
-            .expect("Ed25519 private key must be 32 bytes");
-        let private_key = indexer::consensus::signing::PrivateKey::from(key_array);
-        reactor::engine::EngineConfig {
-            private_key,
-            listen_addr: config
-                .consensus_listen_addr
-                .clone()
-                .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/26656".to_string()),
-            persistent_peers: config.consensus_peers.clone(),
-            data_dir: config.data_dir.clone(),
-        }
-    });
+    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
+        config.consensus_mode,
+        config.consensus_private_key.as_deref(),
+        config.consensus_private_key_file.as_deref(),
+    )?;
+    let consensus_enabled =
+        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
+    if !consensus_enabled {
+        info!("Consensus mode: follower — sync-only, will not sign");
+    }
+    let engine_config = reactor::engine::EngineConfig {
+        private_key,
+        listen_addr: config.consensus_listen_addr.clone(),
+        persistent_peers: config.consensus_peers.clone(),
+        data_dir: config.data_dir.clone(),
+        consensus_enabled,
+    };
 
     let (ready_tx, ready_rx) = oneshot::channel();
     handles.push(reactor::run(
@@ -111,10 +165,12 @@ async fn main() -> Result<()> {
         Some(event_tx),
         Some(simulate_rx),
         engine_config,
-        Some(bitcoin.clone()),
+        bitcoin.clone(),
         Some(replay_tx),
         load_genesis_validators(&config)?,
         None,
+        config.consensus_propose_timeout_ms,
+        Some(fees_tx),
     ));
     ready_rx.await?;
     {
@@ -131,10 +187,7 @@ async fn main() -> Result<()> {
 }
 
 fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
-    let Some(path) = &config.genesis_file else {
-        return Ok(vec![]);
-    };
-    let genesis = indexer::config::GenesisConfig::load(path)?;
+    let genesis = indexer::config::GenesisConfig::load(&config.genesis_file)?;
     genesis
         .validators
         .into_iter()

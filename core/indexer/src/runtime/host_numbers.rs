@@ -167,7 +167,10 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::sqrt_integer(i))
     }
 
-    async fn integer_to_decimal<T>(accessor: &Accessor<T, Self>, i: Integer) -> Result<Decimal> {
+    async fn integer_to_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        i: Integer,
+    ) -> Result<Result<Decimal, Error>> {
         Fuel::NumbersIntegerToDecimal
             .consume(
                 accessor,
@@ -179,7 +182,10 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::integer_to_decimal(i))
     }
 
-    async fn decimal_to_integer<T>(accessor: &Accessor<T, Self>, d: Decimal) -> Result<Integer> {
+    async fn decimal_to_integer<T>(
+        accessor: &Accessor<T, Self>,
+        d: Decimal,
+    ) -> Result<Result<Integer, Error>> {
         Fuel::NumbersDecimalToInteger
             .consume(
                 accessor,
@@ -191,7 +197,10 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::decimal_to_integer(d))
     }
 
-    async fn u64_to_decimal<T>(accessor: &Accessor<T, Self>, i: u64) -> Result<Decimal> {
+    async fn u64_to_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        i: u64,
+    ) -> Result<Result<Decimal, Error>> {
         Fuel::NumbersU64ToDecimal
             .consume(
                 accessor,
@@ -203,7 +212,10 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::u64_to_decimal(i))
     }
 
-    async fn s64_to_decimal<T>(accessor: &Accessor<T, Self>, i: i64) -> Result<Decimal> {
+    async fn s64_to_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        i: i64,
+    ) -> Result<Result<Decimal, Error>> {
         Fuel::NumbersS64ToDecimal
             .consume(
                 accessor,
@@ -215,7 +227,10 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::s64_to_decimal(i))
     }
 
-    async fn f64_to_decimal<T>(accessor: &Accessor<T, Self>, f: f64) -> Result<Decimal> {
+    async fn f64_to_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        f: f64,
+    ) -> Result<Result<Decimal, Error>> {
         Fuel::NumbersF64ToDecimal
             .consume(
                 accessor,
@@ -255,7 +270,11 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(s)
     }
 
-    async fn eq_decimal<T>(accessor: &Accessor<T, Self>, a: Decimal, b: Decimal) -> Result<bool> {
+    async fn eq_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        a: Decimal,
+        b: Decimal,
+    ) -> Result<Result<bool, Error>> {
         Fuel::NumbersEqDecimal
             .consume(
                 accessor,

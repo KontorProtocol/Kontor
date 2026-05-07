@@ -43,19 +43,14 @@ impl ::core::clone::Clone for TokenStorageLedgerModel {
     }
 }
 impl TokenStorageLedgerModel {
-    pub fn get(&self, key: impl ToString) -> Option<u64> {
+    pub fn get(&self, key: &String) -> Option<u64> {
         let base_path = self.base_path.push(key.to_string());
         stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
-        &'a self,
-    ) -> impl Iterator<Item = T> + 'a
-    where
-        <T as FromStr>::Err: Debug,
-    {
+    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
@@ -112,11 +107,11 @@ impl ::core::clone::Clone for TokenStorageLedgerWriteModel {
     }
 }
 impl TokenStorageLedgerWriteModel {
-    pub fn get(&self, key: impl ToString) -> Option<u64> {
+    pub fn get(&self, key: &String) -> Option<u64> {
         let base_path = self.base_path.push(key.to_string());
         stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
-    pub fn set(&self, key: String, value: u64) {
+    pub fn set(&self, key: &String, value: u64) {
         stdlib::WriteStorage::__set(
             &self.ctx,
             self.base_path.push(key.to_string()),
@@ -126,12 +121,7 @@ impl TokenStorageLedgerWriteModel {
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
-        &'a self,
-    ) -> impl Iterator<Item = T> + 'a
-    where
-        <T as FromStr>::Err: Debug,
-    {
+    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

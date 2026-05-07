@@ -95,7 +95,7 @@ impl ProposalPart {
     }
 
     pub fn to_sign_bytes(&self) -> Bytes {
-        proto_trait::Protobuf::to_bytes(self).unwrap()
+        proto_trait::Protobuf::to_bytes(self).expect("proposal part serialization should not fail")
     }
 }
 
@@ -199,14 +199,20 @@ impl Protobuf for ProposalPart {
 
     fn to_proto(&self) -> Result<Self::Proto, ProtoError> {
         match self {
-            Self::Init(init) => Ok(Self::Proto {
-                part: Some(Part::Init(proto::ProposalInit {
-                    height: init.height.as_u64(),
-                    round: init.round.as_u32().unwrap(),
-                    pol_round: init.pol_round.as_u32(),
-                    proposer: Some(init.proposer.to_proto()?),
-                })),
-            }),
+            Self::Init(init) => {
+                let round = init
+                    .round
+                    .as_u32()
+                    .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
+                Ok(Self::Proto {
+                    part: Some(Part::Init(proto::ProposalInit {
+                        height: init.height.as_u64(),
+                        round,
+                        pol_round: init.pol_round.as_u32(),
+                        proposer: Some(init.proposer.to_proto()?),
+                    })),
+                })
+            }
             Self::Data(data) => {
                 let proto_data = match data {
                     ProposalData::Batch {

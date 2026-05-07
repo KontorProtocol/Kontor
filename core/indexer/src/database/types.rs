@@ -28,7 +28,7 @@ pub fn field_element_to_bytes(fe: &FieldElement) -> [u8; 32] {
 
 pub trait HasRowId {
     fn id(&self) -> i64;
-    fn id_name() -> String;
+    fn id_name() -> &'static str;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
@@ -65,8 +65,8 @@ impl HasRowId for BlockRow {
         self.height
     }
 
-    fn id_name() -> String {
-        "height".to_string()
+    fn id_name() -> &'static str {
+        "height"
     }
 }
 
@@ -74,6 +74,37 @@ impl HasRowId for BlockRow {
 pub struct CheckpointRow {
     pub height: i64,
     pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Identity {
+    signer_id: i64,
+    key: String,
+}
+
+impl Identity {
+    pub fn new(signer_id: i64) -> Self {
+        Self {
+            signer_id,
+            key: signer_id.to_string(),
+        }
+    }
+
+    pub fn signer_id(&self) -> i64 {
+        self.signer_id
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SignerEntry {
+    pub signer_id: i64,
+    pub x_only_pubkey: Option<String>,
+    pub bls_pubkey: Option<Vec<u8>>,
+    pub next_nonce: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,8 +140,8 @@ impl HasRowId for TransactionRow {
         self.id
     }
 
-    fn id_name() -> String {
-        "id".to_string()
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 
@@ -122,7 +153,18 @@ impl From<ContractRow> for ContractListRow {
             height: row.height,
             tx_index: row.tx_index,
             size: row.bytes.len() as i64,
+            signer_id: row.signer_id,
         }
+    }
+}
+
+impl HasRowId for ContractListRow {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 
@@ -134,6 +176,7 @@ pub struct ContractRow {
     pub height: i64,
     pub tx_index: i64,
     pub bytes: Vec<u8>,
+    pub signer_id: Option<i64>,
 }
 
 impl ContractRow {
@@ -158,6 +201,20 @@ pub struct BlockQuery {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ContractQuery {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub cursor: Option<i64>,
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+    #[builder(default)]
+    #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
+    #[serde(default)]
+    pub order: OrderDirection,
+    pub signer_id: Option<i64>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<i64>,
@@ -171,6 +228,7 @@ pub struct TransactionQuery {
     pub height: Option<i64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
+    pub signer_id: Option<i64>,
 }
 
 #[serde_as]
@@ -190,6 +248,7 @@ pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub func: Option<String>,
+    pub signer_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
@@ -208,6 +267,8 @@ pub struct ContractResultRow {
     pub func: String,
     pub gas: i64,
     pub value: Option<String>,
+    #[builder(default = 0)]
+    pub signer_id: i64,
 }
 
 impl ContractResultRow {
@@ -235,6 +296,7 @@ pub struct ContractResultPublicRow {
     pub contract_height: i64,
     pub contract_tx_index: i64,
     pub txid: Option<String>,
+    pub signer_id: i64,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -242,8 +304,8 @@ impl HasRowId for ContractResultPublicRow {
         self.id
     }
 
-    fn id_name() -> String {
-        "id".to_string()
+    fn id_name() -> &'static str {
+        "id"
     }
 }
 
@@ -266,6 +328,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             }
             .to_string(),
             txid: row.txid,
+            signer_id: row.signer_id,
         }
     }
 }

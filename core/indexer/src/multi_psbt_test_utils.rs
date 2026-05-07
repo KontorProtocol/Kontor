@@ -201,11 +201,7 @@ pub fn log_node_sign_size_and_fee_breakdown(
     }
     let base_vb = tx_vbytes(&base_no_witness);
     let num_inputs = reveal_psbt_local.unsigned_tx.input.len() as u64;
-    let base_share_vb = if num_inputs > 0 {
-        base_vb / num_inputs
-    } else {
-        0
-    };
+    let base_share_vb = base_vb.checked_div(num_inputs).unwrap_or(0);
     let fair_needed_fee_node =
         (base_share_vb.saturating_add(delta_vb_r)).saturating_mul(min_sat_per_vb);
     let witness_only_needed = delta_vb_r.saturating_mul(min_sat_per_vb);

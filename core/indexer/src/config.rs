@@ -4,15 +4,10 @@ use bitcoin::Network;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+use crate::consensus::signing::ConsensusMode;
 use crate::logging;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
-#[clap(
-    author = "Unspendable Labs",
-    version = "0.1.0",
-    about = "Kontor",
-    long_about = r#"Kontor is a Bitcoin Layer 2"#
-)]
 pub struct Config {
     #[clap(
         long,
@@ -78,20 +73,42 @@ pub struct Config {
     )]
     pub network: bitcoin::Network,
 
-    // --- Consensus (optional — omit to run as follower) ---
+    // --- Consensus ---
+    #[clap(
+        long,
+        env = "CONSENSUS_MODE",
+        default_value = "follower",
+        help = "validator (signs votes/proposals) | follower (sync-only)"
+    )]
+    pub consensus_mode: ConsensusMode,
+
     #[clap(
         long,
         env = "CONSENSUS_PRIVATE_KEY",
-        help = "Hex-encoded Ed25519 private key for consensus participation"
+        help = "Hex-encoded Ed25519 private key for consensus participation (validator mode only)"
     )]
     pub consensus_private_key: Option<String>,
+
+    /// Path to a file containing the hex-encoded Ed25519 private key.
+    /// Standard `_FILE` convention for k8s-mounted secrets — pairs with an
+    /// init container that derives the per-pod key from a master seed and
+    /// writes it to a shared volume. Mutually exclusive with
+    /// `--consensus-private-key`; if both are set, the daemon refuses to
+    /// start so a misconfiguration can't silently pick the wrong source.
+    #[clap(
+        long,
+        env = "CONSENSUS_PRIVATE_KEY_FILE",
+        help = "Path to a file containing the hex-encoded Ed25519 private key (alternative to --consensus-private-key for k8s secret mounts)"
+    )]
+    pub consensus_private_key_file: Option<PathBuf>,
 
     #[clap(
         long,
         env = "CONSENSUS_LISTEN_ADDR",
+        default_value = "/ip4/127.0.0.1/tcp/26656",
         help = "Multiaddr for consensus P2P (e.g. /ip4/127.0.0.1/tcp/26656)"
     )]
-    pub consensus_listen_addr: Option<String>,
+    pub consensus_listen_addr: String,
 
     #[clap(
         long,
@@ -106,7 +123,20 @@ pub struct Config {
         env = "GENESIS_FILE",
         help = "Path to genesis JSON file containing the initial validator set"
     )]
-    pub genesis_file: Option<PathBuf>,
+    pub genesis_file: PathBuf,
+
+    /// Hard deadline for kontor's empty-batch fallback is 80% of this value
+    /// (see `consensus_state::PendingProposal::hard_deadline`). Tuned to match
+    /// the reactor's 500ms debounce; lower values fire empty batches too
+    /// aggressively for kontor's Bitcoin-anchored mempool turnover. Override
+    /// only if you know the debounce model and have a reason.
+    #[clap(
+        long,
+        env = "CONSENSUS_PROPOSE_TIMEOUT_MS",
+        default_value = "10000",
+        help = "Consensus propose timeout in milliseconds"
+    )]
+    pub consensus_propose_timeout_ms: u64,
 }
 
 impl Config {
@@ -122,10 +152,13 @@ impl Config {
             api_port: 9333,
             data_dir: "will be set".into(),
             starting_block_height: 1,
+            consensus_mode: ConsensusMode::Follower,
             consensus_private_key: None,
-            consensus_listen_addr: None,
+            consensus_private_key_file: None,
+            consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
             consensus_peers: Vec::new(),
-            genesis_file: None,
+            genesis_file: PathBuf::new(),
+            consensus_propose_timeout_ms: 10000,
         }
     }
 }

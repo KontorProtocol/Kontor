@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
 
+use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
@@ -311,6 +312,57 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
+/// Shared engine + pre-compiled native contract components.
+/// First caller compiles all native contracts; subsequent callers get cached results.
+async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::component::Component)>) {
+    static ONCE: tokio::sync::OnceCell<(
+        wasmtime::Engine,
+        Vec<(i64, wasmtime::component::Component)>,
+    )> = tokio::sync::OnceCell::const_new();
+
+    ONCE.get_or_init(|| async {
+        let engine = Runtime::new_engine().expect("Failed to create engine");
+        let cache = ComponentCache::new();
+
+        let (_reader, writer, (_db_dir, _db_name)) = new_test_db().await.expect("test db");
+        let conn = writer.connection();
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await
+        .expect("insert block");
+
+        let storage = Storage::builder().height(0).conn(conn).build();
+        let linker = Runtime::new_linker(&engine).expect("linker");
+        let mut runtime = Runtime::new_with(engine.clone(), linker, cache.clone(), storage)
+            .await
+            .expect("runtime");
+        runtime
+            .publish_native_contracts(&[])
+            .await
+            .expect("publish native");
+
+        // Extract compiled components from cache. Native contract IDs start
+        // at 1 and are assigned in publish order; see
+        // `Runtime::publish_native_contracts`.
+        let mut components = Vec::new();
+        for id in 1..=NATIVE_CONTRACTS.len() as i64 {
+            if let Some(component) = cache.get(&id).await {
+                components.push((id, component));
+            }
+        }
+
+        (engine, components)
+    })
+    .await
+    .clone()
+}
+
 pub async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis(&[]).await
 }
@@ -341,7 +393,13 @@ pub async fn test_runtime_with_genesis(
     .await?;
 
     let storage = Storage::builder().height(1).conn(conn).build();
-    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    let (engine, prewarmed) = shared_test_engine().await;
+    let cache = ComponentCache::new();
+    for (id, component) in &prewarmed {
+        cache.put(*id, component.clone()).await;
+    }
+    let linker = Runtime::new_linker(&engine)?;
+    let mut runtime = Runtime::new_with(engine, linker, cache, storage).await?;
     runtime.publish_native_contracts(genesis_validators).await?;
 
     Ok((runtime, db_dir, db_name))
@@ -527,209 +585,142 @@ pub fn lucky_hash(hex: &str) -> [u8; 32] {
         .expect("Hash must be exactly 32 bytes")
 }
 
-/// Test harness for running the production reactor with a single-validator
-/// Malachite engine. Feeds blocks and mempool events through channels
-/// (no poller/bitcoind needed). Uses a real RuntimeExecutor with temp DB.
-pub mod reactor_harness {
-    use std::time::Duration;
+/// BLS test helpers shared between unit and regtest attack vector tests.
+pub mod bls_test {
+    use blst::min_sig::{AggregatePublicKey, PublicKey as BlsPublicKey};
 
-    use anyhow::Result;
-    use tempfile::TempDir;
-    use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
-    use tokio_util::sync::CancellationToken;
-
-    use indexer_types::Block;
-
-    use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
-    use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
-    use crate::consensus::signing::PrivateKey;
-    use crate::reactor;
-    use crate::reactor::consensus::ObservationChannels;
-    use crate::reactor::engine::EngineConfig;
-    use crate::runtime::GenesisValidator;
-
-    /// Handle to a running single-validator test reactor.
-    pub struct TestReactor {
-        pub block_tx: mpsc::Sender<BlockEvent>,
-        pub mempool_tx: mpsc::Sender<MempoolEvent>,
-        pub decided_rx: mpsc::Receiver<DecidedBatch>,
-        pub finality_rx: mpsc::Receiver<FinalityEvent>,
-        pub state_rx: mpsc::Receiver<StateEvent>,
-        pub cancel: CancellationToken,
-        handle: JoinHandle<()>,
-        _db_dir: TempDir,
+    pub fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
+        let seed = [seed_byte; 64];
+        crate::bls::derive_bls_secret_key_eip2333(
+            &seed,
+            &crate::bls::bls_derivation_path(bitcoin::Network::Regtest),
+        )
+        .expect("failed to derive EIP-2333 secret key")
     }
 
-    impl TestReactor {
-        /// Start a single-validator reactor with a fresh temp DB.
-        pub async fn start() -> Result<Self> {
-            let seed: [u8; 32] = [42; 32];
-            let private_key = PrivateKey::from(seed);
-            Self::start_with_key(private_key).await
+    pub fn construct_rogue_g2_pubkey(
+        beta_pk_compressed: &[u8; 96],
+        victim_pk_compressed: &[u8; 96],
+    ) -> [u8; 96] {
+        let beta_pk =
+            BlsPublicKey::key_validate(beta_pk_compressed).expect("beta pk must be valid G2");
+        let mut neg_victim_bytes = *victim_pk_compressed;
+        neg_victim_bytes[0] ^= 0x20;
+        let neg_victim_pk = BlsPublicKey::key_validate(&neg_victim_bytes)
+            .expect("negated victim pk must be valid G2");
+        let agg = AggregatePublicKey::aggregate(&[&beta_pk, &neg_victim_pk], false)
+            .expect("aggregation must succeed");
+        agg.to_public_key().to_bytes()
+    }
+}
+
+#[cfg(test)]
+mod fixture_gen {
+    use anyhow::{Result, anyhow};
+    use kontor_crypto::{
+        FileLedger, PorSystem,
+        api::{self, Challenge},
+    };
+    use serde::Serialize;
+
+    use super::valid_seed_field;
+
+    #[derive(Debug, Serialize)]
+    struct PorProofFixtures {
+        invalid_proof_hex: String,
+        cross_block_agg_hex: String,
+        note: String,
+    }
+
+    fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
+        let mut nonce = [0u8; 32];
+        for (i, b) in filename.bytes().enumerate().take(32) {
+            nonce[i] = b;
         }
+        api::prepare_file(content, filename, &nonce).expect("Failed to prepare file")
+    }
 
-        /// Start with a specific private key.
-        pub async fn start_with_key(private_key: PrivateKey) -> Result<Self> {
-            let (_reader, writer, (db_dir, _db_name)) = super::new_test_db().await?;
-
-            let genesis_validators = vec![GenesisValidator {
-                x_only_pubkey: format!("{:064x}", 1),
-                stake: crate::runtime::Decimal::from("100"),
-                ed25519_pubkey: private_key.public_key().as_bytes().to_vec(),
-            }];
-
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-            let port = listener.local_addr()?.port();
-            drop(listener);
-            let ports = [port];
-            let engine_config = EngineConfig {
-                private_key,
-                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[0]),
-                persistent_peers: vec![],
-                data_dir: db_dir.path().to_path_buf(),
-            };
-
-            let (block_tx, block_rx) = mpsc::channel(256);
-            let (mempool_tx, mempool_rx) = mpsc::channel(256);
-
-            let (decided_tx, decided_rx) = mpsc::channel(1024);
-            let (finality_tx, finality_rx) = mpsc::channel(1024);
-            let (state_tx, state_rx) = mpsc::channel(1024);
-
-            let cancel = CancellationToken::new();
-
-            let observation = ObservationChannels {
-                decided_tx,
-                finality_tx,
-                state_tx,
-            };
-
-            let handle = reactor::run(
-                1,
-                cancel.clone(),
-                writer,
-                block_rx,
-                mempool_rx,
-                None,
-                None,
-                None,
-                Some(engine_config),
-                None,
-                None,
-                genesis_validators,
-                Some(observation),
-            );
-
-            // Wait a bit for the reactor + Malachite to start up
-            tokio::time::sleep(Duration::from_secs(2)).await;
-
-            Ok(Self {
-                block_tx,
-                mempool_tx,
-                decided_rx,
-                finality_rx,
-                state_rx,
-                cancel,
-                handle,
-                _db_dir: db_dir,
-            })
+    fn generate_invalid_proof_hex() -> Result<String> {
+        let file2_content = b"Second file with different content";
+        let (prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
+        let mut ledger = FileLedger::new();
+        ledger.add_file(&metadata2)?;
+        let challenge = Challenge::new(
+            metadata2,
+            20000u64,
+            100,
+            valid_seed_field(99).field,
+            "node_1".to_string(),
+        );
+        let system = PorSystem::new(&ledger);
+        let proof = system
+            .prove(vec![&prepared_file2], std::slice::from_ref(&challenge))
+            .map_err(|e| anyhow!("Failed to generate proof: {e}"))?;
+        let mut bytes = proof
+            .to_bytes()
+            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
+        if let Some(last) = bytes.last_mut() {
+            *last ^= 0x01;
         }
+        Ok(hex::encode(bytes))
+    }
 
-        /// Send a block to the reactor.
-        pub async fn send_block(&self, block: Block) {
-            let target_height = block.height;
-            let _ = self
-                .block_tx
-                .send(BlockEvent::BlockInsert {
-                    target_height,
-                    block,
-                })
-                .await;
+    fn generate_cross_block_agg_hex() -> Result<String> {
+        let (prepared_a, metadata_a) =
+            prepare_test_file(b"Content of file A for cross-block", "cross_a.txt");
+        let (prepared_b, metadata_b) =
+            prepare_test_file(b"Content of file B for cross-block", "cross_b.txt");
+        let (_prepared_c, metadata_c) =
+            prepare_test_file(b"Content of file C - new agreement", "cross_c.txt");
+        let mut ledger = FileLedger::new();
+        ledger.add_file(&metadata_a)?;
+        ledger.add_file(&metadata_b)?;
+        ledger.add_file(&metadata_c)?;
+        let challenges = vec![
+            Challenge::new(
+                metadata_a,
+                40000u64,
+                100,
+                valid_seed_field(200).field,
+                "node_1".to_string(),
+            ),
+            Challenge::new(
+                metadata_b,
+                40000u64,
+                100,
+                valid_seed_field(201).field,
+                "node_1".to_string(),
+            ),
+        ];
+        let system = PorSystem::new(&ledger);
+        let proof = system
+            .prove(vec![&prepared_a, &prepared_b], &challenges)
+            .map_err(|e| anyhow!("Failed to generate aggregated proof: {e}"))?;
+        let bytes = proof
+            .to_bytes()
+            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
+        Ok(hex::encode(bytes))
+    }
+
+    /// Regenerate POR proof fixtures. Run with:
+    /// `cargo test -p indexer --release --lib generate_por_fixtures -- --ignored`
+    #[test]
+    #[ignore]
+    fn generate_por_fixtures() {
+        let fixtures = PorProofFixtures {
+            invalid_proof_hex: generate_invalid_proof_hex().expect("invalid proof"),
+            cross_block_agg_hex: generate_cross_block_agg_hex().expect("cross block agg"),
+            note: "Generated by generate_por_fixtures".to_string(),
+        };
+        let output_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("por_proof_fixtures.json");
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixtures dir");
         }
-
-        /// Send a mempool transaction.
-        pub async fn send_mempool_tx(&self, tx: bitcoin::Transaction) {
-            let _ = self.mempool_tx.send(MempoolEvent::Insert(tx)).await;
-        }
-
-        /// Wait for state events.
-        pub async fn wait_for_state_events(
-            &mut self,
-            count: usize,
-            timeout: Duration,
-        ) -> Vec<StateEvent> {
-            let mut events = Vec::new();
-            let deadline = tokio::time::sleep(timeout);
-            tokio::pin!(deadline);
-
-            loop {
-                if events.len() >= count {
-                    break;
-                }
-                tokio::select! {
-                    _ = &mut deadline => break,
-                    Some(event) = self.state_rx.recv() => {
-                        events.push(event);
-                    }
-                }
-            }
-            events
-        }
-
-        /// Wait for decided batches.
-        pub async fn wait_for_decisions(
-            &mut self,
-            count: usize,
-            timeout: Duration,
-        ) -> Vec<DecidedBatch> {
-            let mut batches = Vec::new();
-            let deadline = tokio::time::sleep(timeout);
-            tokio::pin!(deadline);
-
-            loop {
-                if batches.len() >= count {
-                    break;
-                }
-                tokio::select! {
-                    _ = &mut deadline => break,
-                    Some(batch) = self.decided_rx.recv() => {
-                        batches.push(batch);
-                    }
-                }
-            }
-            batches
-        }
-
-        /// Wait for finality events.
-        pub async fn wait_for_finality_events(
-            &mut self,
-            count: usize,
-            timeout: Duration,
-        ) -> Vec<FinalityEvent> {
-            let mut events = Vec::new();
-            let deadline = tokio::time::sleep(timeout);
-            tokio::pin!(deadline);
-
-            loop {
-                if events.len() >= count {
-                    break;
-                }
-                tokio::select! {
-                    _ = &mut deadline => break,
-                    Some(event) = self.finality_rx.recv() => {
-                        events.push(event);
-                    }
-                }
-            }
-            events
-        }
-
-        /// Shut down the reactor.
-        pub async fn shutdown(self) {
-            self.cancel.cancel();
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            drop(self.handle);
-        }
+        let json = serde_json::to_string_pretty(&fixtures).expect("serialize");
+        std::fs::write(&output_path, json).expect("write fixtures");
+        println!("Wrote fixtures to {}", output_path.display());
     }
 }

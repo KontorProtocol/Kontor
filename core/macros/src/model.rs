@@ -47,7 +47,7 @@ pub fn generate_struct(
 
                     let setter = if write {
                         quote! {
-                            pub fn set(&self, key: #k_ty, value: #v_ty) {
+                            pub fn set(&self, key: &#k_ty, value: #v_ty) {
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
                             }
                         }
@@ -63,7 +63,7 @@ pub fn generate_struct(
                         }
 
                         impl #field_model_name {
-                            pub fn get(&self, key: impl ToString) -> #get_return {
+                            pub fn get(&self, key: &#k_ty) -> #get_return {
                                 let base_path = self.base_path.push(key.to_string());
                                 #get_body
                             }
@@ -74,12 +74,9 @@ pub fn generate_struct(
                                 Map::new(&[])
                             }
 
-                            pub fn keys<'a, T: ToString + FromStr + Clone + 'a>(
+                            pub fn keys<'a>(
                                 &'a self,
-                            ) -> impl Iterator<Item = T> + 'a
-                            where                                       // <--- Add this section
-                                <T as FromStr>::Err: Debug,
-                            {
+                            ) -> impl Iterator<Item = #k_ty> + 'a {
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
                         }

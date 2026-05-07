@@ -1,8 +1,26 @@
 package kontor:built-in;
 
 interface context {
+    use error.{error};
+
+    variant holder-ref {
+        x-only-pubkey(string),
+        signer-id(u64),
+        core,
+        burner,
+        utxo(out-point),
+    }
+
+    resource holder {
+        key: async func() -> string;
+        from-ref: static async func(ref: holder-ref) -> result<holder, error>;
+        as-ref: async func() -> holder-ref;
+    }
+
     resource signer {
-        to-string: async func() -> string;
+        key: async func() -> string;
+        as-holder: async func() -> holder;
+        as-ref: async func() -> holder-ref;
     }
 
     variant op-return-data {
@@ -159,14 +177,14 @@ interface numbers {
     div-integer: async func(a: integer, b: integer) -> result<integer, error>;
     sqrt-integer: async func(i: integer) -> result<integer, error>;
 
-    integer-to-decimal: async func(i: integer) -> decimal;
-    decimal-to-integer: async func(d: decimal) -> integer;
-    u64-to-decimal: async func(i: u64) -> decimal;
-    s64-to-decimal: async func(i: s64) -> decimal;
-    f64-to-decimal: async func(f: f64) -> decimal;
+    integer-to-decimal: async func(i: integer) -> result<decimal, error>;
+    decimal-to-integer: async func(d: decimal) -> result<integer, error>;
+    u64-to-decimal: async func(i: u64) -> result<decimal, error>;
+    s64-to-decimal: async func(i: s64) -> result<decimal, error>;
+    f64-to-decimal: async func(f: f64) -> result<decimal, error>;
     string-to-decimal: async func(s: string) -> result<decimal, error>;
     decimal-to-string: async func(d: decimal) -> string;
-    eq-decimal: async func(a: decimal, b: decimal) -> bool;
+    eq-decimal: async func(a: decimal, b: decimal) -> result<bool, error>;
     cmp-decimal: async func(a: decimal, b: decimal) -> ordering;
     add-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
     sub-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
@@ -228,6 +246,22 @@ interface file-registry {
     }
 }
 
+interface testing {
+    /// Always returns an error. Used to test host function error propagation.
+    host-error: async func() -> string;
+    /// Always panics. Used to test host function panic propagation.
+    host-panic: async func() -> string;
+}
+
+interface registry {
+    /// Consume fuel for a RegisterBlsKey operation. The actual verification
+    /// and DB write happen in the reactor (outside the contract's fuel
+    /// scope); this call meters the caller for the operation so the fuel
+    /// accounting matches reality. Traps on insufficient fuel — aborts
+    /// the enclosing contract call.
+    register-bls-key: async func();
+}
+
 world built-in {
     import context;
     import foreign;
@@ -235,4 +269,6 @@ world built-in {
     import error;
     import numbers;
     import file-registry;
+    import testing;
+    import registry;
 }

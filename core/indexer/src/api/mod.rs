@@ -13,10 +13,11 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Result;
 use axum_server::Handle;
 pub use env::Env;
+use metrics_exporter_prometheus::PrometheusHandle;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
-pub async fn run(env: Env) -> Result<JoinHandle<()>> {
+pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], env.config.api_port));
     let handle = Handle::new();
 
@@ -29,7 +30,7 @@ pub async fn run(env: Env) -> Result<JoinHandle<()>> {
         }
     });
 
-    let router = router::new(env);
+    let router = router::new(env, prom_handle);
 
     info!("HTTP server running @ http://{}", addr);
     Ok(tokio::spawn(async move {

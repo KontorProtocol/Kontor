@@ -86,7 +86,7 @@ jobs:
         run: cargo audit
         working-directory: ./native-contracts
       - name: Audit core
-        run: cargo audit --ignore RUSTSEC-2026-0049  # rustls-webpki 0.102.8 pinned by libsql
+        run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119  # rustls-webpki 0.102.8 pinned by libsql; rand 0.8.5 + hickory-proto 0.25.2 pulled by malachite/libp2p
         working-directory: ./core
 
   test:
@@ -136,13 +136,9 @@ jobs:
         run: cargo binstall cargo-expand --no-confirm
       - name: Install wasm-opt
         run: cargo binstall wasm-opt --no-confirm
-      - name: Run tests (standard)
+      - name: Run tests
         working-directory: ./core
-        run: cargo test --workspace
-      - name: Run tests (long running)
-        if: runner.os == 'macOS'
-        working-directory: ./core
-        run: cargo test --workspace -- --ignored
+        run: REGTEST=1 cargo test --release --workspace
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})

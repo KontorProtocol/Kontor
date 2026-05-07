@@ -33,9 +33,22 @@ export type ComposeOutputs = {
 
 export type ComposeQuery = {
   instructions: Array<InstructionQuery>;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   envelope: number | null;
 };
+
+/**
+ * Whether this node participates in consensus voting.
+ *
+ * Surfaced in the `Info` response so operators monitoring the cluster
+ * externally can confirm a pod's actual mode rather than just trusting
+ * the config they passed in.
+ */
+export type ConsensusMode = "validator" | "follower";
 
 export type ContractListRow = {
   id: number;
@@ -43,25 +56,56 @@ export type ContractListRow = {
   height: number;
   tx_index: number;
   size: number;
+  signer_id: number | null;
 };
 
 export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
 
-export type Event = { "type": "Processed"; block: BlockRow } | {
-  "type": "Rolledback";
-  height: number;
+export type Event =
+  | { "type": "Processed"; block: BlockRow; txids: Array<string> }
+  | { "type": "BatchProcessed"; txids: Array<string> }
+  | { "type": "Rolledback"; height: number };
+
+export type Fees = {
+  /**
+   * Recommended fee rate (sat/vB) to land in the next ~1 block.
+   */
+  fastest: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 3 blocks.
+   */
+  half_hour: number;
+  /**
+   * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
+   */
+  hour: number;
 };
+
+export type HolderRef =
+  | { "XOnlyPubkey": string }
+  | { "SignerId": bigint }
+  | "Core"
+  | "Burner"
+  | { "Utxo": OutPoint };
 
 export type Info = {
   version: string;
   target: string;
   network: string;
   available: boolean;
+  consensus_mode: ConsensusMode;
   height: number;
   checkpoint: string | null;
   consensus_height: number | null;
+};
+
+export type Input = {
+  previous_output: string;
+  input_index: number;
+  x_only_pubkey: string;
+  insts: Insts;
 };
 
 export type Inst =
@@ -70,7 +114,7 @@ export type Inst =
     "Call": {
       gas_limit: number;
       contract: string;
-      nonce?: number | null;
+      nonce: number | null;
       expr: string;
     };
   }
@@ -107,7 +151,7 @@ export type Op =
       metadata: OpMetadata;
       gas_limit: number;
       contract: string;
-      nonce?: number | null;
+      nonce: number | null;
       expr: string;
     };
   }
@@ -124,10 +168,12 @@ export type Op =
 export type OpMetadata = {
   previous_output: string;
   input_index: number;
-  signer: Signer;
+  signer_id: number;
 };
 
 export type OpWithResult = { op: Op; result: ResultRow | null };
+
+export type OutPoint = { txid: string; vout: bigint };
 
 export type PaginatedResponse<T> = {
   results: Array<T>;
@@ -148,13 +194,6 @@ export type ParticipantScripts = {
   chained_tap_leaf_script: TapLeafScript | null;
 };
 
-export type RegistryEntryResponse = {
-  signer_id: number;
-  x_only_pubkey: string;
-  bls_pubkey: Array<number> | null;
-  next_nonce: number;
-};
-
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {
@@ -169,6 +208,7 @@ export type ResultRow = {
   value: string | null;
   contract: string;
   txid: string | null;
+  signer_id: number;
 };
 
 export type RevealInputs = {
@@ -205,15 +245,22 @@ export type RevealParticipantQuery = {
 
 export type RevealQuery = {
   commit_tx_hex: string;
-  sat_per_vbyte: number;
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
   participants: Array<RevealParticipantQuery>;
   op_return_data: Array<number> | null;
   envelope: number | null;
 };
 
-export type Signer = { "Core": Signer } | { "XOnlyPubKey": string } | {
-  "ContractId": { id: number; id_str: string };
-} | "Nobody";
+export type SignerResponse = {
+  signer_id: number;
+  x_only_pubkey: string | null;
+  bls_pubkey: Array<number> | null;
+  next_nonce: number | null;
+};
 
 export type TapLeafScript = {
   leafVersion: number;
@@ -224,18 +271,11 @@ export type TapLeafScript = {
 export type Transaction = {
   txid: string;
   index: number;
-  inputs: Array<TransactionInput>;
+  inputs: Array<Input>;
   op_return_data: Record<number, OpReturnData>;
 };
 
 export type TransactionHex = { hex: string };
-
-export type TransactionInput = {
-  previous_output: string;
-  input_index: number;
-  witness_signer: Signer;
-  insts: Insts;
-};
 
 export type TransactionRow = {
   id: number;

@@ -98,7 +98,19 @@ pub struct GetNetworkInfoResult {
     pub incrementalfee: f64,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+/// Outcome of `Client::check_mempool_acceptance` — a higher-level wrapper
+/// around `testmempoolaccept` that treats "already known" as acceptance
+/// and fills in fee data from `getmempoolentry` when `testmempoolaccept`
+/// short-circuits without returning fees.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Acceptance {
+    /// Tx passes Bitcoin's policy checks; package fee rate in sat/vB.
+    Accepted { fee_rate_sat_per_vb: u64 },
+    /// Tx was rejected by Bitcoin's mempool policy.
+    Rejected { reason: String },
+}
+
+#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
 pub struct TestMempoolAcceptResult {
     pub txid: Txid,
     pub wtxid: Txid,
@@ -110,10 +122,82 @@ pub struct TestMempoolAcceptResult {
     pub fees: Option<TestMempoolAcceptResultFees>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
 pub struct TestMempoolAcceptResultFees {
     #[serde(with = "bitcoin::amount::serde::as_btc")]
     pub base: Amount,
+    /// Effective fee rate in BTC/kvB accounting for in-mempool ancestors
+    /// that would be required for this tx to be included. Added in Bitcoin
+    /// Core v23. Optional because older versions don't return it.
+    #[serde(rename = "effective-feerate", default)]
+    pub effective_feerate_btc_per_kvb: Option<f64>,
+}
+
+/// Convert a `(fee_sat, vsize)` pair to sat/vB, rounding to the nearest
+/// integer instead of truncating. Used wherever we report a fee rate
+/// to consumers that compare it to integer thresholds (consensus
+/// `validate_transaction`, the API). Truncation would push a tx at
+/// rate 0.99 sat/vB to 0, causing a 1-sat/vB threshold check to
+/// reject it spuriously.
+pub fn fee_rate_sat_per_vb(fee_sat: u64, vsize: u64) -> u64 {
+    if vsize == 0 {
+        return 0;
+    }
+    (fee_sat as f64 / vsize as f64).round() as u64
+}
+
+impl TestMempoolAcceptResultFees {
+    /// Package fee rate in sat/vB. Falls back to `base / vsize` if the
+    /// node didn't return `effective-feerate`.
+    ///
+    /// Uses `round` rather than truncating because `0.00001` (= 1 sat/vB
+    /// in BTC/kvB units) is not exactly representable in f64 — its
+    /// closest representation is `0.0000099999999999999991`, which
+    /// truncates to `0` instead of `1`. With truncation, every tx at
+    /// integer-sat/vB rates would round down by one, breaking the
+    /// threshold check (`tx_fee_rate < threshold` for a 1-sat/vB tx
+    /// when threshold is 1).
+    pub fn effective_fee_rate_sat_per_vb(&self, vsize: u64) -> u64 {
+        if let Some(btc_per_kvb) = self.effective_feerate_btc_per_kvb {
+            // BTC/kvB → sat/vB: multiply by 100_000_000 (sat/BTC) / 1000 (vB/kvB) = 100_000
+            (btc_per_kvb * 100_000.0).round() as u64
+        } else {
+            fee_rate_sat_per_vb(self.base.to_sat(), vsize)
+        }
+    }
+}
+
+/// A single mempool entry returned by `getmempoolentry` or the verbose form
+/// of `getrawmempool`. Only the fields we actually consume are modeled;
+/// Bitcoin Core returns additional metadata (`weight`, `wtxid`, descendant
+/// info, etc.) that we ignore.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MempoolEntry {
+    /// Sigop-adjusted virtual size in vbytes. Bitcoin Core computes this
+    /// as `GetVirtualTransactionSize(weight, sigOpCost, bytesPerSigOp)` —
+    /// `max(weight, sigOpCost * 20) / 4` — meaning sigop-heavy txs are
+    /// already accounted for. **Don't apply a second sigop adjustment**;
+    /// `gbt`-style projection consumers can treat this as the effective
+    /// vsize for block-fitness checks. See `mempool_entry.h` in Bitcoin
+    /// Core for the canonical definition.
+    pub vsize: u64,
+    /// Sigop-adjusted vsize for this tx + all in-mempool ancestors.
+    /// Same adjustment applies; see `vsize` doc.
+    pub ancestorsize: u64,
+    pub fees: MempoolEntryFees,
+    /// In-mempool parent txids (direct ancestors, not transitive).
+    #[serde(default)]
+    pub depends: Vec<Txid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MempoolEntryFees {
+    /// Individual transaction fee in BTC.
+    #[serde(with = "bitcoin::amount::serde::as_btc")]
+    pub base: Amount,
+    /// Total fees of this tx plus all in-mempool ancestors, in BTC.
+    #[serde(with = "bitcoin::amount::serde::as_btc")]
+    pub ancestor: Amount,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]

@@ -1,14 +1,90 @@
 use std::pin::Pin;
+use std::str::FromStr;
 
+use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
-pub use indexer_types::Signer;
 
-use crate::database::types::{FileMetadataRow, bytes_to_field_element};
+use crate::database::queries::get_or_create_identity;
+use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
+use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
 use kontor_crypto::field_from_uniform_bytes;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Signer {
+    Id(Identity),
+    Core(Box<Signer>),
+    Contract {
+        id: i64,
+        signer_id: i64,
+        key: String,
+    },
+    Nobody,
+}
+
+impl Signer {
+    pub fn new_contract(id: i64, signer_id: i64) -> Self {
+        Self::Contract {
+            id,
+            signer_id,
+            key: signer_id.to_string(),
+        }
+    }
+
+    pub fn is_core(&self) -> bool {
+        matches!(self, Signer::Core(_))
+    }
+
+    /// The effective signer_id for attribution purposes.
+    /// - `Id` → the identity's signer_id
+    /// - `Core(Nobody)` → the reserved Core signer_id
+    /// - `Core(inner)` → unwraps to inner's signer_id
+    /// - `Contract` → the contract's signer_id
+    /// - `Nobody` → None (only valid inside `Core`)
+    pub fn signer_id(&self, core_signer_id: i64) -> Option<i64> {
+        match self {
+            Signer::Id(identity) => Some(identity.signer_id()),
+            Signer::Core(inner) => match inner.as_ref() {
+                Signer::Nobody => Some(core_signer_id),
+                _ => inner.signer_id(core_signer_id),
+            },
+            Signer::Contract { signer_id, .. } => Some(*signer_id),
+            Signer::Nobody => None,
+        }
+    }
+}
+
+impl core::ops::Deref for Signer {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match self {
+            Self::Id(identity) => identity.key(),
+            Self::Core(_) => "core",
+            Self::Contract { key, .. } => key,
+            Self::Nobody => "nobody",
+        }
+    }
+}
+
+impl core::fmt::Display for Signer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", &**self)
+    }
+}
+
+impl From<&Signer> for HolderRef {
+    fn from(signer: &Signer) -> Self {
+        match signer {
+            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
+            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id as u64),
+            Signer::Core(_) => HolderRef::Core,
+            Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
+        }
+    }
+}
 pub trait HasContractId: 'static {
     fn get_contract_id(&self) -> i64;
 }
@@ -80,6 +156,38 @@ impl HasContractId for CoreContext {
     }
 }
 
+pub struct Holder {
+    pub holder_ref: HolderRef,
+}
+
+impl Holder {
+    pub async fn from_holder_ref(
+        mut holder_ref: HolderRef,
+        conn: &libsql::Connection,
+        height: i64,
+    ) -> Result<Self, Error> {
+        match &holder_ref {
+            HolderRef::XOnlyPubkey(s) => {
+                // Canonicalize to lowercase hex and ensure the signer row exists.
+                let pk = XOnlyPublicKey::from_str(s)
+                    .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
+                let identity = get_or_create_identity(conn, &pk.to_string(), height)
+                    .await
+                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
+                holder_ref = HolderRef::SignerId(identity.signer_id() as u64);
+            }
+            HolderRef::SignerId(_) => {}
+            HolderRef::Utxo(out_point) => {
+                Txid::from_str(&out_point.txid)
+                    .map_err(|e| Error::Validation(format!("invalid txid: {e}")))?;
+            }
+            HolderRef::Core | HolderRef::Burner => {}
+        }
+
+        Ok(Self { holder_ref })
+    }
+}
+
 pub struct Transaction {}
 
 pub struct FileDescriptor {
@@ -96,6 +204,11 @@ impl FileDescriptor {
             .root
             .try_into()
             .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
+        if bytes_to_field_element(&root).is_none() {
+            return Err(Error::Validation(
+                "root bytes are not a valid field element".to_string(),
+            ));
+        }
         Ok(Self {
             file_metadata_row: FileMetadataRow::builder()
                 .file_id(raw.file_id)
@@ -175,5 +288,141 @@ impl Proof {
         let inner = CryptoProof::from_bytes(bytes)
             .map_err(|e| Error::Validation(format!("Failed to deserialize proof: {}", e)))?;
         Ok(Self { inner })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{create_fake_file_metadata, valid_seed_field};
+
+    const CORE_ID: i64 = 1;
+
+    #[test]
+    fn test_signer_signer_id_id() {
+        let signer = Signer::Id(Identity::new(42));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_nobody() {
+        let signer = Signer::Core(Box::new(Signer::Nobody));
+        assert_eq!(signer.signer_id(CORE_ID), Some(CORE_ID));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_id_unwraps() {
+        let signer = Signer::Core(Box::new(Signer::Id(Identity::new(42))));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_core_core_recursive() {
+        let signer = Signer::Core(Box::new(Signer::Core(Box::new(Signer::Id(Identity::new(
+            42,
+        ))))));
+        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+    }
+
+    #[test]
+    fn test_signer_signer_id_contract() {
+        let signer = Signer::new_contract(3, 7);
+        assert_eq!(signer.signer_id(CORE_ID), Some(7));
+    }
+
+    #[test]
+    fn test_signer_signer_id_nobody() {
+        assert_eq!(Signer::Nobody.signer_id(CORE_ID), None);
+    }
+
+    #[test]
+    fn test_build_challenge_success() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let result = descriptor.build_challenge(800000, 100, &seed.bytes, "prover1".to_string());
+        assert!(result.is_ok());
+        let challenge = result.unwrap();
+        assert_eq!(challenge.block_height, 800000);
+        assert_eq!(challenge.num_challenges, 100);
+        assert_eq!(challenge.prover_id, "prover1");
+    }
+
+    #[test]
+    fn test_build_challenge_invalid_seed_length() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let result = descriptor.build_challenge(800000, 100, &[0u8; 16], "prover1".to_string());
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Validation(_)));
+    }
+
+    #[test]
+    fn test_build_challenge_empty_seed() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        assert!(
+            descriptor
+                .build_challenge(800000, 100, &[], "prover1".to_string())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_compute_challenge_id_success() {
+        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let id = descriptor
+            .compute_challenge_id(800000, 100, &seed.bytes, "prover1".to_string())
+            .unwrap();
+        assert_eq!(id.len(), 64);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_build_challenge_uses_correct_file_metadata() {
+        let metadata = create_fake_file_metadata("my_file_id", "metadata_test.txt", 800000);
+        let expected_file_id = metadata.file_id.clone();
+        let expected_padded_len = metadata.padded_len;
+        let expected_original_size = metadata.original_size;
+        let expected_filename = metadata.filename.clone();
+        let descriptor = FileDescriptor::from_row(metadata);
+        let seed = valid_seed_field(1);
+        let c = descriptor
+            .build_challenge(800000, 100, &seed.bytes, "prover1".to_string())
+            .unwrap();
+        assert_eq!(c.file_metadata.file_id, expected_file_id);
+        assert_eq!(c.file_metadata.padded_len, expected_padded_len as usize);
+        assert_eq!(
+            c.file_metadata.original_size,
+            expected_original_size as usize
+        );
+        assert_eq!(c.file_metadata.filename, expected_filename);
+    }
+
+    #[test]
+    fn test_proof_from_bytes_invalid_bytes_fails() {
+        assert!(matches!(
+            Proof::from_bytes(&[0u8; 100]),
+            Err(Error::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn test_proof_from_bytes_empty_bytes_fails() {
+        assert!(Proof::from_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn test_proof_from_bytes_truncated_header_fails() {
+        assert!(Proof::from_bytes(&[0u8; 5]).is_err());
+    }
+
+    #[test]
+    fn test_proof_from_bytes_wrong_magic_fails() {
+        let mut bytes = vec![0u8; 20];
+        bytes[0..4].copy_from_slice(b"XXXX");
+        assert!(Proof::from_bytes(&bytes).is_err());
     }
 }

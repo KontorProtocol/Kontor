@@ -50,7 +50,7 @@ impl WebSocketClient {
             let response = from_message(msg)?;
             // Skip processed events for non-relevant blocks
             if let WsResponse::Event {
-                event: Event::Processed { block },
+                event: Event::Processed { block, .. },
             } = &response
                 && !block.relevant
             {

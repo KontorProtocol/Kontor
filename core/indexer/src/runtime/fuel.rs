@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
@@ -17,6 +17,10 @@ use crate::runtime::Runtime;
 #[strum_discriminants(derive(Hash))]
 pub enum Fuel {
     SignerToString,
+    SignerAsHolder,
+    HolderKey,
+    HolderFromRef,
+    HolderAsRef,
     KeysNext(u64),
     Path(String),
     ExtendPathWithMatch(u64),
@@ -72,14 +76,22 @@ pub enum Fuel {
     NumbersDivDecimal,
     NumbersLog10Decimal,
     Result(u64),
+    // TODO: recalibrate with the rest of the Fuel table against measured
+    // benchmarks. Currently sized to match other non-zk "non-trivial"
+    // operations (DeleteMatchingPaths, ProofFromBytes base cost).
+    RegisterBlsKey,
 }
 
 impl Fuel {
     pub fn cost(&self) -> u64 {
         match self {
             Self::SignerToString => 50,
+            Self::SignerAsHolder => 50,
+            Self::HolderKey => 50,
+            Self::HolderFromRef => 100,
+            Self::HolderAsRef => 50,
             Self::KeysNext(key_len) => 100 + 10 * key_len,
-            Self::Path(path) => 10 * DotPathBuf::from_str(path).unwrap().num_segments(),
+            Self::Path(path) => 10 * DotPathBuf::from(path.as_str()).num_segments(),
             Self::Get(value_len) => 10 * *value_len as u64,
             Self::GetKeys => 200,
             Self::Exists => 50,
@@ -130,6 +142,7 @@ impl Fuel {
             | Self::NumbersDivDecimal => 100,
             Self::NumbersSqrtInteger => 500,
             Self::NumbersLog10Decimal => 500,
+            Self::RegisterBlsKey => 1_000,
         }
     }
 

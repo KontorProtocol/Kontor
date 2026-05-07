@@ -1,12 +1,10 @@
 extern crate alloc;
 
 use anyhow::Result;
-use bitcoin::{
-    BlockHash, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion,
-};
+use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
 use indexmap::IndexMap;
-use macros::contract_address;
+use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
@@ -26,8 +24,10 @@ pub struct InstructionQuery {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
-    #[ts(type = "number")]
-    pub sat_per_vbyte: u64,
+    /// Optional: when omitted, the server falls back to its currently
+    /// published `fastest_fee` (sat/vB) from `/api/fees`.
+    #[ts(type = "number | null")]
+    pub sat_per_vbyte: Option<u64>,
     #[ts(type = "number | null")]
     pub envelope: Option<u64>,
 }
@@ -92,8 +92,10 @@ pub struct RevealParticipantQuery {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct RevealQuery {
     pub commit_tx_hex: String,
-    #[ts(type = "number")]
-    pub sat_per_vbyte: u64,
+    /// Optional: when omitted, the server falls back to its currently
+    /// published `fastest_fee` (sat/vB) from `/api/fees`.
+    #[ts(type = "number | null")]
+    pub sat_per_vbyte: Option<u64>,
     pub participants: Vec<RevealParticipantQuery>,
     pub op_return_data: Option<Vec<u8>>,
     #[ts(type = "number | null")]
@@ -116,7 +118,7 @@ pub struct RevealParticipantInputs {
     #[ts(as = "String")]
     pub x_only_public_key: XOnlyPublicKey,
     #[ts(as = "String")]
-    pub commit_outpoint: OutPoint,
+    pub commit_outpoint: bitcoin::OutPoint,
     #[ts(as = "TxOutSchema")]
     pub commit_prevout: TxOut,
     pub commit_tap_leaf_script: TapLeafScript,
@@ -177,6 +179,10 @@ pub enum WsResponse {
 pub enum Event {
     Processed {
         block: BlockRow,
+        txids: Vec<String>,
+    },
+    BatchProcessed {
+        txids: Vec<String>,
     },
     Rolledback {
         #[ts(type = "number")]
@@ -186,12 +192,13 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct TransactionInput {
+pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub witness_signer: Signer,
+    #[ts(as = "String")]
+    pub x_only_pubkey: XOnlyPublicKey,
     pub insts: Insts,
 }
 
@@ -202,7 +209,7 @@ pub struct Transaction {
     pub txid: Txid,
     #[ts(type = "number")]
     pub index: i64,
-    pub inputs: Vec<TransactionInput>,
+    pub inputs: Vec<Input>,
     #[ts(type = "Record<number, OpReturnData>")]
     #[serde(with = "indexmap::map::serde_seq")]
     pub op_return_data: IndexMap<u64, OpReturnData>,
@@ -220,41 +227,28 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub enum Signer {
-    Core(Box<Signer>),
-    XOnlyPubKey(String),
-    ContractId {
-        #[ts(type = "number")]
-        id: i64,
-        id_str: String,
-    },
-    Nobody,
+pub struct OutPoint {
+    pub txid: String,
+    pub vout: u64,
 }
 
-impl Signer {
-    pub fn new_contract_id(id: i64) -> Self {
-        Self::ContractId {
-            id,
-            id_str: format!("__cid__{}", id),
-        }
-    }
-
-    pub fn is_core(&self) -> bool {
-        matches!(self, Signer::Core(_))
-    }
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum HolderRef {
+    XOnlyPubkey(String),
+    SignerId(u64),
+    Core,
+    Burner,
+    Utxo(OutPoint),
 }
 
-impl core::ops::Deref for Signer {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Nobody => "nobody",
-            Self::Core(_) => "core",
-            Self::XOnlyPubKey(s) => s,
-            Self::ContractId { id_str, .. } => id_str,
-        }
+holder_ref!(HolderRef);
+
+impl core::fmt::Display for OutPoint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}", self.txid, self.vout)
     }
 }
 
@@ -274,7 +268,8 @@ pub struct OpMetadata {
     pub previous_output: bitcoin::OutPoint,
     #[ts(type = "number")]
     pub input_index: i64,
-    pub signer: Signer,
+    #[ts(type = "number")]
+    pub signer_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -403,6 +398,8 @@ pub struct ContractListRow {
     pub tx_index: i64,
     #[ts(type = "number")]
     pub size: i64,
+    #[ts(type = "number | null")]
+    pub signer_id: Option<i64>,
 }
 
 #[serde_as]
@@ -428,6 +425,24 @@ pub struct PaginatedResponse<T> {
     pub pagination: PaginationMeta,
 }
 
+/// Whether this node participates in consensus voting.
+///
+/// Surfaced in the `Info` response so operators monitoring the cluster
+/// externally can confirm a pod's actual mode rather than just trusting
+/// the config they passed in.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, clap::ValueEnum,
+)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[serde(rename_all = "lowercase")]
+pub enum ConsensusMode {
+    /// Signs votes and proposals.
+    Validator,
+    /// Sync-only; does not participate in consensus.
+    #[default]
+    Follower,
+}
+
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Info {
@@ -435,6 +450,7 @@ pub struct Info {
     pub target: String,
     pub network: String,
     pub available: bool,
+    pub consensus_mode: ConsensusMode,
     #[ts(type = "number")]
     pub height: i64,
     pub checkpoint: Option<String>,
@@ -446,6 +462,34 @@ pub struct Info {
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct TransactionHex {
     pub hex: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Fees {
+    /// Recommended fee rate (sat/vB) to land in the next ~1 block.
+    #[ts(type = "number")]
+    pub fastest: u64,
+    /// Recommended fee rate (sat/vB) to land in roughly the next 3 blocks.
+    #[ts(type = "number")]
+    pub half_hour: u64,
+    /// Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
+    #[ts(type = "number")]
+    pub hour: u64,
+}
+
+impl Fees {
+    /// All three tiers floored to the same value. Used as the initial
+    /// snapshot before the reactor has produced any projection, and as
+    /// the reset state when the mempool's minimum fee changes — readers
+    /// never see a value below the current Bitcoin Core mempool floor.
+    pub fn floor(min_fee_sat_per_vb: u64) -> Self {
+        Self {
+            fastest: min_fee_sat_per_vb,
+            half_hour: min_fee_sat_per_vb,
+            hour: min_fee_sat_per_vb,
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
@@ -496,6 +540,8 @@ pub struct ResultRow {
     pub value: Option<String>,
     pub contract: String,
     pub txid: Option<String>,
+    #[ts(type = "number")]
+    pub signer_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,11 +628,11 @@ pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct RegistryEntryResponse {
+pub struct SignerResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
-    pub x_only_pubkey: String,
+    pub x_only_pubkey: Option<String>,
     pub bls_pubkey: Option<Vec<u8>>,
-    #[ts(type = "number")]
-    pub next_nonce: u64,
+    #[ts(type = "number | null")]
+    pub next_nonce: Option<u64>,
 }

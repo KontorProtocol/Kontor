@@ -10,10 +10,11 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            delete_contract_state, delete_matching_paths, exists_contract_state,
-            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
-            get_latest_contract_state_value, insert_contract, insert_contract_result,
-            insert_contract_state, matching_path, path_prefix_filter_contract_state,
+            create_contract_signer, delete_contract_state, delete_matching_paths,
+            exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
+            insert_contract_result, insert_contract_state, matching_path,
+            path_prefix_filter_contract_state,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -146,6 +147,7 @@ impl Storage {
     }
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<i64> {
+        let signer_id = create_contract_signer(&self.conn, self.height).await?;
         Ok(insert_contract(
             &self.conn,
             ContractRow::builder()
@@ -158,6 +160,7 @@ impl Storage {
                 )
                 .name(name.to_string())
                 .bytes(bytes.to_vec())
+                .signer_id(signer_id)
                 .build(),
         )
         .await?)
@@ -174,6 +177,7 @@ impl Storage {
         func: String,
         gas: i64,
         value: Option<String>,
+        signer_id: i64,
     ) -> ContractResultRow {
         ContractResultRow::builder()
             .contract_id(contract_id)
@@ -185,6 +189,7 @@ impl Storage {
             .func(func)
             .gas(gas)
             .maybe_value(value)
+            .signer_id(signer_id)
             .build()
     }
 
@@ -195,10 +200,11 @@ impl Storage {
         func: String,
         gas: i64,
         value: Option<String>,
+        signer_id: i64,
     ) -> Result<i64> {
         Ok(insert_contract_result(
             &self.conn,
-            self.build_contract_result_row(result_index, contract_id, func, gas, value),
+            self.build_contract_result_row(result_index, contract_id, func, gas, value, signer_id),
         )
         .await?)
     }

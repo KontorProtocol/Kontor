@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
     ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
-    RegistryEntryResponse, ResultResponse, ResultRow, RevealOutputs, RevealQuery, TransactionHex,
+    ResultResponse, ResultRow, RevealOutputs, RevealQuery, SignerResponse, TransactionHex,
     ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response};
@@ -148,10 +148,10 @@ impl Client {
         .await
     }
 
-    pub async fn registry_entry(&self, pubkey_or_id: &str) -> Result<RegistryEntryResponse> {
+    pub async fn signer(&self, identifier: &str) -> Result<SignerResponse> {
         Self::handle_response(
             self.client
-                .get(format!("{}/registry/entry/{}", &self.url, pubkey_or_id))
+                .get(format!("{}/signers/{}", &self.url, identifier))
                 .send()
                 .await?,
         )
