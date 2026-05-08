@@ -613,4 +613,3 @@ pub mod bls_test {
         agg.to_public_key().to_bytes()
     }
 }
-

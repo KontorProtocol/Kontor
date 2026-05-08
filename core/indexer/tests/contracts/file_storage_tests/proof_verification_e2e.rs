@@ -174,7 +174,16 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
 /// 3. Block N+2: Aggregated proof generated for A and B's challenges
 /// 4. Verification succeeds because proof's ledger_root (before C) is a valid historical root
 ///    (also exercises multi-file aggregated proof in a single run)
+///
+/// Local-only: drives challenge creation via `create_challenge_for_agreement`,
+/// which takes a `borrow<core-context>` and is only reachable when the
+/// indexer dispatches the call directly with a `Signer::Core(_)`. Regtest
+/// dispatches every contract call via a Bitcoin tx (always `Signer::Id`),
+/// so the core-context export is unreachable there.
 async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -> Result<()> {
+    if runtime.reg_tester().is_some() {
+        return Ok(());
+    }
     let signer = runtime.identity().await?;
     let core_identity = runtime.identity().await?;
     let core_signer = Signer::Core(Box::new(core_identity));
@@ -212,13 +221,8 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // Aggregated proofs require both challenges to live on the same shard,
     // and the kontor-crypto shard depends on the prover-id (now a runtime
     // signer string). Search seeds at runtime so we don't rely on luck.
-    let (seed_a_index, seed_b_index) = find_co_sharded_seeds(
-        &metadata_a,
-        &metadata_b,
-        block_n,
-        s_chal,
-        &node_1_id,
-    );
+    let (seed_a_index, seed_b_index) =
+        find_co_sharded_seeds(&metadata_a, &metadata_b, block_n, s_chal, &node_1_id);
     let seed_a = valid_seed_field(seed_a_index);
     let seed_b = valid_seed_field(seed_b_index);
 
