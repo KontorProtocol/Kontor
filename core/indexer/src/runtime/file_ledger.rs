@@ -110,7 +110,7 @@ impl FileLedger {
         let mut inner = self.inner.write().await;
 
         let next_ledger_index = u64::try_from(inner.ledger.next_ledger_index())
-            .map_err(|_| anyhow!("ledger index exceeds u64"))?; // todo
+            .map_err(|_| anyhow!("ledger index exceeds u64"))?;
 
         // Capture the number of historical roots before adding
         let historical_roots_count_before = inner.ledger.historical_roots.len();

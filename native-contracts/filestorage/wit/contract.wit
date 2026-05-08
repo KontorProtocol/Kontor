@@ -85,17 +85,17 @@ world root {
     ctx: borrow<view-context>
   ) -> list<agreement-data>;
 
-  // Node participation
+  // Node participation. The prover identity is derived from the caller's
+  // signer (`ctx.signer().to_string()`); there is no separate `node-id`
+  // parameter. To join with multiple nodes, submit one call per node-signer.
   export join-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<join-agreement-result, error>;
 
   export leave-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<leave-agreement-result, error>;
 
   // Node queries

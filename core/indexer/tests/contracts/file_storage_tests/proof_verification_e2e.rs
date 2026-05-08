@@ -4,15 +4,17 @@
 //! 1. Prepare files using kontor-crypto
 //! 2. Create agreements in the filestorage contract
 //! 3. Generate challenges through the contract
-//! 4. Load precomputed proofs from fixtures
+//! 4. Generate matching proofs inline via `PorSystem`
 //! 5. Verify proofs through the contract
 //!
-//! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
+//! Proofs are generated in-test (not loaded from a fixture) because the
+//! prover-id is now `signer.to_string()` (a runtime-allocated integer) and
+//! enters challenge-id derivation, so a static fixture cannot match.
 
 use indexer::database::types::field_element_to_bytes;
 use indexer::test_utils::valid_seed_field;
-use kontor_crypto::api::{self};
-use serde::Deserialize;
+use kontor_crypto::api::{self, Challenge as CryptoChallenge};
+use kontor_crypto::{FileLedger, PorSystem};
 use testlib::*;
 
 import!(
@@ -21,12 +23,6 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/filestorage/wit",
 );
-
-async fn named_signer(runtime: &mut Runtime, node_id: &str) -> Result<Signer> {
-    let signer = Signer::XOnlyPubKey(node_id.to_string());
-    runtime.issuance(&signer).await?;
-    Ok(signer)
-}
 
 /// Create a RawFileDescriptor from kontor-crypto FileMetadata
 fn metadata_to_descriptor(metadata: &api::FileMetadata) -> RawFileDescriptor {
@@ -54,28 +50,83 @@ fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api:
     api::prepare_file(content, filename, &nonce).expect("Failed to prepare file")
 }
 
-#[derive(Debug, Deserialize)]
-struct PorProofFixtures {
-    invalid_proof_hex: String,
-    cross_block_agg_hex: String,
-    cross_block_seed_a: u64,
-    cross_block_seed_b: u64,
+/// Build a kontor-crypto Proof for the given prepared files + challenges and
+/// return its wire bytes. The caller is responsible for ensuring the
+/// kontor-crypto FileLedger contains the same files in the same order as the
+/// contract-side ledger at challenge time.
+fn build_proof_bytes(
+    ledger: &FileLedger,
+    files: Vec<&api::PreparedFile>,
+    challenges: &[CryptoChallenge],
+) -> Result<Vec<u8>> {
+    let system = PorSystem::new(ledger);
+    let proof = system
+        .prove(files, challenges)
+        .map_err(|e| anyhow!("Failed to generate proof: {e}"))?;
+    proof
+        .to_bytes()
+        .map_err(|e| anyhow!("Failed to serialize proof: {e}"))
 }
 
-fn load_por_fixtures() -> Result<PorProofFixtures> {
-    let raw = include_str!("../../fixtures/por_proof_fixtures.json");
-    let fixtures: PorProofFixtures =
-        serde_json::from_str(raw).map_err(|e| anyhow!("Invalid fixtures JSON: {e}"))?;
-    Ok(fixtures)
+/// The contract derives `shard_id` from the first byte of the hex-encoded
+/// `Challenge::id()`. Mirror that here so tests can search for seeds that
+/// place two challenges on the same shard (required for aggregation).
+fn challenge_shard_id_for(
+    metadata: &api::FileMetadata,
+    block_height: u64,
+    num_challenges: usize,
+    seed: kontor_crypto::FieldElement,
+    prover_id: &str,
+) -> u8 {
+    let ch = CryptoChallenge::new(
+        metadata.clone(),
+        block_height,
+        num_challenges,
+        seed,
+        prover_id.to_string(),
+    );
+    ch.id().0[0]
 }
 
-fn decode_fixture_hex(field: &str, value: &str) -> Result<Vec<u8>> {
-    if value.trim().is_empty() {
-        return Err(anyhow!(
-            "Fixture value for {field} is empty. Run: cargo run --bin generate_por_fixtures"
-        ));
+/// Search for a `(seed_a_index, seed_b_index)` pair such that the resulting
+/// challenges for `metadata_a` and `metadata_b` (with the same prover/block
+/// parameters) share a kontor-crypto shard. Panics if no pair is found
+/// within the search bounds — in practice ~256 iterations suffice with
+/// NUM_CHALLENGES_SHARDS=256.
+fn find_co_sharded_seeds(
+    metadata_a: &api::FileMetadata,
+    metadata_b: &api::FileMetadata,
+    block_height: u64,
+    num_challenges: usize,
+    prover_id: &str,
+) -> (u64, u64) {
+    let seed_a_index: u64 = 0xA00;
+    let seed_a = valid_seed_field(seed_a_index);
+    let target_shard = challenge_shard_id_for(
+        metadata_a,
+        block_height,
+        num_challenges,
+        seed_a.field,
+        prover_id,
+    );
+    for i in 0..10_000u64 {
+        let candidate_b = 0xB00 + i;
+        let seed_b = valid_seed_field(candidate_b);
+        let shard_b = challenge_shard_id_for(
+            metadata_b,
+            block_height,
+            num_challenges,
+            seed_b.field,
+            prover_id,
+        );
+        if shard_b == target_shard {
+            return (seed_a_index, candidate_b);
+        }
     }
-    hex::decode(value.trim()).map_err(|e| anyhow!("Invalid hex for {field}: {e}"))
+    panic!(
+        "Could not find co-sharded seeds for prover_id={} after 10000 iterations",
+        prover_id
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -84,38 +135,26 @@ fn decode_fixture_hex(field: &str, value: &str) -> Result<Vec<u8>> {
 
 async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
-    let node_1_signer = named_signer(runtime, "node_1").await?;
-    let node_2_signer = named_signer(runtime, "node_2").await?;
-    let node_3_signer = named_signer(runtime, "node_3").await?;
-    let fixtures = load_por_fixtures()?;
+    let node_1_signer = runtime.identity().await?;
+    let node_2_signer = runtime.identity().await?;
+    let node_3_signer = runtime.identity().await?;
 
-    // Prepare file
     let file2_content = b"Second file with different content";
     let (_prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
 
-    // Create agreement for file2 in contract
     let descriptor2 = metadata_to_descriptor(&metadata2);
     let created2 = filestorage::create_agreement(runtime, &signer, descriptor2).await??;
 
-    // Activate agreement
-    let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created2.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created2.agreement_id,
-        "node_2",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created2.agreement_id,
-        "node_3",
-    ));
     let mut submit = runtime.submit();
-    submit.add(ops);
+    for node in [&node_1_signer, &node_2_signer, &node_3_signer] {
+        let mut ops = Ops::new(node);
+        ops.push(filestorage::join_agreement_call(&created2.agreement_id));
+        submit.add(ops);
+    }
     submit.execute().await?;
 
-    let proof_bytes = decode_fixture_hex("invalid_proof_hex", &fixtures.invalid_proof_hex)?;
+    // Garbage bytes — the test just asserts the contract rejects them.
+    let proof_bytes = vec![0u8; 200];
     let result = filestorage::verify_proof(runtime, &node_1_signer, proof_bytes, 0, 0, 1).await?;
     assert!(result.is_err(), "Invalid proof should be rejected");
 
@@ -139,45 +178,57 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     let signer = runtime.identity().await?;
     let core_identity = runtime.identity().await?;
     let core_signer = Signer::Core(Box::new(core_identity));
-    let node_1_signer = named_signer(runtime, "node_1").await?;
-    let node_2_signer = named_signer(runtime, "node_2").await?;
-    let node_3_signer = named_signer(runtime, "node_3").await?;
-    let fixtures = load_por_fixtures()?;
+    let node_1_signer = runtime.identity().await?;
+    let node_2_signer = runtime.identity().await?;
+    let node_3_signer = runtime.identity().await?;
+    let node_1_id = node_1_signer.to_string();
 
-    // Step 1: Create files A and B (existing before the "middle" agreement)
-    let (_prepared_a, metadata_a) =
+    let (prepared_a, metadata_a) =
         prepare_test_file(b"Content of file A for cross-block", "cross_a.txt");
-    let (_prepared_b, metadata_b) =
+    let (prepared_b, metadata_b) =
         prepare_test_file(b"Content of file B for cross-block", "cross_b.txt");
 
-    // Create agreements for A and B
     let descriptor_a = metadata_to_descriptor(&metadata_a);
     let created_a = filestorage::create_agreement(runtime, &signer, descriptor_a).await??;
 
     let descriptor_b = metadata_to_descriptor(&metadata_b);
     let created_b = filestorage::create_agreement(runtime, &signer, descriptor_b).await??;
 
-    // Activate both agreements
-    let mut ops = Ops::new(&signer);
-    for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
-        ops.push(filestorage::join_agreement_call(agreement_id, "node_1"));
-        ops.push(filestorage::join_agreement_call(agreement_id, "node_2"));
-        ops.push(filestorage::join_agreement_call(agreement_id, "node_3"));
-    }
+    // Activate both agreements with three distinct node-signers
     let mut submit = runtime.submit();
-    submit.add(ops);
+    for agreement_id in [&created_a.agreement_id, &created_b.agreement_id] {
+        for node in [&node_1_signer, &node_2_signer, &node_3_signer] {
+            let mut ops = Ops::new(node);
+            ops.push(filestorage::join_agreement_call(agreement_id));
+            submit.add(ops);
+        }
+    }
     submit.execute().await?;
 
-    // Step 2: Create challenges for A and B at block N
+    // Step 2: Create challenges for A and B at block N, targeting node_1's signer-id
     let block_n = 40000u64;
+    let s_chal = filestorage::get_s_chal(runtime).await? as usize;
+
+    // Aggregated proofs require both challenges to live on the same shard,
+    // and the kontor-crypto shard depends on the prover-id (now a runtime
+    // signer string). Search seeds at runtime so we don't rely on luck.
+    let (seed_a_index, seed_b_index) = find_co_sharded_seeds(
+        &metadata_a,
+        &metadata_b,
+        block_n,
+        s_chal,
+        &node_1_id,
+    );
+    let seed_a = valid_seed_field(seed_a_index);
+    let seed_b = valid_seed_field(seed_b_index);
 
     let challenge_a = filestorage::create_challenge_for_agreement(
         runtime,
         &core_signer,
         &created_a.agreement_id,
-        "node_1",
+        &node_1_id,
         block_n,
-        valid_seed_field(fixtures.cross_block_seed_a).bytes.to_vec(),
+        seed_a.bytes.to_vec(),
     )
     .await??;
 
@@ -185,43 +236,57 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &core_signer,
         &created_b.agreement_id,
-        "node_1",
+        &node_1_id,
         block_n,
-        valid_seed_field(fixtures.cross_block_seed_b).bytes.to_vec(),
+        seed_b.bytes.to_vec(),
     )
     .await??;
 
-    // Step 3: NEW AGREEMENT CREATED IN THE MIDDLE
-    // File C is added after challenges were created but before proof generation
+    // Step 3: Build a matching kontor-crypto FileLedger and aggregated proof
+    // for [A, B]. The contract-side ledger currently contains exactly [A, B];
+    // we capture the proof's `ledger_root` against that state, then add file
+    // C below so the contract verifies the proof's root via its historical
+    // roots set rather than its current root.
+    let mut crypto_ledger = FileLedger::new();
+    crypto_ledger
+        .add_file(&metadata_a)
+        .map_err(|e| anyhow!("crypto add_file A: {e}"))?;
+    crypto_ledger
+        .add_file(&metadata_b)
+        .map_err(|e| anyhow!("crypto add_file B: {e}"))?;
+
+    let crypto_challenges = vec![
+        CryptoChallenge::new(metadata_a, block_n, s_chal, seed_a.field, node_1_id.clone()),
+        CryptoChallenge::new(metadata_b, block_n, s_chal, seed_b.field, node_1_id.clone()),
+    ];
+
+    let proof_bytes = build_proof_bytes(
+        &crypto_ledger,
+        vec![&prepared_a, &prepared_b],
+        &crypto_challenges,
+    )?;
+
+    // Step 4: NEW AGREEMENT CREATED IN THE MIDDLE
+    // File C is added after the proof was generated, advancing the contract
+    // ledger past the proof's ledger_root.
     let (_prepared_c, metadata_c) =
         prepare_test_file(b"Content of file C - new agreement", "cross_c.txt");
 
     let descriptor_c = metadata_to_descriptor(&metadata_c);
     let created_c = filestorage::create_agreement(runtime, &signer, descriptor_c).await??;
 
-    // Activate file C's agreement
-    let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created_c.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created_c.agreement_id,
-        "node_2",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created_c.agreement_id,
-        "node_3",
-    ));
     let mut submit = runtime.submit();
-    submit.add(ops);
+    for node in [&node_1_signer, &node_2_signer, &node_3_signer] {
+        let mut ops = Ops::new(node);
+        ops.push(filestorage::join_agreement_call(&created_c.agreement_id));
+        submit.add(ops);
+    }
     submit.execute().await?;
 
-    // Step 4: Verify the precomputed proof
-    let proof_bytes = decode_fixture_hex("cross_block_agg_hex", &fixtures.cross_block_agg_hex)?;
+    // Step 5: Verify the inline-generated proof through the contract
     assert_eq!(
         challenge_a.shard_id, challenge_b.shard_id,
-        "Fixture proof expects challenges from a single shard"
+        "Aggregated proof expects challenges from a single shard"
     );
     let start_seq = challenge_a.shard_seq.min(challenge_b.shard_seq);
     let end_seq = challenge_a.shard_seq.max(challenge_b.shard_seq) + 1;

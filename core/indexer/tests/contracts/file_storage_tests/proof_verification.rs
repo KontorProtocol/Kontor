@@ -25,25 +25,18 @@ async fn setup_active_agreement_with_challenge(
         format!("{}.txt", file_id),
     );
 
-    // Create agreement
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
 
-    // Activate it with 3 nodes
-    let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_2",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_3",
-    ));
+    // Activate with 3 distinct node-signers (each joins under its own signature)
+    let node_a = runtime.identity().await?;
+    let node_b = runtime.identity().await?;
+    let node_c = runtime.identity().await?;
     let mut submit = runtime.submit();
-    submit.add(ops);
+    for node in [&node_a, &node_b, &node_c] {
+        let mut ops = Ops::new(node);
+        ops.push(filestorage::join_agreement_call(&created.agreement_id));
+        submit.add(ops);
+    }
     submit.execute().await?;
 
     // Generate a challenge (core-only)

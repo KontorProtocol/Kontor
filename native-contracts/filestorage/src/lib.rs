@@ -161,9 +161,9 @@ impl Guest for Filestorage {
     fn join_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<JoinAgreementResult, Error> {
         let model = ctx.model();
+        let node_id = ctx.signer().to_string();
 
         // Validate agreement exists
         let agreement = model
@@ -214,9 +214,9 @@ impl Guest for Filestorage {
     fn leave_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<LeaveAgreementResult, Error> {
         let model = ctx.model();
+        let node_id = ctx.signer().to_string();
 
         // Validate agreement exists
         let _agreement = model
@@ -323,7 +323,7 @@ impl Guest for Filestorage {
             return None;
         }
         let prover_challenges = model.prover_challenges().get(&prover_id)?;
-        let shard = prover_challenges.shards().get(shard_id)?;
+        let shard = prover_challenges.shards().get(&shard_id)?;
         Some(shard.next_seq())
     }
 
@@ -364,7 +364,7 @@ impl Guest for Filestorage {
             )))?;
         let shard_challenges = prover_challenges
             .shards()
-            .get(shard_id)
+            .get(&shard_id)
             .ok_or(Error::Message(format!(
                 "No challenges indexed for prover {} shard {}",
                 prover_id, shard_id
@@ -374,7 +374,7 @@ impl Guest for Filestorage {
         for seq in start_seq..end_seq {
             let cid = shard_challenges
                 .by_seq()
-                .get(seq)
+                .get(&seq)
                 .ok_or(Error::Message(format!(
                     "Challenge sequence {} not found in shard {}",
                     seq, shard_id
@@ -577,7 +577,7 @@ impl Guest for Filestorage {
             };
             if model.prover_challenges().get(&prover_id).is_none() {
                 model.prover_challenges().set(
-                    prover_id.clone(),
+                    &prover_id,
                     ProverChallenges {
                         initialized: true,
                         ..ProverChallenges::default()
@@ -588,12 +588,12 @@ impl Guest for Filestorage {
                 Some(value) => value,
                 None => continue,
             };
-            if prover_challenges.shards().get(shard_id).is_none() {
+            if prover_challenges.shards().get(&shard_id).is_none() {
                 prover_challenges
                     .shards()
-                    .set(shard_id, ShardChallenges::default());
+                    .set(&shard_id, ShardChallenges::default());
             }
-            let shard_challenges = match prover_challenges.shards().get(shard_id) {
+            let shard_challenges = match prover_challenges.shards().get(&shard_id) {
                 Some(value) => value,
                 None => continue,
             };
@@ -601,7 +601,7 @@ impl Guest for Filestorage {
             shard_challenges.update_next_seq(|seq| seq.saturating_add(1));
             shard_challenges
                 .by_seq()
-                .set(shard_seq, challenge_id.clone());
+                .set(&shard_seq, challenge_id.clone());
 
             let challenge = ChallengeData {
                 challenge_id,
@@ -701,7 +701,7 @@ impl Guest for Filestorage {
         let shard_id = challenge_shard_id(&challenge_id)?;
         if model.prover_challenges().get(&node_id).is_none() {
             model.prover_challenges().set(
-                node_id.clone(),
+                &node_id,
                 ProverChallenges {
                     initialized: true,
                     ..ProverChallenges::default()
@@ -715,14 +715,14 @@ impl Guest for Filestorage {
                 "Failed to initialize prover challenge state for {}",
                 node_id
             )))?;
-        if prover_challenges.shards().get(shard_id).is_none() {
+        if prover_challenges.shards().get(&shard_id).is_none() {
             prover_challenges
                 .shards()
-                .set(shard_id, ShardChallenges::default());
+                .set(&shard_id, ShardChallenges::default());
         }
         let shard_challenges = prover_challenges
             .shards()
-            .get(shard_id)
+            .get(&shard_id)
             .ok_or(Error::Message(format!(
                 "Failed to initialize shard challenge state for prover {} shard {}",
                 node_id, shard_id
@@ -731,7 +731,7 @@ impl Guest for Filestorage {
         shard_challenges.update_next_seq(|seq| seq.saturating_add(1));
         shard_challenges
             .by_seq()
-            .set(shard_seq, challenge_id.clone());
+            .set(&shard_seq, challenge_id.clone());
 
         let challenge = ChallengeData {
             challenge_id,
@@ -811,7 +811,7 @@ impl Guest for Filestorage {
             )))?;
         let shard_challenges = prover_challenges
             .shards()
-            .get(shard_id)
+            .get(&shard_id)
             .ok_or(Error::Message(format!(
                 "No challenges indexed for prover {} shard {}",
                 prover_id, shard_id
@@ -823,7 +823,7 @@ impl Guest for Filestorage {
         for seq in start_seq..end_seq {
             let cid = shard_challenges
                 .by_seq()
-                .get(seq)
+                .get(&seq)
                 .ok_or(Error::Message(format!(
                     "Challenge sequence {} not found in shard {}",
                     seq, shard_id
