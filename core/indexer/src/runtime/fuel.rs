@@ -48,7 +48,6 @@ pub enum Fuel {
     FromRawFileDescriptor,
     ComputeChallengeId,
     ProofFromBytes(u64),
-    ProofChallengeIds,
     ProofVerify,
     NumbersU64ToInteger,
     NumbersS64ToInteger,
@@ -115,7 +114,6 @@ impl Fuel {
             Self::FromRawFileDescriptor => 500,
             Self::ComputeChallengeId => 500,
             Self::ProofFromBytes(bytes_len) => 1000 + 10 * bytes_len,
-            Self::ProofChallengeIds => 100,
             Self::ProofVerify => 50_000,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger

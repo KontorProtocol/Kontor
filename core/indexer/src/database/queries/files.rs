@@ -8,6 +8,7 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
         .query(
             r#"SELECT
             id,
+            ledger_index,
             file_id,
             object_id,
             nonce,
@@ -18,7 +19,7 @@ pub async fn select_all_file_metadata(conn: &Connection) -> Result<Vec<FileMetad
             height,
             historical_root
             FROM file_metadata
-            ORDER BY id ASC"#,
+            ORDER BY ledger_index ASC"#,
             params![],
         )
         .await?;
@@ -38,6 +39,7 @@ pub async fn select_file_metadata_by_file_id(
         .query(
             r#"SELECT
             id,
+            ledger_index,
             file_id,
             object_id,
             nonce,
@@ -61,6 +63,10 @@ pub async fn insert_file_metadata(
     conn: &Connection,
     entry: &FileMetadataRow,
 ) -> Result<i64, Error> {
+    let ledger_index = entry.ledger_index.ok_or_else(|| {
+        Error::InvalidData("file_metadata entry missing ledger_index".to_string())
+    })?;
+
     let historical_root_value: Value = match &entry.historical_root {
         Some(root) => Value::Blob(root.to_vec()),
         None => Value::Null,
@@ -69,7 +75,8 @@ pub async fn insert_file_metadata(
     conn.execute(
         r#"INSERT INTO
         file_metadata
-        (file_id,
+        (ledger_index,
+        file_id,
         object_id,
         nonce,
         root,
@@ -78,8 +85,9 @@ pub async fn insert_file_metadata(
         filename,
         height,
         historical_root)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         params![
+            ledger_index,
             entry.file_id.clone(),
             entry.object_id.clone(),
             entry.nonce.clone(),
