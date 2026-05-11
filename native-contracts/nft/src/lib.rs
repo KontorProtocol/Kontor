@@ -204,9 +204,13 @@ impl Guest for Nft {
         if limit == 0 {
             return Vec::new();
         }
+        // On wasm32, `usize` is 32 bits; saturate rather than truncate so
+        // that callers passing an offset >= 2^32 get an empty page instead
+        // of silently wrapping back to the start of the collection.
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
         let nfts = ctx.model().nfts();
         nfts.keys()
-            .skip(offset as usize)
+            .skip(offset)
             .take(limit)
             .filter_map(|nft_id: String| {
                 nfts.get(&nft_id).map(|nft| NftInfo {
@@ -240,6 +244,8 @@ impl Guest for Nft {
         let Some(entry) = ctx.model().creator_index().get(&creator) else {
             return Vec::new();
         };
+        // See `list_nfts` for why we saturate instead of casting.
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
         let nfts = ctx.model().nfts();
         // The index is append-only (transfers do not move NFTs across
         // creator buckets), so every key in `nft_ids` is a current
@@ -248,7 +254,7 @@ impl Guest for Nft {
         entry
             .nft_ids()
             .keys()
-            .skip(offset as usize)
+            .skip(offset)
             .take(limit)
             .filter_map(|nft_id: String| {
                 nfts.get(&nft_id).map(|nft| NftInfo {

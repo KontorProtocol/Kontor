@@ -359,6 +359,85 @@ async fn test_native_nft_contract() -> Result<()> {
         Vec::<nft::NftInfo>::new()
     );
 
+    // The global `list_nfts` view returns every successful mint in the
+    // underlying map's lexicographic order on `nft_id`, regardless of
+    // creator. With three mints in flight the page is
+    // [genesis-nft-1, second-nft, third-nft] and each entry exposes the
+    // current owner/creator at call time (still equal pre-transfer).
+    let all_nfts = nft::list_nfts(runtime, 0, 100).await?;
+    assert_eq!(
+        all_nfts
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_1, nft_id_2, nft_id_3]
+    );
+    let nft1_global = all_nfts
+        .iter()
+        .find(|n| n.nft_id == nft_id_1)
+        .expect("global list contains nft_id_1");
+    assert_eq!(nft1_global.creator, alice_ref);
+    assert_eq!(nft1_global.owner, alice_ref);
+    assert_eq!(nft1_global.agreement_id, file_id);
+    let nft2_global = all_nfts
+        .iter()
+        .find(|n| n.nft_id == nft_id_2)
+        .expect("global list contains nft_id_2");
+    assert_eq!(nft2_global.creator, bob_ref);
+    assert_eq!(nft2_global.owner, bob_ref);
+    let nft3_global = all_nfts
+        .iter()
+        .find(|n| n.nft_id == nft_id_3)
+        .expect("global list contains nft_id_3");
+    assert_eq!(nft3_global.creator, alice_ref);
+    assert_eq!(nft3_global.owner, alice_ref);
+    // Pagination on the global list: first page of size 1 is the
+    // lex-first id, subsequent pages walk the collection, and a page
+    // starting past the end is empty.
+    let global_first = nft::list_nfts(runtime, 0, 1).await?;
+    assert_eq!(
+        global_first
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_1]
+    );
+    let global_second = nft::list_nfts(runtime, 1, 1).await?;
+    assert_eq!(
+        global_second
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_2]
+    );
+    let global_third = nft::list_nfts(runtime, 2, 1).await?;
+    assert_eq!(
+        global_third
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_3]
+    );
+    assert_eq!(
+        nft::list_nfts(runtime, 3, 100).await?,
+        Vec::<nft::NftInfo>::new()
+    );
+    // limit == 0 is a documented no-op even when results exist.
+    assert_eq!(
+        nft::list_nfts(runtime, 0, 0).await?,
+        Vec::<nft::NftInfo>::new()
+    );
+    // `limit` is silently clamped to MAX_LIST_LIMIT (100): asking for
+    // 10_000 yields the same three entries, not an error.
+    let clamped = nft::list_nfts(runtime, 0, 10_000).await?;
+    assert_eq!(
+        clamped
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_1, nft_id_2, nft_id_3]
+    );
+
     // transfer on a non-existent nft_id must fail before any owner check.
     let missing_nft = nft::transfer(runtime, &alice, "does_not_exist", &alice).await?;
     assert_eq!(
@@ -542,6 +621,39 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::list_nfts_by_creator(runtime, HolderRef::Burner, 0, 100).await?,
         Vec::<nft::NftInfo>::new()
     );
+
+    // After the alice → bob → carol → Burner chain on nft_id_1, the
+    // global `list_nfts` membership and ordering are unchanged (no
+    // mint, no burn-as-delete), but each entry now exposes the
+    // *current* owner. Creator is invariant: alice still creates
+    // nft_id_1 and nft_id_3, bob still creates nft_id_2.
+    let all_after_chain = nft::list_nfts(runtime, 0, 100).await?;
+    assert_eq!(
+        all_after_chain
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_1, nft_id_2, nft_id_3]
+    );
+    let nft1_after_chain = all_after_chain
+        .iter()
+        .find(|n| n.nft_id == nft_id_1)
+        .expect("global list still contains nft_id_1");
+    assert_eq!(nft1_after_chain.creator, alice_ref);
+    assert_eq!(nft1_after_chain.owner, HolderRef::Burner);
+    let nft2_after_chain = all_after_chain
+        .iter()
+        .find(|n| n.nft_id == nft_id_2)
+        .expect("global list still contains nft_id_2");
+    assert_eq!(nft2_after_chain.creator, bob_ref);
+    assert_eq!(nft2_after_chain.owner, bob_ref);
+    let nft3_after_chain = all_after_chain
+        .iter()
+        .find(|n| n.nft_id == nft_id_3)
+        .expect("global list still contains nft_id_3");
+    assert_eq!(nft3_after_chain.creator, alice_ref);
+    assert_eq!(nft3_after_chain.owner, alice_ref);
+
     // Lenient handling of malformed / never-seen holders.
     assert_eq!(
         nft::count_nfts_by_creator(
