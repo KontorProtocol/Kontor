@@ -9,14 +9,19 @@ world root {
   record nft-info {
     nft-id: string,
     owner: holder-ref,
+    creator: holder-ref,
     agreement-id: string,
-    description: string,
   }
 
   record nft-transfer {
     nft-id: string,
     src: holder-ref,
     dst: holder-ref,
+  }
+
+  record attribute {
+    key: string,
+    value: string,
   }
 
   export init: async func(ctx: borrow<proc-context>);
@@ -26,7 +31,11 @@ world root {
   /// Validation rules enforced by the contract:
   /// - `nft-id` must be non-empty and at most 64 bytes (UTF-8 length, no
   ///   trim, case-sensitive, globally unique across all NFTs in this contract).
-  /// - `description` must be non-empty and at most 2048 bytes.
+  /// - `attributes` describe the NFT as an immutable map of string-to-string
+  ///   pairs (set once at mint, never updated afterwards). The list must
+  ///   contain at most 32 entries; every `key` must be non-empty and at most
+  ///   64 bytes; every `value` must be at most 2048 bytes; keys must be
+  ///   unique within the list (duplicate keys cause `mint` to fail).
   /// - `file-descriptor.file-id` is freely chosen by the caller and validated
   ///   by `filestorage::create-agreement` (non-empty, etc.); it shares its
   ///   global namespace with all other agreements but is decoupled from
@@ -38,7 +47,7 @@ world root {
   export mint: async func(
     ctx: borrow<proc-context>,
     nft-id: string,
-    description: string,
+    attributes: list<attribute>,
     file-descriptor: raw-file-descriptor
   ) -> result<nft-info, error>;
 
@@ -50,4 +59,57 @@ world root {
 
   export get-info: async func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
   export total-minted: async func(ctx: borrow<view-context>) -> u64;
+
+  /// Return up to `limit` minted NFTs, skipping the first `offset` entries.
+  ///
+  /// Use this together with `total-minted` to paginate through the full
+  /// collection. The iteration order matches the underlying storage map
+  /// (lexicographic on `nft-id`) and is stable as long as the store is
+  /// not mutated between calls.
+  ///
+  /// `limit` is silently clamped to an internal cap (currently 100) to
+  /// keep response sizes predictable; pass `limit = 0` for an empty
+  /// page. `offset` beyond the collection size yields an empty list.
+  export list-nfts: async func(
+    ctx: borrow<view-context>,
+    offset: u64,
+    limit: u64
+  ) -> list<nft-info>;
+
+  /// Return up to `limit` NFTs originally minted by `creator`, skipping
+  /// the first `offset` matches. Backed by a secondary creator→nft-ids
+  /// index that is populated at `mint` and never mutated afterwards
+  /// (transfers do not move NFTs across creator buckets), so the cost
+  /// is proportional to `offset + limit`.
+  ///
+  /// "Creator" is the signer of the `mint` call that produced the NFT;
+  /// it is immutable for the lifetime of the NFT and is also exposed on
+  /// `nft-info.creator`. This is the right query for "what did this
+  /// account ever mint?", which is independent of who owns the NFTs
+  /// today.
+  ///
+  /// The same clamping rules as `list-nfts` apply (`limit` is capped at
+  /// an internal maximum, `limit = 0` returns an empty list, and an
+  /// `offset` beyond the creator's collection yields an empty list). The
+  /// iteration order matches the underlying storage map (lexicographic
+  /// on `nft-id`) and is stable between calls as long as the store is
+  /// not mutated. An invalid or never-seen `creator` yields an empty
+  /// list rather than an error.
+  export list-nfts-by-creator: async func(
+    ctx: borrow<view-context>,
+    creator: holder-ref,
+    offset: u64,
+    limit: u64
+  ) -> list<nft-info>;
+
+  /// Number of NFTs minted by `creator`. Equivalent to the length of
+  /// the full (non-paginated) `list-nfts-by-creator` result. Returns 0
+  /// when `creator` has no entry in the index.
+  export count-nfts-by-creator: async func(
+    ctx: borrow<view-context>,
+    creator: holder-ref
+  ) -> u64;
+
+  export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
+  export get-attribute: async func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
 }
