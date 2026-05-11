@@ -286,10 +286,7 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::get_attributes(runtime, nft_id_2).await?,
         Vec::<nft::Attribute>::new()
     );
-    assert_eq!(
-        nft::get_attribute(runtime, nft_id_2, "name").await?,
-        None
-    );
+    assert_eq!(nft::get_attribute(runtime, nft_id_2, "name").await?, None);
 
     // The creator index reflects every successful mint, ignores the
     // failed ones (validation errors abort before the index is touched)
@@ -298,12 +295,24 @@ async fn test_native_nft_contract() -> Result<()> {
     // error). Pagination on alice's two-entry bucket exercises both
     // the offset/limit slicing and the lexicographic ordering of the
     // underlying map.
-    assert_eq!(nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?, 2);
-    assert_eq!(nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?, 1);
-    assert_eq!(nft::count_nfts_by_creator(runtime, carol_ref.clone()).await?, 0);
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?,
+        2
+    );
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?,
+        1
+    );
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, carol_ref.clone()).await?,
+        0
+    );
     let alice_minted = nft::list_nfts_by_creator(runtime, alice_ref.clone(), 0, 100).await?;
     assert_eq!(
-        alice_minted.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        alice_minted
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_1, nft_id_3]
     );
     assert!(alice_minted.iter().all(|n| n.creator == alice_ref));
@@ -313,12 +322,18 @@ async fn test_native_nft_contract() -> Result<()> {
     // empty.
     let alice_first_page = nft::list_nfts_by_creator(runtime, alice_ref.clone(), 0, 1).await?;
     assert_eq!(
-        alice_first_page.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        alice_first_page
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_1]
     );
     let alice_second_page = nft::list_nfts_by_creator(runtime, alice_ref.clone(), 1, 1).await?;
     assert_eq!(
-        alice_second_page.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        alice_second_page
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_3]
     );
     assert_eq!(
@@ -332,7 +347,10 @@ async fn test_native_nft_contract() -> Result<()> {
     );
     let bob_minted = nft::list_nfts_by_creator(runtime, bob_ref.clone(), 0, 100).await?;
     assert_eq!(
-        bob_minted.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        bob_minted
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_2]
     );
     assert_eq!(bob_minted[0].creator, bob_ref);
@@ -392,11 +410,20 @@ async fn test_native_nft_contract() -> Result<()> {
     // expose the *current* owner (bob for nft_id_1, alice for nft_id_3,
     // bob for nft_id_2) while the creator field stays anchored to the
     // original minter.
-    assert_eq!(nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?, 2);
-    assert_eq!(nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?, 1);
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?,
+        2
+    );
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?,
+        1
+    );
     let alice_after_ab = nft::list_nfts_by_creator(runtime, alice_ref.clone(), 0, 100).await?;
     assert_eq!(
-        alice_after_ab.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        alice_after_ab
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_1, nft_id_3]
     );
     assert!(alice_after_ab.iter().all(|n| n.creator == alice_ref));
@@ -460,9 +487,18 @@ async fn test_native_nft_contract() -> Result<()> {
     // minted anything, so they appear as 0/empty. An invalid
     // `HolderRef` is reported as 0/empty rather than as a validation
     // error — view functions stay lenient on query inputs.
-    assert_eq!(nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?, 2);
-    assert_eq!(nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?, 1);
-    assert_eq!(nft::count_nfts_by_creator(runtime, carol_ref.clone()).await?, 0);
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?,
+        2
+    );
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?,
+        1
+    );
+    assert_eq!(
+        nft::count_nfts_by_creator(runtime, carol_ref.clone()).await?,
+        0
+    );
     assert_eq!(
         nft::count_nfts_by_creator(runtime, HolderRef::Burner).await?,
         0
@@ -490,7 +526,10 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(nft3_final.owner, alice_ref);
     let bob_final = nft::list_nfts_by_creator(runtime, bob_ref.clone(), 0, 100).await?;
     assert_eq!(
-        bob_final.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        bob_final
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id_2]
     );
     assert_eq!(bob_final[0].creator, bob_ref);
