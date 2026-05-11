@@ -168,6 +168,14 @@ pub struct Runtime {
     pub op_return_data: Option<OpReturnData>,
     pub node_label: String,
     core_signer_id: Option<i64>,
+    /// Override for the signer that funds gas (token::hold/release).
+    /// When `Some`, only the hold/release calls use this payer; the
+    /// "applicative signer" passed to `execute` for contract auth,
+    /// result attribution and nonces is unaffected. Used by the BLS
+    /// aggregate sponsored-gas path to charge the Bitcoin publisher
+    /// instead of the per-op co-signer. The executor MUST reset this
+    /// back to `None` after each op so the override never leaks.
+    pub gas_payer: Option<Signer>,
 }
 
 impl Runtime {
@@ -220,6 +228,7 @@ impl Runtime {
             op_return_data: None,
             node_label: String::new(),
             core_signer_id: None,
+            gas_payer: None,
         })
     }
 
@@ -284,6 +293,14 @@ impl Runtime {
 
     pub fn set_gas_limit(&mut self, gas_limit: u64) {
         self.gas_limit = Some(gas_limit);
+    }
+
+    /// Override the signer that funds gas (`token::hold`/`token::release`).
+    /// Pass `None` to restore the default behavior (the op's applicative
+    /// signer pays). The executor MUST reset this to `None` after each op
+    /// so the override never leaks across operations.
+    pub fn set_gas_payer(&mut self, payer: Option<Signer>) {
+        self.gas_payer = payer;
     }
 
     pub fn gas_consumed(&self, starting_fuel: u64, ending_fuel: u64) -> u64 {

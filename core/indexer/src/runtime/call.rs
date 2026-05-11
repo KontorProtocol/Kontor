@@ -232,21 +232,24 @@ impl Runtime {
                 .expect("Failed to convert fuel limit into gas limit")
                 .mul(self.gas_to_token_multiplier)
                 .expect("Failed to convert gas limit into token limit");
+            // BLS aggregate sponsored-gas path: when the runtime has been
+            // configured with a `gas_payer`, charge that signer instead
+            // of the op's applicative signer. Everything else (contract
+            // auth, nonces, result attribution) keeps using `signer`.
+            let payer = self.gas_payer.as_ref().unwrap_or(signer);
             tracing::info!(
                 node = %self.node_label,
                 %hold_amount,
                 signer = ?signer,
+                gas_payer = ?self.gas_payer,
                 "Gas hold"
             );
             Box::pin({
                 let mut runtime = self.clone();
+                let payer = payer.clone();
                 async move {
-                    token::api::hold(
-                        &mut runtime,
-                        &Signer::Core(Box::new(signer.clone())),
-                        hold_amount,
-                    )
-                    .await
+                    token::api::hold(&mut runtime, &Signer::Core(Box::new(payer)), hold_amount)
+                        .await
                 }
             })
             .await
@@ -254,7 +257,7 @@ impl Runtime {
             .map_err(|e| {
                 ExecutionError::Deterministic(anyhow!(
                     "Signer {:?} does not have enough token to cover gas limit: {}",
-                    signer,
+                    payer,
                     e
                 ))
             })?;
@@ -435,6 +438,10 @@ impl Runtime {
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
                 .expect("Failed to convert gas consumed to token amount");
+            // Symmetric to `prepare_call`: the publisher (when sponsoring)
+            // is the one that gets the unused-fuel refund / final gas debit,
+            // because we earlier `hold`-ed against that same payer.
+            let payer = self.gas_payer.as_ref().unwrap_or(signer);
             tracing::info!(
                 node = %self.node_label,
                 gas,
@@ -445,18 +452,16 @@ impl Runtime {
                 contract = %contract_address,
                 func = func_name,
                 signer = ?signer,
+                gas_payer = ?self.gas_payer,
                 "Gas release"
             );
             Box::pin({
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
+                let payer = payer.clone();
                 async move {
-                    token::api::release(
-                        &mut runtime,
-                        &Signer::Core(Box::new(signer.clone())),
-                        burn_amount,
-                    )
-                    .await
+                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
+                        .await
                 }
             })
             .await

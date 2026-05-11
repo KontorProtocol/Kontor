@@ -248,7 +248,51 @@ Source: `../Documentation/specs/whitepaper/main.typ` (Sigil Smart Contracts → 
 
 ---
 
-### 7) Serialization + compression (full stack vs v1)
+### 7) Publisher-paid gas (sponsored ops)
+
+Co-signers in a bundled operation usually pay the KOR gas for their own ops via `token::hold` / `token::release`. There are cases where the bundle publisher (the Bitcoin Taproot signer of the witness) wants to absorb the gas — e.g. a service onboarding users who have no KOR yet, or a relayer batching ops for users who only hold BTC. Kontor supports this **per-op, opt-in**, without breaking the existing signing scheme.
+
+#### A. `AggregateInfo` fields
+
+Two new fields extend `AggregateInfo`:
+
+- `gas_paid_by_publisher: bool` — bundle-level switch (default `false`).
+- `publisher_gas_limit_per_op: u64` — effective `gas_limit` applied to every sponsored op (default `0`).
+
+Both fields use `#[serde(default)]`. This makes JSON paths (kontor-ts bindings, `serde_json::from_str`) accept payloads without the new fields. **Postcard is non-self-describing**, so payloads encoded BEFORE this extension cannot be decoded by the new struct shape — postcard's `SeqAccess` errors with `DeserializeUnexpectedEnd` instead of using the defaults (see [postcard#159](https://github.com/jamesmunns/postcard/issues/159)). This is acceptable today because no BLS-bulk payloads predate this change; if that ever changes, a custom `Deserialize` would be required.
+
+Neither field is part of the BLS `aggregate_signing_message` (`KONTOR-OP-V1 || postcard((signer_id, inst))`). Existing BLS signatures keep verifying byte-for-byte. The consent model is:
+
+- The **co-signer** cryptographically expresses their intent to be sponsored by signing `gas_limit = 0` for that op — `gas_limit` is part of `Inst::Call`, which is part of the signing message, so the co-signer's BLS signature binds it.
+- The **publisher** expresses their consent to fund gas by signing the Bitcoin Taproot spend that publishes the bundle and by setting `gas_paid_by_publisher = true` in the envelope they assemble. The publisher chooses `publisher_gas_limit_per_op` freely — they take on the risk of running out of tokens.
+
+#### B. Per-op selection rule
+
+For every op in an aggregate bundle:
+
+| `op.gas_limit` (signed) | `gas_paid_by_publisher` | Effect                                                                                                                                              |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `> 0`                   | `*`                     | **User pays.** Signed `gas_limit` is used verbatim (legacy behavior, unchanged).                                                                    |
+| `= 0`                   | `false` (or absent)     | **Out-of-fuel deterministic.** `fuel_limit = 0`, the op traps on the first `consume_fuel` and rolls back its savepoint (legacy behavior, unchanged). |
+| `= 0`                   | `true`                  | **Publisher pays.** Effective `gas_limit = publisher_gas_limit_per_op`. `token::hold` and `token::release` charge the publisher's auto-created identity, not the co-signer. The co-signer remains the **applicative signer** for contract auth, result attribution, and nonces. |
+
+This makes mixed-payment bulks (some user-paid, some sponsored) possible inside the **same envelope** without any additional plumbing.
+
+#### C. Failure semantics
+
+- **Publisher has insufficient KOR** to cover `publisher_gas_limit_per_op` of one sponsored op → that op fails with a deterministic "Signer ... does not have enough token" error, exactly as a co-signer-paid op would on the legacy path. Other ops in the same bulk are unaffected — each op has its own savepoint. This matches the existing "not all-or-nothing" behavior of bulk execution.
+- **`gas_paid_by_publisher = true` but `publisher_gas_limit_per_op = 0`** is a shape error — `validate_aggregate_shape` rejects the entire bulk. The publisher gets an explicit failure rather than every sponsored op silently trapping out-of-fuel.
+- **Direct (non-aggregate) publication is unchanged.** The publisher-paid-gas path is aggregate-only.
+
+#### D. Implementation pointers
+
+- Per-op resolution lives in `process_aggregate_input` (`core/indexer/src/reactor/executor.rs`): when the bulk opts in, the publisher's identity is resolved exactly once via `get_or_create_identity(&x_only_pubkey)` and then routed into `execute_op` as a `gas_payer: Option<Signer>`.
+- The actual override happens inside `Runtime::prepare_call` and `Runtime::handle_procedure` (`core/indexer/src/runtime/call.rs`): when `runtime.gas_payer` is `Some`, it is the payer passed to `token::api::hold` and `token::api::release` (wrapped in `Signer::Core(...)`). The applicative signer is unchanged.
+- The executor sets `runtime.set_gas_payer(...)` immediately before each `execute_op` and resets it to `None` after, so the override never leaks across ops.
+
+---
+
+### 8) Serialization + compression (full stack vs v1)
 
 The full scalability stack includes Postcard serialization and Zstd compression; v1 `Inst::BlsBulk` uses Postcard and intentionally defers compression to a later, uniform layer.
 

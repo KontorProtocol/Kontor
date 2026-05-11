@@ -342,7 +342,14 @@ async fn process_direct_input(
             )
             .await;
 
-        execute_op(runtime, &op).await?;
+        // Direct path keeps the legacy behavior: no publisher-paid gas
+        // sponsoring, the op's gas_limit is used as-is.
+        let effective_gas_limit = match &op {
+            indexer_types::Op::Publish { gas_limit, .. }
+            | indexer_types::Op::Call { gas_limit, .. } => *gas_limit,
+            _ => 0,
+        };
+        execute_op(runtime, &op, effective_gas_limit, None).await?;
     }
     Ok(())
 }
@@ -369,6 +376,22 @@ async fn process_aggregate_input(
         .aggregate
         .as_ref()
         .expect("aggregate must be present after successful verification");
+    let gas_paid_by_publisher = agg.gas_paid_by_publisher;
+    let publisher_gas_limit_per_op = agg.publisher_gas_limit_per_op;
+
+    // Resolve the Bitcoin publisher's identity exactly once if this bulk
+    // opts into sponsored gas. Same pattern as `process_direct_input` —
+    // an x_only_pubkey that never paid for an op before is auto-registered
+    // here on first sponsorship. Reused for every sponsored op in the bulk.
+    let publisher_identity = if gas_paid_by_publisher {
+        Some(
+            runtime
+                .get_or_create_identity(&input.x_only_pubkey.to_string())
+                .await?,
+        )
+    } else {
+        None
+    };
 
     for (op_index, (inst, &signer_id)) in input
         .insts
@@ -422,66 +445,91 @@ async fn process_aggregate_input(
             }
         }
 
+        // Sponsored-gas selection per op:
+        // - flag = true AND op.gas_limit == 0  → publisher pays,
+        //   effective gas_limit = publisher_gas_limit_per_op.
+        // - otherwise → current behavior, user-signed gas_limit is used
+        //   verbatim. Validate_aggregate_shape requires every aggregate
+        //   op to be `Inst::Call` so this read is safe.
+        let signed_gas_limit = match inst {
+            Inst::Call { gas_limit, .. } => *gas_limit,
+            _ => {
+                warn!("aggregate path encountered non-Call op (shape check should have rejected)");
+                continue;
+            }
+        };
+        let (effective_gas_limit, gas_payer) = if gas_paid_by_publisher && signed_gas_limit == 0 {
+            let payer = publisher_identity
+                .clone()
+                .expect("publisher_identity must be set when gas_paid_by_publisher is true");
+            (publisher_gas_limit_per_op, Some(Signer::Id(payer)))
+        } else {
+            (signed_gas_limit, None)
+        };
+
         let metadata = OpMetadata {
             previous_output: input.previous_output,
             input_index: input.input_index,
             signer_id,
         };
         let op = op_from_inst(inst.clone(), metadata);
-        execute_op(runtime, &op).await?;
+        execute_op(runtime, &op, effective_gas_limit, gas_payer).await?;
     }
     Ok(())
 }
 
-async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
+async fn execute_op(
+    runtime: &mut Runtime,
+    op: &indexer_types::Op,
+    effective_gas_limit: u64,
+    gas_payer: Option<Signer>,
+) -> Result<()> {
     let identity = database::types::Identity::new(op.metadata().signer_id as i64);
     let signer = Signer::Id(identity);
 
-    match op {
-        indexer_types::Op::Publish {
-            gas_limit,
-            name,
-            bytes,
-            ..
-        } => {
-            runtime.set_gas_limit(*gas_limit);
+    // Sponsored-gas override (`Some(...)`) is set ONLY for the duration of
+    // this op so it never leaks into the next iteration. Reset to `None`
+    // before returning, regardless of which branch executed.
+    runtime.set_gas_payer(gas_payer);
+
+    let result = match op {
+        indexer_types::Op::Publish { name, bytes, .. } => {
+            runtime.set_gas_limit(effective_gas_limit);
             match runtime.publish(&signer, name, bytes).await {
-                Ok(_) => {}
+                Ok(_) => Ok(()),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
+                    Ok(())
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Publish operation infrastructure failure"));
+                    Err(e.context("Publish operation infrastructure failure"))
                 }
             }
         }
-        indexer_types::Op::Call {
-            gas_limit,
-            contract,
-            expr,
-            ..
-        } => {
-            runtime.set_gas_limit(*gas_limit);
+        indexer_types::Op::Call { contract, expr, .. } => {
+            runtime.set_gas_limit(effective_gas_limit);
             match runtime
                 .execute(Some(&signer), &(contract.into()), expr)
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => Ok(()),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Call operation failed: {e:#}");
+                    Ok(())
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Call operation infrastructure failure"));
+                    Err(e.context("Call operation infrastructure failure"))
                 }
             }
         }
         indexer_types::Op::Issuance { .. } => match runtime.issuance(&signer).await {
-            Ok(_) => {}
+            Ok(_) => Ok(()),
             Err(ExecutionError::Deterministic(e)) => {
                 warn!("Issuance operation failed: {e:#}");
+                Ok(())
             }
             Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("Issuance infrastructure failure"));
+                Err(e.context("Issuance infrastructure failure"))
             }
         },
         indexer_types::Op::RegisterBlsKey {
@@ -500,18 +548,22 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 .await
             {
                 Ok(_) => {
-                    registry::api::registered(runtime, &Signer::Core(Box::new(signer.clone())))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("registry.registered failed: {e}"))?;
+                    let reg_result =
+                        registry::api::registered(runtime, &Signer::Core(Box::new(signer.clone())))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("registry.registered failed: {e}"));
+                    reg_result.map(|_| ())
                 }
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("RegisterBlsKey failed: {e:#}");
+                    Ok(())
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("RegisterBlsKey infrastructure failure"));
+                    Err(e.context("RegisterBlsKey infrastructure failure"))
                 }
             }
         }
-    }
-    Ok(())
+    };
+    runtime.set_gas_payer(None);
+    result
 }

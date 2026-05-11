@@ -422,6 +422,22 @@ impl RuntimeRegtest {
         &self,
         calls: &[(&Signer, &ContractAddress, &str)],
     ) -> Result<Insts> {
+        self.compose_bls_bulk(calls, 10_000, false, 0).await
+    }
+
+    /// Build BLS aggregate Insts with full control over per-op gas and
+    /// publisher-paid sponsorship. Used both by the default
+    /// `build_aggregate_insts` (gas_limit_per_call = 10_000, no sponsor)
+    /// and by tests that exercise the sponsored-gas path. `gas_limit = 0`
+    /// is allowed and intentional when paired with
+    /// `gas_paid_by_publisher = true`.
+    pub async fn compose_bls_bulk(
+        &self,
+        calls: &[(&Signer, &ContractAddress, &str)],
+        gas_limit_per_call: u64,
+        gas_paid_by_publisher: bool,
+        publisher_gas_limit_per_op: u64,
+    ) -> Result<Insts> {
         use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 
         let mut ops = Vec::with_capacity(calls.len());
@@ -441,7 +457,7 @@ impl RuntimeRegtest {
             *nonce += 1;
 
             ops.push(Inst::Call {
-                gas_limit: 10_000,
+                gas_limit: gas_limit_per_call,
                 contract: (*contract).clone().into(),
                 nonce: Some(current_nonce),
                 expr: expr.to_string(),
@@ -471,6 +487,8 @@ impl RuntimeRegtest {
             aggregate: Some(indexer_types::AggregateInfo {
                 signer_ids,
                 signature: aggregate.to_signature().to_bytes().to_vec(),
+                gas_paid_by_publisher,
+                publisher_gas_limit_per_op,
             }),
         })
     }

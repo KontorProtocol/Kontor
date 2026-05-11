@@ -29,6 +29,8 @@ fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> 
         aggregate: Some(AggregateInfo {
             signer_ids,
             signature,
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     }
 }

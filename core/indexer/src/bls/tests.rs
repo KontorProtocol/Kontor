@@ -132,6 +132,8 @@ async fn verify_aggregate_rejects_empty_bundle() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![],
             signature: vec![],
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -157,6 +159,8 @@ async fn verify_aggregate_rejects_wrong_signature_length() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: vec![0u8; BLS_SIGNATURE_BYTES - 1],
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -190,6 +194,8 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: bad_sig.to_vec(),
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -221,6 +227,8 @@ async fn verify_aggregate_enforces_op_count_cap() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0; MAX_BLS_BULK_OPS + 1],
             signature: vec![],
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -251,12 +259,74 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
                 .sign(b"cap-test", KONTOR_BLS_DST, &[])
                 .to_bytes()
                 .to_vec(),
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
         .await
         .expect_err("message bytes cap must be enforced");
     assert!(err.to_string().contains("signed message bytes exceed max"));
+}
+
+/// `gas_paid_by_publisher = true` AND `publisher_gas_limit_per_op = 0`
+/// is a publisher misconfiguration: every sponsored op would trap out
+/// of fuel on the first consume_fuel. The shape validator MUST reject
+/// the whole bulk so the publisher gets a clear error instead of seeing
+/// every op fail silently.
+#[tokio::test]
+async fn validate_aggregate_shape_rejects_publisher_gas_zero() {
+    let insts = Insts {
+        ops: vec![Inst::Call {
+            gas_limit: 0,
+            contract: ContractAddress {
+                name: "c".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce: Some(0),
+            expr: "noop()".into(),
+        }],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; BLS_SIGNATURE_BYTES],
+            gas_paid_by_publisher: true,
+            publisher_gas_limit_per_op: 0,
+        }),
+    };
+    let err = super::aggregate::validate_aggregate_shape(&insts)
+        .expect_err("flag = true with cap = 0 must be rejected");
+    assert!(
+        err.to_string()
+            .contains("gas_paid_by_publisher = true requires publisher_gas_limit_per_op > 0"),
+        "unexpected error: {err}"
+    );
+}
+
+/// `gas_paid_by_publisher = true` with a positive `publisher_gas_limit_per_op`
+/// is a valid configuration — the shape validator must accept it.
+#[tokio::test]
+async fn validate_aggregate_shape_accepts_publisher_gas_set() {
+    let insts = Insts {
+        ops: vec![Inst::Call {
+            gas_limit: 0,
+            contract: ContractAddress {
+                name: "c".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce: Some(0),
+            expr: "noop()".into(),
+        }],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; BLS_SIGNATURE_BYTES],
+            gas_paid_by_publisher: true,
+            publisher_gas_limit_per_op: 50_000,
+        }),
+    };
+    super::aggregate::validate_aggregate_shape(&insts)
+        .expect("valid sponsor configuration must pass shape validation");
 }
 
 /*
@@ -497,6 +567,8 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: vec![0u8; 48],
+            gas_paid_by_publisher: false,
+            publisher_gas_limit_per_op: 0,
         }),
     };
     let err =

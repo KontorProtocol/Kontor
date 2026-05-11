@@ -239,6 +239,8 @@ mod tests {
             aggregate: Some(AggregateInfo {
                 signer_ids: vec![7],
                 signature: vec![9u8; 48],
+                gas_paid_by_publisher: false,
+                publisher_gas_limit_per_op: 0,
             }),
         };
         let payload = serialize(&insts).expect("serialize Insts");

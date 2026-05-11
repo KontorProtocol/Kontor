@@ -277,6 +277,38 @@ pub struct OpMetadata {
 pub struct AggregateInfo {
     pub signer_ids: Vec<u64>,
     pub signature: Vec<u8>,
+    /// Opt-in flag: when true, ops whose user-signed `gas_limit == 0`
+    /// are paid for by the Bitcoin publisher (the x_only_pubkey that
+    /// signs the Taproot witness) using `publisher_gas_limit_per_op`
+    /// as effective fuel cap.
+    ///
+    /// `#[serde(default)]` populates JSON paths (kontor-ts bindings,
+    /// `serde_json::from_str`) when the field is absent. Postcard is
+    /// non-self-describing and DOES NOT use this default — old
+    /// postcard payloads encoded before this field existed cannot be
+    /// decoded by the new shape (they error with
+    /// `DeserializeUnexpectedEnd`). This is acceptable today because
+    /// no BLS bulk payloads predate this change; if that ever changes,
+    /// a custom `Deserialize` would be required.
+    ///
+    /// NOT included in `aggregate_signing_message` — co-signers
+    /// express their consent to be sponsored cryptographically by
+    /// signing `gas_limit = 0` (which IS part of `Inst::Call` and so
+    /// IS in the signed message). The publisher's consent is
+    /// expressed by signing the Taproot spend.
+    #[serde(default)]
+    pub gas_paid_by_publisher: bool,
+    /// Effective gas_limit applied to every op in the bulk that
+    /// signs `gas_limit = 0` and is sponsored by the publisher.
+    /// Chosen by the publisher (not signed by co-signers).
+    ///
+    /// `#[serde(default)]` applies on JSON paths (see
+    /// `gas_paid_by_publisher` above for the postcard caveat).
+    /// Validated by `validate_aggregate_shape`: must be > 0 when
+    /// `gas_paid_by_publisher == true`.
+    #[ts(type = "number")]
+    #[serde(default)]
+    pub publisher_gas_limit_per_op: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

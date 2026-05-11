@@ -104,6 +104,15 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             }
         }
     }
+    // Publisher-paid gas opt-in: when activated, the publisher MUST declare
+    // a non-zero per-op gas cap. Otherwise every sponsored op would trap
+    // out-of-fuel on the first consume_fuel — that is almost certainly a
+    // publisher misconfiguration so we reject the whole bulk.
+    if agg.gas_paid_by_publisher && agg.publisher_gas_limit_per_op == 0 {
+        return Err(anyhow!(
+            "gas_paid_by_publisher = true requires publisher_gas_limit_per_op > 0"
+        ));
+    }
     Ok(agg)
 }
 
