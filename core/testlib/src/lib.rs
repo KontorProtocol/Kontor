@@ -15,7 +15,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, Insts, PaymentIntent, TransactionRow};
+use indexer_types::{Inst, Insts, Payment, PaymentIntent, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -158,6 +158,17 @@ pub struct RuntimeConfig<'a> {
     pub contracts_dir: &'a str,
 }
 
+/// Test helper: build a `Payment` for a user-driven call where the caller
+/// pays for their own gas. Returns None when the signer has no resolvable
+/// signer_id (e.g. `Signer::Nobody` standalone). Used by test wrappers and
+/// by tests that drive the indexer runtime directly.
+pub fn user_payment(signer: &Signer) -> Option<Payment> {
+    signer.signer_id().map(|id| Payment {
+        signer_id: id as u64,
+        gas_limit: 10_000,
+    })
+}
+
 #[async_trait]
 pub trait RuntimeImpl: Send {
     async fn identity(&mut self) -> Result<Signer>;
@@ -169,6 +180,15 @@ pub trait RuntimeImpl: Send {
     ) -> Result<ContractAddress>;
     async fn wit(&self, contract_address: &ContractAddress) -> Result<String>;
     async fn execute(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String>;
+    /// Macro-codegen entry point for native-contract api wrapper calls (always
+    /// Core-paid system calls). Distinct from `execute` so tests can keep
+    /// calling `execute` directly with user-driven payment semantics.
+    async fn execute_api(
         &mut self,
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
@@ -279,9 +299,18 @@ impl RuntimeLocal {
             )
             .await?;
             if !contract_has_state(&conn, contract_id).await? {
+                // User-driven publish in test setup: the publisher pays for
+                // init() out of their own (test-issued) balance.
+                let payment = Payment {
+                    signer_id: signer
+                        .signer_id()
+                        .expect("test signer must have id") as u64,
+                    gas_limit: self.runtime.gas_limit_for_non_procs,
+                };
                 self.runtime
                     .execute(
                         Some(signer),
+                        Some(payment),
                         &ContractAddress {
                             name: name.to_string(),
                             height: height as u64,
@@ -384,7 +413,28 @@ impl RuntimeImpl for RuntimeLocal {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let result = self.runtime.execute(signer, contract_address, expr).await;
+        // Test ergonomics: user-driven calls pay for their own gas.
+        let payment = signer.and_then(user_payment);
+        let result = self
+            .runtime
+            .execute(signer, payment, contract_address, expr)
+            .await;
+        if let Some(c) = self.runtime.tx_context_mut() {
+            c.op_index += 1;
+        }
+        result.map_err(Into::into)
+    }
+
+    async fn execute_api(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String> {
+        let result = self
+            .runtime
+            .execute_api(signer, contract_address, expr)
+            .await;
         if let Some(c) = self.runtime.tx_context_mut() {
             c.op_index += 1;
         }
@@ -572,6 +622,19 @@ impl RuntimeImpl for RuntimeRegtest {
         } else {
             self.reg_tester.view(contract_address, expr).await
         }
+    }
+
+    async fn execute_api(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String> {
+        // Regtest path: api wrappers map to the same regtest instruction
+        // mechanism as user calls. The `PaymentIntent::self_pay(10_000)` is
+        // a test-friendly default that lets the cluster's executor resolve
+        // payment normally. Sponsored regtest scenarios construct Inst directly.
+        self.execute(signer, contract_address, expr).await
     }
 
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
@@ -799,6 +862,21 @@ impl Runtime {
         #[allow(clippy::useless_conversion)]
         self.runtime
             .execute(signer, contract_address, expr)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Macro codegen for native-contract api wrappers expands to
+    /// `runtime.execute_api(...)`. This forwards to the trait method on the
+    /// underlying impl. Always Core-paid (system call).
+    pub async fn execute_api(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String> {
+        self.runtime
+            .execute_api(signer, contract_address, expr)
             .await
             .map_err(Into::into)
     }

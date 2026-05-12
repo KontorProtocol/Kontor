@@ -439,31 +439,32 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
 
     match op {
         indexer_types::Op::Publish {
-            gas_limit,
+            payment,
             name,
             bytes,
             ..
-        } => {
-            runtime.set_gas_limit(*gas_limit);
-            match runtime.publish(&signer, name, bytes).await {
-                Ok(_) => {}
-                Err(ExecutionError::Deterministic(e)) => {
-                    warn!("Publish operation failed: {e:#}");
-                }
-                Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Publish operation infrastructure failure"));
-                }
+        } => match runtime.publish(&signer, payment.clone(), name, bytes).await {
+            Ok(_) => {}
+            Err(ExecutionError::Deterministic(e)) => {
+                warn!("Publish operation failed: {e:#}");
             }
-        }
+            Err(ExecutionError::NonDeterministic(e)) => {
+                return Err(e.context("Publish operation infrastructure failure"));
+            }
+        },
         indexer_types::Op::Call {
-            gas_limit,
+            payment,
             contract,
             expr,
             ..
         } => {
-            runtime.set_gas_limit(*gas_limit);
             match runtime
-                .execute(Some(&signer), &(contract.into()), expr)
+                .execute(
+                    Some(&signer),
+                    Some(payment.clone()),
+                    &(contract.into()),
+                    expr,
+                )
                 .await
             {
                 Ok(_) => {}

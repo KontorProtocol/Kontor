@@ -423,7 +423,10 @@ pub fn generate_functions(
     };
 
     let execute = if test {
-        quote! { runtime.execute }
+        // Api wrappers are host-side / system calls: always Core-paid.
+        // `execute_api` is the entry point that handles that on both
+        // `indexer::Runtime` and `testlib::Runtime`.
+        quote! { runtime.execute_api }
     } else {
         quote! { foreign::call }
     };

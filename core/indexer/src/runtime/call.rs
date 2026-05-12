@@ -13,7 +13,10 @@ use wasmtime::{
     },
 };
 
+use indexer_types::Payment;
 use stdlib::CheckedArithmetics;
+
+use crate::database::types::Identity;
 
 use super::{
     ContractAddress, Decimal, Runtime,
@@ -30,9 +33,10 @@ impl Runtime {
         &self,
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
+        payment: Option<&Payment>,
         expr: &str,
         is_top_level: bool,
-        fuel: Option<u64>,
+        fuel_override: Option<u64>,
     ) -> Result<
         (
             Store<Runtime>,
@@ -59,7 +63,13 @@ impl Runtime {
             .load_component(contract_id)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        let mut fuel_limit = fuel.unwrap_or(self.fuel_limit_for_non_procs());
+        let mut fuel_limit = match fuel_override {
+            Some(f) => f,
+            None => match payment {
+                Some(p) => p.gas_limit * self.gas_to_fuel_multiplier,
+                None => self.fuel_limit_for_non_procs(),
+            },
+        };
         let mut store = self
             .make_store(fuel_limit)
             .map_err(ExecutionError::NonDeterministic)?;
@@ -206,7 +216,7 @@ impl Runtime {
             }
         }
 
-        if is_proc && fuel.is_none() {
+        if is_proc && payment.is_none() && fuel_override.is_none() {
             return Err(ExecutionError::Deterministic(anyhow!(
                 "Missing fuel for procedure"
             )));
@@ -222,6 +232,8 @@ impl Runtime {
             && let Some(signer) = signer
             && !signer.is_core()
         {
+            let payment = payment.expect("payment is required for top-level proc calls");
+            let payer = Signer::Id(Identity::new(payment.signer_id as i64));
             let hold_amount = Decimal::try_from(fuel_limit)
                 .expect("u64 to decimal")
                 .div(
@@ -236,25 +248,22 @@ impl Runtime {
                 node = %self.node_label,
                 %hold_amount,
                 signer = ?signer,
+                payer = ?payer,
                 "Gas hold"
             );
             Box::pin({
                 let mut runtime = self.clone();
                 async move {
-                    token::api::hold(
-                        &mut runtime,
-                        &Signer::Core(Box::new(signer.clone())),
-                        hold_amount,
-                    )
-                    .await
+                    token::api::hold(&mut runtime, &Signer::Core(Box::new(payer)), hold_amount)
+                        .await
                 }
             })
             .await
             .map_err(ExecutionError::NonDeterministic)?
             .map_err(|e| {
                 ExecutionError::Deterministic(anyhow!(
-                    "Signer {:?} does not have enough token to cover gas limit: {}",
-                    signer,
+                    "Payer {:?} does not have enough token to cover gas limit: {}",
+                    payment.signer_id,
                     e
                 ))
             })?;
@@ -408,6 +417,7 @@ impl Runtime {
     pub async fn handle_procedure(
         &mut self,
         signer: &Signer,
+        payment: Option<&Payment>,
         contract_id: i64,
         contract_address: &ContractAddress,
         func_name: &str,
@@ -431,6 +441,8 @@ impl Runtime {
             .max(1);
 
         if is_op_result && !signer.is_core() {
+            let payment = payment.expect("payment required for op-result release");
+            let payer = Signer::Id(Identity::new(payment.signer_id as i64));
             let burn_amount = Decimal::try_from(gas)
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
@@ -445,18 +457,15 @@ impl Runtime {
                 contract = %contract_address,
                 func = func_name,
                 signer = ?signer,
+                payer = ?payer,
                 "Gas release"
             );
             Box::pin({
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
                 async move {
-                    token::api::release(
-                        &mut runtime,
-                        &Signer::Core(Box::new(signer.clone())),
-                        burn_amount,
-                    )
-                    .await
+                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
+                        .await
                 }
             })
             .await
@@ -505,6 +514,7 @@ impl Runtime {
             self.prepare_call(
                 contract_address,
                 signer.as_ref(),
+                None,
                 expr,
                 false,
                 Some(starting_fuel),
@@ -521,6 +531,7 @@ impl Runtime {
             result = self
                 .handle_procedure(
                     signer.as_ref().expect("Signer should be available in proc"),
+                    None,
                     contract_id,
                     contract_address,
                     &func_name,

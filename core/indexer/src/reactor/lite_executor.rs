@@ -137,8 +137,17 @@ impl LiteExecutor {
                     None,
                 )
                 .await;
+            let payment = indexer_types::Payment {
+                signer_id: signer.signer_id().expect("test signer must have id") as u64,
+                gas_limit: runtime.gas_limit_for_non_procs,
+            };
             runtime
-                .execute(Some(&signer), &counter_address, "init()")
+                .execute(
+                    Some(&signer),
+                    Some(payment),
+                    &counter_address,
+                    "init()",
+                )
                 .await?;
         }
 
@@ -191,8 +200,17 @@ impl Executor for LiteExecutor {
             )
             .await;
 
+        let payment = indexer_types::Payment {
+            signer_id: self.signer.signer_id().unwrap_or(0) as u64,
+            gas_limit: runtime.gas_limit_for_non_procs,
+        };
         match runtime
-            .execute(Some(&self.signer), &self.counter_address, "increment()")
+            .execute(
+                Some(&self.signer),
+                Some(payment),
+                &self.counter_address,
+                "increment()",
+            )
             .await
         {
             Ok(_) => Ok(()),

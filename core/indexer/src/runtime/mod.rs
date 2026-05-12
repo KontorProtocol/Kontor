@@ -102,9 +102,12 @@ use wasmtime::{
     component::{Component, HasData, Linker, ResourceTable},
 };
 
+use indexer_types::Payment;
+
 use crate::bls::RegistrationProof;
 use crate::database;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
+use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::kontor::built_in::context::OpReturnData;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
@@ -160,7 +163,6 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<i64>,
     pub gauge: Option<FuelGauge>,
-    pub gas_limit: Option<u64>,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
@@ -211,7 +213,6 @@ impl Runtime {
             result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
-            gas_limit: None,
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
@@ -272,16 +273,16 @@ impl Runtime {
         self.storage = storage;
     }
 
-    pub fn fuel_limit(&self) -> Option<u64> {
-        self.gas_limit.map(|l| l * self.gas_to_fuel_multiplier)
-    }
-
     pub fn fuel_limit_for_non_procs(&self) -> u64 {
         self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
     }
 
-    pub fn set_gas_limit(&mut self, gas_limit: u64) {
-        self.gas_limit = Some(gas_limit);
+    /// Build a Payment for system (Core-paid) operations.
+    pub fn core_payment(&self) -> Payment {
+        Payment {
+            signer_id: CORE_SIGNER_ID as u64,
+            gas_limit: self.gas_limit_for_non_procs,
+        }
     }
 
     pub fn gas_consumed(&self, starting_fuel: u64, ending_fuel: u64) -> u64 {
@@ -294,7 +295,6 @@ impl Runtime {
     ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
-        self.set_gas_limit(self.gas_limit_for_non_procs);
 
         // Reserve the Core signer row before publishing any contracts. The
         // returned id is asserted equal to CORE_SIGNER_ID inside the query —
@@ -305,8 +305,10 @@ impl Runtime {
         // IDs (1-indexed, assigned in iteration order). Adding a contract
         // = appending to the slice; no manual count to maintain.
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
+        let payment = self.core_payment();
         for (name, bytes) in NATIVE_CONTRACTS {
-            self.publish(&core_signer, name, bytes).await?;
+            self.publish(&core_signer, payment.clone(), name, bytes)
+                .await?;
         }
         if !genesis_validators.is_empty() {
             let validators = genesis_validators.iter().cloned().map(Into::into).collect();
@@ -323,6 +325,7 @@ impl Runtime {
     pub async fn publish(
         &mut self,
         signer: &Signer,
+        payment: Payment,
         name: &str,
         bytes: &[u8],
     ) -> Result<String, ExecutionError> {
@@ -352,7 +355,9 @@ impl Runtime {
             .insert_contract(name, bytes)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        let result = self.execute(Some(signer), &address, "init()").await;
+        let result = self
+            .execute(Some(signer), Some(payment), &address, "init()")
+            .await;
         if result.is_err() {
             self.storage
                 .rollback()
@@ -454,9 +459,32 @@ impl Runtime {
         Ok(())
     }
 
+    /// Host-side entry point used by macro-generated native-contract api
+    /// wrappers (`token::api::*`, `registry::api::*`, etc.). Derives a
+    /// `Payment` from the caller's `signer` at the non-procs gas budget.
+    ///
+    /// For system-internal callers, `signer` is `Signer::Core(...)` and the
+    /// `is_core()` bypass in `prepare_call` skips the hold regardless of
+    /// `payment.signer_id`. For user-driven calls from tests, `signer` is the
+    /// user and `payment.signer_id` resolves to their id so the hold charges
+    /// the right account.
+    pub async fn execute_api(
+        &mut self,
+        signer: Option<&Signer>,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, ExecutionError> {
+        let payment = signer.and_then(|s| s.signer_id()).map(|id| Payment {
+            signer_id: id as u64,
+            gas_limit: self.gas_limit_for_non_procs,
+        });
+        self.execute(signer, payment, contract_address, expr).await
+    }
+
     pub async fn execute(
         &mut self,
         signer: Option<&Signer>,
+        payment: Option<Payment>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String, ExecutionError> {
@@ -477,7 +505,7 @@ impl Runtime {
             is_proc,
             starting_fuel,
         ) = self
-            .prepare_call(contract_address, signer, expr, true, self.fuel_limit())
+            .prepare_call(contract_address, signer, payment.as_ref(), expr, true, None)
             .await?;
         OptionFuture::from(
             self.gauge
@@ -496,9 +524,11 @@ impl Runtime {
         .await;
         if is_proc {
             let signer = signer.expect("Signer should be available in proc");
+            let payment = payment.expect("Payment should be available in proc");
             result = self
                 .handle_procedure(
                     signer,
+                    Some(&payment),
                     contract_id,
                     contract_address,
                     &func_name,
