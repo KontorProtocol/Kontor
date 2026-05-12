@@ -272,6 +272,24 @@ pub struct OpMetadata {
     pub signer_id: u64,
 }
 
+/// Resolved per-op execution payment for `Op::Publish` and `Op::Call`.
+///
+/// Built from the co-signer's `PaymentIntent` plus any aggregate-level
+/// `publisher_sponsorship` offer. `signer_id` identifies who funds the
+/// op's gas (the applicative signer for SelfPay, the publisher for
+/// Sponsored). `gas_limit` is the effective fuel cap for execution.
+///
+/// System-paid ops (`Issuance`, `RegisterBlsKey`) don't carry a `Payment`
+/// — their gas is set by the runtime at the call site.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Payment {
+    #[ts(type = "number")]
+    pub signer_id: u64,
+    #[ts(type = "number")]
+    pub gas_limit: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct AggregateInfo {
@@ -316,6 +334,7 @@ impl Insts {
 pub enum Op {
     Publish {
         metadata: OpMetadata,
+        payment: Payment,
         #[ts(type = "number")]
         gas_limit: u64,
         name: String,
@@ -323,6 +342,7 @@ pub enum Op {
     },
     Call {
         metadata: OpMetadata,
+        payment: Payment,
         #[ts(type = "number")]
         gas_limit: u64,
         #[ts(as = "String")]

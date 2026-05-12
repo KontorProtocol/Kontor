@@ -4,7 +4,8 @@ use bitcoin::{
     script::Instruction,
 };
 use indexer_types::{
-    Input, Inst, Insts, Op, OpMetadata, OpWithResult, PaymentIntent, Transaction, deserialize,
+    Input, Inst, Insts, Op, OpMetadata, OpWithResult, Payment, PaymentIntent, Transaction,
+    deserialize,
 };
 use indexmap::IndexMap;
 use libsql::Connection;
@@ -19,24 +20,38 @@ pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
             payment,
             name,
             bytes,
-        } => Op::Publish {
-            metadata,
-            gas_limit: gas_limit_from_payment(&payment),
-            name,
-            bytes,
-        },
+        } => {
+            let gas_limit = gas_limit_from_payment(&payment);
+            Op::Publish {
+                payment: Payment {
+                    signer_id: metadata.signer_id,
+                    gas_limit,
+                },
+                metadata,
+                gas_limit,
+                name,
+                bytes,
+            }
+        }
         Inst::Call {
             payment,
             contract,
             nonce,
             expr,
-        } => Op::Call {
-            metadata,
-            gas_limit: gas_limit_from_payment(&payment),
-            contract,
-            nonce,
-            expr,
-        },
+        } => {
+            let gas_limit = gas_limit_from_payment(&payment);
+            Op::Call {
+                payment: Payment {
+                    signer_id: metadata.signer_id,
+                    gas_limit,
+                },
+                metadata,
+                gas_limit,
+                contract,
+                nonce,
+                expr,
+            }
+        }
         Inst::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,
@@ -51,11 +66,10 @@ pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
     }
 }
 
-/// Temporary helper for the current commit: extract the gas limit from a
-/// `PaymentIntent` so `Op.gas_limit` (which still exists in this commit) can
-/// be populated. `Sponsored` is unreachable here because no code path
-/// constructs it yet — sponsorship resolution is added in a later commit
-/// alongside the executor split.
+/// Temporary helper while `Op.gas_limit` is duplicated with `Op.payment.gas_limit`.
+/// Extracts the gas limit from the co-signer's `PaymentIntent`. Sponsored is
+/// unreachable because no code path constructs it yet — sponsorship resolution
+/// is added in a later commit alongside the executor split.
 fn gas_limit_from_payment(payment: &PaymentIntent) -> u64 {
     match payment {
         PaymentIntent::SelfPay { limit } => *limit,
