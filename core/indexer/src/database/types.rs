@@ -99,6 +99,12 @@ impl Identity {
     }
 }
 
+/// The reserved signer_id for the Core (system) signer. By construction the
+/// Core row is the first one inserted into `signers` at genesis, so SQLite
+/// auto-increment assigns it id = 1. This constant pins that contract and is
+/// asserted by `create_core_signer`.
+pub const CORE_SIGNER_ID: i64 = 1;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
     pub signer_id: i64,

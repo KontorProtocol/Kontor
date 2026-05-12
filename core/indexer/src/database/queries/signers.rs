@@ -1,7 +1,7 @@
 use libsql::{Connection, de::from_row, params};
 
 use super::Error;
-use crate::database::types::{Identity, SignerEntry};
+use crate::database::types::{CORE_SIGNER_ID, Identity, SignerEntry};
 
 impl Identity {
     /// Returns the most recent x_only_pubkey for this signer. `Identity` wraps
@@ -148,9 +148,11 @@ pub async fn get_or_create_identity(
     Ok(Identity::new(signer_id))
 }
 
-/// Create the reserved Core signer row. The Core signer row has id = 1 by
-/// construction — it's the first row inserted into `signers` at genesis, before
-/// any other signer. Idempotent — returns the existing id on repeat calls.
+/// Create the reserved Core signer row. The Core signer row has id =
+/// `CORE_SIGNER_ID` by construction — it's the first row inserted into
+/// `signers` at genesis, before any other signer. Idempotent — returns the
+/// existing id on repeat calls. Asserts the produced id matches the constant
+/// so downstream code can rely on `CORE_SIGNER_ID` as compile-time-known.
 pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
     let existing = conn
         .query("SELECT id FROM signers ORDER BY id ASC LIMIT 1", ())
@@ -160,11 +162,22 @@ pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
         .map(|r| r.get::<i64>(0))
         .transpose()?;
     if let Some(id) = existing {
+        if id != CORE_SIGNER_ID {
+            return Err(Error::InvalidData(format!(
+                "existing Core signer id ({id}) does not match CORE_SIGNER_ID ({CORE_SIGNER_ID})"
+            )));
+        }
         return Ok(id);
     }
     conn.execute("INSERT INTO signers (height) VALUES (0)", ())
         .await?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    if id != CORE_SIGNER_ID {
+        return Err(Error::InvalidData(format!(
+            "newly-created Core signer id ({id}) does not match CORE_SIGNER_ID ({CORE_SIGNER_ID})"
+        )));
+    }
+    Ok(id)
 }
 
 /// Create a signer row for a contract. No x_only_pubkey — contracts don't
