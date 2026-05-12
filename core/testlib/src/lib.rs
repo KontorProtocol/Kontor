@@ -15,7 +15,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, Insts, TransactionRow};
+use indexer_types::{Inst, Insts, PaymentIntent, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -441,7 +441,7 @@ impl RuntimeRegtest {
             *nonce += 1;
 
             ops.push(Inst::Call {
-                gas_limit: 10_000,
+                payment: PaymentIntent::self_pay(10_000),
                 contract: (*contract).clone().into(),
                 nonce: Some(current_nonce),
                 expr: expr.to_string(),
@@ -471,6 +471,7 @@ impl RuntimeRegtest {
             aggregate: Some(indexer_types::AggregateInfo {
                 signer_ids,
                 signature: aggregate.to_signature().to_bytes().to_vec(),
+                publisher_sponsorship: None,
             }),
         })
     }
@@ -510,7 +511,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .send_instruction(
                 identity,
                 Inst::Publish {
-                    gas_limit: 10_000,
+                    payment: PaymentIntent::self_pay(10_000),
                     name: name.to_string(),
                     bytes: contract.to_vec(),
                 },
@@ -556,7 +557,7 @@ impl RuntimeImpl for RuntimeRegtest {
                 .instruction(
                     identity,
                     Inst::Call {
-                        gas_limit: 10_000,
+                        payment: PaymentIntent::self_pay(10_000),
                         contract: contract_address.clone().into(),
                         nonce: None,
                         expr: expr.to_string(),
@@ -617,7 +618,7 @@ impl RuntimeImpl for RuntimeRegtest {
                         .send_instruction(
                             identity,
                             Inst::Call {
-                                gas_limit: 10_000,
+                                payment: PaymentIntent::self_pay(10_000),
                                 contract: (*contract).clone().into(),
                                 nonce: None,
                                 expr: expr.to_string(),
@@ -633,7 +634,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     let insts: Vec<Inst> = calls
                         .iter()
                         .map(|(contract, expr)| Inst::Call {
-                            gas_limit: 10_000,
+                            payment: PaymentIntent::self_pay(10_000),
                             contract: (*contract).clone().into(),
                             nonce: None,
                             expr: expr.to_string(),

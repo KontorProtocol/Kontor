@@ -9,8 +9,8 @@ use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_r
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    ComposeQuery, ContractAddress, Inst, InstructionQuery, Insts, OpReturnData, RevealInputs,
-    RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
+    ComposeQuery, ContractAddress, Inst, InstructionQuery, Insts, OpReturnData, PaymentIntent,
+    RevealInputs, RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
 };
 use testlib::RegTester;
 
@@ -32,7 +32,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let token_data_bytes = serialize(&token_data)?;
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "test".to_string(),
         bytes: token_data_bytes.clone(),
     };
@@ -162,7 +162,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let token_data_bytes = serialize(&token_data)?;
 
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "test".to_string(),
         bytes: token_data_bytes.clone(),
     };
@@ -170,7 +170,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let chained_token_data_bytes = serialize(b"Hello, World!")?;
 
     let chained_instructions = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "chained".to_string(),
         bytes: chained_token_data_bytes.clone(),
     };
@@ -244,7 +244,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
 
     let derived_chained_instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "chained".to_string(),
         bytes: derived_chained_tap_script.clone(),
     };
@@ -366,7 +366,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     let token_data_bytes = serialize(&token_data)?;
 
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "test".to_string(),
         bytes: token_data_bytes.clone(),
     };
@@ -434,7 +434,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
 
     // Oversized instruction
     let oversized_inst = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "oversized".to_string(),
         bytes: vec![0u8; 387 * 1024 + 1],
     };
@@ -456,7 +456,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
 
     // Oversized chained_instruction
     let chained_oversized_inst = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "chain-oversized".to_string(),
         bytes: vec![0u8; 387 * 1024 + 1],
     };
@@ -466,7 +466,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             insts: Insts::single(Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "chain-oversized".to_string(),
                 bytes: b"x".to_vec(),
             }),
@@ -487,7 +487,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
             insts: Insts::single(Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "fee-rate".to_string(),
                 bytes: b"x".to_vec(),
             }),
@@ -618,7 +618,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
     let token_data_bytes = serialize(&token_data)?;
 
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "nonexistent-utxo".to_string(),
         bytes: token_data_bytes,
     };
@@ -667,7 +667,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
     };
     let token_data_bytes = serialize(&token_data)?;
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "invalid-address".to_string(),
         bytes: token_data_bytes,
     };
@@ -705,7 +705,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
     };
     let token_data_bytes = serialize(&token_data)?;
     let instruction = Inst::Publish {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         name: "insufficient-funds".to_string(),
         bytes: token_data_bytes,
     };
@@ -744,7 +744,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
 
     let instruction = Inst::Call {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         contract: ContractAddress {
             name: "attach".to_string(),
             height: 0,
@@ -755,7 +755,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     };
 
     let chained_instructions = Inst::Call {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         contract: ContractAddress {
             name: "detach".to_string(),
             height: 0,
@@ -832,7 +832,7 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
         .clone();
 
     let derived_chained_instruction = Inst::Call {
-        gas_limit: 50_000,
+        payment: PaymentIntent::self_pay(50_000),
         contract: ContractAddress {
             name: "detach".to_string(),
             height: 0,

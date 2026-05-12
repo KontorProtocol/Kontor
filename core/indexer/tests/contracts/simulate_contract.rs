@@ -1,4 +1,4 @@
-use indexer_types::{Inst, TransactionHex};
+use indexer_types::{Inst, PaymentIntent, TransactionHex};
 use testlib::*;
 
 interface!(name = "crypto", path = "../../test-contracts/crypto/wit");
@@ -16,7 +16,7 @@ async fn test_crypto_contract_simulate() -> Result<()> {
         .compose_instruction(
             &mut ident,
             Inst::Call {
-                gas_limit: 10_000,
+                payment: PaymentIntent::self_pay(10_000),
                 contract: crypto.clone().into(),
                 nonce: None,
                 expr: "set-hash(\"foo\")".to_string(),

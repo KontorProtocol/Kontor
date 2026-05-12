@@ -277,6 +277,13 @@ pub struct OpMetadata {
 pub struct AggregateInfo {
     pub signer_ids: Vec<u64>,
     pub signature: Vec<u8>,
+    /// Publisher's gas-sponsorship commitment for this bulk.
+    /// - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
+    ///   is rejected.
+    /// - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
+    ///   `n > 0` in `validate_aggregate_shape`.
+    #[ts(type = "number | null")]
+    pub publisher_sponsorship: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -549,19 +556,41 @@ pub enum OpReturnData {
     PubKey(XOnlyPublicKey),
 }
 
+/// Co-signer's payment commitment, signed as part of the Inst.
+///
+/// - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
+///   token balance for this op's gas.
+/// - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
+///   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
+///   rejected at validation in any other context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum PaymentIntent {
+    SelfPay {
+        #[ts(type = "number")]
+        limit: u64,
+    },
+    Sponsored,
+}
+
+impl PaymentIntent {
+    /// Shorthand for the common `SelfPay { limit }` case.
+    pub fn self_pay(limit: u64) -> Self {
+        Self::SelfPay { limit }
+    }
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub enum Inst {
     Publish {
-        #[ts(type = "number")]
-        gas_limit: u64,
+        payment: PaymentIntent,
         name: String,
         bytes: Vec<u8>,
     },
     Call {
-        #[ts(type = "number")]
-        gas_limit: u64,
+        payment: PaymentIntent,
         #[ts(type = "string")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,

@@ -3,7 +3,9 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize};
+use indexer_types::{
+    Input, Inst, Insts, Op, OpMetadata, OpWithResult, PaymentIntent, Transaction, deserialize,
+};
 use indexmap::IndexMap;
 use libsql::Connection;
 
@@ -14,23 +16,23 @@ pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Tran
 pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
     match inst {
         Inst::Publish {
-            gas_limit,
+            payment,
             name,
             bytes,
         } => Op::Publish {
             metadata,
-            gas_limit,
+            gas_limit: gas_limit_from_payment(&payment),
             name,
             bytes,
         },
         Inst::Call {
-            gas_limit,
+            payment,
             contract,
             nonce,
             expr,
         } => Op::Call {
             metadata,
-            gas_limit,
+            gas_limit: gas_limit_from_payment(&payment),
             contract,
             nonce,
             expr,
@@ -46,6 +48,20 @@ pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
             bls_sig,
         },
         Inst::Issuance => Op::Issuance { metadata },
+    }
+}
+
+/// Temporary helper for the current commit: extract the gas limit from a
+/// `PaymentIntent` so `Op.gas_limit` (which still exists in this commit) can
+/// be populated. `Sponsored` is unreachable here because no code path
+/// constructs it yet — sponsorship resolution is added in a later commit
+/// alongside the executor split.
+fn gas_limit_from_payment(payment: &PaymentIntent) -> u64 {
+    match payment {
+        PaymentIntent::SelfPay { limit } => *limit,
+        PaymentIntent::Sponsored => {
+            unreachable!("PaymentIntent::Sponsored not yet supported in op_from_inst")
+        }
     }
 }
 
@@ -175,7 +191,7 @@ mod tests {
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
-    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, serialize};
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, PaymentIntent, serialize};
 
     use super::filter_map;
     use crate::test_utils::{PublicKey as TestPublicKey, build_inscription};
@@ -229,7 +245,7 @@ mod tests {
             tx_index: 2,
         };
         let op = Inst::Call {
-            gas_limit: 123,
+            payment: PaymentIntent::self_pay(123),
             contract,
             nonce: Some(0),
             expr: "noop()".to_string(),
@@ -239,6 +255,7 @@ mod tests {
             aggregate: Some(AggregateInfo {
                 signer_ids: vec![7],
                 signature: vec![9u8; 48],
+                publisher_sponsorship: None,
             }),
         };
         let payload = serialize(&insts).expect("serialize Insts");
@@ -293,7 +310,7 @@ mod tests {
     fn filter_map_concatenates_multi_push_payload() {
         let xonly = random_xonly();
         let inst = Inst::Call {
-            gas_limit: 7,
+            payment: PaymentIntent::self_pay(7),
             contract: ContractAddress {
                 name: "arith".to_string(),
                 height: 1,
@@ -324,12 +341,12 @@ mod tests {
         assert_eq!(input.insts.ops.len(), 1);
         match &input.insts.ops[0] {
             Inst::Call {
-                gas_limit,
+                payment,
                 contract,
                 nonce,
                 expr,
             } => {
-                assert_eq!(*gas_limit, 7);
+                assert_eq!(*payment, PaymentIntent::self_pay(7));
                 assert_eq!(contract.name, "arith");
                 assert_eq!(*nonce, None);
                 assert_eq!(expr, "eval(10, id)");

@@ -4,7 +4,9 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts};
+use indexer_types::{
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -16,7 +18,7 @@ fn aggregate_call(
     expr: String,
 ) -> Inst {
     Inst::Call {
-        gas_limit,
+        payment: PaymentIntent::self_pay(gas_limit),
         contract,
         nonce: Some(nonce),
         expr,
@@ -29,6 +31,7 @@ fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> 
         aggregate: Some(AggregateInfo {
             signer_ids,
             signature,
+            publisher_sponsorship: None,
         }),
     }
 }
@@ -52,7 +55,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -196,7 +199,7 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -281,7 +284,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -348,7 +351,7 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },

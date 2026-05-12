@@ -3,6 +3,14 @@
 export type AggregateInfo = {
   signer_ids: Array<bigint>;
   signature: Array<number>;
+  /**
+   * Publisher's gas-sponsorship commitment for this bulk.
+   * - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
+   *   is rejected.
+   * - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
+   *   `n > 0` in `validate_aggregate_shape`.
+   */
+  publisher_sponsorship: number | null;
 };
 
 export type Block = {
@@ -109,10 +117,12 @@ export type Input = {
 };
 
 export type Inst =
-  | { "Publish": { gas_limit: number; name: string; bytes: Array<number> } }
+  | {
+    "Publish": { payment: PaymentIntent; name: string; bytes: Array<number> };
+  }
   | {
     "Call": {
-      gas_limit: number;
+      payment: PaymentIntent;
       contract: string;
       nonce: number | null;
       expr: string;
@@ -193,6 +203,17 @@ export type ParticipantScripts = {
   commit_tap_leaf_script: TapLeafScript;
   chained_tap_leaf_script: TapLeafScript | null;
 };
+
+/**
+ * Co-signer's payment commitment, signed as part of the Inst.
+ *
+ * - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
+ *   token balance for this op's gas.
+ * - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
+ *   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
+ *   rejected at validation in any other context.
+ */
+export type PaymentIntent = { "SelfPay": { limit: number } } | "Sponsored";
 
 export type ResultResponse<T> = { result: T };
 

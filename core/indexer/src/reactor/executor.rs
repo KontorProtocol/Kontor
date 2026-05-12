@@ -28,7 +28,7 @@ pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
             .insts
             .ops
             .iter()
-            .any(|inst| matches!(inst, indexer_types::Inst::Publish { .. }))
+            .any(|inst| matches!(inst, Inst::Publish { .. }))
     })
 }
 
