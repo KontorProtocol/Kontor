@@ -14,24 +14,56 @@ use crate::database::{queries::get_op_result, types::OpResultId};
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
-pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
+/// Publisher's resolved offer for a BLS aggregate bulk. Built once per bulk
+/// in `process_aggregate_input` by combining `AggregateInfo.publisher_sponsorship`
+/// (the publisher's signed commitment) with the publisher's resolved signer_id
+/// (the Bitcoin x_only_pubkey, ensured into the signers table).
+#[derive(Debug, Clone, Copy)]
+pub struct PublisherOffer {
+    pub signer_id: u64,
+    pub gas_limit_per_op: u64,
+}
+
+/// Build an `Op` from a direct (non-aggregate) `Inst`. `PaymentIntent::Sponsored`
+/// is rejected here: direct inputs have no publisher to fall back to.
+pub fn op_from_direct_inst(inst: Inst, metadata: OpMetadata) -> Result<Op, anyhow::Error> {
+    materialize_op(inst, metadata, None)
+}
+
+/// Build an `Op` from an aggregate `Inst` applying the sponsorship resolution
+/// table:
+///   SelfPay  | any        → user pays at their signed limit
+///   Sponsored| Some(offer)→ publisher pays at offer.gas_limit_per_op
+///   Sponsored| None       → rejected (orphan op, co-signer accepted sponsorship
+///                          but no publisher offered)
+pub fn op_from_aggregate_inst(
+    inst: Inst,
+    metadata: OpMetadata,
+    publisher: Option<PublisherOffer>,
+) -> Result<Op, anyhow::Error> {
+    materialize_op(inst, metadata, publisher)
+}
+
+fn materialize_op(
+    inst: Inst,
+    metadata: OpMetadata,
+    publisher: Option<PublisherOffer>,
+) -> Result<Op, anyhow::Error> {
     match inst {
         Inst::Publish {
             payment,
             name,
             bytes,
         } => {
-            let gas_limit = gas_limit_from_payment(&payment);
-            Op::Publish {
-                payment: Payment {
-                    signer_id: metadata.signer_id,
-                    gas_limit,
-                },
+            let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
+            let gas_limit = payment.gas_limit;
+            Ok(Op::Publish {
                 metadata,
+                payment,
                 gas_limit,
                 name,
                 bytes,
-            }
+            })
         }
         Inst::Call {
             payment,
@@ -39,43 +71,48 @@ pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
             nonce,
             expr,
         } => {
-            let gas_limit = gas_limit_from_payment(&payment);
-            Op::Call {
-                payment: Payment {
-                    signer_id: metadata.signer_id,
-                    gas_limit,
-                },
+            let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
+            let gas_limit = payment.gas_limit;
+            Ok(Op::Call {
                 metadata,
+                payment,
                 gas_limit,
                 contract,
                 nonce,
                 expr,
-            }
+            })
         }
         Inst::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-        } => Op::RegisterBlsKey {
+        } => Ok(Op::RegisterBlsKey {
             metadata,
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-        },
-        Inst::Issuance => Op::Issuance { metadata },
+        }),
+        Inst::Issuance => Ok(Op::Issuance { metadata }),
     }
 }
 
-/// Temporary helper while `Op.gas_limit` is duplicated with `Op.payment.gas_limit`.
-/// Extracts the gas limit from the co-signer's `PaymentIntent`. Sponsored is
-/// unreachable because no code path constructs it yet — sponsorship resolution
-/// is added in a later commit alongside the executor split.
-fn gas_limit_from_payment(payment: &PaymentIntent) -> u64 {
-    match payment {
-        PaymentIntent::SelfPay { limit } => *limit,
-        PaymentIntent::Sponsored => {
-            unreachable!("PaymentIntent::Sponsored not yet supported in op_from_inst")
-        }
+fn resolve_payment(
+    intent: &PaymentIntent,
+    signer_id: u64,
+    publisher: Option<PublisherOffer>,
+) -> Result<Payment, anyhow::Error> {
+    match (intent, publisher) {
+        (PaymentIntent::SelfPay { limit }, _) => Ok(Payment {
+            signer_id,
+            gas_limit: *limit,
+        }),
+        (PaymentIntent::Sponsored, Some(offer)) => Ok(Payment {
+            signer_id: offer.signer_id,
+            gas_limit: offer.gas_limit_per_op,
+        }),
+        (PaymentIntent::Sponsored, None) => Err(anyhow::anyhow!(
+            "PaymentIntent::Sponsored without a publisher offer"
+        )),
     }
 }
 
@@ -160,21 +197,43 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        // Per-op signer_ids: aggregates provide them directly,
-        // direct inputs broadcast the single witness signer to every op.
-        let signer_ids: Vec<u64> = match &input.insts.aggregate {
-            Some(agg) => agg.signer_ids.clone(),
-            None => {
-                let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                    conn,
-                    &input.x_only_pubkey.to_string(),
-                )
-                .await?
-                .map(|e| e.signer_id as u64)
-                .unwrap_or(0);
-                vec![id; input.insts.ops.len()]
-            }
-        };
+        // Resolve once per input:
+        // - signer_ids: per-op signers (aggregates carry these directly; direct
+        //   inputs broadcast the witness signer to every op).
+        // - publisher_offer: only meaningful for aggregates with a sponsorship
+        //   offer; lets sponsored ops materialize with their resolved Payment.
+        //
+        // Note: this re-derives state the executor already computed. A follow-up
+        // can persist `payer_signer_id` on the result row and let inspect read
+        // it back instead of looking up by `x_only_pubkey` here.
+        let (signer_ids, publisher_offer): (Vec<u64>, Option<PublisherOffer>) =
+            match &input.insts.aggregate {
+                Some(agg) => {
+                    let publisher_offer = match agg.publisher_sponsorship {
+                        Some(per_op_limit) => crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                            conn,
+                            &input.x_only_pubkey.to_string(),
+                        )
+                        .await?
+                        .map(|e| PublisherOffer {
+                            signer_id: e.signer_id as u64,
+                            gas_limit_per_op: per_op_limit,
+                        }),
+                        None => None,
+                    };
+                    (agg.signer_ids.clone(), publisher_offer)
+                }
+                None => {
+                    let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                        conn,
+                        &input.x_only_pubkey.to_string(),
+                    )
+                    .await?
+                    .map(|e| e.signer_id as u64)
+                    .unwrap_or(0);
+                    (vec![id; input.insts.ops.len()], None)
+                }
+            };
 
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let metadata = OpMetadata {
@@ -182,7 +241,16 @@ pub async fn inspect(
                 input_index: input.input_index,
                 signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
-            let op = op_from_inst(inst.clone(), metadata);
+            // Match executor behavior: skip ops that can't be materialized
+            // (orphan Sponsored, malformed) — those didn't produce a result
+            // during execution either.
+            let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
+                Ok(op) => op,
+                Err(e) => {
+                    tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
+                    continue;
+                }
+            };
             let id = OpResultId::builder()
                 .txid(tx.txid.to_string())
                 .input_index(input.input_index)

@@ -7,7 +7,7 @@ use indexer_types::{Inst, OpMetadata};
 
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
-use crate::block::{filter_map, op_from_inst};
+use crate::block::{PublisherOffer, filter_map, op_from_aggregate_inst, op_from_direct_inst};
 use crate::database;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
@@ -325,7 +325,13 @@ async fn process_direct_input(
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
-        let op = op_from_inst(inst.clone(), metadata.clone());
+        let op = match op_from_direct_inst(inst.clone(), metadata.clone()) {
+            Ok(op) => op,
+            Err(e) => {
+                warn!("Rejected direct op: {e:#}");
+                continue;
+            }
+        };
 
         runtime
             .set_context(
@@ -369,6 +375,21 @@ async fn process_aggregate_input(
         .aggregate
         .as_ref()
         .expect("aggregate must be present after successful verification");
+
+    // Resolve the publisher offer once if this bulk advertises sponsorship.
+    // The publisher's signer_id is derived from the Bitcoin x_only_pubkey
+    // (ensured into the signers table on first sponsorship).
+    let publisher_offer = if let Some(per_op_limit) = agg.publisher_sponsorship {
+        let identity = runtime
+            .get_or_create_identity(&input.x_only_pubkey.to_string())
+            .await?;
+        Some(PublisherOffer {
+            signer_id: identity.signer_id() as u64,
+            gas_limit_per_op: per_op_limit,
+        })
+    } else {
+        None
+    };
 
     for (op_index, (inst, &signer_id)) in input
         .insts
@@ -427,7 +448,13 @@ async fn process_aggregate_input(
             input_index: input.input_index,
             signer_id,
         };
-        let op = op_from_inst(inst.clone(), metadata);
+        let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
+            Ok(op) => op,
+            Err(e) => {
+                warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
+                continue;
+            }
+        };
         execute_op(runtime, &op).await?;
     }
     Ok(())
