@@ -220,7 +220,9 @@ pub async fn inspect(
                 .input_index(input.input_index)
                 .op_index(op_index as i64)
                 .build();
-            let result = get_op_result(conn, &id).await?.map(indexer_types::ResultRow::from);
+            let result = get_op_result(conn, &id)
+                .await?
+                .map(indexer_types::ResultRow::from);
             // Match executor behavior: ops without a result row didn't execute
             // (orphan Sponsored, malformed shape, etc.) — skip them in inspect.
             // Use the stored `payer_signer_id` from the result row to materialize

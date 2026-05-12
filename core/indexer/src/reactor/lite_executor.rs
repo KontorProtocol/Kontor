@@ -142,12 +142,7 @@ impl LiteExecutor {
                 gas_limit: runtime.gas_limit_for_non_procs,
             };
             runtime
-                .execute(
-                    Some(&signer),
-                    Some(payment),
-                    &counter_address,
-                    "init()",
-                )
+                .execute(Some(&signer), Some(payment), &counter_address, "init()")
                 .await?;
         }
 

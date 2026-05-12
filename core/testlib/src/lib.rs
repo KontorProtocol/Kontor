@@ -302,9 +302,7 @@ impl RuntimeLocal {
                 // User-driven publish in test setup: the publisher pays for
                 // init() out of their own (test-issued) balance.
                 let payment = Payment {
-                    signer_id: signer
-                        .signer_id()
-                        .expect("test signer must have id") as u64,
+                    signer_id: signer.signer_id().expect("test signer must have id") as u64,
                     gas_limit: self.runtime.gas_limit_for_non_procs,
                 };
                 self.runtime
@@ -878,7 +876,6 @@ impl Runtime {
         self.runtime
             .execute_api(signer, contract_address, expr)
             .await
-            .map_err(Into::into)
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<()> {
