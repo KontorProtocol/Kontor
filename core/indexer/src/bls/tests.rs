@@ -513,6 +513,54 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
     );
 }
 
+#[test]
+fn validate_aggregate_shape_rejects_zero_publisher_sponsorship() {
+    let op = Inst::Call {
+        payment: PaymentIntent::self_pay(50_000),
+        contract: ContractAddress {
+            name: "c".into(),
+            height: 1,
+            tx_index: 0,
+        },
+        nonce: Some(0),
+        expr: "noop()".into(),
+    };
+    let insts = Insts {
+        ops: vec![op],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; 48],
+            publisher_sponsorship: Some(0),
+        }),
+    };
+    let err = validate_aggregate_shape(&insts)
+        .expect_err("publisher_sponsorship: Some(0) must be rejected");
+    assert!(
+        err.to_string().contains("Some(0)"),
+        "error should mention the invalid Some(0) shape: {err}"
+    );
+}
+
+#[test]
+fn aggregate_info_publisher_sponsorship_postcard_roundtrip() {
+    let agg_some = AggregateInfo {
+        signer_ids: vec![1, 2, 3],
+        signature: vec![9u8; 48],
+        publisher_sponsorship: Some(50_000),
+    };
+    let agg_none = AggregateInfo {
+        signer_ids: vec![1],
+        signature: vec![9u8; 48],
+        publisher_sponsorship: None,
+    };
+    for original in [agg_some, agg_none] {
+        let bytes = indexer_types::serialize(&original).expect("postcard serialize");
+        let decoded: AggregateInfo =
+            indexer_types::deserialize(&bytes).expect("postcard deserialize");
+        assert_eq!(decoded, original);
+    }
+}
+
 fn call_op(nonce: u64, gas_limit: u64, contract: ContractAddress, expr: impl Into<String>) -> Inst {
     Inst::Call {
         payment: PaymentIntent::self_pay(gas_limit),

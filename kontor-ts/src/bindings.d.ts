@@ -151,7 +151,7 @@ export type Op =
   | {
     "Publish": {
       metadata: OpMetadata;
-      gas_limit: number;
+      payment: Payment;
       name: string;
       bytes: Array<number>;
     };
@@ -159,7 +159,7 @@ export type Op =
   | {
     "Call": {
       metadata: OpMetadata;
-      gas_limit: number;
+      payment: Payment;
       contract: string;
       nonce: number | null;
       expr: string;
@@ -205,6 +205,19 @@ export type ParticipantScripts = {
 };
 
 /**
+ * Resolved per-op execution payment for `Op::Publish` and `Op::Call`.
+ *
+ * Built from the co-signer's `PaymentIntent` plus any aggregate-level
+ * `publisher_sponsorship` offer. `signer_id` identifies who funds the
+ * op's gas (the applicative signer for SelfPay, the publisher for
+ * Sponsored). `gas_limit` is the effective fuel cap for execution.
+ *
+ * System-paid ops (`Issuance`, `RegisterBlsKey`) don't carry a `Payment`
+ * — their gas is set by the runtime at the call site.
+ */
+export type Payment = { signer_id: number; gas_limit: number };
+
+/**
  * Co-signer's payment commitment, signed as part of the Inst.
  *
  * - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
@@ -230,6 +243,12 @@ export type ResultRow = {
   contract: string;
   txid: string | null;
   signer_id: number;
+  /**
+   * Who funded gas for this op. Equals `signer_id` for self-pay ops;
+   * for BLS-aggregate sponsored ops it's the publisher's signer_id.
+   * `null` for ops that don't go through user-side gas accounting.
+   */
+  payer_signer_id: number | null;
 };
 
 export type RevealInputs = {

@@ -520,4 +520,106 @@ mod tests {
         let tx = tx_with_taproot_script_witness(tap_script, internal_key);
         assert!(filter_map((0, tx)).is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // op_from_*_inst sponsorship resolution
+    // -----------------------------------------------------------------------
+
+    use super::{PublisherOffer, op_from_aggregate_inst, op_from_direct_inst};
+    use indexer_types::{Op, OpMetadata, Payment};
+
+    fn dummy_call_inst(payment: PaymentIntent) -> Inst {
+        Inst::Call {
+            payment,
+            contract: ContractAddress {
+                name: "c".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce: Some(0),
+            expr: "noop()".into(),
+        }
+    }
+
+    fn dummy_metadata(signer_id: u64) -> OpMetadata {
+        OpMetadata {
+            previous_output: bitcoin::OutPoint::null(),
+            input_index: 0,
+            signer_id,
+        }
+    }
+
+    #[test]
+    fn op_from_direct_inst_self_pay_uses_signer_id() {
+        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
+        let op = op_from_direct_inst(inst, dummy_metadata(42)).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 42,
+                    gas_limit: 123,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_direct_inst_rejects_sponsored() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let err = op_from_direct_inst(inst, dummy_metadata(42))
+            .expect_err("Sponsored in direct path must be rejected");
+        assert!(err.to_string().contains("Sponsored"));
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_self_pay_ignores_offer() {
+        // SelfPay always uses the co-signer's own commitment, even when a
+        // publisher offer is present in the bulk.
+        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
+        let offer = Some(PublisherOffer {
+            signer_id: 99,
+            gas_limit_per_op: 9999,
+        });
+        let op = op_from_aggregate_inst(inst, dummy_metadata(42), offer).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 42,
+                    gas_limit: 123,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_sponsored_uses_publisher_offer() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let offer = Some(PublisherOffer {
+            signer_id: 99,
+            gas_limit_per_op: 9999,
+        });
+        let op = op_from_aggregate_inst(inst, dummy_metadata(42), offer).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 99,
+                    gas_limit: 9999,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_sponsored_without_offer_rejected() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let err = op_from_aggregate_inst(inst, dummy_metadata(42), None)
+            .expect_err("Sponsored without a publisher offer must be rejected");
+        assert!(err.to_string().contains("Sponsored"));
+    }
 }
