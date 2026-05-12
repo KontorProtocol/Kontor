@@ -56,11 +56,9 @@ fn materialize_op(
             bytes,
         } => {
             let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
-            let gas_limit = payment.gas_limit;
             Ok(Op::Publish {
                 metadata,
                 payment,
-                gas_limit,
                 name,
                 bytes,
             })
@@ -72,11 +70,9 @@ fn materialize_op(
             expr,
         } => {
             let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
-            let gas_limit = payment.gas_limit;
             Ok(Op::Call {
                 metadata,
                 payment,
-                gas_limit,
                 contract,
                 nonce,
                 expr,
@@ -277,7 +273,6 @@ fn build_op_from_inst_and_result(
                     signer_id,
                     gas_limit,
                 },
-                gas_limit,
                 name,
                 bytes,
             }
@@ -296,7 +291,6 @@ fn build_op_from_inst_and_result(
                     signer_id,
                     gas_limit,
                 },
-                gas_limit,
                 contract,
                 nonce,
                 expr,

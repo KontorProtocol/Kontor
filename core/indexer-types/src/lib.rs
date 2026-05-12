@@ -335,16 +335,12 @@ pub enum Op {
     Publish {
         metadata: OpMetadata,
         payment: Payment,
-        #[ts(type = "number")]
-        gas_limit: u64,
         name: String,
         bytes: Vec<u8>,
     },
     Call {
         metadata: OpMetadata,
         payment: Payment,
-        #[ts(type = "number")]
-        gas_limit: u64,
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,

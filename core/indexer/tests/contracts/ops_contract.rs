@@ -44,7 +44,6 @@ async fn test_get_ops_from_api() -> Result<()> {
                     .expect("signer must be registered"),
                 gas_limit: 10_000,
             },
-            gas_limit: 10_000,
             name: name.to_string(),
             bytes
         }
