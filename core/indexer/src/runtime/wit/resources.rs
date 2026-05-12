@@ -5,7 +5,7 @@ use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
 use crate::database::queries::get_or_create_identity;
-use crate::database::types::{FileMetadataRow, Identity, bytes_to_field_element};
+use crate::database::types::{CORE_SIGNER_ID, FileMetadataRow, Identity, bytes_to_field_element};
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
@@ -39,16 +39,16 @@ impl Signer {
 
     /// The effective signer_id for attribution purposes.
     /// - `Id` → the identity's signer_id
-    /// - `Core(Nobody)` → the reserved Core signer_id
+    /// - `Core(Nobody)` → the reserved `CORE_SIGNER_ID`
     /// - `Core(inner)` → unwraps to inner's signer_id
     /// - `Contract` → the contract's signer_id
     /// - `Nobody` → None (only valid inside `Core`)
-    pub fn signer_id(&self, core_signer_id: i64) -> Option<i64> {
+    pub fn signer_id(&self) -> Option<i64> {
         match self {
             Signer::Id(identity) => Some(identity.signer_id()),
             Signer::Core(inner) => match inner.as_ref() {
-                Signer::Nobody => Some(core_signer_id),
-                _ => inner.signer_id(core_signer_id),
+                Signer::Nobody => Some(CORE_SIGNER_ID),
+                _ => inner.signer_id(),
             },
             Signer::Contract { signer_id, .. } => Some(*signer_id),
             Signer::Nobody => None,
@@ -305,24 +305,22 @@ mod tests {
     use super::*;
     use crate::test_utils::{create_fake_file_metadata, valid_seed_field};
 
-    const CORE_ID: i64 = 1;
-
     #[test]
     fn test_signer_signer_id_id() {
         let signer = Signer::Id(Identity::new(42));
-        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+        assert_eq!(signer.signer_id(), Some(42));
     }
 
     #[test]
     fn test_signer_signer_id_core_nobody() {
         let signer = Signer::Core(Box::new(Signer::Nobody));
-        assert_eq!(signer.signer_id(CORE_ID), Some(CORE_ID));
+        assert_eq!(signer.signer_id(), Some(CORE_SIGNER_ID));
     }
 
     #[test]
     fn test_signer_signer_id_core_id_unwraps() {
         let signer = Signer::Core(Box::new(Signer::Id(Identity::new(42))));
-        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+        assert_eq!(signer.signer_id(), Some(42));
     }
 
     #[test]
@@ -330,18 +328,18 @@ mod tests {
         let signer = Signer::Core(Box::new(Signer::Core(Box::new(Signer::Id(Identity::new(
             42,
         ))))));
-        assert_eq!(signer.signer_id(CORE_ID), Some(42));
+        assert_eq!(signer.signer_id(), Some(42));
     }
 
     #[test]
     fn test_signer_signer_id_contract() {
         let signer = Signer::new_contract(3, 7);
-        assert_eq!(signer.signer_id(CORE_ID), Some(7));
+        assert_eq!(signer.signer_id(), Some(7));
     }
 
     #[test]
     fn test_signer_signer_id_nobody() {
-        assert_eq!(Signer::Nobody.signer_id(CORE_ID), None);
+        assert_eq!(Signer::Nobody.signer_id(), None);
     }
 
     #[test]
