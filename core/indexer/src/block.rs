@@ -197,43 +197,21 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        // Resolve once per input:
-        // - signer_ids: per-op signers (aggregates carry these directly; direct
-        //   inputs broadcast the witness signer to every op).
-        // - publisher_offer: only meaningful for aggregates with a sponsorship
-        //   offer; lets sponsored ops materialize with their resolved Payment.
-        //
-        // Note: this re-derives state the executor already computed. A follow-up
-        // can persist `payer_signer_id` on the result row and let inspect read
-        // it back instead of looking up by `x_only_pubkey` here.
-        let (signer_ids, publisher_offer): (Vec<u64>, Option<PublisherOffer>) =
-            match &input.insts.aggregate {
-                Some(agg) => {
-                    let publisher_offer = match agg.publisher_sponsorship {
-                        Some(per_op_limit) => crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                            conn,
-                            &input.x_only_pubkey.to_string(),
-                        )
-                        .await?
-                        .map(|e| PublisherOffer {
-                            signer_id: e.signer_id as u64,
-                            gas_limit_per_op: per_op_limit,
-                        }),
-                        None => None,
-                    };
-                    (agg.signer_ids.clone(), publisher_offer)
-                }
-                None => {
-                    let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                        conn,
-                        &input.x_only_pubkey.to_string(),
-                    )
-                    .await?
-                    .map(|e| e.signer_id as u64)
-                    .unwrap_or(0);
-                    (vec![id; input.insts.ops.len()], None)
-                }
-            };
+        // Per-op signer_ids: aggregates carry them directly; direct inputs
+        // broadcast the witness signer to every op.
+        let signer_ids: Vec<u64> = match &input.insts.aggregate {
+            Some(agg) => agg.signer_ids.clone(),
+            None => {
+                let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                    conn,
+                    &input.x_only_pubkey.to_string(),
+                )
+                .await?
+                .map(|e| e.signer_id as u64)
+                .unwrap_or(0);
+                vec![id; input.insts.ops.len()]
+            }
+        };
 
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let metadata = OpMetadata {
@@ -241,26 +219,101 @@ pub async fn inspect(
                 input_index: input.input_index,
                 signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
-            // Match executor behavior: skip ops that can't be materialized
-            // (orphan Sponsored, malformed) — those didn't produce a result
-            // during execution either.
-            let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
-                Ok(op) => op,
-                Err(e) => {
-                    tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
-                    continue;
-                }
-            };
             let id = OpResultId::builder()
                 .txid(tx.txid.to_string())
                 .input_index(input.input_index)
                 .op_index(op_index as i64)
                 .build();
-            let result = get_op_result(conn, &id).await?.map(Into::into);
+            let result = get_op_result(conn, &id).await?.map(indexer_types::ResultRow::from);
+            // Match executor behavior: ops without a result row didn't execute
+            // (orphan Sponsored, malformed shape, etc.) — skip them in inspect.
+            // Use the stored `payer_signer_id` from the result row to materialize
+            // the resolved Op without re-deriving sponsorship logic.
+            let Some(ref r) = result else { continue };
+            let op = build_op_from_inst_and_result(
+                inst.clone(),
+                metadata,
+                r.payer_signer_id.map(|id| id as u64),
+                input.insts.aggregate.as_ref(),
+            );
             ops.push(OpWithResult { op, result });
         }
     }
     Ok(ops)
+}
+
+/// Reconstruct an `Op` for inspection using the stored `payer_signer_id` from
+/// the result row plus the Inst and any AggregateInfo. No DB lookups, no
+/// resolution logic — purely mechanical assembly of values already settled by
+/// the executor at write time.
+fn build_op_from_inst_and_result(
+    inst: Inst,
+    metadata: OpMetadata,
+    payer_signer_id: Option<u64>,
+    aggregate: Option<&indexer_types::AggregateInfo>,
+) -> Op {
+    // Derive gas_limit from the Inst's PaymentIntent (and the bulk's
+    // sponsorship offer when applicable). The executor only writes a result
+    // row after a successful resolution, so unwraps below are sound.
+    let gas_limit_for = |intent: &PaymentIntent| -> u64 {
+        match intent {
+            PaymentIntent::SelfPay { limit } => *limit,
+            PaymentIntent::Sponsored => aggregate
+                .and_then(|a| a.publisher_sponsorship)
+                .expect("Sponsored op with stored result must have had a publisher offer"),
+        }
+    };
+    match inst {
+        Inst::Publish {
+            payment: intent,
+            name,
+            bytes,
+        } => {
+            let gas_limit = gas_limit_for(&intent);
+            let signer_id = payer_signer_id.expect("Publish result row must have payer_signer_id");
+            Op::Publish {
+                metadata,
+                payment: Payment {
+                    signer_id,
+                    gas_limit,
+                },
+                gas_limit,
+                name,
+                bytes,
+            }
+        }
+        Inst::Call {
+            payment: intent,
+            contract,
+            nonce,
+            expr,
+        } => {
+            let gas_limit = gas_limit_for(&intent);
+            let signer_id = payer_signer_id.expect("Call result row must have payer_signer_id");
+            Op::Call {
+                metadata,
+                payment: Payment {
+                    signer_id,
+                    gas_limit,
+                },
+                gas_limit,
+                contract,
+                nonce,
+                expr,
+            }
+        }
+        Inst::RegisterBlsKey {
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        } => Op::RegisterBlsKey {
+            metadata,
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        },
+        Inst::Issuance => Op::Issuance { metadata },
+    }
 }
 
 #[cfg(test)]

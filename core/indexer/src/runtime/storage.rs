@@ -178,6 +178,7 @@ impl Storage {
         gas: i64,
         value: Option<String>,
         signer_id: i64,
+        payer_signer_id: Option<i64>,
     ) -> ContractResultRow {
         ContractResultRow::builder()
             .contract_id(contract_id)
@@ -190,6 +191,7 @@ impl Storage {
             .gas(gas)
             .maybe_value(value)
             .signer_id(signer_id)
+            .maybe_payer_signer_id(payer_signer_id)
             .build()
     }
 
@@ -201,10 +203,19 @@ impl Storage {
         gas: i64,
         value: Option<String>,
         signer_id: i64,
+        payer_signer_id: Option<i64>,
     ) -> Result<i64> {
         Ok(insert_contract_result(
             &self.conn,
-            self.build_contract_result_row(result_index, contract_id, func, gas, value, signer_id),
+            self.build_contract_result_row(
+                result_index,
+                contract_id,
+                func,
+                gas,
+                value,
+                signer_id,
+                payer_signer_id,
+            ),
         )
         .await?)
     }

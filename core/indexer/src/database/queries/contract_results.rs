@@ -29,7 +29,8 @@ pub async fn get_results_paginated(
         c.height as contract_height,
         c.tx_index as contract_tx_index,
         t.txid,
-        r.signer_id
+        r.signer_id,
+        r.payer_signer_id
     "#;
     let from = r#"
         contract_results r
@@ -109,7 +110,8 @@ pub async fn get_op_result(
                 c.height as contract_height,
                 c.tx_index as contract_tx_index,
                 t.txid,
-                r.signer_id
+                r.signer_id,
+                r.payer_signer_id
             FROM contract_results r
             LEFT JOIN transactions t ON r.tx_id = t.id
             JOIN contracts c ON r.contract_id = c.id
@@ -149,7 +151,8 @@ pub async fn get_contract_result(
                 result_index,
                 gas,
                 value,
-                signer_id
+                signer_id,
+                payer_signer_id
             FROM contract_results
             WHERE tx_id IS :tx_id
               AND input_index IS :input_index
@@ -184,8 +187,9 @@ pub async fn insert_contract_result(
                 result_index,
                 gas,
                 value,
-                signer_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                signer_id,
+                payer_signer_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         params![
             row.contract_id,
@@ -198,7 +202,8 @@ pub async fn insert_contract_result(
             row.result_index,
             row.gas,
             row.value,
-            row.signer_id
+            row.signer_id,
+            row.payer_signer_id,
         ],
     )
     .await?;

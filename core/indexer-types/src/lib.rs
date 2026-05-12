@@ -569,6 +569,11 @@ pub struct ResultRow {
     pub txid: Option<String>,
     #[ts(type = "number")]
     pub signer_id: i64,
+    /// Who funded gas for this op. Equals `signer_id` for self-pay ops;
+    /// for BLS-aggregate sponsored ops it's the publisher's signer_id.
+    /// `null` for ops that don't go through user-side gas accounting.
+    #[ts(type = "number | null")]
+    pub payer_signer_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

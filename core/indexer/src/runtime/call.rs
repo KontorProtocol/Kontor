@@ -480,6 +480,10 @@ impl Runtime {
         let signer_id = signer
             .signer_id()
             .expect("signer_id must be set for result attribution");
+        // Payer for this op — equals `signer_id` for self-pay, differs for
+        // BLS-aggregate sponsored ops. `None` when there's no Payment (Core-
+        // paid system calls that bypass hold/release).
+        let payer_signer_id = payment.map(|p| p.signer_id as i64);
         self.storage
             .insert_contract_result(
                 result_index,
@@ -488,6 +492,7 @@ impl Runtime {
                 gas as i64,
                 value,
                 signer_id,
+                payer_signer_id,
             )
             .await
             .map_err(ExecutionError::NonDeterministic)?;
