@@ -209,11 +209,42 @@ pub async fn inspect(
             }
         };
 
+        // For aggregate inputs with a sponsorship offer, resolve the publisher's
+        // signer_id so sponsored ops materialize with the same Payment the
+        // executor used. The `payer_signer_id` column on result rows is the
+        // durable record of who paid (queryable in SQL / future readers); this
+        // local resolution is what inspect needs to reconstruct `Op` for ops
+        // that have no result row yet (e.g. `should_skip_result` cases).
+        let publisher_offer: Option<PublisherOffer> = match &input.insts.aggregate {
+            Some(agg) if agg.publisher_sponsorship.is_some() => {
+                crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                    conn,
+                    &input.x_only_pubkey.to_string(),
+                )
+                .await?
+                .map(|e| PublisherOffer {
+                    signer_id: e.signer_id as u64,
+                    gas_limit_per_op: agg.publisher_sponsorship.unwrap(),
+                })
+            }
+            _ => None,
+        };
+
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
                 signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
+            };
+            // Match executor behavior: an op that fails materialization (orphan
+            // Sponsored without a publisher offer) is skipped in inspect too —
+            // those didn't execute and have no result row.
+            let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
+                Ok(op) => op,
+                Err(e) => {
+                    tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
+                    continue;
+                }
             };
             let id = OpResultId::builder()
                 .txid(tx.txid.to_string())
@@ -223,93 +254,14 @@ pub async fn inspect(
             let result = get_op_result(conn, &id)
                 .await?
                 .map(indexer_types::ResultRow::from);
-            // Match executor behavior: ops without a result row didn't execute
-            // (orphan Sponsored, malformed shape, etc.) — skip them in inspect.
-            // Use the stored `payer_signer_id` from the result row to materialize
-            // the resolved Op without re-deriving sponsorship logic.
-            let Some(ref r) = result else { continue };
-            let op = build_op_from_inst_and_result(
-                inst.clone(),
-                metadata,
-                r.payer_signer_id.map(|id| id as u64),
-                input.insts.aggregate.as_ref(),
-            );
+            // `result: None` is preserved (pre-refactor semantics) for ops the
+            // executor skipped post-validation via `should_skip_result` or that
+            // hit a non-deterministic failure — callers learn "this op was in
+            // the tx but didn't produce a result row."
             ops.push(OpWithResult { op, result });
         }
     }
     Ok(ops)
-}
-
-/// Reconstruct an `Op` for inspection using the stored `payer_signer_id` from
-/// the result row plus the Inst and any AggregateInfo. No DB lookups, no
-/// resolution logic — purely mechanical assembly of values already settled by
-/// the executor at write time.
-fn build_op_from_inst_and_result(
-    inst: Inst,
-    metadata: OpMetadata,
-    payer_signer_id: Option<u64>,
-    aggregate: Option<&indexer_types::AggregateInfo>,
-) -> Op {
-    // Derive gas_limit from the Inst's PaymentIntent (and the bulk's
-    // sponsorship offer when applicable). The executor only writes a result
-    // row after a successful resolution, so unwraps below are sound.
-    let gas_limit_for = |intent: &PaymentIntent| -> u64 {
-        match intent {
-            PaymentIntent::SelfPay { limit } => *limit,
-            PaymentIntent::Sponsored => aggregate
-                .and_then(|a| a.publisher_sponsorship)
-                .expect("Sponsored op with stored result must have had a publisher offer"),
-        }
-    };
-    match inst {
-        Inst::Publish {
-            payment: intent,
-            name,
-            bytes,
-        } => {
-            let gas_limit = gas_limit_for(&intent);
-            let signer_id = payer_signer_id.expect("Publish result row must have payer_signer_id");
-            Op::Publish {
-                metadata,
-                payment: Payment {
-                    signer_id,
-                    gas_limit,
-                },
-                name,
-                bytes,
-            }
-        }
-        Inst::Call {
-            payment: intent,
-            contract,
-            nonce,
-            expr,
-        } => {
-            let gas_limit = gas_limit_for(&intent);
-            let signer_id = payer_signer_id.expect("Call result row must have payer_signer_id");
-            Op::Call {
-                metadata,
-                payment: Payment {
-                    signer_id,
-                    gas_limit,
-                },
-                contract,
-                nonce,
-                expr,
-            }
-        }
-        Inst::RegisterBlsKey {
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        } => Op::RegisterBlsKey {
-            metadata,
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        },
-        Inst::Issuance => Op::Issuance { metadata },
-    }
 }
 
 #[cfg(test)]
