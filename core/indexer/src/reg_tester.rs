@@ -41,7 +41,7 @@ use bitcoin::{
 };
 use indexer_types::{
     ComposeOutputs, ComposeQuery, Event, Info, Inst, InstructionQuery, Insts, OpWithResult,
-    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult, WsResponse,
+    PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult, WsResponse,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -1306,27 +1306,25 @@ impl RegTesterCluster {
         let unregistered_identities = identities.split_off(registered);
         self.pool.extend_unregistered(unregistered_identities).await;
 
-        // Pipeline RegisterBlsKey + Issuance for registered identities
-        let mut txids = Vec::with_capacity(registered * 2);
+        // Bundle Issuance + RegisterBlsKey into a single tx so the reactor
+        // processes them in declaration order. Issuance must come first so
+        // the signer has tokens to pay the gas hold for the registry.registered
+        // contract call. Sibling txs can't guarantee this — Bitcoin block
+        // ordering between non-dependent reveal txs is ambiguous.
+        let mut txids = Vec::with_capacity(registered);
         for ident in &mut identities {
             let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
-            let reg = self
-                .reg_tester
-                .send_instruction(
-                    ident,
-                    Inst::RegisterBlsKey {
-                        bls_pubkey: proof.bls_pubkey.to_vec(),
-                        schnorr_sig: proof.schnorr_sig.to_vec(),
-                        bls_sig: proof.bls_sig.to_vec(),
-                    },
-                )
-                .await?;
-            let iss = self
-                .reg_tester
-                .send_instruction(ident, Inst::Issuance)
-                .await?;
-            txids.push(reg.reveal_txid.to_string());
-            txids.push(iss.reveal_txid.to_string());
+            let insts = Insts::direct(vec![
+                Inst::Issuance,
+                Inst::RegisterBlsKey {
+                    payment: PaymentIntent::self_pay(10_000),
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                },
+            ]);
+            let sent = self.reg_tester.send_insts(ident, insts).await?;
+            txids.push(sent.reveal_txid.to_string());
         }
 
         if !txids.is_empty() {

@@ -493,6 +493,7 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
     let op = Inst::RegisterBlsKey {
+        payment: PaymentIntent::self_pay(10_000),
         bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
         schnorr_sig: eve_schnorr_sig.to_vec(),
         bls_sig: eve_bls_binding_sig.to_vec(),
@@ -949,7 +950,7 @@ mod proptest_bulk {
             schnorr_sig in proptest::collection::vec(any::<u8>(), 0..256),
             bls_sig in proptest::collection::vec(any::<u8>(), 0..256),
         ) {
-            let op = Inst::RegisterBlsKey { bls_pubkey, schnorr_sig, bls_sig };
+            let op = Inst::RegisterBlsKey { payment: PaymentIntent::self_pay(10_000), bls_pubkey, schnorr_sig, bls_sig };
             let msg = op.aggregate_signing_message(signer_id).expect("must not fail");
             prop_assert!(!msg.is_empty());
         }

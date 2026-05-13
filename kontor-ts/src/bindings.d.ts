@@ -131,6 +131,7 @@ export type Inst =
   | "Issuance"
   | {
     "RegisterBlsKey": {
+      payment: PaymentIntent;
       bls_pubkey: Array<number>;
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
@@ -169,6 +170,7 @@ export type Op =
   | {
     "RegisterBlsKey": {
       metadata: OpMetadata;
+      payment: Payment;
       bls_pubkey: Array<number>;
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
@@ -212,8 +214,8 @@ export type ParticipantScripts = {
  * op's gas (the applicative signer for SelfPay, the publisher for
  * Sponsored). `gas_limit` is the effective fuel cap for execution.
  *
- * System-paid ops (`Issuance`, `RegisterBlsKey`) don't carry a `Payment`
- * — their gas is set by the runtime at the call site.
+ * `Issuance` is the only op that doesn't carry a `Payment` — its gas is
+ * set by the runtime at the call site.
  */
 export type Payment = { signer_id: number; gas_limit: number };
 

@@ -79,15 +79,20 @@ fn materialize_op(
             })
         }
         Inst::RegisterBlsKey {
+            payment,
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-        } => Ok(Op::RegisterBlsKey {
-            metadata,
-            bls_pubkey,
-            schnorr_sig,
-            bls_sig,
-        }),
+        } => {
+            let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
+            Ok(Op::RegisterBlsKey {
+                metadata,
+                payment,
+                bls_pubkey,
+                schnorr_sig,
+                bls_sig,
+            })
+        }
         Inst::Issuance => Ok(Op::Issuance { metadata }),
     }
 }

@@ -513,11 +513,33 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
             }
         },
         indexer_types::Op::RegisterBlsKey {
+            payment,
             bls_pubkey,
             schnorr_sig,
             bls_sig,
             ..
         } => {
+            // Charge the payer for the registration via the registry contract
+            // first. If the hold fails (insufficient tokens), the host-side
+            // register_bls_key DB write below is skipped.
+            match runtime
+                .execute(
+                    Some(&signer),
+                    Some(payment.clone()),
+                    &registry::address(),
+                    "registered()",
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("registry.registered failed: {e:#}");
+                    return Ok(());
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("registry.registered infrastructure failure"));
+                }
+            }
             match runtime
                 .register_bls_key(
                     &signer,
@@ -527,11 +549,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 )
                 .await
             {
-                Ok(_) => {
-                    registry::api::registered(runtime, &Signer::Core(Box::new(signer.clone())))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("registry.registered failed: {e}"))?;
-                }
+                Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("RegisterBlsKey failed: {e:#}");
                 }

@@ -279,8 +279,8 @@ pub struct OpMetadata {
 /// op's gas (the applicative signer for SelfPay, the publisher for
 /// Sponsored). `gas_limit` is the effective fuel cap for execution.
 ///
-/// System-paid ops (`Issuance`, `RegisterBlsKey`) don't carry a `Payment`
-/// — their gas is set by the runtime at the call site.
+/// `Issuance` is the only op that doesn't carry a `Payment` — its gas is
+/// set by the runtime at the call site.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Payment {
@@ -354,6 +354,7 @@ pub enum Op {
     },
     RegisterBlsKey {
         metadata: OpMetadata,
+        payment: Payment,
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
@@ -622,6 +623,7 @@ pub enum Inst {
     },
     Issuance,
     RegisterBlsKey {
+        payment: PaymentIntent,
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
