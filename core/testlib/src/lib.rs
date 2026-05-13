@@ -160,12 +160,14 @@ pub struct RuntimeConfig<'a> {
 
 /// Test helper: build a `Payment` for a user-driven call where the caller
 /// pays for their own gas. Returns None when the signer has no resolvable
-/// signer_id (e.g. `Signer::Nobody` standalone). Used by test wrappers and
-/// by tests that drive the indexer runtime directly.
-pub fn user_payment(signer: &Signer) -> Option<Payment> {
+/// signer_id (e.g. `Signer::Nobody` standalone). The gas_limit mirrors the
+/// runtime's `gas_limit_for_non_procs` so test-driven user calls have the
+/// same fuel budget as the pre-refactor stateful `set_gas_limit` path.
+/// Used by test wrappers and by tests that drive the indexer runtime directly.
+pub fn user_payment(runtime: &IndexerRuntime, signer: &Signer) -> Option<Payment> {
     signer.signer_id().map(|id| Payment {
         signer_id: id as u64,
-        gas_limit: 10_000,
+        gas_limit: runtime.gas_limit_for_non_procs,
     })
 }
 
@@ -411,8 +413,9 @@ impl RuntimeImpl for RuntimeLocal {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        // Test ergonomics: user-driven calls pay for their own gas.
-        let payment = signer.and_then(user_payment);
+        // Test ergonomics: user-driven calls pay for their own gas, with the
+        // same fuel budget as `execute_api` and `publish` within this runtime.
+        let payment = signer.and_then(|s| user_payment(&self.runtime, s));
         let result = self
             .runtime
             .execute(signer, payment, contract_address, expr)
