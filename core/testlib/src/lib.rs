@@ -15,7 +15,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, Insts, Payment, PaymentIntent, TransactionRow};
+use indexer_types::{Inst, InstKind, Insts, Payment, PaymentIntent, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -491,11 +491,13 @@ impl RuntimeRegtest {
             let current_nonce = *nonce;
             *nonce += 1;
 
-            ops.push(Inst::Call {
+            ops.push(Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: (*contract).clone().into(),
-                nonce: Some(current_nonce),
-                expr: expr.to_string(),
+                kind: InstKind::Call {
+                    contract: (*contract).clone().into(),
+                    nonce: Some(current_nonce),
+                    expr: expr.to_string(),
+                },
             });
             signer_ids.push(signer_id);
         }
@@ -561,10 +563,12 @@ impl RuntimeImpl for RuntimeRegtest {
             .reg_tester
             .send_instruction(
                 identity,
-                Inst::Publish {
+                Inst {
                     payment: PaymentIntent::self_pay(10_000),
-                    name: name.to_string(),
-                    bytes: contract.to_vec(),
+                    kind: InstKind::Publish {
+                        name: name.to_string(),
+                        bytes: contract.to_vec(),
+                    },
                 },
             )
             .await?;
@@ -607,11 +611,13 @@ impl RuntimeImpl for RuntimeRegtest {
             self.reg_tester
                 .instruction(
                     identity,
-                    Inst::Call {
+                    Inst {
                         payment: PaymentIntent::self_pay(10_000),
-                        contract: contract_address.clone().into(),
-                        nonce: None,
-                        expr: expr.to_string(),
+                        kind: InstKind::Call {
+                            contract: contract_address.clone().into(),
+                            nonce: None,
+                            expr: expr.to_string(),
+                        },
                     },
                 )
                 .await
@@ -644,7 +650,13 @@ impl RuntimeImpl for RuntimeRegtest {
             .get_mut(signer)
             .ok_or_else(|| anyhow!("Identity not found"))?;
         self.reg_tester
-            .instruction(identity, Inst::Issuance)
+            .instruction(
+                identity,
+                Inst {
+                    payment: PaymentIntent::self_pay(10_000),
+                    kind: InstKind::Issuance,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -681,11 +693,13 @@ impl RuntimeImpl for RuntimeRegtest {
                         .reg_tester
                         .send_instruction(
                             identity,
-                            Inst::Call {
+                            Inst {
                                 payment: PaymentIntent::self_pay(10_000),
-                                contract: (*contract).clone().into(),
-                                nonce: None,
-                                expr: expr.to_string(),
+                                kind: InstKind::Call {
+                                    contract: (*contract).clone().into(),
+                                    nonce: None,
+                                    expr: expr.to_string(),
+                                },
                             },
                         )
                         .await?;
@@ -697,11 +711,13 @@ impl RuntimeImpl for RuntimeRegtest {
                 SubmitGroup::Ordered(signer, calls) => {
                     let insts: Vec<Inst> = calls
                         .iter()
-                        .map(|(contract, expr)| Inst::Call {
+                        .map(|(contract, expr)| Inst {
                             payment: PaymentIntent::self_pay(10_000),
-                            contract: (*contract).clone().into(),
-                            nonce: None,
-                            expr: expr.to_string(),
+                            kind: InstKind::Call {
+                                contract: (*contract).clone().into(),
+                                nonce: None,
+                                expr: expr.to_string(),
+                            },
                         })
                         .collect();
                     let op_count = insts.len();

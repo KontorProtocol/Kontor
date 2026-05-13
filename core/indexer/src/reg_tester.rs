@@ -40,8 +40,9 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Event, Info, Inst, InstructionQuery, Insts, OpWithResult,
-    PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult, WsResponse,
+    ComposeOutputs, ComposeQuery, Event, Info, Inst, InstKind, InstructionQuery, Insts,
+    OpWithResult, PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    WsResponse,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -492,7 +493,7 @@ impl RegTesterInner {
         let needs_mine = insts
             .ops
             .iter()
-            .any(|inst| matches!(inst, Inst::Publish { .. }));
+            .any(|inst| matches!(inst.kind, InstKind::Publish { .. }));
         let sent = self.send_insts(ident, insts).await?;
         let id = OpResultId::builder()
             .txid(sent.reveal_txid.to_string())
@@ -1315,12 +1316,17 @@ impl RegTesterCluster {
         for ident in &mut identities {
             let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
             let insts = Insts::direct(vec![
-                Inst::Issuance,
-                Inst::RegisterBlsKey {
+                Inst {
                     payment: PaymentIntent::self_pay(10_000),
-                    bls_pubkey: proof.bls_pubkey.to_vec(),
-                    schnorr_sig: proof.schnorr_sig.to_vec(),
-                    bls_sig: proof.bls_sig.to_vec(),
+                    kind: InstKind::Issuance,
+                },
+                Inst {
+                    payment: PaymentIntent::self_pay(10_000),
+                    kind: InstKind::RegisterBlsKey {
+                        bls_pubkey: proof.bls_pubkey.to_vec(),
+                        schnorr_sig: proof.schnorr_sig.to_vec(),
+                        bls_sig: proof.bls_sig.to_vec(),
+                    },
                 },
             ]);
             let sent = self.reg_tester.send_insts(ident, insts).await?;

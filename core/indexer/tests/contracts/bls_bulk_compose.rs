@@ -5,7 +5,7 @@ use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
-    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, InstKind, Insts, PaymentIntent,
 };
 use testlib::*;
 
@@ -17,11 +17,13 @@ fn aggregate_call(
     contract: IndexerContractAddress,
     expr: String,
 ) -> Inst {
-    Inst::Call {
+    Inst {
         payment: PaymentIntent::self_pay(gas_limit),
-        contract,
-        nonce: Some(nonce),
-        expr,
+        kind: InstKind::Call {
+            contract,
+            nonce: Some(nonce),
+            expr,
+        },
     }
 }
 
@@ -54,10 +56,12 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -198,10 +202,12 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -283,10 +289,12 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -350,10 +358,12 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;

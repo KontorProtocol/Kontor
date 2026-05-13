@@ -11,10 +11,12 @@ test("publish", () => {
   let inst = {
     ops: [
       {
-        Publish: {
-          payment: { SelfPay: { limit: 1000000 } },
-          name: "foo",
-          bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: {
+          Publish: {
+            name: "foo",
+            bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
+          },
         },
       },
     ],
@@ -30,11 +32,13 @@ test("call", () => {
   let inst = {
     ops: [
       {
-        Call: {
-          payment: { SelfPay: { limit: 1000000 } },
-          contract: "foo_1_2",
-          nonce: 0,
-          expr: "foo()",
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            nonce: 0,
+            expr: "foo()",
+          },
         },
       },
     ],
@@ -50,11 +54,13 @@ test("call with null nonce", () => {
   let inst = {
     ops: [
       {
-        Call: {
-          payment: { SelfPay: { limit: 1000000 } },
-          contract: "foo_1_2",
-          nonce: null,
-          expr: "foo()",
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            nonce: null,
+            expr: "foo()",
+          },
         },
       },
     ],
@@ -70,10 +76,12 @@ test("call with omitted nonce", () => {
   let inst = {
     ops: [
       {
-        Call: {
-          payment: { SelfPay: { limit: 1000000 } },
-          contract: "foo_1_2",
-          expr: "foo()",
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            expr: "foo()",
+          },
         },
       },
     ],
@@ -84,11 +92,13 @@ test("call with omitted nonce", () => {
   expect(JSON.parse(result)).toStrictEqual({
     ops: [
       {
-        Call: {
-          payment: { SelfPay: { limit: 1000000 } },
-          contract: "foo_1_2",
-          nonce: null,
-          expr: "foo()",
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            nonce: null,
+            expr: "foo()",
+          },
         },
       },
     ],
@@ -100,11 +110,13 @@ test("call with sponsored payment in aggregate", () => {
   let inst = {
     ops: [
       {
-        Call: {
-          payment: "Sponsored",
-          contract: "foo_1_2",
-          nonce: 0,
-          expr: "foo()",
+        payment: "Sponsored",
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            nonce: 0,
+            expr: "foo()",
+          },
         },
       },
     ],
@@ -122,7 +134,12 @@ test("call with sponsored payment in aggregate", () => {
 
 test("issuance", () => {
   let inst = {
-    ops: ["Issuance"],
+    ops: [
+      {
+        payment: { SelfPay: { limit: 1000000 } },
+        kind: "Issuance",
+      },
+    ],
     aggregate: null,
   };
   const str = JSON.stringify(inst);

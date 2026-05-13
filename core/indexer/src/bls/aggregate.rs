@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
-use indexer_types::{Inst, Insts};
+use indexer_types::{InstKind, Insts};
 
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
@@ -90,24 +90,24 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
         ));
     }
     for inst in &insts.ops {
-        match inst {
-            Inst::Call { nonce: Some(_), .. } => {}
-            Inst::Call { nonce: None, .. } => {
+        match &inst.kind {
+            InstKind::Call { nonce: Some(_), .. } => {}
+            InstKind::Call { nonce: None, .. } => {
                 return Err(anyhow!(
                     "aggregate path only supports Call with nonce (missing nonce)"
                 ));
             }
-            Inst::RegisterBlsKey { .. } => {
+            InstKind::RegisterBlsKey { .. } => {
                 return Err(anyhow!(
                     "RegisterBlsKey is not allowed in aggregate path (use direct)"
                 ));
             }
-            Inst::Publish { .. } => {
+            InstKind::Publish { .. } => {
                 return Err(anyhow!(
                     "aggregate path only supports Call with nonce (got Publish)"
                 ));
             }
-            Inst::Issuance => {
+            InstKind::Issuance => {
                 return Err(anyhow!(
                     "aggregate path only supports Call with nonce (got Issuance)"
                 ));

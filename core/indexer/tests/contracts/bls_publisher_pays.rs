@@ -5,7 +5,7 @@ use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
-    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, InstKind, Insts, PaymentIntent,
 };
 use testlib::*;
 
@@ -34,11 +34,13 @@ fn call_with_intent(
     nonce: u64,
     expr: String,
 ) -> Inst {
-    Inst::Call {
+    Inst {
         payment,
-        contract,
-        nonce: Some(nonce),
-        expr,
+        kind: InstKind::Call {
+            contract,
+            nonce: Some(nonce),
+            expr,
+        },
     }
 }
 
@@ -62,10 +64,12 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -184,10 +188,12 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;

@@ -7,7 +7,7 @@ use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
-    ComposeQuery, Inst, InstructionQuery, Insts, PaymentIntent, RevealParticipantQuery,
+    ComposeQuery, Inst, InstKind, InstructionQuery, Insts, PaymentIntent, RevealParticipantQuery,
     RevealQuery, serialize,
 };
 use testlib::*;
@@ -34,18 +34,22 @@ async fn test_native_token_attach_contract() -> Result<()> {
 
     let (internal_key, _parity) = keypair.x_only_public_key();
 
-    let attach_inst = Inst::Call {
+    let attach_inst = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: runtime::token::address().into(),
-        nonce: None,
-        expr: token::wave::attach_call_expr(0, 2u64.try_into().unwrap()),
+        kind: InstKind::Call {
+            contract: runtime::token::address().into(),
+            nonce: None,
+            expr: token::wave::attach_call_expr(0, 2u64.try_into().unwrap()),
+        },
     };
 
-    let detach_inst = Inst::Call {
+    let detach_inst = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: runtime::token::address().into(),
-        nonce: None,
-        expr: token::wave::detach_call_expr(),
+        kind: InstKind::Call {
+            contract: runtime::token::address().into(),
+            nonce: None,
+            expr: token::wave::detach_call_expr(),
+        },
     };
 
     let query = ComposeQuery::builder()

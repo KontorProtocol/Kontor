@@ -1,7 +1,7 @@
 use anyhow::Result;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{RegistrationProof, validate_aggregate_shape};
-use indexer_types::{AggregateInfo, Inst, Insts, PaymentIntent};
+use indexer_types::{AggregateInfo, Inst, InstKind, Insts, PaymentIntent};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
@@ -13,12 +13,17 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
     rt.instruction_insts(
         &mut user,
         Insts::direct(vec![
-            Inst::Issuance,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                },
             },
         ]),
     )
@@ -43,17 +48,21 @@ async fn bls_user_registry_register_in_aggregate_rejected_regtest() -> Result<()
     let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
     let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
 
-    let op0 = Inst::RegisterBlsKey {
+    let op0 = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: proof1.bls_pubkey.to_vec(),
-        schnorr_sig: proof1.schnorr_sig.to_vec(),
-        bls_sig: proof1.bls_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof1.bls_pubkey.to_vec(),
+            schnorr_sig: proof1.schnorr_sig.to_vec(),
+            bls_sig: proof1.bls_sig.to_vec(),
+        },
     };
-    let op1 = Inst::RegisterBlsKey {
+    let op1 = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: proof2.bls_pubkey.to_vec(),
-        schnorr_sig: proof2.schnorr_sig.to_vec(),
-        bls_sig: proof2.bls_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof2.bls_pubkey.to_vec(),
+            schnorr_sig: proof2.schnorr_sig.to_vec(),
+            bls_sig: proof2.bls_sig.to_vec(),
+        },
     };
 
     let err = validate_aggregate_shape(&Insts {
@@ -89,12 +98,17 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
     rt.instruction_insts(
         &mut user,
         Insts::direct(vec![
-            Inst::Issuance,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                },
             },
         ]),
     )
@@ -109,11 +123,13 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
     let _ = rt
         .instruction(
             &mut user,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: proof.bls_pubkey.to_vec(),
-                schnorr_sig: proof.schnorr_sig.to_vec(),
-                bls_sig: proof.bls_sig.to_vec(),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: proof.bls_pubkey.to_vec(),
+                    schnorr_sig: proof.schnorr_sig.to_vec(),
+                    bls_sig: proof.bls_sig.to_vec(),
+                },
             },
         )
         .await;
@@ -135,12 +151,17 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     rt.instruction_insts(
         &mut user,
         Insts::direct(vec![
-            Inst::Issuance,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: original.bls_pubkey.to_vec(),
-                schnorr_sig: original.schnorr_sig.to_vec(),
-                bls_sig: original.bls_sig.to_vec(),
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: original.bls_pubkey.to_vec(),
+                    schnorr_sig: original.schnorr_sig.to_vec(),
+                    bls_sig: original.bls_sig.to_vec(),
+                },
             },
         ]),
     )
@@ -160,11 +181,13 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     let _ = rt
         .instruction(
             &mut user,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: alt_proof.bls_pubkey.to_vec(),
-                schnorr_sig: alt_proof.schnorr_sig.to_vec(),
-                bls_sig: alt_proof.bls_sig.to_vec(),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: alt_proof.bls_pubkey.to_vec(),
+                    schnorr_sig: alt_proof.schnorr_sig.to_vec(),
+                    bls_sig: alt_proof.bls_sig.to_vec(),
+                },
             },
         )
         .await;
@@ -190,11 +213,13 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op = Inst::RegisterBlsKey {
+    let op = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: proof.bls_pubkey.to_vec(),
-        schnorr_sig: proof.schnorr_sig.to_vec(),
-        bls_sig: proof.bls_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof.bls_pubkey.to_vec(),
+            schnorr_sig: proof.schnorr_sig.to_vec(),
+            bls_sig: proof.bls_sig.to_vec(),
+        },
     };
 
     let err = validate_aggregate_shape(&Insts {
@@ -220,12 +245,17 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
     rt.instruction_insts(
         &mut next_user,
         Insts::direct(vec![
-            Inst::Issuance,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: next_proof.bls_pubkey.to_vec(),
-                schnorr_sig: next_proof.schnorr_sig.to_vec(),
-                bls_sig: next_proof.bls_sig.to_vec(),
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: next_proof.bls_pubkey.to_vec(),
+                    schnorr_sig: next_proof.schnorr_sig.to_vec(),
+                    bls_sig: next_proof.bls_sig.to_vec(),
+                },
             },
         ]),
     )
@@ -258,17 +288,21 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
 
     let user_xonly = user.x_only_public_key().to_string();
 
-    let op_a = Inst::RegisterBlsKey {
+    let op_a = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: proof_a.bls_pubkey.to_vec(),
-        schnorr_sig: proof_a.schnorr_sig.to_vec(),
-        bls_sig: proof_a.bls_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof_a.bls_pubkey.to_vec(),
+            schnorr_sig: proof_a.schnorr_sig.to_vec(),
+            bls_sig: proof_a.bls_sig.to_vec(),
+        },
     };
-    let op_b = Inst::RegisterBlsKey {
+    let op_b = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: proof_b.bls_pubkey.to_vec(),
-        schnorr_sig: proof_b.schnorr_sig.to_vec(),
-        bls_sig: proof_b.bls_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof_b.bls_pubkey.to_vec(),
+            schnorr_sig: proof_b.schnorr_sig.to_vec(),
+            bls_sig: proof_b.bls_sig.to_vec(),
+        },
     };
 
     let err = validate_aggregate_shape(&Insts {
@@ -293,12 +327,17 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
     rt.instruction_insts(
         &mut next_user,
         Insts::direct(vec![
-            Inst::Issuance,
-            Inst::RegisterBlsKey {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                bls_pubkey: next_proof.bls_pubkey.to_vec(),
-                schnorr_sig: next_proof.schnorr_sig.to_vec(),
-                bls_sig: next_proof.bls_sig.to_vec(),
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::RegisterBlsKey {
+                    bls_pubkey: next_proof.bls_pubkey.to_vec(),
+                    schnorr_sig: next_proof.schnorr_sig.to_vec(),
+                    bls_sig: next_proof.bls_sig.to_vec(),
+                },
             },
         ]),
     )
@@ -333,11 +372,13 @@ async fn bls_user_registry_malformed_sig_lengths_in_aggregate_rejected_regtest()
     ];
 
     for (label, schnorr_sig, bls_sig) in cases {
-        let op = Inst::RegisterBlsKey {
+        let op = Inst {
             payment: PaymentIntent::self_pay(10_000),
-            bls_pubkey: bls_pk_bytes.clone(),
-            schnorr_sig,
-            bls_sig,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey: bls_pk_bytes.clone(),
+                schnorr_sig,
+                bls_sig,
+            },
         };
         let err = validate_aggregate_shape(&Insts {
             ops: vec![op],

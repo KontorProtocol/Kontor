@@ -6,7 +6,7 @@ use bitcoin::key::rand;
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1};
 use blst::min_sig::{SecretKey as BlsSecretKey, Signature as BlsSignature};
-use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, PaymentIntent};
+use indexer_types::{AggregateInfo, ContractAddress, Inst, InstKind, Insts, PaymentIntent};
 use tempfile::TempDir;
 
 async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -145,15 +145,17 @@ async fn verify_aggregate_rejects_empty_bundle() {
 async fn verify_aggregate_rejects_wrong_signature_length() {
     let (mut runtime, _tmp) = new_test_runtime().await;
     let insts = Insts {
-        ops: vec![Inst::Call {
+        ops: vec![Inst {
             payment: PaymentIntent::self_pay(0),
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
+            kind: InstKind::Call {
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
             },
-            nonce: Some(0),
-            expr: String::new(),
         }],
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
@@ -179,15 +181,17 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
         "expected test signature bytes to be invalid"
     );
     let insts = Insts {
-        ops: vec![Inst::Call {
+        ops: vec![Inst {
             payment: PaymentIntent::self_pay(0),
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
+            kind: InstKind::Call {
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
             },
-            nonce: Some(0),
-            expr: String::new(),
         }],
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
@@ -208,15 +212,17 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
 async fn verify_aggregate_enforces_op_count_cap() {
     let (mut runtime, _tmp) = new_test_runtime().await;
     let ops: Vec<Inst> = (0..=MAX_BLS_BULK_OPS)
-        .map(|_| Inst::Call {
+        .map(|_| Inst {
             payment: PaymentIntent::self_pay(0),
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
+            kind: InstKind::Call {
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr: String::new(),
             },
-            nonce: Some(0),
-            expr: String::new(),
         })
         .collect();
     let insts = Insts {
@@ -238,15 +244,17 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
     let (mut runtime, _tmp) = new_test_runtime().await;
     let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
     let insts = Insts {
-        ops: vec![Inst::Call {
+        ops: vec![Inst {
             payment: PaymentIntent::self_pay(0),
-            contract: ContractAddress {
-                name: String::new(),
-                height: 0,
-                tx_index: 0,
+            kind: InstKind::Call {
+                contract: ContractAddress {
+                    name: String::new(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                nonce: Some(0),
+                expr,
             },
-            nonce: Some(0),
-            expr,
         }],
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
@@ -492,11 +500,13 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
     let eve_bls_binding_sig = eve_bls_sk
         .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
         .to_bytes();
-    let op = Inst::RegisterBlsKey {
+    let op = Inst {
         payment: PaymentIntent::self_pay(10_000),
-        bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
-        schnorr_sig: eve_schnorr_sig.to_vec(),
-        bls_sig: eve_bls_binding_sig.to_vec(),
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
+            schnorr_sig: eve_schnorr_sig.to_vec(),
+            bls_sig: eve_bls_binding_sig.to_vec(),
+        },
     };
     let insts = Insts {
         ops: vec![op],
@@ -516,15 +526,17 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
 
 #[test]
 fn validate_aggregate_shape_rejects_zero_publisher_sponsorship() {
-    let op = Inst::Call {
+    let op = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: ContractAddress {
-            name: "c".into(),
-            height: 1,
-            tx_index: 0,
+        kind: InstKind::Call {
+            contract: ContractAddress {
+                name: "c".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce: Some(0),
+            expr: "noop()".into(),
         },
-        nonce: Some(0),
-        expr: "noop()".into(),
     };
     let insts = Insts {
         ops: vec![op],
@@ -563,11 +575,13 @@ fn aggregate_info_publisher_sponsorship_postcard_roundtrip() {
 }
 
 fn call_op(nonce: u64, gas_limit: u64, contract: ContractAddress, expr: impl Into<String>) -> Inst {
-    Inst::Call {
+    Inst {
         payment: PaymentIntent::self_pay(gas_limit),
-        contract,
-        nonce: Some(nonce),
-        expr: expr.into(),
+        kind: InstKind::Call {
+            contract,
+            nonce: Some(nonce),
+            expr: expr.into(),
+        },
     }
 }
 
@@ -950,7 +964,7 @@ mod proptest_bulk {
             schnorr_sig in proptest::collection::vec(any::<u8>(), 0..256),
             bls_sig in proptest::collection::vec(any::<u8>(), 0..256),
         ) {
-            let op = Inst::RegisterBlsKey { payment: PaymentIntent::self_pay(10_000), bls_pubkey, schnorr_sig, bls_sig };
+            let op = Inst { payment: PaymentIntent::self_pay(10_000), kind: InstKind::RegisterBlsKey { bls_pubkey, schnorr_sig, bls_sig } };
             let msg = op.aggregate_signing_message(signer_id).expect("must not fail");
             prop_assert!(!msg.is_empty());
         }

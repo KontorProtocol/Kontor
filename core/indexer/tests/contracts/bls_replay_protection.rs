@@ -9,7 +9,7 @@ use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
-    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, InstKind, Insts, PaymentIntent,
 };
 use testlib::*;
 
@@ -21,11 +21,13 @@ fn aggregate_call(
     contract: IndexerContractAddress,
     expr: String,
 ) -> Inst {
-    Inst::Call {
+    Inst {
         payment: PaymentIntent::self_pay(gas_limit),
-        contract,
-        nonce: Some(nonce),
-        expr,
+        kind: InstKind::Call {
+            contract,
+            nonce: Some(nonce),
+            expr,
+        },
     }
 }
 
@@ -54,10 +56,12 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -163,10 +167,12 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -292,10 +298,12 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -355,10 +363,12 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -472,10 +482,12 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -583,10 +595,12 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;

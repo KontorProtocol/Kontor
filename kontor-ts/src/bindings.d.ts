@@ -116,22 +116,14 @@ export type Input = {
   insts: Insts;
 };
 
-export type Inst =
-  | {
-    "Publish": { payment: PaymentIntent; name: string; bytes: Array<number> };
-  }
-  | {
-    "Call": {
-      payment: PaymentIntent;
-      contract: string;
-      nonce: number | null;
-      expr: string;
-    };
-  }
+export type Inst = { payment: PaymentIntent; kind: InstKind };
+
+export type InstKind =
+  | { "Publish": { name: string; bytes: Array<number> } }
+  | { "Call": { contract: string; nonce: number | null; expr: string } }
   | "Issuance"
   | {
     "RegisterBlsKey": {
-      payment: PaymentIntent;
       bls_pubkey: Array<number>;
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
@@ -148,29 +140,14 @@ export type InstructionQuery = {
 
 export type Insts = { ops: Array<Inst>; aggregate: AggregateInfo | null };
 
-export type Op =
-  | {
-    "Publish": {
-      metadata: OpMetadata;
-      payment: Payment;
-      name: string;
-      bytes: Array<number>;
-    };
-  }
-  | {
-    "Call": {
-      metadata: OpMetadata;
-      payment: Payment;
-      contract: string;
-      nonce: number | null;
-      expr: string;
-    };
-  }
-  | { "Issuance": { metadata: OpMetadata } }
+export type Op = { metadata: OpMetadata; kind: OpKind };
+
+export type OpKind =
+  | { "Publish": { name: string; bytes: Array<number> } }
+  | { "Call": { contract: string; nonce: number | null; expr: string } }
+  | "Issuance"
   | {
     "RegisterBlsKey": {
-      metadata: OpMetadata;
-      payment: Payment;
       bls_pubkey: Array<number>;
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
@@ -181,6 +158,7 @@ export type OpMetadata = {
   previous_output: string;
   input_index: number;
   signer_id: number;
+  payment: Payment;
 };
 
 export type OpWithResult = { op: Op; result: ResultRow | null };
@@ -207,15 +185,17 @@ export type ParticipantScripts = {
 };
 
 /**
- * Resolved per-op execution payment for `Op::Publish` and `Op::Call`.
+ * Resolved per-op execution payment, lives on `OpMetadata`.
  *
  * Built from the co-signer's `PaymentIntent` plus any aggregate-level
  * `publisher_sponsorship` offer. `signer_id` identifies who funds the
  * op's gas (the applicative signer for SelfPay, the publisher for
  * Sponsored). `gas_limit` is the effective fuel cap for execution.
  *
- * `Issuance` is the only op that doesn't carry a `Payment` — its gas is
- * set by the runtime at the call site.
+ * `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
+ * gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
+ * — the field exists for shape uniformity, not because Issuance funds
+ * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
 
