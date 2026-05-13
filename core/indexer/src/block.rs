@@ -238,8 +238,16 @@ pub async fn inspect(
             };
             // Match executor behavior: an op that fails materialization (orphan
             // Sponsored without a publisher offer) is skipped in inspect too —
-            // those didn't execute and have no result row.
-            let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
+            // those didn't execute and have no result row. Dispatch on
+            // input shape so the entry point matches the executor's
+            // (op_from_direct_inst for direct inputs, op_from_aggregate_inst
+            // for aggregate inputs).
+            let materialized = if input.insts.aggregate.is_some() {
+                op_from_aggregate_inst(inst.clone(), metadata, publisher_offer)
+            } else {
+                op_from_direct_inst(inst.clone(), metadata)
+            };
+            let op = match materialized {
                 Ok(op) => op,
                 Err(e) => {
                     tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
