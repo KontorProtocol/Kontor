@@ -296,7 +296,11 @@ pub struct Payment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct AggregateInfo {
-    pub signer_ids: Vec<u64>,
+    /// One entry per op in `Insts.ops`, in parallel order. Each entry binds
+    /// a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
+    /// the nonce that op claims, which protects BLS aggregate signatures
+    /// from replay.
+    pub signers: Vec<AggregateSigner>,
     pub signature: Vec<u8>,
     /// Publisher's gas-sponsorship commitment for this bulk.
     /// - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
@@ -305,6 +309,32 @@ pub struct AggregateInfo {
     ///   `n > 0` in `validate_aggregate_shape`.
     #[ts(type = "number | null")]
     pub publisher_sponsorship: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct AggregateSigner {
+    pub identity: SignerClaim,
+    #[ts(type = "number")]
+    pub nonce: u64,
+}
+
+/// How a co-signer identifies themselves in an aggregate bulk.
+///
+/// - `Id(u64)` is compact (8 bytes) for users who already have a
+///   `signer_id` from prior on-chain activity.
+/// - `PubKey(XOnlyPublicKey)` is 32 bytes; used for first-time signers
+///   who don't yet have a `signer_id`. The reactor resolves it via
+///   `get_or_create_identity` during aggregate verification.
+///
+/// Identity binding comes from the BLS signature verification, not from
+/// which variant is chosen — the variant only controls how to *index*
+/// the verification key, not which key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum SignerClaim {
+    Id(#[ts(type = "number")] u64),
+    PubKey(#[ts(as = "String")] XOnlyPublicKey),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -350,9 +380,6 @@ pub enum OpKind {
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
-        #[ts(type = "number | null")]
-        #[serde(default)]
-        nonce: Option<u64>,
         expr: String,
     },
     Issuance,
@@ -612,9 +639,6 @@ pub enum InstKind {
         #[ts(type = "string")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
-        #[ts(type = "number | null")]
-        #[serde(default)]
-        nonce: Option<u64>,
         expr: String,
     },
     Issuance,
@@ -628,10 +652,13 @@ pub enum InstKind {
 impl Inst {
     /// Build the domain-separated signing message for one operation in an aggregate batch.
     ///
-    /// Returns `KONTOR-OP-V1 || postcard((signer_id, self))`.
-    pub fn aggregate_signing_message(&self, signer_id: u64) -> Result<Vec<u8>> {
+    /// Returns `KONTOR-OP-V1 || postcard((signer_id, nonce, self))`. The
+    /// `signer_id` and `nonce` come from the matching `AggregateSigner`
+    /// entry in `AggregateInfo.signers`; binding them into the signed
+    /// payload is what defeats BLS replay.
+    pub fn aggregate_signing_message(&self, signer_id: u64, nonce: u64) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(&(signer_id, self))?;
+        let op_bytes = serialize(&(signer_id, nonce, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);

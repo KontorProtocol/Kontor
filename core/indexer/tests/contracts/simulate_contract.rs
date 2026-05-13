@@ -19,7 +19,6 @@ async fn test_crypto_contract_simulate() -> Result<()> {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: crypto.clone().into(),
-                    nonce: None,
                     expr: "set-hash(\"foo\")".to_string(),
                 },
             },

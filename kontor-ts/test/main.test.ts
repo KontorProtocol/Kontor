@@ -36,7 +36,6 @@ test("call", () => {
         kind: {
           Call: {
             contract: "foo_1_2",
-            nonce: 0,
             expr: "foo()",
           },
         },
@@ -48,62 +47,6 @@ test("call", () => {
   const bs = serializeInst(str);
   let result = deserializeInst(bs);
   expect(inst).toStrictEqual(JSON.parse(result));
-});
-
-test("call with null nonce", () => {
-  let inst = {
-    ops: [
-      {
-        payment: { SelfPay: { limit: 1000000 } },
-        kind: {
-          Call: {
-            contract: "foo_1_2",
-            nonce: null,
-            expr: "foo()",
-          },
-        },
-      },
-    ],
-    aggregate: null,
-  };
-  const str = JSON.stringify(inst);
-  const bs = serializeInst(str);
-  let result = deserializeInst(bs);
-  expect(inst).toStrictEqual(JSON.parse(result));
-});
-
-test("call with omitted nonce", () => {
-  let inst = {
-    ops: [
-      {
-        payment: { SelfPay: { limit: 1000000 } },
-        kind: {
-          Call: {
-            contract: "foo_1_2",
-            expr: "foo()",
-          },
-        },
-      },
-    ],
-  };
-  const str = JSON.stringify(inst);
-  const bs = serializeInst(str);
-  let result = deserializeInst(bs);
-  expect(JSON.parse(result)).toStrictEqual({
-    ops: [
-      {
-        payment: { SelfPay: { limit: 1000000 } },
-        kind: {
-          Call: {
-            contract: "foo_1_2",
-            nonce: null,
-            expr: "foo()",
-          },
-        },
-      },
-    ],
-    aggregate: null,
-  });
 });
 
 test("call with sponsored payment in aggregate", () => {
@@ -114,14 +57,51 @@ test("call with sponsored payment in aggregate", () => {
         kind: {
           Call: {
             contract: "foo_1_2",
-            nonce: 0,
             expr: "foo()",
           },
         },
       },
     ],
     aggregate: {
-      signer_ids: [1],
+      signers: [
+        {
+          identity: { Id: 1 },
+          nonce: 0,
+        },
+      ],
+      signature: Array.from(new Uint8Array(48)),
+      publisher_sponsorship: 100000,
+    },
+  };
+  const str = JSON.stringify(inst);
+  const bs = serializeInst(str);
+  let result = deserializeInst(bs);
+  expect(inst).toStrictEqual(JSON.parse(result));
+});
+
+test("aggregate with PubKey signer claim", () => {
+  let inst = {
+    ops: [
+      {
+        payment: "Sponsored",
+        kind: {
+          Call: {
+            contract: "foo_1_2",
+            expr: "foo()",
+          },
+        },
+      },
+    ],
+    aggregate: {
+      signers: [
+        {
+          identity: {
+            PubKey:
+              "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
+          },
+          nonce: 0,
+        },
+      ],
       signature: Array.from(new Uint8Array(48)),
       publisher_sponsorship: 100000,
     },

@@ -79,7 +79,6 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: contract_addr,
-                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         },
@@ -191,7 +190,6 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
-                    nonce: None,
                     expr: counter::wave::increment_call_expr(),
                 },
             },
@@ -307,7 +305,6 @@ async fn cluster_node_restart_recovery() -> Result<()> {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
-                    nonce: None,
                     expr: counter::wave::increment_call_expr(),
                 },
             },
@@ -337,7 +334,6 @@ async fn cluster_node_restart_recovery() -> Result<()> {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
-                    nonce: None,
                     expr: counter::wave::increment_call_expr(),
                 },
             },
@@ -439,7 +435,6 @@ async fn cluster_late_joiner_sync() -> Result<()> {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
-                    nonce: None,
                     expr: counter::wave::increment_call_expr(),
                 },
             },
@@ -568,7 +563,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: staking_addr.clone(),
-                nonce: None,
                 expr: staking::wave::register_validator_call_expr(
                     ed25519_pubkey,
                     5u64.try_into().unwrap(),
@@ -608,7 +602,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: counter_addr.clone(),
-                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         },
@@ -638,7 +631,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: counter_addr.clone(),
-                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         },
@@ -675,7 +667,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: staking_addr.clone(),
-                nonce: None,
                 expr: staking::wave::begin_unstake_call_expr(),
             },
         },
@@ -707,7 +698,6 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             payment: PaymentIntent::self_pay(10_000),
             kind: InstKind::Call {
                 contract: counter_addr,
-                nonce: None,
                 expr: counter::wave::increment_call_expr(),
             },
         },

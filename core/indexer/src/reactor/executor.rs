@@ -364,8 +364,8 @@ async fn process_aggregate_input(
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
-        Ok(map) => map,
+    let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
+        Ok(r) => r,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
             return Ok(());
@@ -393,14 +393,15 @@ async fn process_aggregate_input(
         None
     };
 
-    for (op_index, (inst, &signer_id)) in input
+    for (op_index, ((inst, agg_signer), &signer_id)) in input
         .insts
         .ops
         .iter()
-        .zip(agg.signer_ids.iter())
+        .zip(agg.signers.iter())
+        .zip(resolved.signer_ids.iter())
         .enumerate()
     {
-        if !signer_map.contains_key(&signer_id) {
+        if !resolved.signer_map.contains_key(&signer_id) {
             warn!("signer_id {signer_id} not in signer_map after verification");
             continue;
         };
@@ -420,28 +421,22 @@ async fn process_aggregate_input(
             )
             .await;
 
-        if let InstKind::Call { nonce, .. } = &inst.kind {
-            let nonce_val = match nonce {
-                Some(n) => *n,
-                None => {
-                    warn!("aggregate Call for signer {signer_id} missing nonce");
-                    continue;
-                }
-            };
-            let conn = runtime.get_storage_conn();
-            let identity = database::types::Identity::new(signer_id as i64);
-            match identity
-                .advance_nonce(&conn, nonce_val as i64, height)
-                .await
-            {
-                Ok(_) => {}
-                Err(database::queries::Error::InvalidData(msg)) => {
-                    warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
-                    continue;
-                }
-                Err(e) => {
-                    anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
-                }
+        // Every aggregate op advances the signer's nonce. The variant restriction
+        // ("Call only") is enforced separately in validate_aggregate_shape; here
+        // we just consume the nonce the co-signer committed to in their BLS sig.
+        let conn = runtime.get_storage_conn();
+        let identity = database::types::Identity::new(signer_id as i64);
+        match identity
+            .advance_nonce(&conn, agg_signer.nonce as i64, height)
+            .await
+        {
+            Ok(_) => {}
+            Err(database::queries::Error::InvalidData(msg)) => {
+                warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
+                continue;
+            }
+            Err(e) => {
+                anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
             }
         }
 

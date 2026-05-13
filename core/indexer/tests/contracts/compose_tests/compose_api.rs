@@ -776,7 +776,6 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
                 height: 0,
                 tx_index: 1,
             },
-            nonce: None,
             expr: "attach(0)".to_string(), // token data??
         },
     };
@@ -789,7 +788,6 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
                 height: 0,
                 tx_index: 1,
             },
-            nonce: None,
             expr: "detach()".to_string(),
         },
     };
@@ -868,7 +866,6 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
                 height: 0,
                 tx_index: 1,
             },
-            nonce: None,
             expr: "detach()".to_string(),
         },
     };

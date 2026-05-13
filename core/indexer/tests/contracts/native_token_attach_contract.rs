@@ -38,7 +38,6 @@ async fn test_native_token_attach_contract() -> Result<()> {
         payment: PaymentIntent::self_pay(50_000),
         kind: InstKind::Call {
             contract: runtime::token::address().into(),
-            nonce: None,
             expr: token::wave::attach_call_expr(0, 2u64.try_into().unwrap()),
         },
     };
@@ -47,7 +46,6 @@ async fn test_native_token_attach_contract() -> Result<()> {
         payment: PaymentIntent::self_pay(50_000),
         kind: InstKind::Call {
             contract: runtime::token::address().into(),
-            nonce: None,
             expr: token::wave::detach_call_expr(),
         },
     };

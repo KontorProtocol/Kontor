@@ -5,7 +5,8 @@ use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
-    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, InstKind, Insts, PaymentIntent,
+    AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
+    Insts, PaymentIntent, SignerClaim,
 };
 use testlib::*;
 
@@ -14,14 +15,14 @@ interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 /// Build an aggregate Insts with the publisher's sponsorship commitment.
 fn aggregate_insts(
     ops: Vec<Inst>,
-    signer_ids: Vec<u64>,
+    signers: Vec<AggregateSigner>,
     signature: Vec<u8>,
     publisher_sponsorship: Option<u64>,
 ) -> Insts {
     Insts {
         ops,
         aggregate: Some(AggregateInfo {
-            signer_ids,
+            signers,
             signature,
             publisher_sponsorship,
         }),
@@ -31,16 +32,18 @@ fn aggregate_insts(
 fn call_with_intent(
     payment: PaymentIntent,
     contract: IndexerContractAddress,
-    nonce: u64,
     expr: String,
 ) -> Inst {
     Inst {
         payment,
-        kind: InstKind::Call {
-            contract,
-            nonce: Some(nonce),
-            expr,
-        },
+        kind: InstKind::Call { contract, expr },
+    }
+}
+
+fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
+    AggregateSigner {
+        identity: SignerClaim::Id(id),
+        nonce,
     }
 }
 
@@ -99,19 +102,17 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
     let op0 = call_with_intent(
         PaymentIntent::Sponsored,
         arith_contract.clone(),
-        0,
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
     let op1 = call_with_intent(
         PaymentIntent::Sponsored,
         arith_contract.clone(),
-        0,
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
     // BLS aggregate signing: each co-signer signs their inner op.
-    let msg0 = op0.aggregate_signing_message(signer1_id)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id)?;
+    let msg0 = op0.aggregate_signing_message(signer1_id, 0)?;
+    let msg1 = op1.aggregate_signing_message(signer2_id, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
@@ -136,7 +137,7 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1],
-                vec![signer1_id, signer2_id],
+                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
                 aggregate_sig.to_bytes().to_vec(),
                 Some(50_000),
             ),
@@ -222,19 +223,17 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
     let op0 = call_with_intent(
         PaymentIntent::self_pay(50_000),
         arith_contract.clone(),
-        0,
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
     // op1: Sponsored — publisher covers it.
     let op1 = call_with_intent(
         PaymentIntent::Sponsored,
         arith_contract.clone(),
-        0,
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
-    let msg0 = op0.aggregate_signing_message(signer1_id)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id)?;
+    let msg0 = op0.aggregate_signing_message(signer1_id, 0)?;
+    let msg1 = op1.aggregate_signing_message(signer2_id, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
@@ -250,7 +249,7 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1],
-                vec![signer1_id, signer2_id],
+                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
                 aggregate_sig.to_bytes().to_vec(),
                 Some(50_000),
             ),

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
-use indexer_types::{InstKind, Insts};
+use indexer_types::{InstKind, Insts, SignerClaim};
 
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
@@ -72,10 +72,10 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             MAX_BLS_BULK_OPS
         ));
     }
-    if agg.signer_ids.len() != insts.ops.len() {
+    if agg.signers.len() != insts.ops.len() {
         return Err(anyhow!(
-            "signer_ids length ({}) != ops length ({})",
-            agg.signer_ids.len(),
+            "signers length ({}) != ops length ({})",
+            agg.signers.len(),
             insts.ops.len()
         ));
     }
@@ -91,37 +91,40 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
     }
     for inst in &insts.ops {
         match &inst.kind {
-            InstKind::Call { nonce: Some(_), .. } => {}
-            InstKind::Call { nonce: None, .. } => {
-                return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (missing nonce)"
-                ));
-            }
+            InstKind::Call { .. } => {}
             InstKind::RegisterBlsKey { .. } => {
                 return Err(anyhow!(
                     "RegisterBlsKey is not allowed in aggregate path (use direct)"
                 ));
             }
             InstKind::Publish { .. } => {
-                return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (got Publish)"
-                ));
+                return Err(anyhow!("aggregate path only supports Call (got Publish)"));
             }
             InstKind::Issuance => {
-                return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (got Issuance)"
-                ));
+                return Err(anyhow!("aggregate path only supports Call (got Issuance)"));
             }
         }
     }
     Ok(agg)
 }
 
+/// Resolved aggregate output: per-op `signer_id` (after `SignerClaim`
+/// resolution) paired with the `signer_id → x_only_pubkey` map so the caller
+/// can avoid redundant registry lookups during op execution.
+#[derive(Debug)]
+pub struct AggregateResolved {
+    pub signer_ids: Vec<u64>,
+    pub signer_map: SignerMap,
+}
+
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
-/// signers for execution without redundant registry lookups.
-pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+/// Resolves each `SignerClaim` to an internal `signer_id`
+/// (`SignerClaim::Id` direct, `SignerClaim::PubKey` via
+/// `get_or_create_identity`), looks up each signer's registered BLS pubkey,
+/// and verifies the aggregate signature against the per-op signing message
+/// `postcard((signer_id, nonce, inst))`.
+pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<AggregateResolved> {
     let agg = validate_aggregate_shape(insts)?;
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
         return Err(anyhow!(
@@ -136,10 +139,21 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
     let mut resolver = SignerResolver::new();
     let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
     let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(insts.ops.len());
+    let mut signer_ids: Vec<u64> = Vec::with_capacity(insts.ops.len());
     let mut total_message_bytes: usize = 0;
 
-    for (inst, &signer_id) in insts.ops.iter().zip(agg.signer_ids.iter()) {
-        let msg = inst.aggregate_signing_message(signer_id)?;
+    for (inst, agg_signer) in insts.ops.iter().zip(agg.signers.iter()) {
+        let signer_id = match &agg_signer.identity {
+            SignerClaim::Id(id) => *id,
+            SignerClaim::PubKey(pk) => {
+                let identity = runtime
+                    .get_or_create_identity(&pk.to_string())
+                    .await
+                    .map_err(|e| anyhow!("resolving SignerClaim::PubKey: {e}"))?;
+                identity.signer_id() as u64
+            }
+        };
+        let msg = inst.aggregate_signing_message(signer_id, agg_signer.nonce)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
@@ -149,6 +163,7 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
         }
         pks.push(resolver.resolve(runtime, signer_id).await?);
         msgs.push(msg);
+        signer_ids.push(signer_id);
     }
 
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
@@ -161,5 +176,8 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
         ));
     }
 
-    Ok(resolver.signer_map)
+    Ok(AggregateResolved {
+        signer_ids,
+        signer_map: resolver.signer_map,
+    })
 }

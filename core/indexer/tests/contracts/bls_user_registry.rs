@@ -1,7 +1,9 @@
 use anyhow::Result;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{RegistrationProof, validate_aggregate_shape};
-use indexer_types::{AggregateInfo, Inst, InstKind, Insts, PaymentIntent};
+use indexer_types::{
+    AggregateInfo, AggregateSigner, Inst, InstKind, Insts, PaymentIntent, SignerClaim,
+};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
@@ -68,7 +70,16 @@ async fn bls_user_registry_register_in_aggregate_rejected_regtest() -> Result<()
     let err = validate_aggregate_shape(&Insts {
         ops: vec![op0, op1],
         aggregate: Some(AggregateInfo {
-            signer_ids: vec![0, 1],
+            signers: vec![
+                AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                },
+                AggregateSigner {
+                    identity: SignerClaim::Id(1),
+                    nonce: 0,
+                },
+            ],
             signature: vec![9u8; 48],
             publisher_sponsorship: None,
         }),
@@ -225,7 +236,16 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
     let err = validate_aggregate_shape(&Insts {
         ops: vec![op.clone(), op],
         aggregate: Some(AggregateInfo {
-            signer_ids: vec![0, 0],
+            signers: vec![
+                AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                },
+                AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                },
+            ],
             signature: vec![9u8; 48],
             publisher_sponsorship: None,
         }),
@@ -308,7 +328,16 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
     let err = validate_aggregate_shape(&Insts {
         ops: vec![op_a, op_b],
         aggregate: Some(AggregateInfo {
-            signer_ids: vec![0, 0],
+            signers: vec![
+                AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                },
+                AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                },
+            ],
             signature: vec![9u8; 48],
             publisher_sponsorship: None,
         }),
@@ -383,7 +412,10 @@ async fn bls_user_registry_malformed_sig_lengths_in_aggregate_rejected_regtest()
         let err = validate_aggregate_shape(&Insts {
             ops: vec![op],
             aggregate: Some(AggregateInfo {
-                signer_ids: vec![0],
+                signers: vec![AggregateSigner {
+                    identity: SignerClaim::Id(0),
+                    nonce: 0,
+                }],
                 signature: vec![9u8; 48],
                 publisher_sponsorship: None,
             }),

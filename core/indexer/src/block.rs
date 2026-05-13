@@ -69,15 +69,7 @@ fn materialize_op(
             let resolved = resolve_payment(&payment, base.signer_id, publisher)?;
             let op_kind = match other {
                 InstKind::Publish { name, bytes } => OpKind::Publish { name, bytes },
-                InstKind::Call {
-                    contract,
-                    nonce,
-                    expr,
-                } => OpKind::Call {
-                    contract,
-                    nonce,
-                    expr,
-                },
+                InstKind::Call { contract, expr } => OpKind::Call { contract, expr },
                 InstKind::RegisterBlsKey {
                     bls_pubkey,
                     schnorr_sig,
@@ -166,7 +158,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                         && insts
                             .aggregate
                             .as_ref()
-                            .is_none_or(|agg| agg.signer_ids.len() == insts.ops.len())
+                            .is_none_or(|agg| agg.signers.len() == insts.ops.len())
                     {
                         return Some(Input {
                             previous_output: input.previous_output,
@@ -213,10 +205,31 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        // Per-op signer_ids: aggregates carry them directly; direct inputs
-        // broadcast the witness signer to every op.
+        // Per-op signer_ids: aggregates resolve each `SignerClaim` (Id is
+        // already-resolved; PubKey is looked up against the registry — by
+        // the time inspect runs, any PubKey claim on a successfully
+        // executed aggregate must have a corresponding signers row).
+        // Direct inputs broadcast the witness signer to every op.
         let signer_ids: Vec<u64> = match &input.insts.aggregate {
-            Some(agg) => agg.signer_ids.clone(),
+            Some(agg) => {
+                let mut ids = Vec::with_capacity(agg.signers.len());
+                for s in &agg.signers {
+                    let id = match &s.identity {
+                        indexer_types::SignerClaim::Id(id) => *id,
+                        indexer_types::SignerClaim::PubKey(pk) => {
+                            crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                                conn,
+                                &pk.to_string(),
+                            )
+                            .await?
+                            .map(|e| e.signer_id as u64)
+                            .unwrap_or(0)
+                        }
+                    };
+                    ids.push(id);
+                }
+                ids
+            }
             None => {
                 let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
                     conn,
@@ -303,7 +316,8 @@ mod tests {
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
     use indexer_types::{
-        AggregateInfo, ContractAddress, Inst, InstKind, Insts, PaymentIntent, serialize,
+        AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, PaymentIntent,
+        SignerClaim, serialize,
     };
 
     use super::filter_map;
@@ -361,14 +375,16 @@ mod tests {
             payment: PaymentIntent::self_pay(123),
             kind: InstKind::Call {
                 contract,
-                nonce: Some(0),
                 expr: "noop()".to_string(),
             },
         };
         let insts = Insts {
             ops: vec![op.clone()],
             aggregate: Some(AggregateInfo {
-                signer_ids: vec![7],
+                signers: vec![AggregateSigner {
+                    identity: SignerClaim::Id(7),
+                    nonce: 0,
+                }],
                 signature: vec![9u8; 48],
                 publisher_sponsorship: None,
             }),
@@ -440,7 +456,6 @@ mod tests {
                     height: 1,
                     tx_index: 0,
                 },
-                nonce: None,
                 expr: "eval(10, id)".to_string(),
             },
         };
@@ -467,16 +482,10 @@ mod tests {
         match &input.insts.ops[0] {
             Inst {
                 payment,
-                kind:
-                    InstKind::Call {
-                        contract,
-                        nonce,
-                        expr,
-                    },
+                kind: InstKind::Call { contract, expr },
             } => {
                 assert_eq!(*payment, PaymentIntent::self_pay(7));
                 assert_eq!(contract.name, "arith");
-                assert_eq!(*nonce, None);
                 assert_eq!(expr, "eval(10, id)");
             }
             other => panic!("expected Inst::Call, got {other:?}"),
@@ -544,7 +553,6 @@ mod tests {
                     height: 1,
                     tx_index: 0,
                 },
-                nonce: Some(0),
                 expr: "noop()".into(),
             },
         }

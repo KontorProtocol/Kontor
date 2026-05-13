@@ -476,7 +476,7 @@ impl RuntimeRegtest {
         use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 
         let mut ops = Vec::with_capacity(calls.len());
-        let mut signer_ids = Vec::with_capacity(calls.len());
+        let mut agg_signers = Vec::with_capacity(calls.len());
         // Track nonce per signer — starts at 0 for each signer in this batch,
         // incremented for subsequent ops from the same signer.
         let mut nonce_counters: HashMap<u64, u64> = HashMap::new();
@@ -495,11 +495,13 @@ impl RuntimeRegtest {
                 payment: PaymentIntent::self_pay(10_000),
                 kind: InstKind::Call {
                     contract: (*contract).clone().into(),
-                    nonce: Some(current_nonce),
                     expr: expr.to_string(),
                 },
             });
-            signer_ids.push(signer_id);
+            agg_signers.push(indexer_types::AggregateSigner {
+                identity: indexer_types::SignerClaim::Id(signer_id),
+                nonce: current_nonce,
+            });
         }
 
         // Sign each op with its signer's BLS key and aggregate
@@ -511,7 +513,11 @@ impl RuntimeRegtest {
                 .ok_or_else(|| anyhow!("Identity not found for BLS signing"))?;
             let sk = BlsSecretKey::from_bytes(&identity.bls_secret_key)
                 .map_err(|e| anyhow!("Invalid BLS secret key: {:?}", e))?;
-            let msg = ops[i].aggregate_signing_message(signer_ids[i])?;
+            let signer_id = match &agg_signers[i].identity {
+                indexer_types::SignerClaim::Id(id) => *id,
+                indexer_types::SignerClaim::PubKey(_) => unreachable!("testlib uses Id claims"),
+            };
+            let msg = ops[i].aggregate_signing_message(signer_id, agg_signers[i].nonce)?;
             sigs.push(sk.sign(&msg, KONTOR_BLS_DST, &[]));
         }
 
@@ -522,7 +528,7 @@ impl RuntimeRegtest {
         Ok(Insts {
             ops,
             aggregate: Some(indexer_types::AggregateInfo {
-                signer_ids,
+                signers: agg_signers,
                 signature: aggregate.to_signature().to_bytes().to_vec(),
                 publisher_sponsorship: None,
             }),
@@ -615,7 +621,6 @@ impl RuntimeImpl for RuntimeRegtest {
                         payment: PaymentIntent::self_pay(10_000),
                         kind: InstKind::Call {
                             contract: contract_address.clone().into(),
-                            nonce: None,
                             expr: expr.to_string(),
                         },
                     },
@@ -697,7 +702,6 @@ impl RuntimeImpl for RuntimeRegtest {
                                 payment: PaymentIntent::self_pay(10_000),
                                 kind: InstKind::Call {
                                     contract: (*contract).clone().into(),
-                                    nonce: None,
                                     expr: expr.to_string(),
                                 },
                             },
@@ -715,7 +719,6 @@ impl RuntimeImpl for RuntimeRegtest {
                             payment: PaymentIntent::self_pay(10_000),
                             kind: InstKind::Call {
                                 contract: (*contract).clone().into(),
-                                nonce: None,
                                 expr: expr.to_string(),
                             },
                         })
