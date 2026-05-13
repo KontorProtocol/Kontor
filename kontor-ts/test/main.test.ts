@@ -12,7 +12,7 @@ test("publish", () => {
     ops: [
       {
         Publish: {
-          gas_limit: 1000000,
+          payment: { SelfPay: { limit: 1000000 } },
           name: "foo",
           bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
         },
@@ -31,7 +31,7 @@ test("call", () => {
     ops: [
       {
         Call: {
-          gas_limit: 1000000,
+          payment: { SelfPay: { limit: 1000000 } },
           contract: "foo_1_2",
           nonce: 0,
           expr: "foo()",
@@ -51,7 +51,7 @@ test("call with null nonce", () => {
     ops: [
       {
         Call: {
-          gas_limit: 1000000,
+          payment: { SelfPay: { limit: 1000000 } },
           contract: "foo_1_2",
           nonce: null,
           expr: "foo()",
@@ -71,7 +71,7 @@ test("call with omitted nonce", () => {
     ops: [
       {
         Call: {
-          gas_limit: 1000000,
+          payment: { SelfPay: { limit: 1000000 } },
           contract: "foo_1_2",
           expr: "foo()",
         },
@@ -85,7 +85,7 @@ test("call with omitted nonce", () => {
     ops: [
       {
         Call: {
-          gas_limit: 1000000,
+          payment: { SelfPay: { limit: 1000000 } },
           contract: "foo_1_2",
           nonce: null,
           expr: "foo()",
@@ -94,6 +94,30 @@ test("call with omitted nonce", () => {
     ],
     aggregate: null,
   });
+});
+
+test("call with sponsored payment in aggregate", () => {
+  let inst = {
+    ops: [
+      {
+        Call: {
+          payment: "Sponsored",
+          contract: "foo_1_2",
+          nonce: 0,
+          expr: "foo()",
+        },
+      },
+    ],
+    aggregate: {
+      signer_ids: [1],
+      signature: Array.from(new Uint8Array(48)),
+      publisher_sponsorship: 100000,
+    },
+  };
+  const str = JSON.stringify(inst);
+  const bs = serializeInst(str);
+  let result = deserializeInst(bs);
+  expect(inst).toStrictEqual(JSON.parse(result));
 });
 
 test("issuance", () => {

@@ -79,6 +79,16 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             insts.ops.len()
         ));
     }
+    // Publisher's sponsorship offer must be a positive cap when present.
+    // `Some(0)` would silently trap every sponsored op out-of-fuel on the
+    // first instruction — almost certainly a publisher misconfiguration, so
+    // reject the whole bulk.
+    if let Some(0) = agg.publisher_sponsorship {
+        return Err(anyhow!(
+            "AggregateInfo.publisher_sponsorship = Some(0) is invalid; \
+             use None to opt out of sponsorship"
+        ));
+    }
     for inst in &insts.ops {
         match inst {
             Inst::Call { nonce: Some(_), .. } => {}

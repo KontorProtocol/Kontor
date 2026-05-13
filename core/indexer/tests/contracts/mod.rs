@@ -2,6 +2,7 @@ mod amm_contract;
 mod bls_attack_vectors;
 mod bls_bulk_compose;
 mod bls_key_derivation_and_registration;
+mod bls_publisher_pays;
 mod bls_replay_protection;
 mod bls_user_registry;
 mod compose;
@@ -47,6 +48,7 @@ testlib::regtest_tests! {
     bls_attack_vectors,
     bls_bulk_compose,
     bls_key_derivation_and_registration,
+    bls_publisher_pays,
     bls_replay_protection,
     bls_user_registry,
     compose,

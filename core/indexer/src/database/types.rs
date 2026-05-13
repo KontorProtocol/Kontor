@@ -99,6 +99,12 @@ impl Identity {
     }
 }
 
+/// The reserved signer_id for the Core (system) signer. By construction the
+/// Core row is the first one inserted into `signers` at genesis, so SQLite
+/// auto-increment assigns it id = 1. This constant pins that contract and is
+/// asserted by `create_core_signer`.
+pub const CORE_SIGNER_ID: i64 = 1;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
     pub signer_id: i64,
@@ -269,6 +275,11 @@ pub struct ContractResultRow {
     pub value: Option<String>,
     #[builder(default = 0)]
     pub signer_id: i64,
+    /// Who funded gas for this op. Equals `signer_id` for self-pay ops; for
+    /// BLS-aggregate sponsored ops it's the publisher's signer_id. `None` for
+    /// ops that don't go through user-side gas accounting (Issuance,
+    /// RegisterBlsKey via the Core-paid path).
+    pub payer_signer_id: Option<i64>,
 }
 
 impl ContractResultRow {
@@ -297,6 +308,7 @@ pub struct ContractResultPublicRow {
     pub contract_tx_index: i64,
     pub txid: Option<String>,
     pub signer_id: i64,
+    pub payer_signer_id: Option<i64>,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -329,6 +341,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             .to_string(),
             txid: row.txid,
             signer_id: row.signer_id,
+            payer_signer_id: row.payer_signer_id,
         }
     }
 }

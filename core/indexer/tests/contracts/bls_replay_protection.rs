@@ -8,7 +8,9 @@ use bitcoin::consensus::encode::deserialize_hex;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts};
+use indexer_types::{
+    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+};
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
@@ -20,7 +22,7 @@ fn aggregate_call(
     expr: String,
 ) -> Inst {
     Inst::Call {
-        gas_limit,
+        payment: PaymentIntent::self_pay(gas_limit),
         contract,
         nonce: Some(nonce),
         expr,
@@ -33,6 +35,7 @@ fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> 
         aggregate: Some(AggregateInfo {
             signer_ids,
             signature,
+            publisher_sponsorship: None,
         }),
     }
 }
@@ -52,7 +55,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -161,7 +164,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -290,7 +293,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -353,7 +356,7 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -470,7 +473,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },
@@ -581,7 +584,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         .instruction(
             &mut publisher,
             Inst::Publish {
-                gas_limit: 50_000,
+                payment: PaymentIntent::self_pay(50_000),
                 name: "arith".to_string(),
                 bytes: arith_bytes,
             },

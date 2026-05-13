@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS contract_results (
   size INTEGER NOT NULL,
   value TEXT,
   signer_id INTEGER NOT NULL,
+  -- Who funded gas for this op. Differs from signer_id only when the op was
+  -- sponsored by the Bitcoin publisher in a BLS aggregate; otherwise equals
+  -- signer_id. NULL for ops that don't go through gas accounting at all
+  -- (e.g. Issuance, RegisterBlsKey via Core-paid path).
+  payer_signer_id INTEGER,
   UNIQUE (
     tx_id,
     input_index,
@@ -80,7 +85,8 @@ CREATE TABLE IF NOT EXISTS contract_results (
   ),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
   FOREIGN KEY (tx_id) REFERENCES transactions (id),
-  FOREIGN KEY (signer_id) REFERENCES signers (id)
+  FOREIGN KEY (signer_id) REFERENCES signers (id),
+  FOREIGN KEY (payer_signer_id) REFERENCES signers (id)
 );
 
 CREATE TABLE IF NOT EXISTS file_metadata (

@@ -3,7 +3,10 @@ use bitcoin::{
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     script::Instruction,
 };
-use indexer_types::{Input, Inst, Insts, Op, OpMetadata, OpWithResult, Transaction, deserialize};
+use indexer_types::{
+    Input, Inst, Insts, Op, OpMetadata, OpWithResult, Payment, PaymentIntent, Transaction,
+    deserialize,
+};
 use indexmap::IndexMap;
 use libsql::Connection;
 
@@ -11,41 +14,101 @@ use crate::database::{queries::get_op_result, types::OpResultId};
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
-pub fn op_from_inst(inst: Inst, metadata: OpMetadata) -> Op {
+/// Publisher's resolved offer for a BLS aggregate bulk. Built once per bulk
+/// in `process_aggregate_input` by combining `AggregateInfo.publisher_sponsorship`
+/// (the publisher's signed commitment) with the publisher's resolved signer_id
+/// (the Bitcoin x_only_pubkey, ensured into the signers table).
+#[derive(Debug, Clone, Copy)]
+pub struct PublisherOffer {
+    pub signer_id: u64,
+    pub gas_limit_per_op: u64,
+}
+
+/// Build an `Op` from a direct (non-aggregate) `Inst`. `PaymentIntent::Sponsored`
+/// is rejected here: direct inputs have no publisher to fall back to.
+pub fn op_from_direct_inst(inst: Inst, metadata: OpMetadata) -> Result<Op, anyhow::Error> {
+    materialize_op(inst, metadata, None)
+}
+
+/// Build an `Op` from an aggregate `Inst` applying the sponsorship resolution
+/// table:
+///   SelfPay  | any        → user pays at their signed limit
+///   Sponsored| Some(offer)→ publisher pays at offer.gas_limit_per_op
+///   Sponsored| None       → rejected (orphan op, co-signer accepted sponsorship
+///                          but no publisher offered)
+pub fn op_from_aggregate_inst(
+    inst: Inst,
+    metadata: OpMetadata,
+    publisher: Option<PublisherOffer>,
+) -> Result<Op, anyhow::Error> {
+    materialize_op(inst, metadata, publisher)
+}
+
+fn materialize_op(
+    inst: Inst,
+    metadata: OpMetadata,
+    publisher: Option<PublisherOffer>,
+) -> Result<Op, anyhow::Error> {
     match inst {
         Inst::Publish {
-            gas_limit,
+            payment,
             name,
             bytes,
-        } => Op::Publish {
-            metadata,
-            gas_limit,
-            name,
-            bytes,
-        },
+        } => {
+            let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
+            Ok(Op::Publish {
+                metadata,
+                payment,
+                name,
+                bytes,
+            })
+        }
         Inst::Call {
-            gas_limit,
+            payment,
             contract,
             nonce,
             expr,
-        } => Op::Call {
-            metadata,
-            gas_limit,
-            contract,
-            nonce,
-            expr,
-        },
+        } => {
+            let payment = resolve_payment(&payment, metadata.signer_id, publisher)?;
+            Ok(Op::Call {
+                metadata,
+                payment,
+                contract,
+                nonce,
+                expr,
+            })
+        }
         Inst::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-        } => Op::RegisterBlsKey {
+        } => Ok(Op::RegisterBlsKey {
             metadata,
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-        },
-        Inst::Issuance => Op::Issuance { metadata },
+        }),
+        Inst::Issuance => Ok(Op::Issuance { metadata }),
+    }
+}
+
+fn resolve_payment(
+    intent: &PaymentIntent,
+    signer_id: u64,
+    publisher: Option<PublisherOffer>,
+) -> Result<Payment, anyhow::Error> {
+    match (intent, publisher) {
+        (PaymentIntent::SelfPay { limit }, _) => Ok(Payment {
+            signer_id,
+            gas_limit: *limit,
+        }),
+        (PaymentIntent::Sponsored, Some(offer)) => Ok(Payment {
+            signer_id: offer.signer_id,
+            gas_limit: offer.gas_limit_per_op,
+        }),
+        (PaymentIntent::Sponsored, None) => Err(anyhow::anyhow!(
+            "PaymentIntent::Sponsored without a publisher offer"
+        )),
     }
 }
 
@@ -130,8 +193,8 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        // Per-op signer_ids: aggregates provide them directly,
-        // direct inputs broadcast the single witness signer to every op.
+        // Per-op signer_ids: aggregates carry them directly; direct inputs
+        // broadcast the witness signer to every op.
         let signer_ids: Vec<u64> = match &input.insts.aggregate {
             Some(agg) => agg.signer_ids.clone(),
             None => {
@@ -146,19 +209,63 @@ pub async fn inspect(
             }
         };
 
+        // For aggregate inputs with a sponsorship offer, resolve the publisher's
+        // signer_id so sponsored ops materialize with the same Payment the
+        // executor used. The `payer_signer_id` column on result rows is the
+        // durable record of who paid (queryable in SQL / future readers); this
+        // local resolution is what inspect needs to reconstruct `Op` for ops
+        // that have no result row yet (e.g. `should_skip_result` cases).
+        let publisher_offer: Option<PublisherOffer> = match &input.insts.aggregate {
+            Some(agg) if agg.publisher_sponsorship.is_some() => {
+                crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                    conn,
+                    &input.x_only_pubkey.to_string(),
+                )
+                .await?
+                .map(|e| PublisherOffer {
+                    signer_id: e.signer_id as u64,
+                    gas_limit_per_op: agg.publisher_sponsorship.unwrap(),
+                })
+            }
+            _ => None,
+        };
+
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let metadata = OpMetadata {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
                 signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
-            let op = op_from_inst(inst.clone(), metadata);
+            // Match executor behavior: an op that fails materialization (orphan
+            // Sponsored without a publisher offer) is skipped in inspect too —
+            // those didn't execute and have no result row. Dispatch on
+            // input shape so the entry point matches the executor's
+            // (op_from_direct_inst for direct inputs, op_from_aggregate_inst
+            // for aggregate inputs).
+            let materialized = if input.insts.aggregate.is_some() {
+                op_from_aggregate_inst(inst.clone(), metadata, publisher_offer)
+            } else {
+                op_from_direct_inst(inst.clone(), metadata)
+            };
+            let op = match materialized {
+                Ok(op) => op,
+                Err(e) => {
+                    tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
+                    continue;
+                }
+            };
             let id = OpResultId::builder()
                 .txid(tx.txid.to_string())
                 .input_index(input.input_index)
                 .op_index(op_index as i64)
                 .build();
-            let result = get_op_result(conn, &id).await?.map(Into::into);
+            let result = get_op_result(conn, &id)
+                .await?
+                .map(indexer_types::ResultRow::from);
+            // `result: None` is preserved (pre-refactor semantics) for ops the
+            // executor skipped post-validation via `should_skip_result` or that
+            // hit a non-deterministic failure — callers learn "this op was in
+            // the tx but didn't produce a result row."
             ops.push(OpWithResult { op, result });
         }
     }
@@ -175,7 +282,7 @@ mod tests {
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
-    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, serialize};
+    use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, PaymentIntent, serialize};
 
     use super::filter_map;
     use crate::test_utils::{PublicKey as TestPublicKey, build_inscription};
@@ -229,7 +336,7 @@ mod tests {
             tx_index: 2,
         };
         let op = Inst::Call {
-            gas_limit: 123,
+            payment: PaymentIntent::self_pay(123),
             contract,
             nonce: Some(0),
             expr: "noop()".to_string(),
@@ -239,6 +346,7 @@ mod tests {
             aggregate: Some(AggregateInfo {
                 signer_ids: vec![7],
                 signature: vec![9u8; 48],
+                publisher_sponsorship: None,
             }),
         };
         let payload = serialize(&insts).expect("serialize Insts");
@@ -293,7 +401,7 @@ mod tests {
     fn filter_map_concatenates_multi_push_payload() {
         let xonly = random_xonly();
         let inst = Inst::Call {
-            gas_limit: 7,
+            payment: PaymentIntent::self_pay(7),
             contract: ContractAddress {
                 name: "arith".to_string(),
                 height: 1,
@@ -324,12 +432,12 @@ mod tests {
         assert_eq!(input.insts.ops.len(), 1);
         match &input.insts.ops[0] {
             Inst::Call {
-                gas_limit,
+                payment,
                 contract,
                 nonce,
                 expr,
             } => {
-                assert_eq!(*gas_limit, 7);
+                assert_eq!(*payment, PaymentIntent::self_pay(7));
                 assert_eq!(contract.name, "arith");
                 assert_eq!(*nonce, None);
                 assert_eq!(expr, "eval(10, id)");
@@ -373,5 +481,107 @@ mod tests {
             .into_script();
         let tx = tx_with_taproot_script_witness(tap_script, internal_key);
         assert!(filter_map((0, tx)).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // op_from_*_inst sponsorship resolution
+    // -----------------------------------------------------------------------
+
+    use super::{PublisherOffer, op_from_aggregate_inst, op_from_direct_inst};
+    use indexer_types::{Op, OpMetadata, Payment};
+
+    fn dummy_call_inst(payment: PaymentIntent) -> Inst {
+        Inst::Call {
+            payment,
+            contract: ContractAddress {
+                name: "c".into(),
+                height: 1,
+                tx_index: 0,
+            },
+            nonce: Some(0),
+            expr: "noop()".into(),
+        }
+    }
+
+    fn dummy_metadata(signer_id: u64) -> OpMetadata {
+        OpMetadata {
+            previous_output: bitcoin::OutPoint::null(),
+            input_index: 0,
+            signer_id,
+        }
+    }
+
+    #[test]
+    fn op_from_direct_inst_self_pay_uses_signer_id() {
+        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
+        let op = op_from_direct_inst(inst, dummy_metadata(42)).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 42,
+                    gas_limit: 123,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_direct_inst_rejects_sponsored() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let err = op_from_direct_inst(inst, dummy_metadata(42))
+            .expect_err("Sponsored in direct path must be rejected");
+        assert!(err.to_string().contains("Sponsored"));
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_self_pay_ignores_offer() {
+        // SelfPay always uses the co-signer's own commitment, even when a
+        // publisher offer is present in the bulk.
+        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
+        let offer = Some(PublisherOffer {
+            signer_id: 99,
+            gas_limit_per_op: 9999,
+        });
+        let op = op_from_aggregate_inst(inst, dummy_metadata(42), offer).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 42,
+                    gas_limit: 123,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_sponsored_uses_publisher_offer() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let offer = Some(PublisherOffer {
+            signer_id: 99,
+            gas_limit_per_op: 9999,
+        });
+        let op = op_from_aggregate_inst(inst, dummy_metadata(42), offer).unwrap();
+        match op {
+            Op::Call { payment, .. } => assert_eq!(
+                payment,
+                Payment {
+                    signer_id: 99,
+                    gas_limit: 9999,
+                }
+            ),
+            _ => panic!("expected Op::Call"),
+        }
+    }
+
+    #[test]
+    fn op_from_aggregate_inst_sponsored_without_offer_rejected() {
+        let inst = dummy_call_inst(PaymentIntent::Sponsored);
+        let err = op_from_aggregate_inst(inst, dummy_metadata(42), None)
+            .expect_err("Sponsored without a publisher offer must be rejected");
+        assert!(err.to_string().contains("Sponsored"));
     }
 }

@@ -55,6 +55,7 @@ async fn bls_user_registry_register_in_aggregate_rejected_regtest() -> Result<()
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0, 1],
             signature: vec![9u8; 48],
+            publisher_sponsorship: None,
         }),
     })
     .expect_err("aggregate RegisterBlsKey must be rejected");
@@ -184,6 +185,7 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0, 0],
             signature: vec![9u8; 48],
+            publisher_sponsorship: None,
         }),
     })
     .expect_err("aggregate RegisterBlsKey must be rejected");
@@ -251,6 +253,7 @@ async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regte
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0, 0],
             signature: vec![9u8; 48],
+            publisher_sponsorship: None,
         }),
     })
     .expect_err("aggregate RegisterBlsKey must be rejected");
@@ -313,6 +316,7 @@ async fn bls_user_registry_malformed_sig_lengths_in_aggregate_rejected_regtest()
             aggregate: Some(AggregateInfo {
                 signer_ids: vec![0],
                 signature: vec![9u8; 48],
+                publisher_sponsorship: None,
             }),
         })
         .expect_err("aggregate RegisterBlsKey must be rejected");

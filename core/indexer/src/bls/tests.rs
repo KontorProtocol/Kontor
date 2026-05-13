@@ -6,7 +6,7 @@ use bitcoin::key::rand;
 use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1};
 use blst::min_sig::{SecretKey as BlsSecretKey, Signature as BlsSignature};
-use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts};
+use indexer_types::{AggregateInfo, ContractAddress, Inst, Insts, PaymentIntent};
 use tempfile::TempDir;
 
 async fn new_test_runtime() -> (Runtime, TempDir) {
@@ -132,6 +132,7 @@ async fn verify_aggregate_rejects_empty_bundle() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![],
             signature: vec![],
+            publisher_sponsorship: None,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -145,7 +146,7 @@ async fn verify_aggregate_rejects_wrong_signature_length() {
     let (mut runtime, _tmp) = new_test_runtime().await;
     let insts = Insts {
         ops: vec![Inst::Call {
-            gas_limit: 0,
+            payment: PaymentIntent::self_pay(0),
             contract: ContractAddress {
                 name: String::new(),
                 height: 0,
@@ -157,6 +158,7 @@ async fn verify_aggregate_rejects_wrong_signature_length() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: vec![0u8; BLS_SIGNATURE_BYTES - 1],
+            publisher_sponsorship: None,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -178,7 +180,7 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
     );
     let insts = Insts {
         ops: vec![Inst::Call {
-            gas_limit: 0,
+            payment: PaymentIntent::self_pay(0),
             contract: ContractAddress {
                 name: String::new(),
                 height: 0,
@@ -190,6 +192,7 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: bad_sig.to_vec(),
+            publisher_sponsorship: None,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -206,7 +209,7 @@ async fn verify_aggregate_enforces_op_count_cap() {
     let (mut runtime, _tmp) = new_test_runtime().await;
     let ops: Vec<Inst> = (0..=MAX_BLS_BULK_OPS)
         .map(|_| Inst::Call {
-            gas_limit: 0,
+            payment: PaymentIntent::self_pay(0),
             contract: ContractAddress {
                 name: String::new(),
                 height: 0,
@@ -221,6 +224,7 @@ async fn verify_aggregate_enforces_op_count_cap() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0; MAX_BLS_BULK_OPS + 1],
             signature: vec![],
+            publisher_sponsorship: None,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -235,7 +239,7 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
     let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
     let insts = Insts {
         ops: vec![Inst::Call {
-            gas_limit: 0,
+            payment: PaymentIntent::self_pay(0),
             contract: ContractAddress {
                 name: String::new(),
                 height: 0,
@@ -251,6 +255,7 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
                 .sign(b"cap-test", KONTOR_BLS_DST, &[])
                 .to_bytes()
                 .to_vec(),
+            publisher_sponsorship: None,
         }),
     };
     let err = verify_aggregate(&mut runtime, &insts)
@@ -497,6 +502,7 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
         aggregate: Some(AggregateInfo {
             signer_ids: vec![0],
             signature: vec![0u8; 48],
+            publisher_sponsorship: None,
         }),
     };
     let err =
@@ -507,9 +513,57 @@ fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
     );
 }
 
+#[test]
+fn validate_aggregate_shape_rejects_zero_publisher_sponsorship() {
+    let op = Inst::Call {
+        payment: PaymentIntent::self_pay(50_000),
+        contract: ContractAddress {
+            name: "c".into(),
+            height: 1,
+            tx_index: 0,
+        },
+        nonce: Some(0),
+        expr: "noop()".into(),
+    };
+    let insts = Insts {
+        ops: vec![op],
+        aggregate: Some(AggregateInfo {
+            signer_ids: vec![0],
+            signature: vec![0u8; 48],
+            publisher_sponsorship: Some(0),
+        }),
+    };
+    let err = validate_aggregate_shape(&insts)
+        .expect_err("publisher_sponsorship: Some(0) must be rejected");
+    assert!(
+        err.to_string().contains("Some(0)"),
+        "error should mention the invalid Some(0) shape: {err}"
+    );
+}
+
+#[test]
+fn aggregate_info_publisher_sponsorship_postcard_roundtrip() {
+    let agg_some = AggregateInfo {
+        signer_ids: vec![1, 2, 3],
+        signature: vec![9u8; 48],
+        publisher_sponsorship: Some(50_000),
+    };
+    let agg_none = AggregateInfo {
+        signer_ids: vec![1],
+        signature: vec![9u8; 48],
+        publisher_sponsorship: None,
+    };
+    for original in [agg_some, agg_none] {
+        let bytes = indexer_types::serialize(&original).expect("postcard serialize");
+        let decoded: AggregateInfo =
+            indexer_types::deserialize(&bytes).expect("postcard deserialize");
+        assert_eq!(decoded, original);
+    }
+}
+
 fn call_op(nonce: u64, gas_limit: u64, contract: ContractAddress, expr: impl Into<String>) -> Inst {
     Inst::Call {
-        gas_limit,
+        payment: PaymentIntent::self_pay(gas_limit),
         contract,
         nonce: Some(nonce),
         expr: expr.into(),

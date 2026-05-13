@@ -1,7 +1,7 @@
 use anyhow::bail;
 use bitcoin::consensus::encode::deserialize_hex;
 use indexer::reg_tester::InstructionResult;
-use indexer_types::{Inst, Op, OpMetadata};
+use indexer_types::{Inst, Op, OpMetadata, Payment, PaymentIntent};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
@@ -15,7 +15,7 @@ async fn test_get_ops_from_api() -> Result<()> {
         .instruction(
             &mut ident,
             Inst::Publish {
-                gas_limit: 10_000,
+                payment: PaymentIntent::self_pay(10_000),
                 name: name.to_string(),
                 bytes: bytes.clone(),
             },
@@ -37,7 +37,13 @@ async fn test_get_ops_from_api() -> Result<()> {
                     .await?
                     .expect("signer must be registered"),
             },
-            gas_limit: 10_000,
+            payment: Payment {
+                signer_id: rt
+                    .get_signer_id(&ident.x_only_public_key().to_string())
+                    .await?
+                    .expect("signer must be registered"),
+                gas_limit: 10_000,
+            },
             name: name.to_string(),
             bytes
         }
