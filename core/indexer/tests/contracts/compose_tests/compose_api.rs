@@ -9,8 +9,9 @@ use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_r
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    ComposeQuery, ContractAddress, Inst, InstructionQuery, Insts, OpReturnData, PaymentIntent,
-    RevealInputs, RevealParticipantInputs, RevealParticipantQuery, RevealQuery, serialize,
+    ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts, OpReturnData,
+    PaymentIntent, RevealInputs, RevealParticipantInputs, RevealParticipantQuery, RevealQuery,
+    serialize,
 };
 use testlib::RegTester;
 
@@ -31,10 +32,12 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     };
 
     let token_data_bytes = serialize(&token_data)?;
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "test".to_string(),
-        bytes: token_data_bytes.clone(),
+        kind: InstKind::Publish {
+            name: "test".to_string(),
+            bytes: token_data_bytes.clone(),
+        },
     };
 
     let query = ComposeQuery::builder()
@@ -161,18 +164,22 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let token_data_bytes = serialize(&token_data)?;
 
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "test".to_string(),
-        bytes: token_data_bytes.clone(),
+        kind: InstKind::Publish {
+            name: "test".to_string(),
+            bytes: token_data_bytes.clone(),
+        },
     };
 
     let chained_token_data_bytes = serialize(b"Hello, World!")?;
 
-    let chained_instructions = Inst::Publish {
+    let chained_instructions = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "chained".to_string(),
-        bytes: chained_token_data_bytes.clone(),
+        kind: InstKind::Publish {
+            name: "chained".to_string(),
+            bytes: chained_token_data_bytes.clone(),
+        },
     };
 
     let query = ComposeQuery::builder()
@@ -243,10 +250,12 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
 
-    let derived_chained_instruction = Inst::Publish {
+    let derived_chained_instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "chained".to_string(),
-        bytes: derived_chained_tap_script.clone(),
+        kind: InstKind::Publish {
+            name: "chained".to_string(),
+            bytes: derived_chained_tap_script.clone(),
+        },
     };
 
     let derived_chained_tap_script = Builder::new()
@@ -365,10 +374,12 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
     };
     let token_data_bytes = serialize(&token_data)?;
 
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "test".to_string(),
-        bytes: token_data_bytes.clone(),
+        kind: InstKind::Publish {
+            name: "test".to_string(),
+            bytes: token_data_bytes.clone(),
+        },
     };
 
     // duplicate address provided twice
@@ -433,10 +444,12 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
     let (out_point, _utxo_for_output) = identity.next_funding_utxo;
 
     // Oversized instruction
-    let oversized_inst = Inst::Publish {
+    let oversized_inst = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "oversized".to_string(),
-        bytes: vec![0u8; 387 * 1024 + 1],
+        kind: InstKind::Publish {
+            name: "oversized".to_string(),
+            bytes: vec![0u8; 387 * 1024 + 1],
+        },
     };
     let query = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
@@ -455,20 +468,24 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
     }
 
     // Oversized chained_instruction
-    let chained_oversized_inst = Inst::Publish {
+    let chained_oversized_inst = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "chain-oversized".to_string(),
-        bytes: vec![0u8; 387 * 1024 + 1],
+        kind: InstKind::Publish {
+            name: "chain-oversized".to_string(),
+            bytes: vec![0u8; 387 * 1024 + 1],
+        },
     };
     let query2 = ComposeQuery::builder()
         .instructions(vec![InstructionQuery {
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            insts: Insts::single(Inst::Publish {
+            insts: Insts::single(Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "chain-oversized".to_string(),
-                bytes: b"x".to_vec(),
+                kind: InstKind::Publish {
+                    name: "chain-oversized".to_string(),
+                    bytes: b"x".to_vec(),
+                },
             }),
             chained_insts: Some(Insts::single(chained_oversized_inst)),
         }])
@@ -486,10 +503,12 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
             address: seller_address.to_string(),
             x_only_public_key: internal_key.to_string(),
             funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            insts: Insts::single(Inst::Publish {
+            insts: Insts::single(Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "fee-rate".to_string(),
-                bytes: b"x".to_vec(),
+                kind: InstKind::Publish {
+                    name: "fee-rate".to_string(),
+                    bytes: b"x".to_vec(),
+                },
             }),
             chained_insts: None,
         }])
@@ -617,10 +636,12 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
     };
     let token_data_bytes = serialize(&token_data)?;
 
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "nonexistent-utxo".to_string(),
-        bytes: token_data_bytes,
+        kind: InstKind::Publish {
+            name: "nonexistent-utxo".to_string(),
+            bytes: token_data_bytes,
+        },
     };
 
     let query = ComposeQuery::builder()
@@ -666,10 +687,12 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
         },
     };
     let token_data_bytes = serialize(&token_data)?;
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "invalid-address".to_string(),
-        bytes: token_data_bytes,
+        kind: InstKind::Publish {
+            name: "invalid-address".to_string(),
+            bytes: token_data_bytes,
+        },
     };
 
     let query = ComposeQuery::builder()
@@ -704,10 +727,12 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
         },
     };
     let token_data_bytes = serialize(&token_data)?;
-    let instruction = Inst::Publish {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        name: "insufficient-funds".to_string(),
-        bytes: token_data_bytes,
+        kind: InstKind::Publish {
+            name: "insufficient-funds".to_string(),
+            bytes: token_data_bytes,
+        },
     };
 
     let query = ComposeQuery::builder()
@@ -743,26 +768,28 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
     let (internal_key, _parity) = keypair.x_only_public_key();
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
 
-    let instruction = Inst::Call {
+    let instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: ContractAddress {
-            name: "attach".to_string(),
-            height: 0,
-            tx_index: 1,
+        kind: InstKind::Call {
+            contract: ContractAddress {
+                name: "attach".to_string(),
+                height: 0,
+                tx_index: 1,
+            },
+            expr: "attach(0)".to_string(), // token data??
         },
-        nonce: None,
-        expr: "attach(0)".to_string(), // token data??
     };
 
-    let chained_instructions = Inst::Call {
+    let chained_instructions = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: ContractAddress {
-            name: "detach".to_string(),
-            height: 0,
-            tx_index: 1,
+        kind: InstKind::Call {
+            contract: ContractAddress {
+                name: "detach".to_string(),
+                height: 0,
+                tx_index: 1,
+            },
+            expr: "detach()".to_string(),
         },
-        nonce: None,
-        expr: "detach()".to_string(),
     };
 
     let query = ComposeQuery::builder()
@@ -831,15 +858,16 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
         .script
         .clone();
 
-    let derived_chained_instruction = Inst::Call {
+    let derived_chained_instruction = Inst {
         payment: PaymentIntent::self_pay(50_000),
-        contract: ContractAddress {
-            name: "detach".to_string(),
-            height: 0,
-            tx_index: 1,
+        kind: InstKind::Call {
+            contract: ContractAddress {
+                name: "detach".to_string(),
+                height: 0,
+                tx_index: 1,
+            },
+            expr: "detach()".to_string(),
         },
-        nonce: None,
-        expr: "detach()".to_string(),
     };
 
     let derived_chained_tap_script = Builder::new()

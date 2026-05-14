@@ -11,7 +11,7 @@ impl Guest for Registry {
         RegistryStorage::default().init(ctx);
     }
 
-    fn registered(_ctx: &CoreContext) {
+    fn registered(_ctx: &ProcContext) {
         // The reactor does the actual proof verification and bls_keys DB
         // write in `Runtime::register_bls_key`. We call this host import
         // purely to charge the caller `Fuel::RegisterBlsKey` units — so

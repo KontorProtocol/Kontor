@@ -5,31 +5,32 @@ use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
-    AggregateInfo, ContractAddress as IndexerContractAddress, Inst, Insts, PaymentIntent,
+    AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
+    Insts, PaymentIntent, SignerClaim,
 };
 use testlib::*;
 
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 
-fn aggregate_call(
-    nonce: u64,
-    gas_limit: u64,
-    contract: IndexerContractAddress,
-    expr: String,
-) -> Inst {
-    Inst::Call {
+fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
+    Inst {
         payment: PaymentIntent::self_pay(gas_limit),
-        contract,
-        nonce: Some(nonce),
-        expr,
+        kind: InstKind::Call { contract, expr },
     }
 }
 
-fn aggregate_insts(ops: Vec<Inst>, signer_ids: Vec<u64>, signature: Vec<u8>) -> Insts {
+fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
+    AggregateSigner {
+        identity: SignerClaim::Id(id),
+        nonce,
+    }
+}
+
+fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
     Insts {
         ops,
         aggregate: Some(AggregateInfo {
-            signer_ids,
+            signers,
             signature,
             publisher_sponsorship: None,
         }),
@@ -54,10 +55,12 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -81,21 +84,21 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
 
     // Build two inner ops.
     let op0 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
     let op1 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
     // Each signer signs their op message; publisher aggregates.
-    let msg0 = op0.aggregate_signing_message(signer1_id)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id)?;
+    let signer1_claim = SignerClaim::Id(signer1_id);
+    let signer2_claim = SignerClaim::Id(signer2_id);
+    let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
+    let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
 
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
@@ -128,7 +131,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1],
-                vec![signer1_id, signer2_id],
+                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
                 aggregate_sig.to_bytes().to_vec(),
             ),
         )
@@ -198,10 +201,12 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -218,27 +223,26 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for signer"))?;
 
     let op0 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(5, arith::Op::Id),
     );
     let op1 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(7, arith::Op::Id),
     );
     let op2 = aggregate_call(
-        1,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(11, arith::Op::Id),
     );
 
-    let msg0 = op0.aggregate_signing_message(signer_id)?;
-    let msg1 = op1.aggregate_signing_message(signer_id + 10_000)?;
-    let msg2 = op2.aggregate_signing_message(signer_id)?;
+    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim_alt = SignerClaim::Id(signer_id + 10_000);
+    let msg0 = op0.aggregate_signing_message(&signer_claim, 0)?;
+    let msg1 = op1.aggregate_signing_message(&signer_claim_alt, 0)?;
+    let msg2 = op2.aggregate_signing_message(&signer_claim, 1)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig0 = sk.sign(&msg0, KONTOR_BLS_DST, &[]);
@@ -252,7 +256,11 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1, op2],
-                vec![signer_id, signer_id + 10_000, signer_id],
+                vec![
+                    signer_by_id(signer_id, 0),
+                    signer_by_id(signer_id + 10_000, 0),
+                    signer_by_id(signer_id, 1),
+                ],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
         )
@@ -283,10 +291,12 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -308,12 +318,12 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     let last_op_before = arith::wave::last_op_parse_return_expr(&last_op_before_wave);
 
     let op = aggregate_call(
-        0,
         50_000,
         arith_contract,
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
-    let msg = op.aggregate_signing_message(999_999_999)?;
+    let bogus_claim = SignerClaim::Id(999_999_999);
+    let msg = op.aggregate_signing_message(&bogus_claim, 0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
     let sig = sk.sign(&msg, KONTOR_BLS_DST, &[]);
@@ -321,7 +331,11 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
     let res = rt
         .instruction_insts(
             &mut publisher,
-            aggregate_insts(vec![op], vec![999_999_999], sig.to_bytes().to_vec()),
+            aggregate_insts(
+                vec![op],
+                vec![signer_by_id(999_999_999, 0)],
+                sig.to_bytes().to_vec(),
+            ),
         )
         .await;
     assert!(res.is_err(), "expected unregistered signer_id to fail");
@@ -350,10 +364,12 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
     let publish = rt
         .instruction(
             &mut publisher,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(50_000),
-                name: "arith".to_string(),
-                bytes: arith_bytes,
+                kind: InstKind::Publish {
+                    name: "arith".to_string(),
+                    bytes: arith_bytes,
+                },
             },
         )
         .await?;
@@ -374,26 +390,25 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         .ok_or_else(|| anyhow!("missing signer_id for signer2"))?;
 
     let op0 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(2, arith::Op::Id),
     );
     let op1 = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(3, arith::Op::Id),
     );
     let op1_tampered = aggregate_call(
-        0,
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(4, arith::Op::Id),
     );
 
-    let msg0 = op0.aggregate_signing_message(signer1_id)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id)?;
+    let signer1_claim = SignerClaim::Id(signer1_id);
+    let signer2_claim = SignerClaim::Id(signer2_id);
+    let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
+    let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
@@ -417,7 +432,7 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1_tampered],
-                vec![signer1_id, signer2_id],
+                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
         )

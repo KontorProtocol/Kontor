@@ -270,17 +270,20 @@ pub struct OpMetadata {
     pub input_index: i64,
     #[ts(type = "number")]
     pub signer_id: u64,
+    pub payment: Payment,
 }
 
-/// Resolved per-op execution payment for `Op::Publish` and `Op::Call`.
+/// Resolved per-op execution payment, lives on `OpMetadata`.
 ///
 /// Built from the co-signer's `PaymentIntent` plus any aggregate-level
 /// `publisher_sponsorship` offer. `signer_id` identifies who funds the
 /// op's gas (the applicative signer for SelfPay, the publisher for
 /// Sponsored). `gas_limit` is the effective fuel cap for execution.
 ///
-/// System-paid ops (`Issuance`, `RegisterBlsKey`) don't carry a `Payment`
-/// — their gas is set by the runtime at the call site.
+/// `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
+/// gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
+/// — the field exists for shape uniformity, not because Issuance funds
+/// itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct Payment {
@@ -293,7 +296,11 @@ pub struct Payment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct AggregateInfo {
-    pub signer_ids: Vec<u64>,
+    /// One entry per op in `Insts.ops`, in parallel order. Each entry binds
+    /// a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
+    /// the nonce that op claims, which protects BLS aggregate signatures
+    /// from replay.
+    pub signers: Vec<AggregateSigner>,
     pub signature: Vec<u8>,
     /// Publisher's gas-sponsorship commitment for this bulk.
     /// - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
@@ -302,6 +309,32 @@ pub struct AggregateInfo {
     ///   `n > 0` in `validate_aggregate_shape`.
     #[ts(type = "number | null")]
     pub publisher_sponsorship: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct AggregateSigner {
+    pub identity: SignerClaim,
+    #[ts(type = "number")]
+    pub nonce: u64,
+}
+
+/// How a co-signer identifies themselves in an aggregate bulk.
+///
+/// - `Id(u64)` is compact (8 bytes) for users who already have a
+///   `signer_id` from prior on-chain activity.
+/// - `PubKey(XOnlyPublicKey)` is 32 bytes; used for first-time signers
+///   who don't yet have a `signer_id`. The reactor resolves it via
+///   `get_or_create_identity` during aggregate verification.
+///
+/// Identity binding comes from the BLS signature verification, not from
+/// which variant is chosen — the variant only controls how to *index*
+/// the verification key, not which key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum SignerClaim {
+    Id(#[ts(type = "number")] u64),
+    PubKey(#[ts(as = "String")] XOnlyPublicKey),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -328,47 +361,33 @@ impl Insts {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Op {
+    pub metadata: OpMetadata,
+    pub kind: OpKind,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub enum Op {
+pub enum OpKind {
     Publish {
-        metadata: OpMetadata,
-        payment: Payment,
         name: String,
         bytes: Vec<u8>,
     },
     Call {
-        metadata: OpMetadata,
-        payment: Payment,
         #[ts(as = "String")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
-        #[ts(type = "number | null")]
-        #[serde(default)]
-        nonce: Option<u64>,
         expr: String,
     },
-    Issuance {
-        metadata: OpMetadata,
-    },
+    Issuance,
     RegisterBlsKey {
-        metadata: OpMetadata,
         bls_pubkey: Vec<u8>,
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
-}
-
-impl Op {
-    pub fn metadata(&self) -> &OpMetadata {
-        match self {
-            Op::Publish { metadata, .. } => metadata,
-            Op::Call { metadata, .. } => metadata,
-            Op::Issuance { metadata, .. } => metadata,
-            Op::RegisterBlsKey { metadata, .. } => metadata,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
@@ -601,23 +620,25 @@ impl PaymentIntent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub struct Inst {
+    pub payment: PaymentIntent,
+    pub kind: InstKind,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub enum Inst {
+pub enum InstKind {
     Publish {
-        payment: PaymentIntent,
         name: String,
         bytes: Vec<u8>,
     },
     Call {
-        payment: PaymentIntent,
         #[ts(type = "string")]
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
-        #[ts(type = "number | null")]
-        #[serde(default)]
-        nonce: Option<u64>,
         expr: String,
     },
     Issuance,
@@ -631,10 +652,15 @@ pub enum Inst {
 impl Inst {
     /// Build the domain-separated signing message for one operation in an aggregate batch.
     ///
-    /// Returns `KONTOR-OP-V1 || postcard((signer_id, self))`.
-    pub fn aggregate_signing_message(&self, signer_id: u64) -> Result<Vec<u8>> {
+    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, self))` where `claim`
+    /// and `nonce` come from the matching `AggregateSigner` entry in
+    /// `AggregateInfo.signers`. Signing over the `SignerClaim` rather than a
+    /// resolved `signer_id` is what lets a brand-new co-signer (no
+    /// `signer_id` yet) participate in aggregates: they sign over their
+    /// `SignerClaim::PubKey(self_x_only)`, which they know locally.
+    pub fn aggregate_signing_message(&self, claim: &SignerClaim, nonce: u64) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(&(signer_id, self))?;
+        let op_bytes = serialize(&(claim, nonce, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);

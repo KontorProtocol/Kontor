@@ -15,7 +15,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, Insts, Payment, PaymentIntent, TransactionRow};
+use indexer_types::{Inst, InstKind, Insts, Payment, PaymentIntent, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -476,7 +476,7 @@ impl RuntimeRegtest {
         use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 
         let mut ops = Vec::with_capacity(calls.len());
-        let mut signer_ids = Vec::with_capacity(calls.len());
+        let mut agg_signers = Vec::with_capacity(calls.len());
         // Track nonce per signer — starts at 0 for each signer in this batch,
         // incremented for subsequent ops from the same signer.
         let mut nonce_counters: HashMap<u64, u64> = HashMap::new();
@@ -491,13 +491,17 @@ impl RuntimeRegtest {
             let current_nonce = *nonce;
             *nonce += 1;
 
-            ops.push(Inst::Call {
+            ops.push(Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: (*contract).clone().into(),
-                nonce: Some(current_nonce),
-                expr: expr.to_string(),
+                kind: InstKind::Call {
+                    contract: (*contract).clone().into(),
+                    expr: expr.to_string(),
+                },
             });
-            signer_ids.push(signer_id);
+            agg_signers.push(indexer_types::AggregateSigner {
+                identity: indexer_types::SignerClaim::Id(signer_id),
+                nonce: current_nonce,
+            });
         }
 
         // Sign each op with its signer's BLS key and aggregate
@@ -509,7 +513,8 @@ impl RuntimeRegtest {
                 .ok_or_else(|| anyhow!("Identity not found for BLS signing"))?;
             let sk = BlsSecretKey::from_bytes(&identity.bls_secret_key)
                 .map_err(|e| anyhow!("Invalid BLS secret key: {:?}", e))?;
-            let msg = ops[i].aggregate_signing_message(signer_ids[i])?;
+            let msg =
+                ops[i].aggregate_signing_message(&agg_signers[i].identity, agg_signers[i].nonce)?;
             sigs.push(sk.sign(&msg, KONTOR_BLS_DST, &[]));
         }
 
@@ -520,7 +525,7 @@ impl RuntimeRegtest {
         Ok(Insts {
             ops,
             aggregate: Some(indexer_types::AggregateInfo {
-                signer_ids,
+                signers: agg_signers,
                 signature: aggregate.to_signature().to_bytes().to_vec(),
                 publisher_sponsorship: None,
             }),
@@ -561,10 +566,12 @@ impl RuntimeImpl for RuntimeRegtest {
             .reg_tester
             .send_instruction(
                 identity,
-                Inst::Publish {
+                Inst {
                     payment: PaymentIntent::self_pay(10_000),
-                    name: name.to_string(),
-                    bytes: contract.to_vec(),
+                    kind: InstKind::Publish {
+                        name: name.to_string(),
+                        bytes: contract.to_vec(),
+                    },
                 },
             )
             .await?;
@@ -607,11 +614,12 @@ impl RuntimeImpl for RuntimeRegtest {
             self.reg_tester
                 .instruction(
                     identity,
-                    Inst::Call {
+                    Inst {
                         payment: PaymentIntent::self_pay(10_000),
-                        contract: contract_address.clone().into(),
-                        nonce: None,
-                        expr: expr.to_string(),
+                        kind: InstKind::Call {
+                            contract: contract_address.clone().into(),
+                            expr: expr.to_string(),
+                        },
                     },
                 )
                 .await
@@ -644,7 +652,13 @@ impl RuntimeImpl for RuntimeRegtest {
             .get_mut(signer)
             .ok_or_else(|| anyhow!("Identity not found"))?;
         self.reg_tester
-            .instruction(identity, Inst::Issuance)
+            .instruction(
+                identity,
+                Inst {
+                    payment: PaymentIntent::self_pay(10_000),
+                    kind: InstKind::Issuance,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -681,11 +695,12 @@ impl RuntimeImpl for RuntimeRegtest {
                         .reg_tester
                         .send_instruction(
                             identity,
-                            Inst::Call {
+                            Inst {
                                 payment: PaymentIntent::self_pay(10_000),
-                                contract: (*contract).clone().into(),
-                                nonce: None,
-                                expr: expr.to_string(),
+                                kind: InstKind::Call {
+                                    contract: (*contract).clone().into(),
+                                    expr: expr.to_string(),
+                                },
                             },
                         )
                         .await?;
@@ -697,11 +712,12 @@ impl RuntimeImpl for RuntimeRegtest {
                 SubmitGroup::Ordered(signer, calls) => {
                     let insts: Vec<Inst> = calls
                         .iter()
-                        .map(|(contract, expr)| Inst::Call {
+                        .map(|(contract, expr)| Inst {
                             payment: PaymentIntent::self_pay(10_000),
-                            contract: (*contract).clone().into(),
-                            nonce: None,
-                            expr: expr.to_string(),
+                            kind: InstKind::Call {
+                                contract: (*contract).clone().into(),
+                                expr: expr.to_string(),
+                            },
                         })
                         .collect();
                     let op_count = insts.len();

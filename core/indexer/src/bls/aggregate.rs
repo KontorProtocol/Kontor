@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
-use indexer_types::{Inst, Insts};
+use indexer_types::{InstKind, Insts, SignerClaim};
 
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
@@ -53,6 +53,39 @@ impl SignerResolver {
         self.pk_cache.insert(signer_id, pk);
         Ok(pk)
     }
+
+    /// Populate `signer_map` for a signer_id without requiring a registered
+    /// BLS pubkey. Used for aggregate `RegisterBlsKey` ops, where the
+    /// bls_pubkey is in the Inst payload (no DB row yet) but the executor
+    /// still expects the signer_id → x_only_pubkey mapping to be available.
+    ///
+    /// If `claim_pubkey` is provided (the call site already had the x_only
+    /// from a `SignerClaim::PubKey`), it's used directly; otherwise we read
+    /// it from the signers table.
+    pub(super) async fn ensure_x_only(
+        &mut self,
+        runtime: &mut Runtime,
+        signer_id: u64,
+        claim_pubkey: Option<String>,
+    ) -> Result<()> {
+        if self.signer_map.contains_key(&signer_id) {
+            return Ok(());
+        }
+        let x_only = match claim_pubkey {
+            Some(pk) => pk,
+            None => {
+                let conn = runtime.get_storage_conn();
+                let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+                    .await?
+                    .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                entry.x_only_pubkey.ok_or_else(|| {
+                    anyhow!("signer_id {signer_id} is not a user signer (no x_only_pubkey)")
+                })?
+            }
+        };
+        self.signer_map.insert(signer_id, x_only);
+        Ok(())
+    }
 }
 
 /// Validate the stateless shape of an aggregate `Insts` envelope.
@@ -72,10 +105,10 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             MAX_BLS_BULK_OPS
         ));
     }
-    if agg.signer_ids.len() != insts.ops.len() {
+    if agg.signers.len() != insts.ops.len() {
         return Err(anyhow!(
-            "signer_ids length ({}) != ops length ({})",
-            agg.signer_ids.len(),
+            "signers length ({}) != ops length ({})",
+            agg.signers.len(),
             insts.ops.len()
         ));
     }
@@ -90,26 +123,16 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
         ));
     }
     for inst in &insts.ops {
-        match inst {
-            Inst::Call { nonce: Some(_), .. } => {}
-            Inst::Call { nonce: None, .. } => {
+        match &inst.kind {
+            InstKind::Call { .. } | InstKind::RegisterBlsKey { .. } => {}
+            InstKind::Publish { .. } => {
                 return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (missing nonce)"
+                    "aggregate path supports Call and RegisterBlsKey (got Publish)"
                 ));
             }
-            Inst::RegisterBlsKey { .. } => {
+            InstKind::Issuance => {
                 return Err(anyhow!(
-                    "RegisterBlsKey is not allowed in aggregate path (use direct)"
-                ));
-            }
-            Inst::Publish { .. } => {
-                return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (got Publish)"
-                ));
-            }
-            Inst::Issuance => {
-                return Err(anyhow!(
-                    "aggregate path only supports Call with nonce (got Issuance)"
+                    "aggregate path supports Call and RegisterBlsKey (got Issuance)"
                 ));
             }
         }
@@ -117,11 +140,31 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
     Ok(agg)
 }
 
+/// Resolved aggregate output: per-op `signer_id` (after `SignerClaim`
+/// resolution) paired with the `signer_id → x_only_pubkey` map so the caller
+/// can avoid redundant registry lookups during op execution.
+#[derive(Debug)]
+pub struct AggregateResolved {
+    pub signer_ids: Vec<u64>,
+    pub signer_map: SignerMap,
+}
+
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Returns a `SignerMap` (signer_id → x_only_pubkey) so the caller can resolve
-/// signers for execution without redundant registry lookups.
-pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<SignerMap> {
+/// Resolves each `SignerClaim` to an internal `signer_id`
+/// (`SignerClaim::Id` direct, `SignerClaim::PubKey` via
+/// `get_or_create_identity`), sources the verification BLS pubkey
+/// per-op-kind (DB lookup for `Call`; payload bytes for `RegisterBlsKey`,
+/// since the registrant has no prior bls_keys row), and verifies the
+/// aggregate signature against the per-op signing message
+/// `postcard((signer_id, nonce, inst))`.
+///
+/// For `RegisterBlsKey` ops: aggregate verify proves the supplied
+/// bls_pubkey's owner consented to this op, but does NOT establish the
+/// x_only_pubkey ↔ bls_pubkey binding — that's the job of
+/// `runtime.register_bls_key`'s `RegistrationProof::verify` during op
+/// execution.
+pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<AggregateResolved> {
     let agg = validate_aggregate_shape(insts)?;
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
         return Err(anyhow!(
@@ -136,10 +179,14 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
     let mut resolver = SignerResolver::new();
     let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
     let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(insts.ops.len());
+    let mut signer_ids: Vec<u64> = Vec::with_capacity(insts.ops.len());
     let mut total_message_bytes: usize = 0;
 
-    for (inst, &signer_id) in insts.ops.iter().zip(agg.signer_ids.iter()) {
-        let msg = inst.aggregate_signing_message(signer_id)?;
+    for (inst, agg_signer) in insts.ops.iter().zip(agg.signers.iter()) {
+        // Build the signing message and enforce the bytes cap before any
+        // identity resolution or DB lookups — keeps oversized payloads from
+        // costing us I/O.
+        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
@@ -147,8 +194,46 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
-        pks.push(resolver.resolve(runtime, signer_id).await?);
+
+        let (signer_id, claim_pubkey) = match &agg_signer.identity {
+            SignerClaim::Id(id) => (*id, None),
+            SignerClaim::PubKey(pk) => {
+                let identity = runtime
+                    .get_or_create_identity(&pk.to_string())
+                    .await
+                    .map_err(|e| anyhow!("resolving SignerClaim::PubKey: {e}"))?;
+                (identity.signer_id() as u64, Some(pk.to_string()))
+            }
+        };
+
+        let pk = match &inst.kind {
+            InstKind::RegisterBlsKey { bls_pubkey, .. } => {
+                // The registrant has no bls_keys row yet — verify against the
+                // bls_pubkey they're submitting. A valid aggregate-sig
+                // contribution at this position proves the submitter has the
+                // bls_pubkey's secret key. The x_only_pubkey ↔ bls_pubkey
+                // binding is established later by RegistrationProof::verify
+                // in runtime.register_bls_key.
+                let validated = BlsPublicKey::key_validate(bls_pubkey).map_err(|e| {
+                    anyhow!("invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}")
+                })?;
+                // Always populate signer_map. PubKey claim gives us the x_only
+                // directly; Id claim requires a registry lookup (an existing
+                // signer is re-registering or first-registering a BLS key).
+                // Downstream `process_aggregate_input` checks this map and
+                // silently drops ops whose signer_id isn't in it, so missing
+                // an entry would cause a verified op to be skipped.
+                resolver
+                    .ensure_x_only(runtime, signer_id, claim_pubkey)
+                    .await?;
+                validated
+            }
+            _ => resolver.resolve(runtime, signer_id).await?,
+        };
+
+        pks.push(pk);
         msgs.push(msg);
+        signer_ids.push(signer_id);
     }
 
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
@@ -161,5 +246,8 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Si
         ));
     }
 
-    Ok(resolver.signer_map)
+    Ok(AggregateResolved {
+        signer_ids,
+        signer_map: resolver.signer_map,
+    })
 }

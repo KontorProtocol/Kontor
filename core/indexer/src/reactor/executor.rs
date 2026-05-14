@@ -3,11 +3,13 @@ use bitcoin::Txid;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use indexer_types::{Inst, OpMetadata};
+use indexer_types::{InstKind, OpKind};
 
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
-use crate::block::{PublisherOffer, filter_map, op_from_aggregate_inst, op_from_direct_inst};
+use crate::block::{
+    OpMetadataBase, PublisherOffer, filter_map, op_from_aggregate_inst, op_from_direct_inst,
+};
 use crate::database;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
@@ -28,7 +30,7 @@ pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
             .insts
             .ops
             .iter()
-            .any(|inst| matches!(inst, Inst::Publish { .. }))
+            .any(|inst| matches!(inst.kind, InstKind::Publish { .. }))
     })
 }
 
@@ -318,14 +320,14 @@ async fn process_direct_input(
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
 
-    let metadata = OpMetadata {
+    let base = OpMetadataBase {
         previous_output: input.previous_output,
         input_index: input.input_index,
         signer_id: identity.signer_id() as u64,
     };
 
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
-        let op = match op_from_direct_inst(inst.clone(), metadata.clone()) {
+        let op = match op_from_direct_inst(inst.clone(), base) {
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected direct op: {e:#}");
@@ -362,8 +364,8 @@ async fn process_aggregate_input(
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
 ) -> Result<()> {
-    let signer_map = match crate::bls::verify_aggregate(runtime, &input.insts).await {
-        Ok(map) => map,
+    let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
+        Ok(r) => r,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
             return Ok(());
@@ -391,14 +393,15 @@ async fn process_aggregate_input(
         None
     };
 
-    for (op_index, (inst, &signer_id)) in input
+    for (op_index, ((inst, agg_signer), &signer_id)) in input
         .insts
         .ops
         .iter()
-        .zip(agg.signer_ids.iter())
+        .zip(agg.signers.iter())
+        .zip(resolved.signer_ids.iter())
         .enumerate()
     {
-        if !signer_map.contains_key(&signer_id) {
+        if !resolved.signer_map.contains_key(&signer_id) {
             warn!("signer_id {signer_id} not in signer_map after verification");
             continue;
         };
@@ -418,37 +421,31 @@ async fn process_aggregate_input(
             )
             .await;
 
-        if let Inst::Call { nonce, .. } = inst {
-            let nonce_val = match nonce {
-                Some(n) => *n,
-                None => {
-                    warn!("aggregate Call for signer {signer_id} missing nonce");
-                    continue;
-                }
-            };
-            let conn = runtime.get_storage_conn();
-            let identity = database::types::Identity::new(signer_id as i64);
-            match identity
-                .advance_nonce(&conn, nonce_val as i64, height)
-                .await
-            {
-                Ok(_) => {}
-                Err(database::queries::Error::InvalidData(msg)) => {
-                    warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
-                    continue;
-                }
-                Err(e) => {
-                    anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
-                }
+        // Every aggregate op advances the signer's nonce. The variant restriction
+        // ("Call only") is enforced separately in validate_aggregate_shape; here
+        // we just consume the nonce the co-signer committed to in their BLS sig.
+        let conn = runtime.get_storage_conn();
+        let identity = database::types::Identity::new(signer_id as i64);
+        match identity
+            .advance_nonce(&conn, agg_signer.nonce as i64, height)
+            .await
+        {
+            Ok(_) => {}
+            Err(database::queries::Error::InvalidData(msg)) => {
+                warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
+                continue;
+            }
+            Err(e) => {
+                anyhow::bail!("aggregate nonce advance error for signer {signer_id}: {e}");
             }
         }
 
-        let metadata = OpMetadata {
+        let base = OpMetadataBase {
             previous_output: input.previous_output,
             input_index: input.input_index,
             signer_id,
         };
-        let op = match op_from_aggregate_inst(inst.clone(), metadata, publisher_offer) {
+        let op = match op_from_aggregate_inst(inst.clone(), base, publisher_offer) {
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
@@ -461,37 +458,25 @@ async fn process_aggregate_input(
 }
 
 async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
-    let identity = database::types::Identity::new(op.metadata().signer_id as i64);
+    let identity = database::types::Identity::new(op.metadata.signer_id as i64);
     let signer = Signer::Id(identity);
+    let payment = op.metadata.payment.clone();
 
-    match op {
-        indexer_types::Op::Publish {
-            payment,
-            name,
-            bytes,
-            ..
-        } => match runtime.publish(&signer, payment.clone(), name, bytes).await {
-            Ok(_) => {}
-            Err(ExecutionError::Deterministic(e)) => {
-                warn!("Publish operation failed: {e:#}");
+    match &op.kind {
+        OpKind::Publish { name, bytes } => {
+            match runtime.publish(&signer, payment, name, bytes).await {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("Publish operation failed: {e:#}");
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("Publish operation infrastructure failure"));
+                }
             }
-            Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("Publish operation infrastructure failure"));
-            }
-        },
-        indexer_types::Op::Call {
-            payment,
-            contract,
-            expr,
-            ..
-        } => {
+        }
+        OpKind::Call { contract, expr, .. } => {
             match runtime
-                .execute(
-                    Some(&signer),
-                    Some(payment.clone()),
-                    &(contract.into()),
-                    expr,
-                )
+                .execute(Some(&signer), Some(payment), &(contract.into()), expr)
                 .await
             {
                 Ok(_) => {}
@@ -503,7 +488,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 }
             }
         }
-        indexer_types::Op::Issuance { .. } => match runtime.issuance(&signer).await {
+        OpKind::Issuance => match runtime.issuance(&signer).await {
             Ok(_) => {}
             Err(ExecutionError::Deterministic(e)) => {
                 warn!("Issuance operation failed: {e:#}");
@@ -512,12 +497,32 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 return Err(e.context("Issuance infrastructure failure"));
             }
         },
-        indexer_types::Op::RegisterBlsKey {
+        OpKind::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,
             bls_sig,
-            ..
         } => {
+            // Charge the payer for the registration via the registry contract
+            // first. If the hold fails (insufficient tokens), the host-side
+            // register_bls_key DB write below is skipped.
+            match runtime
+                .execute(
+                    Some(&signer),
+                    Some(payment),
+                    &registry::address(),
+                    "registered()",
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("registry.registered failed: {e:#}");
+                    return Ok(());
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("registry.registered infrastructure failure"));
+                }
+            }
             match runtime
                 .register_bls_key(
                     &signer,
@@ -527,11 +532,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 )
                 .await
             {
-                Ok(_) => {
-                    registry::api::registered(runtime, &Signer::Core(Box::new(signer.clone())))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("registry.registered failed: {e}"))?;
-                }
+                Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("RegisterBlsKey failed: {e:#}");
                 }

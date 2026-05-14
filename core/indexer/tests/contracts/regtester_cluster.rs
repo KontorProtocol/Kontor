@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexer::reg_tester::RegTesterCluster;
 use indexer::runtime::ContractAddress;
-use indexer_types::{Inst, PaymentIntent};
+use indexer_types::{Inst, InstKind, PaymentIntent};
 use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
@@ -39,10 +39,12 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     let result = rt
         .instruction(
             &mut ident,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                name: "counter".to_string(),
-                bytes: contract_bytes,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: contract_bytes,
+                },
             },
         )
         .await?;
@@ -73,11 +75,12 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     };
     rt.send_instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: contract_addr,
-            nonce: None,
-            expr: counter::wave::increment_call_expr(),
+            kind: InstKind::Call {
+                contract: contract_addr,
+                expr: counter::wave::increment_call_expr(),
+            },
         },
     )
     .await?;
@@ -144,10 +147,12 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
     let result = rt
         .instruction(
             &mut ident,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                name: "counter".to_string(),
-                bytes: contract_bytes,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: contract_bytes,
+                },
             },
         )
         .await?;
@@ -181,11 +186,12 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
     for i in 0..5 {
         rt.send_instruction(
             &mut ident,
-            Inst::Call {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: contract_addr.clone(),
-                nonce: None,
-                expr: counter::wave::increment_call_expr(),
+                kind: InstKind::Call {
+                    contract: contract_addr.clone(),
+                    expr: counter::wave::increment_call_expr(),
+                },
             },
         )
         .await?;
@@ -256,10 +262,12 @@ async fn cluster_node_restart_recovery() -> Result<()> {
     let result = rt
         .instruction(
             &mut ident,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                name: "counter".to_string(),
-                bytes: contract_bytes,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: contract_bytes,
+                },
             },
         )
         .await?;
@@ -293,11 +301,12 @@ async fn cluster_node_restart_recovery() -> Result<()> {
     for i in 0..2 {
         rt.send_instruction(
             &mut ident,
-            Inst::Call {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: contract_addr.clone(),
-                nonce: None,
-                expr: counter::wave::increment_call_expr(),
+                kind: InstKind::Call {
+                    contract: contract_addr.clone(),
+                    expr: counter::wave::increment_call_expr(),
+                },
             },
         )
         .await?;
@@ -321,11 +330,12 @@ async fn cluster_node_restart_recovery() -> Result<()> {
     for _ in 0..2 {
         rt.send_instruction(
             &mut ident,
-            Inst::Call {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: contract_addr.clone(),
-                nonce: None,
-                expr: counter::wave::increment_call_expr(),
+                kind: InstKind::Call {
+                    contract: contract_addr.clone(),
+                    expr: counter::wave::increment_call_expr(),
+                },
             },
         )
         .await?;
@@ -381,10 +391,12 @@ async fn cluster_late_joiner_sync() -> Result<()> {
     let result = rt
         .instruction(
             &mut ident,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                name: "counter".to_string(),
-                bytes: contract_bytes,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: contract_bytes,
+                },
             },
         )
         .await?;
@@ -419,11 +431,12 @@ async fn cluster_late_joiner_sync() -> Result<()> {
     for i in 0..3 {
         rt.send_instruction(
             &mut ident,
-            Inst::Call {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                contract: contract_addr.clone(),
-                nonce: None,
-                expr: counter::wave::increment_call_expr(),
+                kind: InstKind::Call {
+                    contract: contract_addr.clone(),
+                    expr: counter::wave::increment_call_expr(),
+                },
             },
         )
         .await?;
@@ -487,10 +500,12 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     let result = rt
         .instruction(
             &mut ident,
-            Inst::Publish {
+            Inst {
                 payment: PaymentIntent::self_pay(10_000),
-                name: "counter".to_string(),
-                bytes: contract_bytes,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: contract_bytes,
+                },
             },
         )
         .await?;
@@ -544,14 +559,15 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         .to_vec();
     rt.instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: staking_addr.clone(),
-            nonce: None,
-            expr: staking::wave::register_validator_call_expr(
-                ed25519_pubkey,
-                5u64.try_into().unwrap(),
-            ),
+            kind: InstKind::Call {
+                contract: staking_addr.clone(),
+                expr: staking::wave::register_validator_call_expr(
+                    ed25519_pubkey,
+                    5u64.try_into().unwrap(),
+                ),
+            },
         },
     )
     .await?;
@@ -582,11 +598,12 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     };
     rt.instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: counter_addr.clone(),
-            nonce: None,
-            expr: counter::wave::increment_call_expr(),
+            kind: InstKind::Call {
+                contract: counter_addr.clone(),
+                expr: counter::wave::increment_call_expr(),
+            },
         },
     )
     .await?;
@@ -610,11 +627,12 @@ async fn cluster_validator_lifecycle() -> Result<()> {
 
     rt.send_instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: counter_addr.clone(),
-            nonce: None,
-            expr: counter::wave::increment_call_expr(),
+            kind: InstKind::Call {
+                contract: counter_addr.clone(),
+                expr: counter::wave::increment_call_expr(),
+            },
         },
     )
     .await?;
@@ -645,11 +663,12 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     // --- Unstake the 5th validator ---
     rt.instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: staking_addr.clone(),
-            nonce: None,
-            expr: staking::wave::begin_unstake_call_expr(),
+            kind: InstKind::Call {
+                contract: staking_addr.clone(),
+                expr: staking::wave::begin_unstake_call_expr(),
+            },
         },
     )
     .await?;
@@ -675,11 +694,12 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     // Consensus continues — increment counter again
     rt.send_instruction(
         &mut ident,
-        Inst::Call {
+        Inst {
             payment: PaymentIntent::self_pay(10_000),
-            contract: counter_addr,
-            nonce: None,
-            expr: counter::wave::increment_call_expr(),
+            kind: InstKind::Call {
+                contract: counter_addr,
+                expr: counter::wave::increment_call_expr(),
+            },
         },
     )
     .await?;
