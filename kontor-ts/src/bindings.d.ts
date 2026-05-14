@@ -169,6 +169,21 @@ export type OpMetadata = {
   payment: Payment;
 };
 
+/**
+ * What happened when this op ran. Persisted per row in `contract_results`.
+ *
+ * - `Ok`: the contract function returned successfully.
+ * - `ContractErr`: the function returned `result<_, error>::Err` — its state
+ *   mutations were rolled back, but the call itself completed cleanly.
+ * - `OutOfFuel`: the call ran out of fuel mid-execution (either a host
+ *   import couldn't be charged, or wasmtime trapped on a fuel decrement).
+ * - `Trap`: any non-fuel wasmtime trap — panic, unreachable, memory error.
+ * - `Other`: a deterministic failure that doesn't fit the above (currently
+ *   uncommon for rows that get inserted — pre-execution rejections like
+ *   parse errors / contract-not-found don't reach `handle_procedure`).
+ */
+export type OpStatus = "Ok" | "ContractErr" | "OutOfFuel" | "Trap" | "Other";
+
 export type OpWithResult = {
   op: Op;
   result: ResultRow | null;
@@ -240,6 +255,12 @@ export type ResultRow = {
   result_index: number;
   func: string;
   gas: number;
+  /**
+   * Outcome category for this op. `Ok` for successful calls (regardless
+   * of whether the contract returned `ok(...)` or just a value); the
+   * failure variants distinguish what went wrong.
+   */
+  status: OpStatus;
   value: string | null;
   contract: string;
   txid: string | null;

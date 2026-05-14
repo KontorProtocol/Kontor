@@ -13,7 +13,7 @@ use wasmtime::{
     },
 };
 
-use indexer_types::Payment;
+use indexer_types::{OpStatus, Payment};
 use stdlib::CheckedArithmetics;
 
 use crate::database::types::Identity;
@@ -387,7 +387,15 @@ impl Runtime {
             }
         };
 
-        if result.is_err() || result.as_ref().is_ok_and(|val| val.starts_with("err(")) {
+        let result = result.map_err(|e| {
+            if is_deterministic {
+                ExecutionError::Deterministic(e)
+            } else {
+                ExecutionError::NonDeterministic(e)
+            }
+        });
+
+        if classify_result(&result) != OpStatus::Ok {
             self.storage
                 .rollback()
                 .await
@@ -405,13 +413,7 @@ impl Runtime {
                 .map_err(|e| ExecutionError::NonDeterministic(e.context("commit failed")))?;
         }
 
-        result.map_err(|e| {
-            if is_deterministic {
-                ExecutionError::Deterministic(e)
-            } else {
-                ExecutionError::NonDeterministic(e)
-            }
-        })
+        result
     }
 
     pub async fn handle_procedure(
@@ -476,6 +478,7 @@ impl Runtime {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
+        let status = classify_result(&result);
         let result_index = self.result_id_counter.get().await as i64;
         let signer_id = signer
             .signer_id()
@@ -493,6 +496,7 @@ impl Runtime {
                 value,
                 signer_id,
                 payer_signer_id,
+                status,
             )
             .await
             .map_err(ExecutionError::NonDeterministic)?;
@@ -548,5 +552,43 @@ impl Runtime {
                 .await;
         }
         result.map_err(Into::into)
+    }
+}
+
+/// Categorize the result of a wasm call into a persisted `OpStatus`.
+///
+/// - `Ok(s)` where `s` starts with `"err("` means the contract function
+///   returned a `result<_, error>::Err` value. The call ran cleanly but the
+///   semantic outcome was a failure; storage was rolled back. Treated as
+///   `OpStatus::ContractErr`.
+/// - `Ok(_)` otherwise is a successful call returning either a value or
+///   nothing. `OpStatus::Ok`.
+/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
+///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
+///   becomes `OpStatus::OutOfFuel`; other trap variants become
+///   `OpStatus::Trap`. If the error isn't a trap (host-side `Fuel::consume`
+///   exhaustion produces an `anyhow!("Insufficient fuel")` rather than a
+///   wasmtime trap, so check the message too), classify as `OutOfFuel` or
+///   `Other`.
+/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
+///   propagate as fatal infrastructure errors and the block won't commit.
+///   Mapped to `Other` for completeness.
+fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
+    match result {
+        Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
+        Ok(_) => OpStatus::Ok,
+        Err(ExecutionError::Deterministic(e)) => {
+            if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
+                match trap {
+                    wasmtime::Trap::OutOfFuel => OpStatus::OutOfFuel,
+                    _ => OpStatus::Trap,
+                }
+            } else if e.to_string().contains("Insufficient fuel") {
+                OpStatus::OutOfFuel
+            } else {
+                OpStatus::Other
+            }
+        }
+        Err(ExecutionError::NonDeterministic(_)) => OpStatus::Other,
     }
 }

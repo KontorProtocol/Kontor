@@ -567,6 +567,53 @@ pub struct ContractResponse {
     pub wit: String,
 }
 
+/// What happened when this op ran. Persisted per row in `contract_results`.
+///
+/// - `Ok`: the contract function returned successfully.
+/// - `ContractErr`: the function returned `result<_, error>::Err` — its state
+///   mutations were rolled back, but the call itself completed cleanly.
+/// - `OutOfFuel`: the call ran out of fuel mid-execution (either a host
+///   import couldn't be charged, or wasmtime trapped on a fuel decrement).
+/// - `Trap`: any non-fuel wasmtime trap — panic, unreachable, memory error.
+/// - `Other`: a deterministic failure that doesn't fit the above (currently
+///   uncommon for rows that get inserted — pre-execution rejections like
+///   parse errors / contract-not-found don't reach `handle_procedure`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum OpStatus {
+    Ok,
+    ContractErr,
+    OutOfFuel,
+    Trap,
+    Other,
+}
+
+impl OpStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OpStatus::Ok => "Ok",
+            OpStatus::ContractErr => "ContractErr",
+            OpStatus::OutOfFuel => "OutOfFuel",
+            OpStatus::Trap => "Trap",
+            OpStatus::Other => "Other",
+        }
+    }
+}
+
+impl std::str::FromStr for OpStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "Ok" => Ok(OpStatus::Ok),
+            "ContractErr" => Ok(OpStatus::ContractErr),
+            "OutOfFuel" => Ok(OpStatus::OutOfFuel),
+            "Trap" => Ok(OpStatus::Trap),
+            "Other" => Ok(OpStatus::Other),
+            other => Err(format!("unknown OpStatus: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct ResultRow {
@@ -585,6 +632,10 @@ pub struct ResultRow {
     pub func: String,
     #[ts(type = "number")]
     pub gas: i64,
+    /// Outcome category for this op. `Ok` for successful calls (regardless
+    /// of whether the contract returned `ok(...)` or just a value); the
+    /// failure variants distinguish what went wrong.
+    pub status: OpStatus,
     pub value: Option<String>,
     pub contract: String,
     pub txid: Option<String>,

@@ -77,6 +77,11 @@ CREATE TABLE IF NOT EXISTS contract_results (
   -- signer_id. NULL for ops that don't go through gas accounting at all
   -- (e.g. Issuance, RegisterBlsKey via Core-paid path).
   payer_signer_id INTEGER,
+  -- Outcome category for the op. Stored as the OpStatus enum's variant
+  -- name (Ok / ContractErr / OutOfFuel / Trap / Other). Always present —
+  -- successful rows carry "Ok", failure rows carry the failure category
+  -- (frontend uses this to distinguish OOG from trap from contract Err).
+  status TEXT NOT NULL DEFAULT 'Ok',
   UNIQUE (
     tx_id,
     input_index,

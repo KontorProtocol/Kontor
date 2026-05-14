@@ -179,6 +179,7 @@ impl Storage {
         value: Option<String>,
         signer_id: i64,
         payer_signer_id: Option<i64>,
+        status: indexer_types::OpStatus,
     ) -> ContractResultRow {
         ContractResultRow::builder()
             .contract_id(contract_id)
@@ -192,6 +193,7 @@ impl Storage {
             .maybe_value(value)
             .signer_id(signer_id)
             .maybe_payer_signer_id(payer_signer_id)
+            .status(status)
             .build()
     }
 
@@ -204,6 +206,7 @@ impl Storage {
         value: Option<String>,
         signer_id: i64,
         payer_signer_id: Option<i64>,
+        status: indexer_types::OpStatus,
     ) -> Result<i64> {
         Ok(insert_contract_result(
             &self.conn,
@@ -215,6 +218,7 @@ impl Storage {
                 value,
                 signer_id,
                 payer_signer_id,
+                status,
             ),
         )
         .await?)
