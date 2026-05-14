@@ -652,13 +652,15 @@ pub enum InstKind {
 impl Inst {
     /// Build the domain-separated signing message for one operation in an aggregate batch.
     ///
-    /// Returns `KONTOR-OP-V1 || postcard((signer_id, nonce, self))`. The
-    /// `signer_id` and `nonce` come from the matching `AggregateSigner`
-    /// entry in `AggregateInfo.signers`; binding them into the signed
-    /// payload is what defeats BLS replay.
-    pub fn aggregate_signing_message(&self, signer_id: u64, nonce: u64) -> Result<Vec<u8>> {
+    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, self))` where `claim`
+    /// and `nonce` come from the matching `AggregateSigner` entry in
+    /// `AggregateInfo.signers`. Signing over the `SignerClaim` rather than a
+    /// resolved `signer_id` is what lets a brand-new co-signer (no
+    /// `signer_id` yet) participate in aggregates: they sign over their
+    /// `SignerClaim::PubKey(self_x_only)`, which they know locally.
+    pub fn aggregate_signing_message(&self, claim: &SignerClaim, nonce: u64) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(&(signer_id, nonce, self))?;
+        let op_bytes = serialize(&(claim, nonce, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);

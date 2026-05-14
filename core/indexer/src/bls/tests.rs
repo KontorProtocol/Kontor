@@ -254,17 +254,19 @@ async fn verify_aggregate_enforces_op_count_cap() {
 #[tokio::test]
 async fn verify_aggregate_enforces_total_message_bytes_cap() {
     let (mut runtime, _tmp) = new_test_runtime().await;
-    let expr = "a".repeat(MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024);
+    // RegisterBlsKey op skips DB signer resolution in verify_aggregate, so
+    // we can build an unregistered-signer test without first populating
+    // bls_keys. A giant schnorr_sig payload pushes us over the cap.
+    let bls_sk = BlsSecretKey::key_gen(&[7u8; 32], &[]).expect("BLS key_gen");
+    let bls_pubkey = bls_sk.sk_to_pk().to_bytes().to_vec();
+    let giant_sig = vec![0u8; MAX_BLS_BULK_TOTAL_MESSAGE_BYTES + 1024];
     let insts = Insts {
         ops: vec![Inst {
             payment: PaymentIntent::self_pay(0),
-            kind: InstKind::Call {
-                contract: ContractAddress {
-                    name: String::new(),
-                    height: 0,
-                    tx_index: 0,
-                },
-                expr,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey,
+                schnorr_sig: giant_sig,
+                bls_sig: vec![0u8; 48],
             },
         }],
         aggregate: Some(AggregateInfo {
@@ -272,8 +274,7 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
                 identity: SignerClaim::Id(0),
                 nonce: 0,
             }],
-            signature: BlsSecretKey::key_gen(&[7u8; 32], &[])
-                .expect("BLS key_gen")
+            signature: bls_sk
                 .sign(b"cap-test", KONTOR_BLS_DST, &[])
                 .to_bytes()
                 .to_vec(),
@@ -485,63 +486,6 @@ fn rogue_key_forgery_fails_with_distinct_messages() {
 }
 
 #[test]
-fn bls_attack_eve_registers_own_key_under_alice_identity_aggregate_rejected() {
-    use crate::test_utils::bls_test::derive_test_key;
-    use bitcoin::hashes::{Hash, sha256};
-    use bitcoin::key::{Keypair, Secp256k1, rand};
-    use bitcoin::secp256k1::Message;
-
-    let secp = Secp256k1::new();
-    let _alice_keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let eve_keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let alice_xonly = _alice_keypair.x_only_public_key().0;
-    let eve_bls_sk = derive_test_key(42);
-    let eve_bls_pk = eve_bls_sk.sk_to_pk();
-    let schnorr_msg = {
-        let mut preimage = Vec::with_capacity(SCHNORR_BINDING_PREFIX.len() + 96);
-        preimage.extend_from_slice(SCHNORR_BINDING_PREFIX);
-        preimage.extend_from_slice(&eve_bls_pk.to_bytes());
-        let digest = sha256::Hash::hash(&preimage).to_byte_array();
-        Message::from_digest_slice(&digest).expect("32-byte digest")
-    };
-    let eve_schnorr_sig = secp.sign_schnorr(&schnorr_msg, &eve_keypair).serialize();
-    let bls_binding_msg = {
-        let mut msg = Vec::with_capacity(BLS_BINDING_PREFIX.len() + 32);
-        msg.extend_from_slice(BLS_BINDING_PREFIX);
-        msg.extend_from_slice(&alice_xonly.serialize());
-        msg
-    };
-    let eve_bls_binding_sig = eve_bls_sk
-        .sign(&bls_binding_msg, KONTOR_BLS_DST, &[])
-        .to_bytes();
-    let op = Inst {
-        payment: PaymentIntent::self_pay(10_000),
-        kind: InstKind::RegisterBlsKey {
-            bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
-            schnorr_sig: eve_schnorr_sig.to_vec(),
-            bls_sig: eve_bls_binding_sig.to_vec(),
-        },
-    };
-    let insts = Insts {
-        ops: vec![op],
-        aggregate: Some(AggregateInfo {
-            signers: vec![AggregateSigner {
-                identity: SignerClaim::Id(0),
-                nonce: 0,
-            }],
-            signature: vec![0u8; 48],
-            publisher_sponsorship: None,
-        }),
-    };
-    let err =
-        validate_aggregate_shape(&insts).expect_err("aggregate RegisterBlsKey must be rejected");
-    assert!(
-        err.to_string()
-            .contains("RegisterBlsKey is not allowed in aggregate")
-    );
-}
-
-#[test]
 fn validate_aggregate_shape_rejects_zero_publisher_sponsorship() {
     let op = Inst {
         payment: PaymentIntent::self_pay(50_000),
@@ -634,8 +578,12 @@ fn bls_bulk_aggregate_signature_roundtrip() {
     };
     let op1 = call_op(50_000, contract.clone(), "eval(10, id)");
     let op2 = call_op(50_000, contract, "eval(10, sum({y: 8}))");
-    let msg1 = op1.aggregate_signing_message(1, 0).unwrap();
-    let msg2 = op2.aggregate_signing_message(2, 0).unwrap();
+    let msg1 = op1
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
+        .unwrap();
+    let msg2 = op2
+        .aggregate_signing_message(&SignerClaim::Id(2), 0)
+        .unwrap();
     let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
     let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
     let agg = blst::min_sig::AggregateSignature::aggregate(&[&sig1, &sig2], true).unwrap();
@@ -662,10 +610,10 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         tx_index: 4,
     };
     let msg1 = call_op(50_000, contract.clone(), "eval(10, id)")
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap();
     let msg2 = call_op(50_000, contract, "eval(10, sum({y: 8}))")
-        .aggregate_signing_message(2, 0)
+        .aggregate_signing_message(&SignerClaim::Id(2), 0)
         .unwrap();
     let sig1 = sk1.sign(&msg1, KONTOR_BLS_DST, &[]);
     let sig2 = sk2.sign(&msg2, KONTOR_BLS_DST, &[]);
@@ -679,7 +627,7 @@ fn bls_bulk_aggregate_signature_fails_if_op_bytes_change() {
         },
         "eval(10, id)",
     )
-    .aggregate_signing_message(1, 0)
+    .aggregate_signing_message(&SignerClaim::Id(1), 0)
     .unwrap();
     let msgs = [msg1_mutated, msg2];
     let refs: Vec<&[u8]> = msgs.iter().map(Vec::as_slice).collect();
@@ -715,10 +663,10 @@ fn bls_bulk_message_changes_when_signer_id_changes() {
     };
     assert_ne!(
         call_op(50_000, c.clone(), "eval(10, id)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap(),
         call_op(50_000, c, "eval(10, id)")
-            .aggregate_signing_message(2, 0)
+            .aggregate_signing_message(&SignerClaim::Id(2), 0)
             .unwrap()
     );
 }
@@ -732,10 +680,10 @@ fn bls_bulk_message_changes_when_nonce_changes() {
     };
     assert_ne!(
         call_op(50_000, c.clone(), "eval(10, id)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap(),
         call_op(50_000, c, "eval(10, id)")
-            .aggregate_signing_message(1, 1)
+            .aggregate_signing_message(&SignerClaim::Id(1), 1)
             .unwrap()
     );
 }
@@ -749,10 +697,10 @@ fn bls_bulk_message_changes_when_gas_limit_changes() {
     };
     assert_ne!(
         call_op(50_000, c.clone(), "eval(10, id)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap(),
         call_op(60_000, c, "eval(10, id)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap()
     );
 }
@@ -769,7 +717,7 @@ fn bls_bulk_message_changes_when_contract_name_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap(),
         call_op(
             50_000,
@@ -780,7 +728,7 @@ fn bls_bulk_message_changes_when_contract_name_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap()
     );
 }
@@ -797,7 +745,7 @@ fn bls_bulk_message_changes_when_contract_height_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap(),
         call_op(
             50_000,
@@ -808,7 +756,7 @@ fn bls_bulk_message_changes_when_contract_height_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap()
     );
 }
@@ -825,7 +773,7 @@ fn bls_bulk_message_changes_when_contract_tx_index_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap(),
         call_op(
             50_000,
@@ -836,7 +784,7 @@ fn bls_bulk_message_changes_when_contract_tx_index_changes() {
             },
             "transfer(\"x\", 10)"
         )
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap()
     );
 }
@@ -850,10 +798,10 @@ fn bls_bulk_message_changes_when_expr_changes() {
     };
     assert_ne!(
         call_op(50_000, c.clone(), "transfer(\"alice\", 10)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap(),
         call_op(50_000, c, "transfer(\"bob\", 10)")
-            .aggregate_signing_message(1, 0)
+            .aggregate_signing_message(&SignerClaim::Id(1), 0)
             .unwrap()
     );
 }
@@ -874,7 +822,7 @@ fn bls_bulk_wrong_signer_key_fails_single_op() {
         },
         "transfer(\"dest\", 100)",
     )
-    .aggregate_signing_message(1, 0)
+    .aggregate_signing_message(&SignerClaim::Id(1), 0)
     .unwrap();
     let sig_by_b = sk_b.sign(&msg, KONTOR_BLS_DST, &[]);
     assert_ne!(
@@ -897,10 +845,10 @@ fn bls_bulk_wrong_signer_key_fails_multi_op_key_swap() {
         tx_index: 0,
     };
     let msg_a = call_op(50_000, c.clone(), "transfer(\"x\", 10)")
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap();
     let msg_b = call_op(50_000, c, "transfer(\"y\", 20)")
-        .aggregate_signing_message(2, 0)
+        .aggregate_signing_message(&SignerClaim::Id(2), 0)
         .unwrap();
     let agg = blst::min_sig::AggregateSignature::aggregate(
         &[
@@ -937,10 +885,10 @@ fn bls_bulk_one_correct_one_wrong_key_fails_entire_aggregate() {
         tx_index: 0,
     };
     let msg_a = call_op(50_000, c.clone(), "transfer(\"x\", 10)")
-        .aggregate_signing_message(1, 0)
+        .aggregate_signing_message(&SignerClaim::Id(1), 0)
         .unwrap();
     let msg_b = call_op(50_000, c, "transfer(\"y\", 20)")
-        .aggregate_signing_message(2, 0)
+        .aggregate_signing_message(&SignerClaim::Id(2), 0)
         .unwrap();
     let agg = blst::min_sig::AggregateSignature::aggregate(
         &[
@@ -978,7 +926,8 @@ mod proptest_bulk {
             expr in any::<String>(),
         ) {
             let op = call_op(gas_limit, ContractAddress { name, height, tx_index }, expr);
-            let msg = op.aggregate_signing_message(signer_id, nonce).expect("must not fail");
+            let claim = SignerClaim::Id(signer_id);
+            let msg = op.aggregate_signing_message(&claim, nonce).expect("must not fail");
             prop_assert!(!msg.is_empty());
         }
 
@@ -991,7 +940,8 @@ mod proptest_bulk {
             bls_sig in proptest::collection::vec(any::<u8>(), 0..256),
         ) {
             let op = Inst { payment: PaymentIntent::self_pay(10_000), kind: InstKind::RegisterBlsKey { bls_pubkey, schnorr_sig, bls_sig } };
-            let msg = op.aggregate_signing_message(signer_id, nonce).expect("must not fail");
+            let claim = SignerClaim::Id(signer_id);
+            let msg = op.aggregate_signing_message(&claim, nonce).expect("must not fail");
             prop_assert!(!msg.is_empty());
         }
     }

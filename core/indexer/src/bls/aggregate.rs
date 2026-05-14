@@ -91,17 +91,16 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
     }
     for inst in &insts.ops {
         match &inst.kind {
-            InstKind::Call { .. } => {}
-            InstKind::RegisterBlsKey { .. } => {
+            InstKind::Call { .. } | InstKind::RegisterBlsKey { .. } => {}
+            InstKind::Publish { .. } => {
                 return Err(anyhow!(
-                    "RegisterBlsKey is not allowed in aggregate path (use direct)"
+                    "aggregate path supports Call and RegisterBlsKey (got Publish)"
                 ));
             }
-            InstKind::Publish { .. } => {
-                return Err(anyhow!("aggregate path only supports Call (got Publish)"));
-            }
             InstKind::Issuance => {
-                return Err(anyhow!("aggregate path only supports Call (got Issuance)"));
+                return Err(anyhow!(
+                    "aggregate path supports Call and RegisterBlsKey (got Issuance)"
+                ));
             }
         }
     }
@@ -121,9 +120,17 @@ pub struct AggregateResolved {
 ///
 /// Resolves each `SignerClaim` to an internal `signer_id`
 /// (`SignerClaim::Id` direct, `SignerClaim::PubKey` via
-/// `get_or_create_identity`), looks up each signer's registered BLS pubkey,
-/// and verifies the aggregate signature against the per-op signing message
+/// `get_or_create_identity`), sources the verification BLS pubkey
+/// per-op-kind (DB lookup for `Call`; payload bytes for `RegisterBlsKey`,
+/// since the registrant has no prior bls_keys row), and verifies the
+/// aggregate signature against the per-op signing message
 /// `postcard((signer_id, nonce, inst))`.
+///
+/// For `RegisterBlsKey` ops: aggregate verify proves the supplied
+/// bls_pubkey's owner consented to this op, but does NOT establish the
+/// x_only_pubkey ↔ bls_pubkey binding — that's the job of
+/// `runtime.register_bls_key`'s `RegistrationProof::verify` during op
+/// execution.
 pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<AggregateResolved> {
     let agg = validate_aggregate_shape(insts)?;
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
@@ -143,17 +150,40 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
     let mut total_message_bytes: usize = 0;
 
     for (inst, agg_signer) in insts.ops.iter().zip(agg.signers.iter()) {
-        let signer_id = match &agg_signer.identity {
-            SignerClaim::Id(id) => *id,
+        let (signer_id, claim_pubkey) = match &agg_signer.identity {
+            SignerClaim::Id(id) => (*id, None),
             SignerClaim::PubKey(pk) => {
                 let identity = runtime
                     .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| anyhow!("resolving SignerClaim::PubKey: {e}"))?;
-                identity.signer_id() as u64
+                (identity.signer_id() as u64, Some(pk.to_string()))
             }
         };
-        let msg = inst.aggregate_signing_message(signer_id, agg_signer.nonce)?;
+
+        let pk = match &inst.kind {
+            InstKind::RegisterBlsKey { bls_pubkey, .. } => {
+                // The registrant has no bls_keys row yet — verify against the
+                // bls_pubkey they're submitting. A valid aggregate-sig
+                // contribution at this position proves the submitter has the
+                // bls_pubkey's secret key. The x_only_pubkey ↔ bls_pubkey
+                // binding is established later by RegistrationProof::verify
+                // in runtime.register_bls_key.
+                let validated = BlsPublicKey::key_validate(bls_pubkey).map_err(|e| {
+                    anyhow!("invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}")
+                })?;
+                // Populate the signer_map for downstream consumers (executor
+                // doesn't currently need it for RegisterBlsKey, but keep the
+                // map complete for consistency).
+                if let Some(pk_str) = claim_pubkey {
+                    resolver.signer_map.insert(signer_id, pk_str);
+                }
+                validated
+            }
+            _ => resolver.resolve(runtime, signer_id).await?,
+        };
+
+        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
@@ -161,7 +191,7 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
             ));
         }
-        pks.push(resolver.resolve(runtime, signer_id).await?);
+        pks.push(pk);
         msgs.push(msg);
         signer_ids.push(signer_id);
     }

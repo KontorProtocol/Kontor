@@ -513,11 +513,8 @@ impl RuntimeRegtest {
                 .ok_or_else(|| anyhow!("Identity not found for BLS signing"))?;
             let sk = BlsSecretKey::from_bytes(&identity.bls_secret_key)
                 .map_err(|e| anyhow!("Invalid BLS secret key: {:?}", e))?;
-            let signer_id = match &agg_signers[i].identity {
-                indexer_types::SignerClaim::Id(id) => *id,
-                indexer_types::SignerClaim::PubKey(_) => unreachable!("testlib uses Id claims"),
-            };
-            let msg = ops[i].aggregate_signing_message(signer_id, agg_signers[i].nonce)?;
+            let msg =
+                ops[i].aggregate_signing_message(&agg_signers[i].identity, agg_signers[i].nonce)?;
             sigs.push(sk.sign(&msg, KONTOR_BLS_DST, &[]));
         }
 

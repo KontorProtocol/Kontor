@@ -1,6 +1,6 @@
-use anyhow::Result;
-use blst::min_sig::SecretKey as BlsSecretKey;
-use indexer::bls::{RegistrationProof, validate_aggregate_shape};
+use anyhow::{Result, anyhow};
+use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
+use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
 use indexer_types::{
     AggregateInfo, AggregateSigner, Inst, InstKind, Insts, PaymentIntent, SignerClaim,
 };
@@ -37,65 +37,6 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
 
     let registered_bls_pubkey = rt.get_bls_pubkey(&xonly).await?;
     assert_eq!(registered_bls_pubkey, Some(proof.bls_pubkey.to_vec()));
-
-    Ok(())
-}
-
-#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn bls_user_registry_register_in_aggregate_rejected_regtest() -> Result<()> {
-    let mut rt = runtime.reg_tester().unwrap();
-    let user1 = rt.unregistered_identity().await?;
-    let user2 = rt.unregistered_identity().await?;
-
-    let proof1 = RegistrationProof::new(&user1.keypair, &user1.bls_secret_key)?;
-    let proof2 = RegistrationProof::new(&user2.keypair, &user2.bls_secret_key)?;
-
-    let op0 = Inst {
-        payment: PaymentIntent::self_pay(10_000),
-        kind: InstKind::RegisterBlsKey {
-            bls_pubkey: proof1.bls_pubkey.to_vec(),
-            schnorr_sig: proof1.schnorr_sig.to_vec(),
-            bls_sig: proof1.bls_sig.to_vec(),
-        },
-    };
-    let op1 = Inst {
-        payment: PaymentIntent::self_pay(10_000),
-        kind: InstKind::RegisterBlsKey {
-            bls_pubkey: proof2.bls_pubkey.to_vec(),
-            schnorr_sig: proof2.schnorr_sig.to_vec(),
-            bls_sig: proof2.bls_sig.to_vec(),
-        },
-    };
-
-    let err = validate_aggregate_shape(&Insts {
-        ops: vec![op0, op1],
-        aggregate: Some(AggregateInfo {
-            signers: vec![
-                AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                },
-                AggregateSigner {
-                    identity: SignerClaim::Id(1),
-                    nonce: 0,
-                },
-            ],
-            signature: vec![9u8; 48],
-            publisher_sponsorship: None,
-        }),
-    })
-    .expect_err("aggregate RegisterBlsKey must be rejected");
-
-    let xonly1 = user1.x_only_public_key().to_string();
-    let xonly2 = user2.x_only_public_key().to_string();
-    assert!(
-        err.to_string()
-            .contains("RegisterBlsKey is not allowed in aggregate")
-    );
-    assert_eq!(rt.get_signer_id(&xonly1).await?, None);
-    assert_eq!(rt.get_signer_id(&xonly2).await?, None);
-    assert_eq!(rt.get_bls_pubkey(&xonly1).await?, None);
-    assert_eq!(rt.get_bls_pubkey(&xonly2).await?, None);
 
     Ok(())
 }
@@ -211,21 +152,33 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
     Ok(())
 }
 
-/// Two `RegisterBlsKey` ops for the same x-only with the SAME BLS key in one
-/// bundle. The first creates the registry entry; the second hits the
-/// idempotent early-return. The result must be exactly one entry with one
-/// signer ID, and a subsequent registration must get the next sequential ID
-/// (no gap).
+/// Sponsored aggregate `RegisterBlsKey` end-to-end:
+/// - publisher (registered, funded) submits a one-op aggregate
+/// - op is `Sponsored`; aggregate carries `publisher_sponsorship`
+/// - registrant is brand-new — identified by `SignerClaim::PubKey(x_only)`
+/// - registrant signs over their own `SignerClaim::PubKey` (they don't yet
+///   have a `signer_id` to sign over)
+/// - aggregate verify uses the inline `bls_pubkey` from the Inst payload
+///   (no DB row exists yet)
+/// - after execution: bls_keys row exists for the new signer and the
+///   payment was attributed to the publisher
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() -> Result<()> {
+async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
+    let mut publisher = rt.identity().await?;
     let user = rt.unregistered_identity().await?;
 
+    let publisher_id = rt
+        .get_signer_id(&publisher.x_only_public_key().to_string())
+        .await?
+        .ok_or_else(|| anyhow!("missing signer_id for publisher"))?;
+    let user_xonly_pk = user.x_only_public_key();
+    let user_xonly_str = user_xonly_pk.to_string();
+
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
-    let user_xonly = user.x_only_public_key().to_string();
 
     let op = Inst {
-        payment: PaymentIntent::self_pay(10_000),
+        payment: PaymentIntent::Sponsored,
         kind: InstKind::RegisterBlsKey {
             bls_pubkey: proof.bls_pubkey.to_vec(),
             schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -233,205 +186,52 @@ async fn bls_user_registry_duplicate_same_key_in_aggregate_rejected_regtest() ->
         },
     };
 
-    let err = validate_aggregate_shape(&Insts {
-        ops: vec![op.clone(), op],
-        aggregate: Some(AggregateInfo {
-            signers: vec![
-                AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                },
-                AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                },
-            ],
-            signature: vec![9u8; 48],
-            publisher_sponsorship: None,
-        }),
-    })
-    .expect_err("aggregate RegisterBlsKey must be rejected");
+    // Registrant signs over their own SignerClaim::PubKey — they don't yet
+    // have a signer_id to sign over.
+    let claim = SignerClaim::PubKey(user_xonly_pk);
+    let msg = op.aggregate_signing_message(&claim, 0)?;
+    let user_sk = BlsSecretKey::from_bytes(&user.bls_secret_key)
+        .map_err(|e| anyhow!("invalid user BLS secret key: {e:?}"))?;
+    let sig = user_sk.sign(&msg, KONTOR_BLS_DST, &[]);
+    let aggregate_sig =
+        AggregateSignature::aggregate(&[&sig], true).map_err(|e| anyhow!("aggregate: {e:?}"))?;
 
-    assert!(
-        err.to_string()
-            .contains("RegisterBlsKey is not allowed in aggregate")
-    );
-    assert_eq!(rt.get_signer_id(&user_xonly).await?, None);
-    assert_eq!(rt.get_bls_pubkey(&user_xonly).await?, None);
+    let res = rt
+        .instruction_insts(
+            &mut publisher,
+            Insts {
+                ops: vec![op],
+                aggregate: Some(AggregateInfo {
+                    signers: vec![AggregateSigner {
+                        identity: claim,
+                        nonce: 0,
+                    }],
+                    signature: aggregate_sig.to_signature().to_bytes().to_vec(),
+                    publisher_sponsorship: Some(10_000),
+                }),
+            },
+        )
+        .await?;
 
-    // Next registration should get the expected ID (no gap from rejected aggregate)
-    let mut next_user = rt.unregistered_identity().await?;
-    let next_proof = RegistrationProof::new(&next_user.keypair, &next_user.bls_secret_key)?;
-    rt.instruction_insts(
-        &mut next_user,
-        Insts::direct(vec![
-            Inst {
-                payment: PaymentIntent::self_pay(10_000),
-                kind: InstKind::Issuance,
-            },
-            Inst {
-                payment: PaymentIntent::self_pay(10_000),
-                kind: InstKind::RegisterBlsKey {
-                    bls_pubkey: next_proof.bls_pubkey.to_vec(),
-                    schnorr_sig: next_proof.schnorr_sig.to_vec(),
-                    bls_sig: next_proof.bls_sig.to_vec(),
-                },
-            },
-        ]),
-    )
-    .await?;
-    let next_xonly = next_user.x_only_public_key().to_string();
-    let next_id = rt.get_signer_id(&next_xonly).await?;
-    assert!(
-        next_id.is_some(),
-        "next user should be registered after rejected aggregate"
+    // Registration landed: the new signer has a row and their BLS pubkey is bound.
+    let new_signer_id = rt
+        .get_signer_id(&user_xonly_str)
+        .await?
+        .ok_or_else(|| anyhow!("registrant should have a signer_id after aggregate"))?;
+    let registered_bls = rt.get_bls_pubkey(&user_xonly_str).await?;
+    assert_eq!(registered_bls, Some(proof.bls_pubkey.to_vec()));
+    assert_ne!(
+        new_signer_id, publisher_id,
+        "registrant must be a distinct signer from the publisher"
     );
 
-    Ok(())
-}
-
-/// Two `RegisterBlsKey` ops for the same x-only with DIFFERENT BLS keys in one
-/// bundle. The first registration succeeds; the second is rejected by the
-/// registry ("BLS pubkey already registered for signer"). The original key
-/// must remain, and no ID gap is created.
-#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn bls_user_registry_different_keys_same_xonly_in_aggregate_rejected_regtest() -> Result<()> {
-    let mut rt = runtime.reg_tester().unwrap();
-    let user = rt.unregistered_identity().await?;
-
-    let proof_a = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
-
-    let mut alt_ikm = [0u8; 32];
-    alt_ikm[0] = 0xBB;
-    let alt_sk = BlsSecretKey::key_gen(&alt_ikm, &[]).expect("alt key_gen");
-    let proof_b = RegistrationProof::new(&user.keypair, &alt_sk.to_bytes())?;
-
-    let user_xonly = user.x_only_public_key().to_string();
-
-    let op_a = Inst {
-        payment: PaymentIntent::self_pay(10_000),
-        kind: InstKind::RegisterBlsKey {
-            bls_pubkey: proof_a.bls_pubkey.to_vec(),
-            schnorr_sig: proof_a.schnorr_sig.to_vec(),
-            bls_sig: proof_a.bls_sig.to_vec(),
-        },
-    };
-    let op_b = Inst {
-        payment: PaymentIntent::self_pay(10_000),
-        kind: InstKind::RegisterBlsKey {
-            bls_pubkey: proof_b.bls_pubkey.to_vec(),
-            schnorr_sig: proof_b.schnorr_sig.to_vec(),
-            bls_sig: proof_b.bls_sig.to_vec(),
-        },
-    };
-
-    let err = validate_aggregate_shape(&Insts {
-        ops: vec![op_a, op_b],
-        aggregate: Some(AggregateInfo {
-            signers: vec![
-                AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                },
-                AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                },
-            ],
-            signature: vec![9u8; 48],
-            publisher_sponsorship: None,
-        }),
-    })
-    .expect_err("aggregate RegisterBlsKey must be rejected");
-
-    assert!(
-        err.to_string()
-            .contains("RegisterBlsKey is not allowed in aggregate")
+    // The publisher paid for the registration (gas attributed via the
+    // registry.registered contract call), not the registrant.
+    assert_eq!(
+        res.result.payer_signer_id,
+        Some(publisher_id as i64),
+        "sponsored RegisterBlsKey gas must be charged to the publisher"
     );
-    assert_eq!(rt.get_signer_id(&user_xonly).await?, None);
-    assert_eq!(rt.get_bls_pubkey(&user_xonly).await?, None);
-
-    let mut next_user = rt.unregistered_identity().await?;
-    let next_proof = RegistrationProof::new(&next_user.keypair, &next_user.bls_secret_key)?;
-    rt.instruction_insts(
-        &mut next_user,
-        Insts::direct(vec![
-            Inst {
-                payment: PaymentIntent::self_pay(10_000),
-                kind: InstKind::Issuance,
-            },
-            Inst {
-                payment: PaymentIntent::self_pay(10_000),
-                kind: InstKind::RegisterBlsKey {
-                    bls_pubkey: next_proof.bls_pubkey.to_vec(),
-                    schnorr_sig: next_proof.schnorr_sig.to_vec(),
-                    bls_sig: next_proof.bls_sig.to_vec(),
-                },
-            },
-        ]),
-    )
-    .await?;
-    let next_xonly = next_user.x_only_public_key().to_string();
-    let next_id = rt.get_signer_id(&next_xonly).await?;
-    assert!(
-        next_id.is_some(),
-        "next user should be registered after rejected aggregate"
-    );
-
-    Ok(())
-}
-
-/// Wrong-length `schnorr_sig` and `bls_sig` in a `BlsBulkOp::RegisterBlsKey`
-/// pass aggregate verification (those fields aren't used for BLS pubkey
-/// resolution) but must be rejected by `register_bls_key`'s length checks
-/// with no registry entry created.
-#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn bls_user_registry_malformed_sig_lengths_in_aggregate_rejected_regtest() -> Result<()> {
-    let mut rt = runtime.reg_tester().unwrap();
-    let user = rt.unregistered_identity().await?;
-    let bls_sk = blst::min_sig::SecretKey::from_bytes(&user.bls_secret_key).unwrap();
-    let bls_pk_bytes = bls_sk.sk_to_pk().to_bytes().to_vec();
-    let user_xonly = user.x_only_public_key().to_string();
-
-    let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
-        ("short schnorr_sig", vec![0u8; 32], vec![0u8; 48]),
-        ("long schnorr_sig", vec![0u8; 128], vec![0u8; 48]),
-        ("short bls_sig", vec![0u8; 64], vec![0u8; 24]),
-        ("long bls_sig", vec![0u8; 64], vec![0u8; 96]),
-    ];
-
-    for (label, schnorr_sig, bls_sig) in cases {
-        let op = Inst {
-            payment: PaymentIntent::self_pay(10_000),
-            kind: InstKind::RegisterBlsKey {
-                bls_pubkey: bls_pk_bytes.clone(),
-                schnorr_sig,
-                bls_sig,
-            },
-        };
-        let err = validate_aggregate_shape(&Insts {
-            ops: vec![op],
-            aggregate: Some(AggregateInfo {
-                signers: vec![AggregateSigner {
-                    identity: SignerClaim::Id(0),
-                    nonce: 0,
-                }],
-                signature: vec![9u8; 48],
-                publisher_sponsorship: None,
-            }),
-        })
-        .expect_err("aggregate RegisterBlsKey must be rejected");
-
-        assert!(
-            err.to_string()
-                .contains("RegisterBlsKey is not allowed in aggregate")
-        );
-        assert_eq!(
-            rt.get_signer_id(&user_xonly).await?,
-            None,
-            "{label}: malformed field must prevent registration"
-        );
-    }
 
     Ok(())
 }

@@ -111,8 +111,10 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
     );
 
     // BLS aggregate signing: each co-signer signs their inner op.
-    let msg0 = op0.aggregate_signing_message(signer1_id, 0)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id, 0)?;
+    let signer1_claim = SignerClaim::Id(signer1_id);
+    let signer2_claim = SignerClaim::Id(signer2_id);
+    let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
+    let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
@@ -232,8 +234,10 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
-    let msg0 = op0.aggregate_signing_message(signer1_id, 0)?;
-    let msg1 = op1.aggregate_signing_message(signer2_id, 0)?;
+    let signer1_claim = SignerClaim::Id(signer1_id);
+    let signer2_claim = SignerClaim::Id(signer2_id);
+    let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
+    let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
