@@ -299,7 +299,15 @@ pub async fn inspect(
             // executor skipped post-validation via `should_skip_result` or that
             // hit a non-deterministic failure — callers learn "this op was in
             // the tx but didn't produce a result row."
-            ops.push(OpWithResult { op, result });
+            //
+            // `error_message: None` because inspect reads from chain state and
+            // error strings aren't persisted. The simulate handler overwrites
+            // this with live error detail captured during execution.
+            ops.push(OpWithResult {
+                op,
+                result,
+                error_message: None,
+            });
         }
     }
     Ok(ops)

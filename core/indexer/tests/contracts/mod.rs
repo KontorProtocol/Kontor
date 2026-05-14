@@ -20,6 +20,7 @@ mod regtester_cluster;
 mod shared_account_contract;
 mod shared_cluster;
 mod simulate_contract;
+mod simulate_errors;
 mod staking_contract;
 mod token_contract;
 mod wit_contract;
@@ -62,6 +63,7 @@ testlib::regtest_tests! {
     pool_contract,
     shared_account_contract,
     simulate_contract,
+    simulate_errors,
     token_contract,
     wit_contract,
 }

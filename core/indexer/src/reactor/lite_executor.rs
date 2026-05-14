@@ -179,7 +179,7 @@ impl Executor for LiteExecutor {
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<Vec<Option<anyhow::Error>>>> {
         runtime
             .set_context(
                 height,
@@ -208,10 +208,10 @@ impl Executor for LiteExecutor {
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(vec![vec![None]]),
             Err(crate::runtime::ExecutionError::Deterministic(e)) => {
                 tracing::error!("counter increment error: {e}");
-                Ok(())
+                Ok(vec![vec![Some(anyhow::anyhow!("{e:#}"))]])
             }
             Err(crate::runtime::ExecutionError::NonDeterministic(e)) => Err(e),
         }

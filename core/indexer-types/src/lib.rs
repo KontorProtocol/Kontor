@@ -539,6 +539,12 @@ impl Fees {
 pub struct OpWithResult {
     pub op: Op,
     pub result: Option<ResultRow>,
+    /// Live error detail captured during execution. Populated only by the
+    /// `/transactions/simulate` endpoint when an op produced no row (rejected
+    /// pre-execution) or produced a row with a failure status. The
+    /// `/inspect` endpoints always return `None` — historical errors aren't
+    /// persisted to chain state.
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

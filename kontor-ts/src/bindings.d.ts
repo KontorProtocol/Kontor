@@ -169,7 +169,18 @@ export type OpMetadata = {
   payment: Payment;
 };
 
-export type OpWithResult = { op: Op; result: ResultRow | null };
+export type OpWithResult = {
+  op: Op;
+  result: ResultRow | null;
+  /**
+   * Live error detail captured during execution. Populated only by the
+   * `/transactions/simulate` endpoint when an op produced no row (rejected
+   * pre-execution) or produced a row with a failure status. The
+   * `/inspect` endpoints always return `None` — historical errors aren't
+   * persisted to chain state.
+   */
+  error_message: string | null;
+};
 
 export type OutPoint = { txid: string; vout: bigint };
 
