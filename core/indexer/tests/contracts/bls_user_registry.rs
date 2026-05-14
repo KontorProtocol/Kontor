@@ -235,3 +235,79 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
 
     Ok(())
 }
+
+/// An existing signer (has a `signer_id` from prior direct activity, but no
+/// bls_keys row) registers their BLS key via a sponsored aggregate using
+/// `SignerClaim::Id`. Guards a bug where `verify_aggregate` populated
+/// `signer_map` only for the `SignerClaim::PubKey` path — leaving the
+/// `Id`-claim case to be silently dropped by `process_aggregate_input`'s
+/// `signer_map.contains_key` check after a successful BLS verify.
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn bls_user_registry_register_in_aggregate_via_id_claim_regtest() -> Result<()> {
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut publisher = rt.identity().await?;
+    let mut user = rt.unregistered_identity().await?;
+
+    // Step 1: user does a direct Issuance to land in the signers table with a
+    // known signer_id, but no bls_keys row yet.
+    rt.instruction(
+        &mut user,
+        Inst {
+            payment: PaymentIntent::self_pay(10_000),
+            kind: InstKind::Issuance,
+        },
+    )
+    .await?;
+    let user_xonly_str = user.x_only_public_key().to_string();
+    let user_signer_id = rt
+        .get_signer_id(&user_xonly_str)
+        .await?
+        .ok_or_else(|| anyhow!("user must have signer_id after Issuance"))?;
+    assert_eq!(
+        rt.get_bls_pubkey(&user_xonly_str).await?,
+        None,
+        "user must not yet have a registered BLS pubkey"
+    );
+
+    // Step 2: publisher submits a sponsored aggregate containing the user's
+    // RegisterBlsKey, identifying the user via SignerClaim::Id.
+    let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
+    let op = Inst {
+        payment: PaymentIntent::Sponsored,
+        kind: InstKind::RegisterBlsKey {
+            bls_pubkey: proof.bls_pubkey.to_vec(),
+            schnorr_sig: proof.schnorr_sig.to_vec(),
+            bls_sig: proof.bls_sig.to_vec(),
+        },
+    };
+    let claim = SignerClaim::Id(user_signer_id);
+    let msg = op.aggregate_signing_message(&claim, 0)?;
+    let user_sk = BlsSecretKey::from_bytes(&user.bls_secret_key)
+        .map_err(|e| anyhow!("invalid user BLS secret key: {e:?}"))?;
+    let sig = user_sk.sign(&msg, KONTOR_BLS_DST, &[]);
+    let aggregate_sig =
+        AggregateSignature::aggregate(&[&sig], true).map_err(|e| anyhow!("aggregate: {e:?}"))?;
+
+    rt.instruction_insts(
+        &mut publisher,
+        Insts {
+            ops: vec![op],
+            aggregate: Some(AggregateInfo {
+                signers: vec![AggregateSigner {
+                    identity: claim,
+                    nonce: 0,
+                }],
+                signature: aggregate_sig.to_signature().to_bytes().to_vec(),
+                publisher_sponsorship: Some(10_000),
+            }),
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        rt.get_bls_pubkey(&user_xonly_str).await?,
+        Some(proof.bls_pubkey.to_vec()),
+        "BLS pubkey should land in bls_keys after Id-claim aggregate registration"
+    );
+    Ok(())
+}

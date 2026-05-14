@@ -53,6 +53,39 @@ impl SignerResolver {
         self.pk_cache.insert(signer_id, pk);
         Ok(pk)
     }
+
+    /// Populate `signer_map` for a signer_id without requiring a registered
+    /// BLS pubkey. Used for aggregate `RegisterBlsKey` ops, where the
+    /// bls_pubkey is in the Inst payload (no DB row yet) but the executor
+    /// still expects the signer_id → x_only_pubkey mapping to be available.
+    ///
+    /// If `claim_pubkey` is provided (the call site already had the x_only
+    /// from a `SignerClaim::PubKey`), it's used directly; otherwise we read
+    /// it from the signers table.
+    pub(super) async fn ensure_x_only(
+        &mut self,
+        runtime: &mut Runtime,
+        signer_id: u64,
+        claim_pubkey: Option<String>,
+    ) -> Result<()> {
+        if self.signer_map.contains_key(&signer_id) {
+            return Ok(());
+        }
+        let x_only = match claim_pubkey {
+            Some(pk) => pk,
+            None => {
+                let conn = runtime.get_storage_conn();
+                let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+                    .await?
+                    .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                entry.x_only_pubkey.ok_or_else(|| {
+                    anyhow!("signer_id {signer_id} is not a user signer (no x_only_pubkey)")
+                })?
+            }
+        };
+        self.signer_map.insert(signer_id, x_only);
+        Ok(())
+    }
 }
 
 /// Validate the stateless shape of an aggregate `Insts` envelope.
@@ -150,6 +183,18 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
     let mut total_message_bytes: usize = 0;
 
     for (inst, agg_signer) in insts.ops.iter().zip(agg.signers.iter()) {
+        // Build the signing message and enforce the bytes cap before any
+        // identity resolution or DB lookups — keeps oversized payloads from
+        // costing us I/O.
+        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
+        total_message_bytes = total_message_bytes.saturating_add(msg.len());
+        if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
+            return Err(anyhow!(
+                "aggregate signed message bytes exceed max {}",
+                MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
+            ));
+        }
+
         let (signer_id, claim_pubkey) = match &agg_signer.identity {
             SignerClaim::Id(id) => (*id, None),
             SignerClaim::PubKey(pk) => {
@@ -172,25 +217,20 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                 let validated = BlsPublicKey::key_validate(bls_pubkey).map_err(|e| {
                     anyhow!("invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}")
                 })?;
-                // Populate the signer_map for downstream consumers (executor
-                // doesn't currently need it for RegisterBlsKey, but keep the
-                // map complete for consistency).
-                if let Some(pk_str) = claim_pubkey {
-                    resolver.signer_map.insert(signer_id, pk_str);
-                }
+                // Always populate signer_map. PubKey claim gives us the x_only
+                // directly; Id claim requires a registry lookup (an existing
+                // signer is re-registering or first-registering a BLS key).
+                // Downstream `process_aggregate_input` checks this map and
+                // silently drops ops whose signer_id isn't in it, so missing
+                // an entry would cause a verified op to be skipped.
+                resolver
+                    .ensure_x_only(runtime, signer_id, claim_pubkey)
+                    .await?;
                 validated
             }
             _ => resolver.resolve(runtime, signer_id).await?,
         };
 
-        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
-        total_message_bytes = total_message_bytes.saturating_add(msg.len());
-        if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
-            return Err(anyhow!(
-                "aggregate signed message bytes exceed max {}",
-                MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
-            ));
-        }
         pks.push(pk);
         msgs.push(msg);
         signer_ids.push(signer_id);
