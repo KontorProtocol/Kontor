@@ -23,3 +23,4 @@ export type {
 export type * from "./bindings";
 export { generate } from "./codegen";
 export type { KontorTransport } from "./json-codec";
+export { Decimal } from "./canonical/Decimal";

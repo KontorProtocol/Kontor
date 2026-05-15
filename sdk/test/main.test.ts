@@ -706,17 +706,14 @@ test("codegen Tier 1: emits TS types + Contract interface from token.wit", () =>
 
   // Type declarations for named user types
   expect(out).toMatch(/export type HolderRef =/);
-  expect(out).toMatch(/export type Decimal =/);
-  expect(out).toMatch(/export type Sign =/);
-
-  // u64 fields should be bigint
-  expect(out).toMatch(/r0: bigint/);
+  // Decimal is canonical — imported as a class, NOT emitted as a typedef.
+  expect(out).not.toMatch(/export type Decimal =/);
+  // Sign is internal to Decimal; with Decimal hidden behind its class, Sign
+  // shouldn't leak into the generated module either.
+  expect(out).not.toMatch(/export type Sign =/);
 
   // Variants use {kind, value}
   expect(out).toMatch(/\{ kind: "x-only-pubkey"; value: string \}/);
-
-  // Enums use string-literal unions
-  expect(out).toMatch(/"plus" \| "minus"/);
 });
 
 test("codegen Tier 1: result<T,E> renders as discriminated union", () => {
@@ -730,29 +727,27 @@ test("codegen Tier 1: rejects invalid WIT", () => {
   expect(() => generate("garbage")).toThrow(/WIT parse error/);
 });
 
+
 // ─── codegen Tier 2: Contract class end-to-end ────────────────────────
 
 test("codegen Tier 2: emits Contract class with transport + per-type helpers", () => {
   const out = generate(tokenWit);
 
-  // Imports the runtime helpers (just witApi and KontorTransport now —
-  // no generic walker dependency; conversions are inlined in generated
-  // helpers).
+  // Imports the runtime helpers + the canonical Decimal class.
   expect(out).toContain(
-    'import { Wit, type KontorTransport } from "@kontor/sdk";',
+    'import { Wit, type KontorTransport, Decimal } from "@kontor/sdk";',
   );
 
   // Embeds the WIT and instantiates a Wit resource at module load.
   expect(out).toContain("const WIT = String.raw`");
   expect(out).toContain("const _wit = new Wit(WIT);");
 
-  // Per-type encode/decode helpers exist for named compound types.
-  expect(out).toMatch(/function _encodeDecimal\(v: Decimal\)/);
-  expect(out).toMatch(/function _decodeDecimal\(v: unknown\): Decimal/);
-  expect(out).toMatch(/function _encodeHolderRef\(v: HolderRef\)/);
+  // Decimal is canonical — no _encode/_decode helpers emitted for it.
+  expect(out).not.toMatch(/function _encodeDecimal\(/);
+  expect(out).not.toMatch(/function _decodeDecimal\(/);
 
-  // Decimal's encode helper converts each bigint field via .toString().
-  expect(out).toMatch(/"r0": v\.r0\.toString\(\)/);
+  // Other named types still get helpers.
+  expect(out).toMatch(/function _encodeHolderRef\(v: HolderRef\)/);
 
   // Contract class with constructor.
   expect(out).toContain("export class Contract {");
@@ -770,7 +765,10 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   expect(out).toMatch(/async totalSupply\(/);
   // kebab param → camelCase in TS, kebab on the wire.
   expect(out).toMatch(/burnAmt:/);
-  expect(out).toMatch(/"burn-amt": _encodeDecimal\(burnAmt\)/);
+  // Canonical Decimal: arg passed via `.toRaw()` rather than a helper.
+  expect(out).toMatch(/"burn-amt": \(burnAmt\)\.toRaw\(\)/);
+  // Canonical Decimal: results decoded via `Decimal.fromRaw(...)`.
+  expect(out).toMatch(/Decimal\.fromRaw\(/);
 });
 
 // ─── numerics-api ─────────────────────────────────────────────────────
@@ -826,3 +824,51 @@ test("numerics: integer overflow surfaces as error", () => {
     expect(e.payload.tag).toBe("overflow");
   }
 });
+
+// ─── canonical Decimal class ─────────────────────────────────────────
+// Hand-written wrapper over the raw {r0,r1,r2,r3,sign} record.
+
+import { Decimal } from "@kontor/sdk";
+
+test("Decimal: string round-trip preserves fractional precision", () => {
+  expect(Decimal.from("100.5").toString()).toBe("100.5");
+  expect(Decimal.from("-3.14159").toString()).toBe("-3.14159");
+});
+
+test("Decimal: bigint constructor handles values beyond u64", () => {
+  const big = 18446744073709551616n; // 2^64
+  expect(Decimal.from(big).toString()).toBe("18446744073709551616");
+  expect(Decimal.from(-1n).toString()).toBe("-1");
+});
+
+test("Decimal: number constructor for convenient f64 input", () => {
+  expect(Decimal.from(42).toString()).toBe("42");
+});
+
+test("Decimal: arithmetic delegates to numerics (exact)", () => {
+  const a = Decimal.from("1.1");
+  const b = Decimal.from("2.2");
+  expect(a.add(b).toString()).toBe("3.3");
+  expect(b.sub(a).toString()).toBe("1.1");
+  expect(a.mul(b).toString()).toBe("2.42");
+  expect(Decimal.from("10").div(Decimal.from("4")).toString()).toBe("2.5");
+});
+
+test("Decimal: eq and cmp", () => {
+  const a = Decimal.from("3.14");
+  const b = Decimal.from("3.14");
+  const c = Decimal.from("2.71");
+  expect(a.eq(b)).toBe(true);
+  expect(a.eq(c)).toBe(false);
+  expect(a.cmp(b)).toBe("equal");
+  expect(c.cmp(a)).toBe("less");
+  expect(a.cmp(c)).toBe("greater");
+});
+
+test("Decimal: fromRaw / toRaw round-trip for codec interop", () => {
+  const d = Decimal.from("42.5");
+  const raw = d.toRaw();
+  const back = Decimal.fromRaw(raw);
+  expect(back.toString()).toBe("42.5");
+});
+
